@@ -2,7 +2,7 @@
 name: Feature request
 about: An idea for a feature or improvement to Blink.
 title: 'Feature request: '
-labels: feature-request
+labels: enhancement
 assignees: ''
 
 ---
