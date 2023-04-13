@@ -1,7 +1,7 @@
 ---
 name: Bug report
 about: Tell us about a problem you've encountered.
-title: ''
+title: 'Bug: '
 labels: bug
 assignees: harishhary
 

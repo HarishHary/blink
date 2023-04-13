@@ -1,8 +1,8 @@
 ---
-name: Idea
+name: Feature request
 about: An idea for a feature or improvement to Blink.
-title: 'Idea: '
-labels: 'idea'
+title: 'Feature request: '
+labels: feature-request
 assignees: ''
 
 ---
