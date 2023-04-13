@@ -1,0 +1,31 @@
+extends: default
+rules:
+    braces:
+        min-spaces-inside: 0
+        max-spaces-inside: 0
+    brackets:
+        min-spaces-inside: 0
+        max-spaces-inside: 0
+    colons:
+        max-spaces-before: 0
+        max-spaces-after: 1
+    commas:
+        max-spaces-before: 0
+        min-spaces-after: 1
+        max-spaces-after: 1
+    comments: enable
+    comments-indentation: enable
+    document-start: disable
+    empty-lines:
+        max: 1
+        max-start: 1
+        max-end: 1
+    hyphens:
+        max-spaces-after: 1
+    new-lines:
+        type: unix
+    indentation:
+        spaces: 4
+    line-length: disable
+    new-line-at-end-of-file: enable
+    trailing-spaces: enable
