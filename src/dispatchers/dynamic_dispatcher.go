@@ -2,8 +2,10 @@ package dispatchers
 
 import (
 	"context"
+
+	"github.com/harishhary/blink/src/events"
 )
 
 type IDynamicDispatcher interface {
-	Dispatch(ctx context.Context, record map[string]interface{}) error // probably a func that return a Dispatcher
+	Dispatch(ctx context.Context, event *events.Event) error // probably a func that return a Dispatcher
 }

@@ -1,8 +1,6 @@
 package dispatchers
 
 import (
-	"context"
-	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -20,18 +18,18 @@ const (
 	DefaultServiceURL     = "https://example.com/api"           // Replace with actual URL
 )
 
-// DispatcherError custom error for Dispather
-type DispatcherError struct {
-	Message string
-}
-
-func (e *DispatcherError) Error() string {
-	return fmt.Sprintf("Dispatcher failed with error: %s", e.Message)
+// OutputProperty struct equivalent to namedtuple in Python
+type OutputProperty struct {
+	Description       string
+	Value             string
+	InputRestrictions map[rune]struct{}
+	MaskInput         bool
+	CredRequirement   bool
 }
 
 // IDispatcher interface with required methods
 type IDispatcher interface {
-	Dispatch(ctx context.Context, alert map[string]interface{}) bool
+	DispatchLogic(alert, descriptor string) bool
 }
 
 type BaseDispatcher struct {
@@ -49,9 +47,8 @@ func (d *BaseDispatcher) logStatus(success bool, descriptor string) {
 	}
 }
 
-func (d *BaseDispatcher) Dispatch(ctx context.Context, alert map[string]interface{}) bool {
-	output := d.ServiceName
-	log.Printf("Sending dispatcher %s to %s with context: %s. Alert:\n%s", d.ServiceName, d.ServiceURL, ctx, alert)
+func (d *BaseDispatcher) Dispatch(alert, output string) bool {
+	log.Printf("Sending %s to %s", alert, output)
 	descriptor := output[strings.Index(output, ":")+1:]
 	var sent bool
 	defer func() {
@@ -60,13 +57,13 @@ func (d *BaseDispatcher) Dispatch(ctx context.Context, alert map[string]interfac
 			sent = false
 		}
 	}()
-	sent = d.DispatchLogic(ctx, alert)
+	sent = d.DispatchLogic(alert, descriptor)
 	d.logStatus(sent, descriptor)
 	return sent
 }
 
-func (d *BaseDispatcher) DispatchLogic(ctx context.Context, alert map[string]interface{}) bool {
+func (d *BaseDispatcher) DispatchLogic(alert, descriptor string) bool {
 	// Placeholder for actual dispatch logic
-	log.Printf("Using base dispatcher %s to %s with context: %s. Alert:\n%s", d.ServiceName, d.ServiceURL, ctx, alert)
+	log.Printf("Using base dispatcher %s to %s. Alert:\n%v", alert, descriptor, alert)
 	return true
 }
