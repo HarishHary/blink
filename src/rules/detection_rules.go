@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"plugin"
 
+	"github.com/harishhary/blink/src/dispatchers"
 	"github.com/harishhary/blink/src/enrichments"
 	"github.com/harishhary/blink/src/events"
 	"github.com/harishhary/blink/src/inputs"
-	"github.com/harishhary/blink/src/outputs"
+	"github.com/harishhary/blink/src/matchers"
 	"github.com/harishhary/blink/src/publishers"
 )
 
@@ -20,9 +21,9 @@ type DetectionRule struct {
 	Name        string
 	Description string
 	Severity    int
-	Inputs      []inputs.IInputs
-	Outputs     []outputs.IOutputs
-	Matchers    []string
+	Inputs      []inputs.IInput
+	Dispathers  []dispatchers.IDispatcher
+	Matchers    []matchers.IMatchers
 	Publishers  []publishers.IPublishers
 	Enrichments []enrichments.IEnrichmentFunction
 	TuningRules []ITuningRule
@@ -47,7 +48,7 @@ func (r *DetectionRule) ApplyTuningRules(ctx context.Context, event *events.Even
 // ApplyPublishers applies all publishers to the event.
 func (r *DetectionRule) ApplyPublishers(ctx context.Context, event *events.Event) error {
 	for _, publisher := range r.Publishers {
-		publisher.Publish(ctx, event, event)
+		publisher.Publish(ctx, event)
 	}
 	return nil
 }
