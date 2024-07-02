@@ -3,32 +3,17 @@ package publishers
 import (
 	"context"
 	"fmt"
-	"log"
+
+	"github.com/harishhary/blink/src/events"
 )
 
-// PublisherError custom error for Publisher
-type PublisherError struct {
-	Message string
-}
-
-func (e *PublisherError) Error() string {
-	return fmt.Sprintf("Publisher failed with error: %s", e.Message)
-}
-
 type IPublishers interface {
-	Publish(ctx context.Context, record map[string]interface{}) (bool, error) // FIXME return
+	Publish(ctx context.Context, event *events.Event) (*events.Event, error)
 }
 
-type BasePublisher struct {
-	Name string
-}
+type BasePublisher struct{}
 
-func (p *BasePublisher) Publish(ctx context.Context, record map[string]interface{}) (bool, error) { // FIXME return
-	log.Printf("Using base publisher %s with context: %s. record:%s", p.Name, ctx, record)
-	return p.PublishLogic(ctx, record)
-}
-
-func (p *BasePublisher) PublishLogic(ctx context.Context, record map[string]interface{}) (bool, error) { // FIXME return
-	log.Printf("Using base publisher %s with context: %s. record:%s", p.Name, ctx, record)
-	return false, nil
+func (r *BasePublisher) Publish(ctx context.Context, event *events.Event) (*events.Event, error) {
+	fmt.Println("Simple Publisher from:", event.User.UserName)
+	return event, nil
 }

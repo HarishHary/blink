@@ -1,9 +1,7 @@
 package dispatchers
 
 import (
-	"context"
 	"crypto/tls"
-	"log"
 	"net/http"
 
 	"github.com/harishhary/blink/src/helpers"
@@ -24,16 +22,16 @@ func NewExampleDispatcher(config map[string]interface{}) *ExampleDispatcher {
 	}
 }
 
-func (d *ExampleDispatcher) DispatchLogic(ctx context.Context, alert map[string]interface{}) bool {
-	log.Printf("Using example dispatcher %s to %s with context: %s. Alert:\n%s", d.ServiceName, d.ServiceURL, ctx, alert)
+func (d *ExampleDispatcher) DispatchLogic(alert, descriptor string) bool {
+	logger.Printf("Sending alert to %s:%s", d.ServiceURL, descriptor)
 	headers := map[string]string{
 		"Content-Type":  "application/json",
 		"Authorization": "Bearer example_token", // Replace with actual token
 	}
 
 	data := map[string]string{
-		"alert":      d.ServiceName,
-		"descriptor": d.ServiceName,
+		"alert":      alert,
+		"descriptor": descriptor,
 	}
 
 	resp, err := d.RequestHelper.PostRequestRetry(d.ServiceURL, headers, data, d.RequestHelper.CatchExceptions())
@@ -53,19 +51,16 @@ func ExampleUsage() {
 	config := map[string]interface{}{
 		"example_key": "example_value",
 	}
-	ctx := new(context.Context)
+
 	// Create a new instance of ExampleDispatcher
 	dispatcher := NewExampleDispatcher(config)
 
 	// Example alert and descriptor
-
-	alert := map[string]interface{}{
-		"name":        "alert1",
-		"description": "alert description",
-	}
+	alert := "This is a test alert"
+	descriptor := "example_descriptor"
 
 	// Dispatch the alert using the ExampleDispatcher
-	success := dispatcher.Dispatch(*ctx, alert)
+	success := dispatcher.Dispatch(alert, descriptor)
 	if success {
 		logger.Println("Alert dispatched successfully")
 	} else {
