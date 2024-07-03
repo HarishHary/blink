@@ -1,5 +1,10 @@
 package blink
 
+import (
+	"fmt"
+	"plugin"
+)
+
 // var allrules []rules.DetectionRule
 
 // func main() {
@@ -159,3 +164,23 @@ package blink
 // func within24Hours(t1, t2 time.Time) bool {
 // 	return t1.Sub(t2).Hours() <= 24 && t2.Sub(t1).Hours() <= 24
 // }
+
+func LoadPlugins[T any](paths []string) ([]T, error) {
+	var plugins []T
+	for _, path := range paths {
+		p, err := plugin.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		sym, err := p.Lookup("Plugin")
+		if err != nil {
+			return nil, err
+		}
+		pluginInstance, ok := sym.(T)
+		if !ok {
+			return nil, fmt.Errorf("invalid type for plugin %s", path)
+		}
+		plugins = append(plugins, pluginInstance)
+	}
+	return plugins, nil
+}

@@ -2,14 +2,23 @@ package rules
 
 import (
 	"context"
-
-	"github.com/harishhary/blink/src/events"
 )
 
 type ITuningRule interface {
-	Name() string
-	Description() string
-	Tune(ctx context.Context, events *events.Event) error
-	Severity() int
-	Precedence() int
+	Tune(ctx context.Context, record map[string]interface{}) bool
+}
+
+type BaseTuningRule struct {
+	Name        string
+	Description string
+	Severity    int
+	Precedence  int
+}
+
+func (r *BaseTuningRule) Tune(ctx context.Context, record map[string]interface{}) bool {
+	return r.TuneLogic(ctx, record)
+}
+
+func (r *BaseTuningRule) TuneLogic(ctx context.Context, record map[string]interface{}) bool {
+	return true
 }

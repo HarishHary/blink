@@ -8,43 +8,37 @@ import (
 	"time"
 
 	"github.com/harishhary/blink/src/enrichments"
-	"github.com/harishhary/blink/src/events"
 )
 
 // GeoLocationEnrichment enriches the event with geolocation data
 type GeoLocationEnrichment struct {
-	timing enrichments.EnrichmentTiming
+	enrichments.BaseEnrichmentFunction
 }
 
-func (e *GeoLocationEnrichment) Name() string {
-	return "Geo Location Enrichment"
-}
-
-func (e *GeoLocationEnrichment) Enrich(ctx context.Context, event *events.Event) error {
-	geoLocation, err := getGeoLocation(event.IP)
-	if err != nil {
-		return err
+func (e *GeoLocationEnrichment) EnrichLogic(ctx context.Context, record map[string]interface{}) error {
+	if ip, ok := record["IP"].(string); ok {
+		geoLocation, err := getGeoLocation(ip)
+		if err != nil {
+			return err
+		}
+		record["geoLocation"] = geoLocation
+		return nil
 	}
-	event.GeoLocation = geoLocation
 	return nil
 }
 
-func (e *GeoLocationEnrichment) Timing() enrichments.EnrichmentTiming {
-	return e.timing
-}
-
-func getGeoLocation(ip string) (events.GeoLocation, error) {
+func getGeoLocation(ip string) (string, error) {
 	url := fmt.Sprintf("https://api.ipgeolocation.io/ipgeo?apiKey=your_api_key&ip=%s", ip)
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {
-		return events.GeoLocation{}, err
+		return "", err
 	}
 	defer resp.Body.Close()
 
-	var geoLocation events.GeoLocation
+	var geoLocation string
 	if err := json.NewDecoder(resp.Body).Decode(&geoLocation); err != nil {
-		return events.GeoLocation{}, err
+		return "", err
 	}
 	return geoLocation, nil
 }
