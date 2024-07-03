@@ -3,17 +3,32 @@ package matchers
 import (
 	"context"
 	"fmt"
-
-	"github.com/harishhary/blink/src/events"
+	"log"
 )
 
-type IMatchers interface {
-	Match(ectx context.Context, event *events.Event) bool
+// MatcherError custom error for Matcher
+type MatcherError struct {
+	Message string
 }
 
-type BaseMatcher struct{}
+func (e *MatcherError) Error() string {
+	return fmt.Sprintf("Matcher failed with error: %s", e.Message)
+}
 
-func (r *BaseMatcher) Match(ctx context.Context, event *events.Event) bool {
-	fmt.Println("Simple Matcher from:", event.User.UserName)
+type IMatchers interface {
+	Match(ctx context.Context, record map[string]interface{}) bool
+}
+
+type BaseMatcher struct {
+	Name string
+}
+
+func (r *BaseMatcher) Match(ctx context.Context, record map[string]interface{}) bool {
+	log.Printf("Using matcher %s with context:%s and record:%s", r.Name, ctx, record)
+	return r.MatchLogic(ctx, record)
+}
+
+func (r *BaseMatcher) MatchLogic(ctx context.Context, record map[string]interface{}) bool {
+	log.Printf("Using matcher %s with context:%s and record:%s", r.Name, ctx, record)
 	return true
 }

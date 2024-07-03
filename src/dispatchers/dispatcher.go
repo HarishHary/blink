@@ -1,6 +1,8 @@
 package dispatchers
 
 import (
+	"context"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -18,18 +20,18 @@ const (
 	DefaultServiceURL     = "https://example.com/api"           // Replace with actual URL
 )
 
-// OutputProperty struct equivalent to namedtuple in Python
-type OutputProperty struct {
-	Description       string
-	Value             string
-	InputRestrictions map[rune]struct{}
-	MaskInput         bool
-	CredRequirement   bool
+// DispatcherError custom error for Dispather
+type DispatcherError struct {
+	Message string
+}
+
+func (e *DispatcherError) Error() string {
+	return fmt.Sprintf("Dispatcher failed with error: %s", e.Message)
 }
 
 // IDispatcher interface with required methods
 type IDispatcher interface {
-	DispatchLogic(alert, descriptor string) bool
+	Dispatch(ctx context.Context, alert map[string]interface{}) bool
 }
 
 type BaseDispatcher struct {
@@ -47,8 +49,9 @@ func (d *BaseDispatcher) logStatus(success bool, descriptor string) {
 	}
 }
 
-func (d *BaseDispatcher) Dispatch(alert, output string) bool {
-	log.Printf("Sending %s to %s", alert, output)
+func (d *BaseDispatcher) Dispatch(ctx context.Context, alert map[string]interface{}) bool {
+	output := d.ServiceName
+	log.Printf("Sending dispatcher %s to %s with context: %s. Alert:\n%s", d.ServiceName, d.ServiceURL, ctx, alert)
 	descriptor := output[strings.Index(output, ":")+1:]
 	var sent bool
 	defer func() {
@@ -57,13 +60,13 @@ func (d *BaseDispatcher) Dispatch(alert, output string) bool {
 			sent = false
 		}
 	}()
-	sent = d.DispatchLogic(alert, descriptor)
+	sent = d.DispatchLogic(ctx, alert)
 	d.logStatus(sent, descriptor)
 	return sent
 }
 
-func (d *BaseDispatcher) DispatchLogic(alert, descriptor string) bool {
+func (d *BaseDispatcher) DispatchLogic(ctx context.Context, alert map[string]interface{}) bool {
 	// Placeholder for actual dispatch logic
-	log.Printf("Using base dispatcher %s to %s. Alert:\n%v", alert, descriptor, alert)
+	log.Printf("Using base dispatcher %s to %s with context: %s. Alert:\n%s", d.ServiceName, d.ServiceURL, ctx, alert)
 	return true
 }
