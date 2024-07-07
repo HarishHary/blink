@@ -21,19 +21,22 @@ const (
 	After
 )
 
-type IEnrichmentFunction interface {
+type IEnrichment interface {
 	Enrich(ctx context.Context, record map[string]interface{}) error
 }
 
-type BaseEnrichmentFunction struct {
-	Name   string
-	Timing EnrichmentTiming
+type Enrichment struct {
+	Name         string
+	EnrichmentID string
+	Description  string
+	Disabled     string
+	Timing       EnrichmentTiming
 }
 
-func (e *BaseEnrichmentFunction) Enrich(ctx context.Context, record map[string]interface{}) error {
+func (e *Enrichment) Enrich(ctx context.Context, record map[string]interface{}) error {
 	return e.EnrichLogic(ctx, record)
 }
 
-func (e *BaseEnrichmentFunction) EnrichLogic(ctx context.Context, record map[string]interface{}) error {
+func (e *Enrichment) EnrichLogic(ctx context.Context, record map[string]interface{}) error {
 	return nil
 }

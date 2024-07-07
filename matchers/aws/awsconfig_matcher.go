@@ -1,16 +1,15 @@
-package matchers
+package aws_matchers
 
 import (
-	"github.com/harishhary/blink/src/matchers"
+	"github.com/harishhary/blink/src/shared/matchers"
 )
 
-// AwsConfigMatcher contains matchers relevant to AWS Config
-type AwsConfigMatcher struct {
-	matchers.BaseMatcher
+type AwsConfigConfigComplianceMatcher struct {
+	matchers.Matcher
 }
 
 // IsConfigCompliance checks if the record event is from config compliance
-func (m *AwsConfigMatcher) IsConfigCompliance(record map[string]interface{}) bool {
+func (m *AwsConfigConfigComplianceMatcher) MatchLogic(record map[string]interface{}) bool {
 	if eventSource, ok := record["eventSource"].(string); ok && eventSource == "config.amazonaws.com" {
 		if eventName, ok := record["eventName"].(string); ok && eventName == "PutEvaluations" {
 			if requestParameters, ok := record["requestParameters"].(map[string]interface{}); ok {
@@ -23,8 +22,12 @@ func (m *AwsConfigMatcher) IsConfigCompliance(record map[string]interface{}) boo
 	return false
 }
 
+type AwsConfigAutoRemediationMatcher struct {
+	matchers.Matcher
+}
+
 // IsAutoRemediation checks if the record is an auto-remediation event
-func (m *AwsConfigMatcher) IsAutoRemediation(record map[string]interface{}) bool {
+func (m *AwsConfigAutoRemediationMatcher) MatchLogic(record map[string]interface{}) bool {
 	if eventName, ok := record["eventName"].(string); ok && eventName == "StartAutomationExecution" {
 		if eventSource, ok := record["eventSource"].(string); ok && eventSource == "ssm.amazonaws.com" {
 			if sourceIPAddress, ok := record["sourceIPAddress"].(string); ok && sourceIPAddress == "config.amazonaws.com" {
