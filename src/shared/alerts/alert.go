@@ -37,8 +37,8 @@ type Alert struct {
 	LogType         string
 	MergeByKeys     []string
 	MergeWindow     time.Duration
-	Outputs         map[string]struct{}
-	OutputsSent     map[string]struct{}
+	Outputs         []string
+	OutputsSent     []string
 	Publishers      []publishers.IPublisher
 	Record          shared.Record
 	RuleDescription string
@@ -52,7 +52,7 @@ type Alert struct {
 const DATETIME_FORMAT = "2006-01-02T15:04:05.000Z"
 
 // NewAlert creates a new Alert
-func NewAlert(ruleName string, record shared.Record, outputs map[string]struct{}, opts ...AlertOption) (*Alert, error) {
+func NewAlert(ruleName string, record shared.Record, outputs []string, opts ...AlertOption) (*Alert, error) {
 	alert := &Alert{
 		AlertID:     uuid.NewString(),
 		Created:     time.Now().UTC(),
@@ -61,7 +61,7 @@ func NewAlert(ruleName string, record shared.Record, outputs map[string]struct{}
 		Outputs:     outputs,
 		Context:     make(map[string]interface{}),
 		Publishers:  []publishers.IPublisher{},
-		OutputsSent: make(map[string]struct{}),
+		OutputsSent: make([]string, 10),
 	}
 
 	for _, opt := range opts {
@@ -281,4 +281,46 @@ func (a *Alert) FullString() string {
 // Less compares alerts by their creation time
 func (a *Alert) Less(other *Alert) bool {
 	return a.Created.Before(other.Created)
+}
+
+// CanMerge checks if two alerts can be merged together
+func (a *Alert) CanMerge(other *Alert) bool {
+	if !a.MergeEnabled() || !other.MergeEnabled() {
+		return false
+	}
+
+	older, newer := a, other
+	if newer.Created.Before(older.Created) {
+		older, newer = newer, older
+	}
+
+	if newer.Created.After(older.Created.Add(time.Duration(older.MergeWindow) * time.Minute)) {
+		return false
+	}
+
+	if !helpers.EqualStringSlices(a.MergeByKeys, other.MergeByKeys) {
+		return false
+	}
+
+	for _, key := range a.MergeByKeys {
+		if helpers.GetFirstKey(a.Record, key, "N/A") != helpers.GetFirstKey(other.Record, key, "N/A2") {
+			return false
+		}
+	}
+
+	return true
+}
+
+func (a *Alert) MergeEnabled() bool {
+	return len(a.MergeByKeys) > 0 && a.MergeWindow > 0
+}
+
+func (a *Alert) RemainingOutputs(requiredOutputs []string) []string {
+	var outputsToSendNow []string
+	if a.MergeEnabled() {
+		outputsToSendNow = helpers.Intersect(a.Outputs, requiredOutputs)
+	} else {
+		outputsToSendNow = a.Outputs
+	}
+	return helpers.Difference(outputsToSendNow, a.OutputsSent)
 }

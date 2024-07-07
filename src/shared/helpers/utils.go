@@ -69,3 +69,53 @@ func JsonCompact(v interface{}) string {
 	}
 	return string(bytes)
 }
+
+// EqualStringSlices checks if two string slices are equal
+func EqualStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+
+	aMap := make(map[string]struct{}, len(a))
+	for _, item := range a {
+		aMap[item] = struct{}{}
+	}
+
+	for _, item := range b {
+		if _, found := aMap[item]; !found {
+			return false
+		}
+	}
+
+	return true
+}
+
+// intersect returns the intersection of two slices
+func Intersect(a, b []string) []string {
+	set := make(map[string]struct{})
+	for _, item := range b {
+		set[item] = struct{}{}
+	}
+	var result []string
+	for _, item := range a {
+		if _, found := set[item]; found {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+// difference returns the difference of two slices (a - b)
+func Difference(a, b []string) []string {
+	set := make(map[string]struct{})
+	for _, item := range b {
+		set[item] = struct{}{}
+	}
+	var result []string
+	for _, item := range a {
+		if _, found := set[item]; !found {
+			result = append(result, item)
+		}
+	}
+	return result
+}

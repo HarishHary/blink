@@ -134,9 +134,9 @@ func (am *AlertMerger) Dispatch() {
 	for ruleName := range am.table.RuleNamesGenerator() {
 		var mergeEnabledAlerts []*alerts.Alert
 		for alert := range am.getAlertGenerator(ruleName) {
-			if len(alert.RemainingOutputs) > 0 {
+			if len(alert.RemainingOutputs()) > 0 {
 				am.dispatchAlert(alert)
-			} else if alert.MergeEnabled {
+			} else if alert.MergeEnabled() {
 				mergeEnabledAlerts = append(mergeEnabledAlerts, alert)
 			} else {
 				alertsToDelete = append(alertsToDelete, alert)
