@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/harishhary/blink/src/enrichments"
+	"github.com/harishhary/blink/src/shared/enrichments"
 )
 
 // UserEnrichment enriches the event with user data
 type UserEnrichment struct {
-	enrichments.BaseEnrichmentFunction
+	enrichments.Enrichment
 }
 
 func (e *UserEnrichment) EnrichLogic(ctx context.Context, record map[string]interface{}) error {

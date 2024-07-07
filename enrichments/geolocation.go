@@ -7,12 +7,12 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/harishhary/blink/src/enrichments"
+	"github.com/harishhary/blink/src/shared/enrichments"
 )
 
 // GeoLocationEnrichment enriches the event with geolocation data
 type GeoLocationEnrichment struct {
-	enrichments.BaseEnrichmentFunction
+	enrichments.Enrichment
 }
 
 func (e *GeoLocationEnrichment) EnrichLogic(ctx context.Context, record map[string]interface{}) error {

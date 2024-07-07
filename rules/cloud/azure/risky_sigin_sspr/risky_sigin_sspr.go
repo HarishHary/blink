@@ -1,37 +1,38 @@
 package main
 
-// import (
-// 	"context"
-// 	"fmt"
+import (
+	"context"
+	"fmt"
 
-// 	global_enrichment "github.com/harishhary/blink/enrichments"
-// 	"github.com/harishhary/blink/src/enrichments"
-// 	"github.com/harishhary/blink/src/events"
-// 	"github.com/harishhary/blink/src/rules"
-// )
+	global_enrichment "github.com/harishhary/blink/enrichments"
+	"github.com/harishhary/blink/src/shared"
+	"github.com/harishhary/blink/src/shared/enrichments"
+	"github.com/harishhary/blink/src/shared/rules"
+	"github.com/harishhary/blink/src/shared/rules/tuning_rules"
+)
 
-// // SampleRule is an example implementation of the DetectionRule interface.
-// type SampleRule struct {
-// 	rules.DetectionRule
-// }
+// SampleRule is an example implementation of the DetectionRule interface.
+type SampleRule struct {
+	rules.Rule
+}
 
-// func (r *SampleRule) EvaluateLogic(ctx context.Context, event *events.Event) bool {
-// 	// Implement your rule evaluation logic here
-// 	fmt.Println("Evaluating SampleRule for event:", event)
-// 	return true
-// }
+func (r *SampleRule) EvaluateLogic(ctx context.Context, record shared.Record) bool {
+	// Implement your rule evaluation logic here
+	fmt.Println("Evaluating SampleRule for event:", ctx)
+	return true
+}
 
-// func New() rules.IDetectionRule {
-// 	return &SampleRule{
-// 		DetectionRule: rules.DetectionRule{
-// 			Name:        "MyRule",
-// 			Description: "This is my custom rule.",
-// 			Severity:    5,
-// 			Enrichments: []enrichments.IEnrichmentFunction{
-// 				&global_enrichment.GeoLocationEnrichment{},
-// 				&global_enrichment.UserEnrichment{},
-// 			},
-// 			TuningRules: []rules.ITuningRule{},
-// 		},
-// 	}
-// }
+func New() rules.IRule {
+	return &SampleRule{
+		Rule: rules.Rule{
+			Name:        "MyRule",
+			Description: "This is my custom rule.",
+			Severity:    5,
+			Enrichments: []enrichments.IEnrichment{
+				&global_enrichment.GeoLocationEnrichment{},
+				&global_enrichment.UserEnrichment{},
+			},
+			TuningRules: []tuning_rules.ITuningRule{},
+		},
+	}
+}

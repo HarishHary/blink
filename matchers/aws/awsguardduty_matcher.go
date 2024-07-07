@@ -1,13 +1,13 @@
 // Define the production accounts
-package matchers
+package aws_matchers
 
 import (
-	"github.com/harishhary/blink/src/matchers"
+	"github.com/harishhary/blink/src/shared/matchers"
 )
 
 // AwsGuardDutyMatcher contains matchers for AWS GuardDuty service
 type AwsGuardDutyMatcher struct {
-	matchers.BaseMatcher
+	matchers.Matcher
 }
 
 // GuardDuty checks if the record is a GuardDuty finding

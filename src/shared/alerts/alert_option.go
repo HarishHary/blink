@@ -1,6 +1,10 @@
-package shared
+package alerts
 
-import "time"
+import (
+	"time"
+
+	"github.com/harishhary/blink/src/shared/publishers"
+)
 
 // AlertOption defines the functional option type
 type AlertOption func(*Alert)
@@ -76,7 +80,7 @@ func OutputsSent(outputsSent map[string]struct{}) AlertOption {
 }
 
 // Publishers sets the publishers for the alert
-func Publishers(publishers interface{}) AlertOption {
+func Publishers(publishers []publishers.IPublisher) AlertOption {
 	return func(a *Alert) {
 		a.Publishers = publishers
 	}

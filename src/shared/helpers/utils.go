@@ -1,10 +1,8 @@
 package helpers
 
 import (
-	"crypto/md5"
-	"fmt"
+	"encoding/json"
 	"reflect"
-	"time"
 )
 
 func GetFirstKey(data interface{}, searchKey string, defaultValue interface{}) interface{} {
@@ -64,7 +62,10 @@ func isContainerType(val interface{}) bool {
 	return reflect.TypeOf(val).Kind() == reflect.Map || reflect.TypeOf(val).Kind() == reflect.Slice
 }
 
-// GenerateUUID generates a random UUID
-func GenerateUUID() string {
-	return fmt.Sprintf("%x", md5.Sum([]byte(fmt.Sprintf("%d", time.Now().UnixNano()))))
+func JsonCompact(v interface{}) string {
+	bytes, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	return string(bytes)
 }

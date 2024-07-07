@@ -12,7 +12,7 @@ import (
 
 // 	ctx := context.Background()
 
-// 	p := beam.NewPipeline()
+// 	p :=beam.NewPipeline()
 // 	s := p.Root()
 
 // 	// Kafka configuration for SigninLogs
