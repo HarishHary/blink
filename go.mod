@@ -30,3 +30,5 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 )
+
+require github.com/cenkalti/backoff/v4 v4.3.0

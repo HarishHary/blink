@@ -24,20 +24,33 @@ func (e *GeoLocationEnrichment) EnrichLogic(ctx context.Context, record map[stri
 		record["geoLocation"] = geoLocation
 		return nil
 	}
+func (e *GeoLocationEnrichment) EnrichLogic(ctx context.Context, record map[string]interface{}) error {
+	if ip, ok := record["IP"].(string); ok {
+		geoLocation, err := getGeoLocation(ip)
+		if err != nil {
+			return err
+		}
+		record["geoLocation"] = geoLocation
+		return nil
+	}
 	return nil
 }
 
+func getGeoLocation(ip string) (string, error) {
 func getGeoLocation(ip string) (string, error) {
 	url := fmt.Sprintf("https://api.ipgeolocation.io/ipgeo?apiKey=your_api_key&ip=%s", ip)
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {
 		return "", err
+		return "", err
 	}
 	defer resp.Body.Close()
 
 	var geoLocation string
+	var geoLocation string
 	if err := json.NewDecoder(resp.Body).Decode(&geoLocation); err != nil {
+		return "", err
 		return "", err
 	}
 	return geoLocation, nil
