@@ -76,7 +76,7 @@ func NewAlert(ruleName string, record shared.Record, outputs map[string]struct{}
 }
 
 // Merge merges multiple alerts into a new merged alert
-func Merge(alerts []Alert) (*Alert, error) {
+func Merge(alerts []*Alert) (*Alert, error) {
 	if len(alerts) == 0 {
 		return nil, errors.New("no alerts to merge")
 	}
@@ -141,7 +141,7 @@ func computeCommon(records []shared.Record) map[string]interface{} {
 }
 
 // getValueDiffs finds values in the records that are not in the common subset
-func getValueDiffs(common map[string]interface{}, alerts []Alert, records []shared.Record) map[string]interface{} {
+func getValueDiffs(common map[string]interface{}, alerts []*Alert, records []shared.Record) map[string]interface{} {
 	valueDiffs := make(map[string]interface{})
 	for i, record := range records {
 		diff := record.ComputeDiff(common)
@@ -153,7 +153,7 @@ func getValueDiffs(common map[string]interface{}, alerts []Alert, records []shar
 }
 
 // anyStaged checks if any alert is staged
-func anyStaged(alerts []Alert) bool {
+func anyStaged(alerts []*Alert) bool {
 	for _, alert := range alerts {
 		if alert.Staged {
 			return true

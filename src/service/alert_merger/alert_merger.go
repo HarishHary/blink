@@ -3,34 +3,28 @@ package alertmerger
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"log"
 	"os"
 	"sort"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/lambda"
-	"github.com/harishhary/blink/src/shared"
-	"github.com/harishhary/blink/src/shared/alert"
-	"github.com/harishhary/blink/src/shared/alerttable"
-	"github.com/harishhary/blink/src/shared/logger"
-	"github.com/harishhary/blink/src/shared/metrics"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/harishhary/blink/src/shared/alerts"
 )
 
-var log = logger.GetLogger("alertmerger")
+var logger = log.Default()
 
 type AlertMergeGroup struct {
-	alerts []*alert.Alert
+	alerts []*alerts.Alert
 }
 
-func NewAlertMergeGroup(a *alert.Alert) *AlertMergeGroup {
-	return &AlertMergeGroup{alerts: []*alert.Alert{a}}
+func NewAlertMergeGroup(a *alerts.Alert) *AlertMergeGroup {
+	return &AlertMergeGroup{alerts: []*alerts.Alert{a}}
 }
 
-func (g *AlertMergeGroup) Add(a *alert.Alert) bool {
+func (g *AlertMergeGroup) Add(a *alerts.Alert) bool {
 	if len(g.alerts) >= 50 {
 		return false
 	}
@@ -42,38 +36,39 @@ func (g *AlertMergeGroup) Add(a *alert.Alert) bool {
 }
 
 type AlertMerger struct {
-	table               *alerttable.AlertTable
+	table               *alerts.AlertTable
 	alertProc           string
 	alertProcTimeout    int
-	lambdaClient        *lambda.Lambda
+	lambdaClient        lambda.Handler
 	alertGeneratorLimit int
 }
 
 func NewAlertMerger() *AlertMerger {
-	sess := session.Must(session.NewSession())
+	ctx := context.Background()
+	table, err := alerts.NewAlertTable(ctx, os.Getenv("ALERTS_TABLE"))
 	return &AlertMerger{
-		table:               alerttable.NewAlertTable(os.Getenv("ALERTS_TABLE")),
+		table:               table,
 		alertProc:           os.Getenv("ALERT_PROCESSOR"),
 		alertProcTimeout:    getEnvInt("ALERT_PROCESSOR_TIMEOUT_SEC", 60),
-		lambdaClient:        lambda.New(sess),
+		lambdaClient:        lambda.NewHandler(),
 		alertGeneratorLimit: 5000,
 	}
 }
 
-func (am *AlertMerger) getAlertGenerator(ruleName string) chan *alert.Alert {
-	out := make(chan *alert.Alert)
+func (am *AlertMerger) getAlertGenerator(ruleName string) chan *alerts.Alert {
+	out := make(chan *alerts.Alert)
 	go func() {
 		defer close(out)
 		generator := am.table.GetAlertRecords(ruleName, am.alertProcTimeout)
 		idx := 0
 		for record := range generator {
 			if idx >= am.alertGeneratorLimit {
-				log.Warningf("Alert Merger reached alert limit of %d for rule \"%s\"", am.alertGeneratorLimit, ruleName)
+				logger.Printf("Alert Merger reached alert limit of %d for rule \"%s\"", am.alertGeneratorLimit, ruleName)
 				return
 			}
-			alert, err := alert.CreateFromDynamoRecord(record)
+			alert, err := alerts.CreateFromDynamoRecord(record)
 			if err != nil {
-				log.Errorf("Invalid alert record %s: %v", record, err)
+				logger.Printf("Invalid alert record %s: %v", record, err)
 				continue
 			}
 			out <- alert
@@ -83,7 +78,7 @@ func (am *AlertMerger) getAlertGenerator(ruleName string) chan *alert.Alert {
 	return out
 }
 
-func (am *AlertMerger) mergeGroups(alerts []*alert.Alert) []*AlertMergeGroup {
+func (am *AlertMerger) mergeGroups(alerts []*alerts.Alert) []*AlertMergeGroup {
 	var mergeGroups []*AlertMergeGroup
 	sort.Slice(alerts, func(i, j int) bool {
 		return alerts[i].Created.Before(alerts[j].Created)
@@ -106,12 +101,15 @@ func (am *AlertMerger) mergeGroups(alerts []*alert.Alert) []*AlertMergeGroup {
 	return mergeGroups
 }
 
-func (am *AlertMerger) dispatchAlert(a *alert.Alert) {
+func (am *AlertMerger) dispatchAlert(a *alerts.Alert) {
 	a.Attempts++
-	log.Infof("Dispatching %s to %s (attempt %d)", a, am.alertProc, a.Attempts)
-	metrics.LogMetric(metrics.ALERT_MERGER_NAME, metrics.ALERT_ATTEMPTS, a.Attempts)
+	logger.Printf("Dispatching %s to %s (attempt %d)", a, am.alertProc, a.Attempts)
+	// metrics.LogMetric(metrics.ALERT_MERGER_NAME, metrics.ALERT_ATTEMPTS, a.Attempts)
 
-	recordPayload, _ := json.Marshal(a.DynamoRecord())
+	record, err := a.DynamoRecord()
+	if err != nil {
+	}
+	recordPayload, _ := json.Marshal(record)
 
 	payload := recordPayload
 	if len(recordPayload) > 126000 {
@@ -130,11 +128,11 @@ func (am *AlertMerger) dispatchAlert(a *alert.Alert) {
 }
 
 func (am *AlertMerger) Dispatch() {
-	var mergedAlerts []*alert.Alert
-	var alertsToDelete []*alert.Alert
+	var mergedAlerts []*alerts.Alert
+	var alertsToDelete []*alerts.Alert
 
 	for ruleName := range am.table.RuleNamesGenerator() {
-		var mergeEnabledAlerts []*alert.Alert
+		var mergeEnabledAlerts []*alerts.Alert
 		for alert := range am.getAlertGenerator(ruleName) {
 			if len(alert.RemainingOutputs) > 0 {
 				am.dispatchAlert(alert)
@@ -146,8 +144,11 @@ func (am *AlertMerger) Dispatch() {
 		}
 
 		for _, group := range am.mergeGroups(mergeEnabledAlerts) {
-			newAlert := alert.Merge(group.alerts)
-			log.Infof("Merged %d alerts into a new alert with ID %s", len(group.alerts), newAlert.AlertID)
+
+			newAlert, err := alerts.Merge(group.alerts)
+			if err != nil {
+			}
+			logger.Printf("Merged %d alerts into a new alert with ID %s", len(group.alerts), newAlert.AlertID)
 			mergedAlerts = append(mergedAlerts, newAlert)
 			alertsToDelete = append(alertsToDelete, group.alerts...)
 		}
@@ -161,9 +162,9 @@ func (am *AlertMerger) Dispatch() {
 	}
 
 	if len(alertsToDelete) > 0 {
-		var keys [][]interface{}
+		var keys [][]string
 		for _, alert := range alertsToDelete {
-			keys = append(keys, []interface{}{alert.RuleName, alert.AlertID})
+			keys = append(keys, []string{alert.RuleName, alert.AlertID})
 		}
 		am.table.DeleteAlerts(keys)
 	}
