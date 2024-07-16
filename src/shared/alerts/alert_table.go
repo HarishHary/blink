@@ -11,9 +11,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/harishhary/blink/src/shared/helpers"
 )
-
-const datetimeFormat = "2006-01-02T15:04:05.000Z"
 
 type AlertTable struct {
 	ctx  context.Context
@@ -111,7 +110,7 @@ func (at *AlertTable) RuleNamesGenerator() <-chan string {
 }
 
 func (at *AlertTable) GetAlertRecords(ruleName string, alertProcTimeoutSec int) <-chan map[string]types.AttributeValue {
-	inProgressThreshold := time.Now().Add(-time.Duration(alertProcTimeoutSec) * time.Second).Format(datetimeFormat)
+	inProgressThreshold := time.Now().Add(-time.Duration(alertProcTimeoutSec) * time.Second).Format(helpers.DATETIME_FORMAT)
 
 	filter := expression.Name("Dispatched").LessThan(expression.Value(inProgressThreshold))
 	keyCond := expression.Key("RuleName").Equal(expression.Value(ruleName))
@@ -207,7 +206,7 @@ func (at *AlertTable) MarkAsDispatched(alert *Alert) error {
 
 	update := expression.Set(
 		expression.Name("Attempts"), expression.Value(alert.Attempts)).
-		Set(expression.Name("Dispatched"), expression.Value(alert.Dispatched.Format(datetimeFormat)))
+		Set(expression.Name("Dispatched"), expression.Value(alert.Dispatched.Format(helpers.DATETIME_FORMAT)))
 
 	expr, err := expression.NewBuilder().WithUpdate(update).WithCondition(expression.AttributeExists(expression.Name("AlertID"))).Build()
 	if err != nil {

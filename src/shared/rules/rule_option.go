@@ -3,9 +3,9 @@ package rules
 import (
 	"github.com/harishhary/blink/src/shared/dispatchers"
 	"github.com/harishhary/blink/src/shared/enrichments"
+	"github.com/harishhary/blink/src/shared/formatters"
 	"github.com/harishhary/blink/src/shared/inputs"
 	"github.com/harishhary/blink/src/shared/matchers"
-	"github.com/harishhary/blink/src/shared/publishers"
 	"github.com/harishhary/blink/src/shared/rules/tuning_rules"
 )
 
@@ -59,20 +59,15 @@ func Dispatchers(Dispatchers []dispatchers.IDispatcher) RuleOption {
 	}
 }
 
-func DynamicDispatchers(DynamicDispatchers []dispatchers.IDynamicDispatcher) RuleOption {
-	return func(rule *Rule) {
-		rule.DynamicDispatchers = DynamicDispatchers
-	}
-}
 func Matchers(Matchers []matchers.IMatcher) RuleOption {
 	return func(rule *Rule) {
 		rule.Matchers = Matchers
 	}
 }
 
-func Publishers(Publishers []publishers.IPublisher) RuleOption {
+func Formatters(Formatters []formatters.IFormatter) RuleOption {
 	return func(rule *Rule) {
-		rule.Publishers = Publishers
+		rule.Formatters = Formatters
 	}
 }
 
@@ -85,17 +80,5 @@ func Enrichments(Enrichments []enrichments.IEnrichment) RuleOption {
 func TuningRules(TuningRules []tuning_rules.ITuningRule) RuleOption {
 	return func(rule *Rule) {
 		rule.TuningRules = TuningRules
-	}
-}
-
-func InitialContext(InitialContext *map[string]interface{}) RuleOption {
-	return func(rule *Rule) {
-		rule.InitialContext = InitialContext
-	}
-}
-
-func Context(Context *map[string]interface{}) RuleOption {
-	return func(rule *Rule) {
-		rule.Context = Context
 	}
 }

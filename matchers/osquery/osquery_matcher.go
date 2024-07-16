@@ -8,7 +8,7 @@ type OsqueryAddedMatcher struct {
 }
 
 // Added checks if the record action is "added"
-func (m *OsqueryAddedMatcher) Added(record map[string]interface{}) bool {
+func (m *OsqueryAddedMatcher) MatchLogic(record map[string]interface{}) bool {
 	if action, ok := record["action"].(string); ok {
 		return action == "added"
 	}
@@ -33,7 +33,7 @@ type OsqueryUserLoginMatcher struct {
 // This matcher assumes the use of the default osquery pack shipped with the osquery package
 // located at /usr/share/osquery/packs/incident-response.conf on the Linux host.
 // Update the pack name (rec["name"]) if it is different.
-func (m *OsqueryUserLoginMatcher) UserLogin(record map[string]interface{}) bool {
+func (m *OsqueryUserLoginMatcher) MatchLogic(record map[string]interface{}) bool {
 	if name, ok := record["name"].(string); ok && name == "pack_incident-response_last" {
 		if columns, ok := record["columns"].(map[string]interface{}); ok {
 			if eventType, ok := columns["type"].(int); ok && eventType == EventTypeLogin {

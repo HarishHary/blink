@@ -32,31 +32,33 @@ func (e *DispatcherError) Error() string {
 // IDispatcher interface with required methods
 type IDispatcher interface {
 	Dispatch(ctx context.Context, alert map[string]interface{}) bool
-	GetName() string
+	Name() string
+	String() string
 }
 
 type Dispatcher struct {
-	Name          string
-	URL           string
-	Config        map[string]interface{}
-	RequestHelper *helpers.RequestHelper
+	name          string
+	id            string
+	url           string
+	config        map[string]interface{}
+	requestHelper *helpers.RequestHelper
 }
 
-func (d *Dispatcher) GetName() string {
-	return d.Name
+func (d *Dispatcher) Name() string {
+	return d.name
 }
 
 func (d *Dispatcher) logStatus(success bool, descriptor string) {
 	if success {
-		logger.Printf("Successfully sent alert to %s:%s", d.URL, descriptor)
+		logger.Printf("Successfully sent alert to %s:%s", d.url, descriptor)
 	} else {
-		logger.Printf("Failed to send alert to %s:%s", d.URL, descriptor)
+		logger.Printf("Failed to send alert to %s:%s", d.url, descriptor)
 	}
 }
 
 func (d *Dispatcher) Dispatch(ctx context.Context, alert map[string]interface{}) bool {
-	output := d.GetName()
-	log.Printf("Sending dispatcher %s to %s with context: %s. Alert:\n%s", output, d.URL, ctx, alert)
+	output := d.Name()
+	log.Printf("Sending dispatcher %s to %s with context: %s. Alert:\n%s", output, d.url, ctx, alert)
 	descriptor := output[strings.Index(output, ":")+1:]
 	var sent bool
 	defer func() {
@@ -65,13 +67,6 @@ func (d *Dispatcher) Dispatch(ctx context.Context, alert map[string]interface{})
 			sent = false
 		}
 	}()
-	sent = d.DispatchLogic(ctx, alert)
 	d.logStatus(sent, descriptor)
 	return sent
-}
-
-func (d *Dispatcher) DispatchLogic(ctx context.Context, alert map[string]interface{}) bool {
-	// Placeholder for actual dispatch logic
-	log.Printf("Using base dispatcher %s to %s with context: %s. Alert:\n%s", d.GetName(), d.URL, ctx, alert)
-	return true
 }

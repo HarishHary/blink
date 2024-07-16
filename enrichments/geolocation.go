@@ -15,7 +15,7 @@ type GeoLocationEnrichment struct {
 	enrichments.Enrichment
 }
 
-func (e *GeoLocationEnrichment) EnrichLogic(ctx context.Context, record map[string]interface{}) error {
+func (e *GeoLocationEnrichment) Enrich(ctx context.Context, record map[string]interface{}) error {
 	if ip, ok := record["IP"].(string); ok {
 		geoLocation, err := getGeoLocation(ip)
 		if err != nil {

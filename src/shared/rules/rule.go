@@ -14,9 +14,9 @@ import (
 
 	"github.com/harishhary/blink/src/shared/dispatchers"
 	"github.com/harishhary/blink/src/shared/enrichments"
+	"github.com/harishhary/blink/src/shared/formatters"
 	"github.com/harishhary/blink/src/shared/inputs"
 	"github.com/harishhary/blink/src/shared/matchers"
-	"github.com/harishhary/blink/src/shared/publishers"
 	"github.com/harishhary/blink/src/shared/rules/tuning_rules"
 )
 
@@ -37,32 +37,32 @@ type IRule interface {
 }
 
 type Rule struct {
-	Name               string
-	RuleID             string
-	Description        string
-	Severity           int
-	MergeByKeys        []string
-	MergeWindowMins    int
-	ReqSubkeys         []string
-	Disabled           bool
-	Inputs             []inputs.IInput
-	Dispatchers        []dispatchers.IDispatcher
-	DynamicDispatchers []dispatchers.IDynamicDispatcher
-	Matchers           []matchers.IMatcher
-	Publishers         []publishers.IPublisher
-	Enrichments        []enrichments.IEnrichment
-	TuningRules        []tuning_rules.ITuningRule
-	InitialContext     *map[string]interface{}
-	Context            *map[string]interface{}
-	Checksum           string
+	Name            string
+	RuleID          string
+	Description     string
+	Severity        int
+	MergeByKeys     []string
+	MergeWindowMins int
+	ReqSubkeys      []string
+	Disabled        bool
+	Inputs          []inputs.IInput
+	Dispatchers     []dispatchers.IDispatcher
+	Matchers        []matchers.IMatcher
+	Formatters      []formatters.IFormatter
+	Enrichments     []enrichments.IEnrichment
+	TuningRules     []tuning_rules.ITuningRule
+	Checksum        string
 }
 
-// Disable disables a rule
 func (r *Rule) Disable() {
 	r.Disabled = true
 }
 
-func (r *Rule) CalculateChecksum() string {
+func (r *Rule) GetName() string {
+	return r.Name
+}
+
+func (r *Rule) GetChecksum() string {
 	if r.Checksum != "" {
 		return r.Checksum
 	}
@@ -120,10 +120,10 @@ func (r *Rule) ApplyTuningRules(ctx context.Context, record map[string]interface
 	return nil
 }
 
-// ApplyPublishers applies all publishers to the event.
-func (r *Rule) ApplyPublishers(ctx context.Context, record map[string]interface{}) error {
-	for _, publisher := range r.Publishers {
-		publisher.Publish(ctx, record)
+// ApplyFormatters applies all formatters to the event.
+func (r *Rule) ApplyFormatters(ctx context.Context, record map[string]interface{}) error {
+	for _, formatter := range r.Formatters {
+		formatter.Format(ctx, record)
 	}
 	return nil
 }
@@ -144,13 +144,13 @@ func (r *Rule) EvaluateLogic(ctx context.Context, record map[string]interface{})
 	return true
 }
 
-func (r *Rule) Init(name string, setters ...RuleOption) {
+func NewRule(name string, setters ...RuleOption) Rule {
 	// Default Options
-	rule := &Rule{
+	r := Rule{
 		Name: name,
 	}
 	for _, setter := range setters {
-		setter(rule)
+		setter(&r)
 	}
-	r.Checksum = r.CalculateChecksum()
+	return r
 }

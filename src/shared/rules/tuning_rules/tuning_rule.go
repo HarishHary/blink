@@ -35,7 +35,9 @@ type TuningRule struct {
 
 func NewTuningRule(name string, setters ...TuningRuleOption) TuningRule {
 	// Default Options
-	r := TuningRule{}
+	r := TuningRule{
+		Name: name,
+	}
 	for _, setter := range setters {
 		setter(&r)
 	}

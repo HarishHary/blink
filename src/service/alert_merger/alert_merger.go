@@ -6,15 +6,25 @@ import (
 	"log"
 	"os"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
-	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/lambda"
+	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 	"github.com/harishhary/blink/src/shared/alerts"
+	"github.com/harishhary/blink/src/shared/helpers"
 )
 
 var logger = log.Default()
+
+const (
+	MAX_ALERTS_PER_GROUP          = 50
+	MAX_LAMBDA_PAYLOAD_SIZE       = 126000
+	ALERT_GENERATOR_DEFAULT_LIMIT = 5000
+)
 
 type AlertMergeGroup struct {
 	alerts []*alerts.Alert
@@ -25,7 +35,7 @@ func NewAlertMergeGroup(a *alerts.Alert) *AlertMergeGroup {
 }
 
 func (g *AlertMergeGroup) Add(a *alerts.Alert) bool {
-	if len(g.alerts) >= 50 {
+	if len(g.alerts) >= MAX_ALERTS_PER_GROUP {
 		return false
 	}
 	if a.CanMerge(g.alerts[0]) {
@@ -37,20 +47,35 @@ func (g *AlertMergeGroup) Add(a *alerts.Alert) bool {
 
 type AlertMerger struct {
 	table               *alerts.AlertTable
+	context             context.Context
 	alertProc           string
 	alertProcTimeout    int
-	lambdaClient        lambda.Handler
+	lambdaClient        *lambda.Client
 	alertGeneratorLimit int
+}
+
+var instance *AlertMerger
+
+func GetInstance() *AlertMerger {
+	if instance == nil {
+		instance = NewAlertMerger()
+	}
+	return instance
 }
 
 func NewAlertMerger() *AlertMerger {
 	ctx := context.Background()
+	sdkConfig, err := config.LoadDefaultConfig(ctx)
 	table, err := alerts.NewAlertTable(ctx, os.Getenv("ALERTS_TABLE"))
+	if err != nil {
+		return nil
+	}
 	return &AlertMerger{
 		table:               table,
+		context:             ctx,
 		alertProc:           os.Getenv("ALERT_PROCESSOR"),
 		alertProcTimeout:    getEnvInt("ALERT_PROCESSOR_TIMEOUT_SEC", 60),
-		lambdaClient:        lambda.NewHandler(),
+		lambdaClient:        lambda.NewFromConfig(sdkConfig),
 		alertGeneratorLimit: 5000,
 	}
 }
@@ -92,7 +117,7 @@ func (am *AlertMerger) mergeGroups(alerts []*alerts.Alert) []*AlertMergeGroup {
 			}
 		}
 		if !added {
-			if time.Now().Before(alert.Created.Add(alert.MergeWindow)) {
+			if time.Now().Before(alert.Created.Add(time.Duration(alert.MergeWindow) * time.Minute)) {
 				break
 			}
 			mergeGroups = append(mergeGroups, NewAlertMergeGroup(alert))
@@ -112,13 +137,13 @@ func (am *AlertMerger) dispatchAlert(a *alerts.Alert) {
 	recordPayload, _ := json.Marshal(record)
 
 	payload := recordPayload
-	if len(recordPayload) > 126000 {
+	if len(recordPayload) > MAX_LAMBDA_PAYLOAD_SIZE {
 		payload, _ = json.Marshal(a.DynamoKey)
 	}
 
-	am.lambdaClient.Invoke(&lambda.InvokeInput{
+	am.lambdaClient.Invoke(am.context, &lambda.InvokeInput{
 		FunctionName:   aws.String(am.alertProc),
-		InvocationType: aws.String("Event"),
+		InvocationType: types.InvocationTypeEvent,
 		Payload:        payload,
 		Qualifier:      aws.String("production"),
 	})
@@ -134,7 +159,7 @@ func (am *AlertMerger) Dispatch() {
 	for ruleName := range am.table.RuleNamesGenerator() {
 		var mergeEnabledAlerts []*alerts.Alert
 		for alert := range am.getAlertGenerator(ruleName) {
-			if len(alert.RemainingOutputs()) > 0 {
+			if len(alert.RemainingOutputs(helpers.GetRequiredOutputs())) > 0 {
 				am.dispatchAlert(alert)
 			} else if alert.MergeEnabled() {
 				mergeEnabledAlerts = append(mergeEnabledAlerts, alert)
@@ -174,6 +199,14 @@ func Handler(ctx context.Context, event events.CloudWatchEvent) {
 	NewAlertMerger().Dispatch()
 }
 
-func main() {
-	lambda.Start(Handler)
+func getEnvInt(key string, defaultValue int) int {
+	if val, ok := os.LookupEnv(key); ok {
+		intVal, err := strconv.Atoi(val)
+		if err != nil {
+			log.Printf("Error converting %s to int: %v", key, err)
+			return defaultValue
+		}
+		return intVal
+	}
+	return defaultValue
 }

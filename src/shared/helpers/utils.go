@@ -2,8 +2,12 @@ package helpers
 
 import (
 	"encoding/json"
+	"fmt"
+	"plugin"
 	"reflect"
 )
+
+const DATETIME_FORMAT = "2006-01-02T15:04:05.000Z"
 
 func GetFirstKey(data interface{}, searchKey string, defaultValue interface{}) interface{} {
 	keys := GetKeys(data, searchKey, 1)
@@ -118,4 +122,25 @@ func Difference(a, b []string) []string {
 		}
 	}
 	return result
+}
+
+func LoadPlugins[T any](paths []string) ([]T, error) {
+	var plugins []T
+	for _, path := range paths {
+		p, err := plugin.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		sym, err := p.Lookup("Plugin")
+		if err != nil {
+			// return nil, err
+			continue
+		}
+		pluginInstance, ok := sym.(T)
+		if !ok {
+			return nil, fmt.Errorf("invalid type for plugin %s", path)
+		}
+		plugins = append(plugins, pluginInstance)
+	}
+	return plugins, nil
 }

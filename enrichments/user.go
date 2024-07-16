@@ -12,7 +12,7 @@ type UserEnrichment struct {
 	enrichments.Enrichment
 }
 
-func (e *UserEnrichment) EnrichLogic(ctx context.Context, record map[string]interface{}) error {
+func (e *UserEnrichment) Enrich(ctx context.Context, record map[string]interface{}) error {
 	if user, ok := record["UserID"].(string); ok {
 		EnrichedUser, err := getUserData(user)
 		if err != nil {

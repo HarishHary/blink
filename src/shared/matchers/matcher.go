@@ -17,19 +17,26 @@ func (e *MatcherError) Error() string {
 
 type IMatcher interface {
 	Match(ctx context.Context, record map[string]interface{}) (bool, error)
+	Name() string
+	String() string
 }
 
 type Matcher struct {
-	Name        string
-	Description string
+	id          string
+	name        string
+	description string
+	disabled    bool
 }
 
-func (r *Matcher) Match(ctx context.Context, record map[string]interface{}) (bool, error) {
-	log.Printf("Using matcher %s with context:%s and record:%s", r.Name, ctx, record)
-	return r.MatchLogic(ctx, record)
+func (m *Matcher) Name() string {
+	return m.name
 }
 
-func (r *Matcher) MatchLogic(ctx context.Context, record map[string]interface{}) (bool, error) {
-	log.Printf("Using matcher %s with context:%s and record:%s", r.Name, ctx, record)
-	return true, nil
+func (m *Matcher) String() string {
+	return fmt.Sprintf("Matcher '%s' with id:'%s', description:'%s', disabled:'%t'", m.name, m.id, m.description, m.disabled)
+}
+
+func (m *Matcher) Match(ctx context.Context, record map[string]interface{}) (bool, error) {
+	log.Printf("Using matcher 'base matcher' with context:'%s' and record:'%s'", ctx, record)
+	return false, nil
 }

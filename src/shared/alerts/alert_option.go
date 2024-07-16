@@ -2,8 +2,6 @@ package alerts
 
 import (
 	"time"
-
-	"github.com/harishhary/blink/src/shared/publishers"
 )
 
 // AlertOption defines the functional option type
@@ -20,13 +18,6 @@ func Attempts(attempts int) AlertOption {
 func Cluster(cluster string) AlertOption {
 	return func(a *Alert) {
 		a.Cluster = cluster
-	}
-}
-
-// Context sets the context for the alert
-func Context(context map[string]interface{}) AlertOption {
-	return func(a *Alert) {
-		a.Context = context
 	}
 }
 
@@ -73,14 +64,14 @@ func MergeWindow(mergeWindow time.Duration) AlertOption {
 }
 
 // OutputsSent sets the outputs sent for the alert
-func OutputsSent(outputsSent map[string]struct{}) AlertOption {
+func OutputsSent(outputsSent []string) AlertOption {
 	return func(a *Alert) {
 		a.OutputsSent = outputsSent
 	}
 }
 
 // Publishers sets the publishers for the alert
-func Publishers(publishers []publishers.IPublisher) AlertOption {
+func Publishers(publishers []string) AlertOption {
 	return func(a *Alert) {
 		a.Publishers = publishers
 	}

@@ -13,7 +13,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/harishhary/blink/src/shared"
 	"github.com/harishhary/blink/src/shared/helpers"
-	"github.com/harishhary/blink/src/shared/publishers"
 )
 
 // AlertCreationError custom error for alert creation
@@ -30,16 +29,15 @@ type Alert struct {
 	AlertID         string
 	Attempts        int
 	Cluster         string
-	Context         map[string]interface{}
 	Created         time.Time
 	Dispatched      time.Time
 	LogSource       string
 	LogType         string
 	MergeByKeys     []string
 	MergeWindow     time.Duration
-	Outputs         []string
+	Dispatchers     []string
 	OutputsSent     []string
-	Publishers      []publishers.IPublisher
+	Publishers      []string
 	Record          shared.Record
 	RuleDescription string
 	RuleName        string
@@ -48,19 +46,15 @@ type Alert struct {
 	Staged          bool
 }
 
-// Constants for datetime format
-const DATETIME_FORMAT = "2006-01-02T15:04:05.000Z"
-
 // NewAlert creates a new Alert
-func NewAlert(ruleName string, record shared.Record, outputs []string, opts ...AlertOption) (*Alert, error) {
+func NewAlert(ruleName string, record shared.Record, dispatchers []string, opts ...AlertOption) (*Alert, error) {
 	alert := &Alert{
 		AlertID:     uuid.NewString(),
 		Created:     time.Now().UTC(),
 		RuleName:    ruleName,
 		Record:      record,
-		Outputs:     outputs,
-		Context:     make(map[string]interface{}),
-		Publishers:  []publishers.IPublisher{},
+		Dispatchers: dispatchers,
+		Publishers:  make([]string, 10),
 		OutputsSent: make([]string, 10),
 	}
 
@@ -68,7 +62,7 @@ func NewAlert(ruleName string, record shared.Record, outputs []string, opts ...A
 		opt(alert)
 	}
 
-	if !(alert.RuleName != "" && len(alert.Outputs) > 0) {
+	if !(alert.RuleName != "" && len(alert.Dispatchers) > 0) {
 		return nil, &AlertError{Message: "Invalid Alert options"}
 	}
 
@@ -95,8 +89,8 @@ func Merge(alerts []*Alert) (*Alert, error) {
 
 	newRecord := shared.Record{
 		"AlertCount":      len(alerts),
-		"AlertTimeFirst":  alerts[0].Created.Format(DATETIME_FORMAT),
-		"AlertTimeLast":   alerts[len(alerts)-1].Created.Format(DATETIME_FORMAT),
+		"AlertTimeFirst":  alerts[0].Created.Format(helpers.DATETIME_FORMAT),
+		"AlertTimeLast":   alerts[len(alerts)-1].Created.Format(helpers.DATETIME_FORMAT),
 		"MergedBy":        alerts[0].Record.GetMergedKeys(mergeKeys),
 		"OtherCommonKeys": common,
 		"ValueDiffs":      getValueDiffs(common, alerts, cleanedRecords),
@@ -105,9 +99,8 @@ func Merge(alerts []*Alert) (*Alert, error) {
 	return NewAlert(
 		alerts[0].RuleName,
 		newRecord,
-		alerts[len(alerts)-1].Outputs,
+		alerts[len(alerts)-1].Dispatchers,
 		Cluster(alerts[0].Cluster),
-		Context(alerts[0].Context),
 		LogSource(alerts[0].LogSource),
 		LogType(alerts[0].LogType),
 		Publishers(alerts[0].Publishers),
@@ -146,7 +139,7 @@ func getValueDiffs(common map[string]interface{}, alerts []*Alert, records []sha
 	for i, record := range records {
 		diff := record.ComputeDiff(common)
 		if len(diff) > 0 {
-			valueDiffs[alerts[i].Created.Format(DATETIME_FORMAT)] = diff
+			valueDiffs[alerts[i].Created.Format(helpers.DATETIME_FORMAT)] = diff
 		}
 	}
 	return valueDiffs
@@ -173,14 +166,14 @@ func CreateFromDynamoRecord(record map[string]types.AttributeValue) (*Alert, err
 	}
 
 	if createdStr, ok := record["Created"].(*types.AttributeValueMemberS); ok {
-		a.Created, err = time.Parse(DATETIME_FORMAT, createdStr.Value)
+		a.Created, err = time.Parse(helpers.DATETIME_FORMAT, createdStr.Value)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse Created timestamp: %w", err)
 		}
 	}
 
 	if dispatchedStr, ok := record["Dispatched"].(*types.AttributeValueMemberS); ok {
-		dispatchedTime, err := time.Parse(DATETIME_FORMAT, dispatchedStr.Value)
+		dispatchedTime, err := time.Parse(helpers.DATETIME_FORMAT, dispatchedStr.Value)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse Dispatched timestamp: %w", err)
 		}
@@ -204,14 +197,13 @@ func (a *Alert) DynamoRecord() (map[string]types.AttributeValue, error) {
 		"AlertID":         a.AlertID,  // Sort/Range Key
 		"Attempts":        a.Attempts,
 		"Cluster":         a.Cluster,
-		"Context":         a.Context,
-		"Created":         a.Created.Format(DATETIME_FORMAT),
-		"Dispatched":      a.Dispatched.Format(DATETIME_FORMAT),
+		"Created":         a.Created.Format(helpers.DATETIME_FORMAT),
+		"Dispatched":      a.Dispatched.Format(helpers.DATETIME_FORMAT),
 		"LogSource":       a.LogSource,
 		"LogType":         a.LogType,
 		"MergeByKeys":     a.MergeByKeys,
 		"MergeWindow":     a.MergeWindow,
-		"Outputs":         a.Outputs,
+		"Outputs":         a.Dispatchers,
 		"OutputsSent":     a.OutputsSent,
 		"Publishers":      a.Publishers,
 		"Record":          helpers.JsonCompact(a.Record),
@@ -230,12 +222,11 @@ func (a *Alert) DynamoRecord() (map[string]types.AttributeValue, error) {
 func (a *Alert) OutputDict() (map[string]interface{}, error) {
 	output := map[string]interface{}{
 		"cluster":          a.Cluster,
-		"context":          a.Context,
-		"created":          a.Created.Format(DATETIME_FORMAT),
+		"created":          a.Created.Format(helpers.DATETIME_FORMAT),
 		"id":               a.AlertID,
 		"log_source":       a.LogSource,
 		"log_type":         a.LogType,
-		"outputs":          a.Outputs,
+		"outputs":          a.Dispatchers,
 		"publishers":       a.Publishers,
 		"record":           a.Record,
 		"rule_description": a.RuleDescription,
@@ -318,9 +309,9 @@ func (a *Alert) MergeEnabled() bool {
 func (a *Alert) RemainingOutputs(requiredOutputs []string) []string {
 	var outputsToSendNow []string
 	if a.MergeEnabled() {
-		outputsToSendNow = helpers.Intersect(a.Outputs, requiredOutputs)
+		outputsToSendNow = helpers.Intersect(a.Dispatchers, requiredOutputs)
 	} else {
-		outputsToSendNow = a.Outputs
+		outputsToSendNow = a.Dispatchers
 	}
 	return helpers.Difference(outputsToSendNow, a.OutputsSent)
 }
