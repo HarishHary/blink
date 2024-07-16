@@ -40,3 +40,14 @@ func (m *Matcher) Match(ctx context.Context, record map[string]interface{}) (boo
 	log.Printf("Using matcher 'base matcher' with context:'%s' and record:'%s'", ctx, record)
 	return false, nil
 }
+
+func NewMatcher(name string, setters ...MatcherOption) Matcher {
+	// Default Options
+	r := Matcher{
+		name: name,
+	}
+	for _, setter := range setters {
+		setter(&r)
+	}
+	return r
+}

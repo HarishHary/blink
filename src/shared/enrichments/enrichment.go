@@ -48,3 +48,14 @@ func (e *Enrichment) Enrich(ctx context.Context, record map[string]interface{}) 
 	log.Printf("Using enrichment 'base enrichement' with context:'%s' and record:'%s'", ctx, record)
 	return nil
 }
+
+func NewEnrichment(name string, setters ...EnrichmentOption) Enrichment {
+	// Default Options
+	r := Enrichment{
+		name: name,
+	}
+	for _, setter := range setters {
+		setter(&r)
+	}
+	return r
+}

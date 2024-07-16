@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"runtime"
 
+	"github.com/harishhary/blink/src/shared"
 	"github.com/harishhary/blink/src/shared/dispatchers"
 	"github.com/harishhary/blink/src/shared/enrichments"
 	"github.com/harishhary/blink/src/shared/formatters"
@@ -33,42 +34,43 @@ func (e *RuleError) Error() string {
 }
 
 type IRule interface {
-	Evaluate(ctx context.Context, record map[string]interface{}) bool
+	Evaluate(ctx context.Context, record shared.Record) bool
+	Name() string
 }
 
 type Rule struct {
-	Name            string
-	RuleID          string
-	Description     string
-	Severity        int
-	MergeByKeys     []string
-	MergeWindowMins int
-	ReqSubkeys      []string
-	Disabled        bool
-	Inputs          []inputs.IInput
-	Dispatchers     []dispatchers.IDispatcher
-	Matchers        []matchers.IMatcher
-	Formatters      []formatters.IFormatter
-	Enrichments     []enrichments.IEnrichment
-	TuningRules     []tuning_rules.ITuningRule
-	Checksum        string
+	name            string
+	id              string
+	description     string
+	severity        int
+	mergeByKeys     []string
+	mergeWindowMins int
+	reqSubkeys      []string
+	disabled        bool
+	inputs          []inputs.IInput
+	dispatchers     []dispatchers.IDispatcher
+	matchers        []matchers.IMatcher
+	formatters      []formatters.IFormatter
+	enrichments     []enrichments.IEnrichment
+	tuningRules     []tuning_rules.ITuningRule
+	checksum        string
 }
 
 func (r *Rule) Disable() {
-	r.Disabled = true
+	r.disabled = true
 }
 
-func (r *Rule) GetName() string {
-	return r.Name
+func (r *Rule) Name() string {
+	return r.name
 }
 
-func (r *Rule) GetChecksum() string {
-	if r.Checksum != "" {
-		return r.Checksum
+func (r *Rule) Checksum() string {
+	if r.checksum != "" {
+		return r.checksum
 	}
 
 	fset := token.NewFileSet()
-	funcName := runtime.FuncForPC(reflect.ValueOf(r.EvaluateLogic).Pointer()).Name()
+	funcName := runtime.FuncForPC(reflect.ValueOf(r.Evaluate).Pointer()).Name()
 	node, err := parser.ParseFile(fset, "", fmt.Sprintf("package main; var f = %s", funcName), parser.ParseComments)
 	if err != nil {
 		logger.Printf("Could not parse rule function: %v", err)
@@ -82,17 +84,17 @@ func (r *Rule) GetChecksum() string {
 		}
 		return true
 	})
-	r.Checksum = hex.EncodeToString(h.Sum(nil))
-	return r.Checksum
+	r.checksum = hex.EncodeToString(h.Sum(nil))
+	return r.checksum
 }
 
 // ApplyMatchers applies all matchers to the event.
-func (r *Rule) ApplyMatchers(ctx context.Context, record map[string]interface{}) bool {
-	if r.Disabled {
+func (r *Rule) ApplyMatchers(ctx context.Context, record shared.Record) bool {
+	if r.disabled {
 		return false
 	}
 
-	for _, matcher := range r.Matchers {
+	for _, matcher := range r.matchers {
 		match, err := matcher.Match(ctx, record)
 		if err != nil {
 			return false
@@ -105,49 +107,45 @@ func (r *Rule) ApplyMatchers(ctx context.Context, record map[string]interface{})
 }
 
 // ApplyEnrichments applies all enrichment functions to the event.
-func (r *Rule) ApplyEnrichments(ctx context.Context, record map[string]interface{}) error {
-	for _, enrich := range r.Enrichments {
+func (r *Rule) ApplyEnrichments(ctx context.Context, record shared.Record) error {
+	for _, enrich := range r.enrichments {
 		enrich.Enrich(ctx, record)
 	}
 	return nil
 }
 
 // ApplyTuningRules applies all tuning rules to the event.
-func (r *Rule) ApplyTuningRules(ctx context.Context, record map[string]interface{}) error {
-	for _, tuningRule := range r.TuningRules {
+func (r *Rule) ApplyTuningRules(ctx context.Context, record shared.Record) error {
+	for _, tuningRule := range r.tuningRules {
 		tuningRule.Tune(ctx, record)
 	}
 	return nil
 }
 
 // ApplyFormatters applies all formatters to the event.
-func (r *Rule) ApplyFormatters(ctx context.Context, record map[string]interface{}) error {
-	for _, formatter := range r.Formatters {
+func (r *Rule) ApplyFormatters(ctx context.Context, record shared.Record) error {
+	for _, formatter := range r.formatters {
 		formatter.Format(ctx, record)
 	}
 	return nil
 }
 
 // ApplyDispatchers applies all dispatchers to the event.
-func (r *Rule) ApplyDispatchers(ctx context.Context, record map[string]interface{}) error {
-	for _, dispatcher := range r.Dispatchers {
+func (r *Rule) ApplyDispatchers(ctx context.Context, record shared.Record) error {
+	for _, dispatcher := range r.dispatchers {
 		dispatcher.Dispatch(ctx, record)
 	}
 	return nil
 }
 
-func (r *Rule) Evaluate(ctx context.Context, record map[string]interface{}) bool {
-	return r.EvaluateLogic(ctx, record)
-}
-
-func (r *Rule) EvaluateLogic(ctx context.Context, record map[string]interface{}) bool {
+func (r *Rule) Evaluate(ctx context.Context, record shared.Record) bool {
 	return true
 }
 
 func NewRule(name string, setters ...RuleOption) Rule {
 	// Default Options
 	r := Rule{
-		Name: name,
+		name: name,
 	}
 	for _, setter := range setters {
 		setter(&r)

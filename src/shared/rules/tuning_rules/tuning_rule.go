@@ -19,24 +19,27 @@ func (e *TuningRuleError) Error() string {
 
 type ITuningRule interface {
 	Tune(ctx context.Context, record shared.Record) error
+	Name() string
 }
 
 type TuningRule struct {
-	Name           string
-	RuleID         string
-	Description    string
-	Precedence     int
-	Disabled       bool
-	Matchers       []matchers.IMatcher
-	Global         bool
-	InitialContext *map[string]interface{}
-	Context        *map[string]interface{}
+	name        string
+	id          string
+	description string
+	precedence  int
+	disabled    bool
+	matchers    []matchers.IMatcher
+	global      bool
+}
+
+func (r *TuningRule) Name() string {
+	return r.name
 }
 
 func NewTuningRule(name string, setters ...TuningRuleOption) TuningRule {
 	// Default Options
 	r := TuningRule{
-		Name: name,
+		name: name,
 	}
 	for _, setter := range setters {
 		setter(&r)
@@ -44,24 +47,23 @@ func NewTuningRule(name string, setters ...TuningRuleOption) TuningRule {
 	return r
 }
 
-func (r *TuningRule) Tune(ctx context.Context, record shared.Record) error {
-	if r.Disabled {
-		return nil
+func (r *TuningRule) ApplyMatchers(ctx context.Context, record shared.Record) bool {
+	if r.disabled {
+		return false
 	}
 
-	for _, matcher := range r.Matchers {
+	for _, matcher := range r.matchers {
 		match, err := matcher.Match(ctx, record)
 		if err != nil {
-			return &TuningRuleError{Message: err.Error()}
+			return false
 		}
 		if !match {
-			return nil // If any matcher fails, do not apply the rule
+			return false // If any matcher fails, do not apply the rule
 		}
 	}
-
-	return r.TuneLogic(ctx, record)
+	return true
 }
 
-func (r *TuningRule) TuneLogic(ctx context.Context, record shared.Record) error {
+func (r *TuningRule) Tune(ctx context.Context, record shared.Record) error {
 	return nil
 }

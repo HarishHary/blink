@@ -11,74 +11,74 @@ import (
 
 type RuleOption func(*Rule)
 
-func Description(Description string) RuleOption {
+func Description(description string) RuleOption {
 	return func(rule *Rule) {
-		rule.Description = Description
+		rule.description = description
 	}
 }
 
-func Severity(Severity int) RuleOption {
+func Severity(severity int) RuleOption {
 	return func(rule *Rule) {
-		rule.Severity = Severity
+		rule.severity = severity
 	}
 }
 
-func MergeByKeys(MergeByKeys []string) RuleOption {
+func MergeByKeys(mergeByKeys []string) RuleOption {
 	return func(rule *Rule) {
-		rule.MergeByKeys = MergeByKeys
+		rule.mergeByKeys = mergeByKeys
 	}
 }
 
-func MergeWindowMins(MergeWindowMins int) RuleOption {
+func MergeWindowMins(mergeWindowMins int) RuleOption {
 	return func(rule *Rule) {
-		rule.MergeWindowMins = MergeWindowMins
+		rule.mergeWindowMins = mergeWindowMins
 	}
 }
 
-func ReqSubkeys(ReqSubkeys []string) RuleOption {
+func ReqSubkeys(reqSubkeys []string) RuleOption {
 	return func(rule *Rule) {
-		rule.ReqSubkeys = ReqSubkeys
+		rule.reqSubkeys = reqSubkeys
 	}
 }
 
-func Disabled(Disabled bool) RuleOption {
+func Disabled(disabled bool) RuleOption {
 	return func(rule *Rule) {
-		rule.Disabled = Disabled
+		rule.disabled = disabled
 	}
 }
 
-func Inputs(Inputs []inputs.IInput) RuleOption {
+func Inputs(inputs []inputs.IInput) RuleOption {
 	return func(rule *Rule) {
-		rule.Inputs = Inputs
+		rule.inputs = inputs
 	}
 }
 
-func Dispatchers(Dispatchers []dispatchers.IDispatcher) RuleOption {
+func Dispatchers(dispatchers []dispatchers.IDispatcher) RuleOption {
 	return func(rule *Rule) {
-		rule.Dispatchers = Dispatchers
+		rule.dispatchers = dispatchers
 	}
 }
 
-func Matchers(Matchers []matchers.IMatcher) RuleOption {
+func Matchers(matchers []matchers.IMatcher) RuleOption {
 	return func(rule *Rule) {
-		rule.Matchers = Matchers
+		rule.matchers = matchers
 	}
 }
 
-func Formatters(Formatters []formatters.IFormatter) RuleOption {
+func Formatters(formatters []formatters.IFormatter) RuleOption {
 	return func(rule *Rule) {
-		rule.Formatters = Formatters
+		rule.formatters = formatters
 	}
 }
 
-func Enrichments(Enrichments []enrichments.IEnrichment) RuleOption {
+func Enrichments(enrichments []enrichments.IEnrichment) RuleOption {
 	return func(rule *Rule) {
-		rule.Enrichments = Enrichments
+		rule.enrichments = enrichments
 	}
 }
 
-func TuningRules(TuningRules []tuning_rules.ITuningRule) RuleOption {
+func TuningRules(tuningRules []tuning_rules.ITuningRule) RuleOption {
 	return func(rule *Rule) {
-		rule.TuningRules = TuningRules
+		rule.tuningRules = tuningRules
 	}
 }

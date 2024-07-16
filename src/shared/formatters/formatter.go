@@ -40,3 +40,14 @@ func (f *Formatter) Format(ctx context.Context, record map[string]interface{}) (
 	log.Printf("Using formatter 'base formatter' with context:'%s' and record:'%s'", ctx, record)
 	return false, nil
 }
+
+func NewFormatter(name string, setters ...FormatterOption) Formatter {
+	// Default Options
+	r := Formatter{
+		name: name,
+	}
+	for _, setter := range setters {
+		setter(&r)
+	}
+	return r
+}

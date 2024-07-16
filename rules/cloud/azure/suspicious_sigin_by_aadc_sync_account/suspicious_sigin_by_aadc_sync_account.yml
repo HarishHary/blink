@@ -41,8 +41,6 @@ tags:
     - azure
     - identity
     - authentication
-    - ks.coverage.publiccloud.azure
-    - ks.coverage.identity
     - attack.T1078.004
     - attack.T1078.002
     - attack.T1550
