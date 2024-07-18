@@ -109,7 +109,6 @@ func (at *DynamoDBBackend) RuleNamesGenerator() <-chan string {
 
 func (at *DynamoDBBackend) GetAlertRecords(ruleName string, alertProcTimeoutSec int) <-chan map[string]any {
 	inProgressThreshold := time.Now().Add(-time.Duration(alertProcTimeoutSec) * time.Second).Format(helpers.DATETIME_FORMAT)
-
 	filter := expression.Name("Dispatched").LessThan(expression.Value(inProgressThreshold))
 	keyCond := expression.Key("RuleName").Equal(expression.Value(ruleName))
 

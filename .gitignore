@@ -1,100 +1,68 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
-
-# C extensions
+### Go ###
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
 *.so
+*.dylib
 
-# Distribution / packaging
-.Python
-env/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-*.egg-info/
-.installed.cfg
-*.egg
+# Test binary, built with `go test -c`
+*.test
 
-# PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
-*.manifest
-*.spec
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
 
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
+# Dependency directories
+vendor/
 
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*,cover
-.hypothesis/
+# Go workspace file
+go.work
 
-# Translations
-*.mo
-*.pot
+### Terraform ###
+# Local .terraform directories
+**/.terraform/*
 
-# Django stuff:
-*.log
-local_settings.py
+# .tfstate files
+*.tfstate
+*.tfstate.*
 
-# Flask stuff:
-instance/
-.webassets-cache
+# Crash log files
+crash.log
+crash.*.log
 
-# MacOS Finder
-.DS_Store
+# Exclude all .tfvars files, which are likely to contain sensitive data, such as
+# password, private keys, and other secrets. These should not be part of version
+# control as they are data points which are potentially sensitive and subject
+# to change depending on the environment.
+*.tfvars
+*.tfvars.json
 
-# Scrapy stuff:
-.scrapy
+# Ignore override files as they are usually used to override resources locally and so
+# are not checked in
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
 
-# Sphinx documentation
-docs/_build/
+# Ignore CLI configuration files
+.terraformrc
+terraform.rc
 
-# PyBuilder
-target/
+### VisualStudioCode ###
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+!.vscode/*.code-snippets
 
-# IPython Notebook
-.ipynb_checkpoints
+# Local History for Visual Studio Code
+.history/
 
-# pyenv
-.python-version
+# Built Visual Studio Code Extensions
+*.vsix
 
-# celery beat schedule file
-celerybeat-schedule
-
-# dotenv
-.env
-
-# virtualenv
-venv/
-ENV/
-
-# Spyder project settings
-.spyderproject
-
-# Rope project settings
-.ropeproject
-
-# vi(m)
-*.swp
-settings.json
-
-# VisualStudio
-.vs/
-.vscode/launch.json
+### VisualStudioCode Patch ###
+# Ignore all local history of files
+.history
+.ionide

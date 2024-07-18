@@ -1,0 +1,32 @@
+// For format details, see https://aka.ms/devcontainer.json. For config options, see the
+// README at: https://github.com/devcontainers/templates/tree/main/src/python
+{
+    "name": "Go",
+    // Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
+    "build": {
+        "dockerfile": "./Dockerfile"
+    },
+    "features": {},
+    // Features to add to the dev container. More info: https://containers.dev/features.
+    // "features": {},
+    // Use 'forwardPorts' to make a list of ports inside the container available locally.
+    // "forwardPorts": [],
+    // Use 'postCreateCommand' to run commands after the container is created.
+    // "postCreateCommand": "cp /root/.host-ssh/* /root/.ssh && chown -R root:root /root/.ssh && bash .devcontainer/install-development-tools.sh",
+    // Configure tool-specific properties.
+    // "customizations": {},
+    "mounts": [
+        "source=${localEnv:HOME}${localEnv:USERPROFILE}/.ssh,target=/root/.host-ssh,type=bind,consistency=cached"
+    ],
+    // Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.
+    "remoteUser": "root",
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "go.dev",
+                "eamodio.gitlens",
+                "DavidAnson.vscode-markdownlint",
+            ]
+        }
+    }
+}
