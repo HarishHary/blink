@@ -20,7 +20,7 @@ func URL(url string) DispatcherOption {
 	}
 }
 
-func Config(config map[string]interface{}) DispatcherOption {
+func Config(config map[string]any) DispatcherOption {
 	return func(dispatcher *Dispatcher) {
 		dispatcher.config = config
 	}

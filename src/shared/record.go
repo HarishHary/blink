@@ -7,11 +7,11 @@ import (
 	"github.com/harishhary/blink/src/shared/helpers"
 )
 
-type Record map[string]interface{}
+type Record map[string]any
 
 // getMergedKeys retrieves merge keys from a record
-func (r *Record) GetMergedKeys(keys []string) map[string]interface{} {
-	mergeKeys := make(map[string]interface{})
+func (r *Record) GetMergedKeys(keys []string) map[string]any {
+	mergeKeys := make(map[string]any)
 	for _, key := range keys {
 		mergeKeys[key] = helpers.GetFirstKey(r, key, "N/A")
 	}
@@ -35,12 +35,12 @@ func (r *Record) CleanRecord(ignoredKeys []string) Record {
 }
 
 // computeDiff finds values in the record that are not in the common subset
-func (r *Record) ComputeDiff(common map[string]interface{}) map[string]interface{} {
-	diff := make(map[string]interface{})
+func (r *Record) ComputeDiff(common map[string]any) map[string]any {
+	diff := make(map[string]any)
 	for key, val := range *r {
 		if commonVal, ok := common[key]; !ok || !reflect.DeepEqual(val, commonVal) {
 			if v, ok := val.(Record); ok && reflect.TypeOf(commonVal).Kind() == reflect.Map {
-				nestedDiff := v.ComputeDiff(commonVal.(map[string]interface{}))
+				nestedDiff := v.ComputeDiff(commonVal.(map[string]any))
 				if len(nestedDiff) > 0 {
 					diff[key] = nestedDiff
 				}

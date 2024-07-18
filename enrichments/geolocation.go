@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/harishhary/blink/src/shared"
 	"github.com/harishhary/blink/src/shared/enrichments"
 )
 
@@ -15,7 +16,7 @@ type geoLocationEnrichment struct {
 	enrichments.Enrichment
 }
 
-func (e *geoLocationEnrichment) Enrich(ctx context.Context, record map[string]interface{}) error {
+func (e *geoLocationEnrichment) Enrich(ctx context.Context, record shared.Record) error {
 	if ip, ok := record["IP"].(string); ok {
 		geoLocation, err := getGeoLocation(ip)
 		if err != nil {

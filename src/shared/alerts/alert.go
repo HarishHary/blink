@@ -8,8 +8,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/google/uuid"
 	"github.com/harishhary/blink/src/shared"
 	"github.com/harishhary/blink/src/shared/helpers"
@@ -37,10 +35,11 @@ type Alert struct {
 	MergeWindow     time.Duration
 	Dispatchers     []string
 	OutputsSent     []string
-	Publishers      []string
+	Formatters      []string
 	Record          shared.Record
 	RuleDescription string
 	RuleName        string
+	RuleID          string
 	SourceEntity    string
 	SourceService   string
 	Staged          bool
@@ -54,7 +53,7 @@ func NewAlert(ruleName string, record shared.Record, dispatchers []string, opts 
 		RuleName:    ruleName,
 		Record:      record,
 		Dispatchers: dispatchers,
-		Publishers:  make([]string, 10),
+		Formatters:  make([]string, 10),
 		OutputsSent: make([]string, 10),
 	}
 
@@ -103,7 +102,7 @@ func Merge(alerts []*Alert) (*Alert, error) {
 		Cluster(alerts[0].Cluster),
 		LogSource(alerts[0].LogSource),
 		LogType(alerts[0].LogType),
-		Publishers(alerts[0].Publishers),
+		Formatters(alerts[0].Formatters),
 		RuleDescription(alerts[0].RuleDescription),
 		SourceEntity(alerts[0].SourceEntity),
 		SourceService(alerts[0].SourceService),
@@ -112,12 +111,12 @@ func Merge(alerts []*Alert) (*Alert, error) {
 }
 
 // computeCommon finds values common to all records
-func computeCommon(records []shared.Record) map[string]interface{} {
+func computeCommon(records []shared.Record) map[string]any {
 	if len(records) == 0 {
-		return make(map[string]interface{})
+		return make(map[string]any)
 	}
 
-	common := make(map[string]interface{})
+	common := make(map[string]any)
 	for key, val := range records[0] {
 		allEqual := true
 		for _, record := range records[1:] {
@@ -134,8 +133,8 @@ func computeCommon(records []shared.Record) map[string]interface{} {
 }
 
 // getValueDiffs finds values in the records that are not in the common subset
-func getValueDiffs(common map[string]interface{}, alerts []*Alert, records []shared.Record) map[string]interface{} {
-	valueDiffs := make(map[string]interface{})
+func getValueDiffs(common map[string]any, alerts []*Alert, records []shared.Record) map[string]any {
+	valueDiffs := make(map[string]any)
 	for i, record := range records {
 		diff := record.ComputeDiff(common)
 		if len(diff) > 0 {
@@ -155,79 +154,16 @@ func anyStaged(alerts []*Alert) bool {
 	return false
 }
 
-// CreateFromDynamoRecord creates an alert from a DynamoDB record
-func CreateFromDynamoRecord(record map[string]types.AttributeValue) (*Alert, error) {
-	var err error
-	a := new(Alert)
-
-	err = attributevalue.UnmarshalMap(record, a)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal dynamodb record to alert: %w", err)
-	}
-
-	if createdStr, ok := record["Created"].(*types.AttributeValueMemberS); ok {
-		a.Created, err = time.Parse(helpers.DATETIME_FORMAT, createdStr.Value)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse Created timestamp: %w", err)
-		}
-	}
-
-	if dispatchedStr, ok := record["Dispatched"].(*types.AttributeValueMemberS); ok {
-		dispatchedTime, err := time.Parse(helpers.DATETIME_FORMAT, dispatchedStr.Value)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse Dispatched timestamp: %w", err)
-		}
-		a.Dispatched = dispatchedTime
-	}
-
-	if recordStr, ok := record["Record"].(*types.AttributeValueMemberS); ok {
-		err = json.Unmarshal([]byte(recordStr.Value), &a.Record)
-		if err != nil {
-			return nil, fmt.Errorf("failed to unmarshal Record JSON: %w", err)
-		}
-	}
-
-	return a, nil
-}
-
-// DynamoRecord converts the alert to a DynamoDB record
-func (a *Alert) DynamoRecord() (map[string]types.AttributeValue, error) {
-	item, err := attributevalue.MarshalMap(map[string]interface{}{
-		"RuleName":        a.RuleName, // Partition Key
-		"AlertID":         a.AlertID,  // Sort/Range Key
-		"Attempts":        a.Attempts,
-		"Cluster":         a.Cluster,
-		"Created":         a.Created.Format(helpers.DATETIME_FORMAT),
-		"Dispatched":      a.Dispatched.Format(helpers.DATETIME_FORMAT),
-		"LogSource":       a.LogSource,
-		"LogType":         a.LogType,
-		"MergeByKeys":     a.MergeByKeys,
-		"MergeWindow":     a.MergeWindow,
-		"Outputs":         a.Dispatchers,
-		"OutputsSent":     a.OutputsSent,
-		"Publishers":      a.Publishers,
-		"Record":          helpers.JsonCompact(a.Record),
-		"RuleDescription": a.RuleDescription,
-		"SourceEntity":    a.SourceEntity,
-		"SourceService":   a.SourceService,
-		"Staged":          a.Staged,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal alert to dynamodb record: %w", err)
-	}
-	return item, nil
-}
-
 // OutputDict converts the alert to a dictionary ready to send to an output
-func (a *Alert) OutputDict() (map[string]interface{}, error) {
-	output := map[string]interface{}{
+func (a *Alert) OutputDict() (map[string]any, error) {
+	output := map[string]any{
 		"cluster":          a.Cluster,
 		"created":          a.Created.Format(helpers.DATETIME_FORMAT),
 		"id":               a.AlertID,
 		"log_source":       a.LogSource,
 		"log_type":         a.LogType,
 		"outputs":          a.Dispatchers,
-		"publishers":       a.Publishers,
+		"formatters":       a.Formatters,
 		"record":           a.Record,
 		"rule_description": a.RuleDescription,
 		"rule_name":        a.RuleName,
@@ -238,17 +174,6 @@ func (a *Alert) OutputDict() (map[string]interface{}, error) {
 	return output, nil
 }
 
-func (a *Alert) DynamoKey() (map[string]types.AttributeValue, error) {
-	key, err := attributevalue.MarshalMap(map[string]string{
-		"RuleName": a.RuleName,
-		"AlertID":  a.AlertID,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return key, nil
-}
-
 // String returns a simple representation of the alert
 func (a *Alert) String() string {
 	return fmt.Sprintf("<Alert %s triggered from %s>", a.AlertID, a.RuleName)
@@ -256,17 +181,12 @@ func (a *Alert) String() string {
 
 // FullString returns a detailed representation of the alert
 func (a *Alert) FullString() string {
-	dynamoRecord, err := a.DynamoRecord()
+	recordJSON, err := json.MarshalIndent(a, "", "  ")
 	if err != nil {
-		return fmt.Sprintf("Error creating dynamo record: %v", err)
+		return fmt.Sprintf("Error marshalling record: %v", err)
 	}
 
-	dynamoRecordJSON, err := json.MarshalIndent(dynamoRecord, "", "  ")
-	if err != nil {
-		return fmt.Sprintf("Error marshalling dynamo record: %v", err)
-	}
-
-	return string(dynamoRecordJSON)
+	return string(recordJSON)
 }
 
 // Less compares alerts by their creation time
@@ -314,4 +234,12 @@ func (a *Alert) RemainingOutputs(requiredOutputs []string) []string {
 		outputsToSendNow = a.Dispatchers
 	}
 	return helpers.Difference(outputsToSendNow, a.OutputsSent)
+}
+
+func (a *Alert) RecordKey() map[string]any {
+	key := map[string]any{
+		"RuleName": a.RuleName,
+		"AlertID":  a.AlertID,
+	}
+	return key
 }

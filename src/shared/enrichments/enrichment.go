@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+
+	"github.com/harishhary/blink/src/shared"
 )
 
 // EnrichmentError custom error for enrichment functions
@@ -23,7 +25,7 @@ const (
 )
 
 type IEnrichment interface {
-	Enrich(ctx context.Context, record map[string]interface{}) error
+	Enrich(ctx context.Context, record shared.Record) error
 	Name() string
 	String() string
 }
@@ -44,7 +46,7 @@ func (e *Enrichment) String() string {
 	return fmt.Sprintf("Enrichment '%s' with id:'%s', description:'%s', disabled:'%t', timing:'%d'", e.name, e.id, e.description, e.disabled, e.timing)
 }
 
-func (e *Enrichment) Enrich(ctx context.Context, record map[string]interface{}) error {
+func (e *Enrichment) Enrich(ctx context.Context, record shared.Record) error {
 	log.Printf("Using enrichment 'base enrichement' with context:'%s' and record:'%s'", ctx, record)
 	return nil
 }

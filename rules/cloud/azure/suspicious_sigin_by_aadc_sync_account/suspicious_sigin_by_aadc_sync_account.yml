@@ -9,7 +9,6 @@ rule_version: 1
 goal: |
     We look for Sign-in events by "Sync" Azure AD Accounts, with non-standard "App Display Name" attribute, to identify sign-ins that don't align with the characteristics of the known "Azure AD user account".
 
-
 strategy_abstract_and_technical_context: |
     ## Hybrid environment?
     Most organizations use Active Directory to manage permissions and access to network resources. Many of these organizations are also starting to use Azure AD, a cloud-based identity and access management service, to manage user identities and access privileges to resources such as the Azure portal and Office 365.

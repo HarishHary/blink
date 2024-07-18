@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/harishhary/blink/src/shared/alerts"
 	"github.com/harishhary/blink/src/shared/helpers"
 )
 
@@ -31,7 +32,7 @@ func (e *DispatcherError) Error() string {
 
 // IDispatcher interface with required methods
 type IDispatcher interface {
-	Dispatch(ctx context.Context, alert map[string]interface{}) bool
+	Dispatch(ctx context.Context, alert alerts.Alert) bool
 	Name() string
 	String() string
 }
@@ -40,7 +41,7 @@ type Dispatcher struct {
 	name          string
 	id            string
 	url           string
-	config        map[string]interface{}
+	config        map[string]any
 	requestHelper *helpers.RequestHelper
 }
 
@@ -56,14 +57,14 @@ func (d *Dispatcher) logStatus(success bool, descriptor string) {
 	}
 }
 
-func (d *Dispatcher) Dispatch(ctx context.Context, alert map[string]interface{}) bool {
+func (d *Dispatcher) Dispatch(ctx context.Context, alert alerts.Alert) bool {
 	output := d.Name()
-	log.Printf("Sending dispatcher %s to %s with context: %s. Alert:\n%s", output, d.url, ctx, alert)
+	log.Printf("Sending dispatcher %s to %s with context: %s. Alert:\n%v", output, d.url, ctx, alert)
 	descriptor := output[strings.Index(output, ":")+1:]
 	var sent bool
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("Exception when sending %s to %s. Alert:\n%v", alert, output, alert)
+			log.Printf("Exception when sending alert to %s. Alert:\n%v", output, alert)
 			sent = false
 		}
 	}()

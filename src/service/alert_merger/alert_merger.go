@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 	"github.com/harishhary/blink/src/shared/alerts"
+	"github.com/harishhary/blink/src/shared/backends"
 	"github.com/harishhary/blink/src/shared/helpers"
 )
 
@@ -46,12 +47,11 @@ func (g *AlertMergeGroup) Add(a *alerts.Alert) bool {
 }
 
 type AlertMerger struct {
-	table               *alerts.AlertTable
-	context             context.Context
 	alertProc           string
 	alertProcTimeout    int
 	lambdaClient        *lambda.Client
 	alertGeneratorLimit int
+	backend             backends.IBackend
 }
 
 var instance *AlertMerger
@@ -66,13 +66,15 @@ func GetInstance() *AlertMerger {
 func NewAlertMerger() *AlertMerger {
 	ctx := context.Background()
 	sdkConfig, err := config.LoadDefaultConfig(ctx)
-	table, err := alerts.NewAlertTable(ctx, os.Getenv("ALERTS_TABLE"))
+	if err != nil {
+		return nil
+	}
+	backend, err := backends.NewDynamoDBBackend(ctx, os.Getenv("ALERTS_TABLE"))
 	if err != nil {
 		return nil
 	}
 	return &AlertMerger{
-		table:               table,
-		context:             ctx,
+		backend:             backend,
 		alertProc:           os.Getenv("ALERT_PROCESSOR"),
 		alertProcTimeout:    getEnvInt("ALERT_PROCESSOR_TIMEOUT_SEC", 60),
 		lambdaClient:        lambda.NewFromConfig(sdkConfig),
@@ -84,14 +86,14 @@ func (am *AlertMerger) getAlertGenerator(ruleName string) chan *alerts.Alert {
 	out := make(chan *alerts.Alert)
 	go func() {
 		defer close(out)
-		generator := am.table.GetAlertRecords(ruleName, am.alertProcTimeout)
+		generator := am.backend.GetAlertRecords(ruleName, am.alertProcTimeout)
 		idx := 0
 		for record := range generator {
 			if idx >= am.alertGeneratorLimit {
 				logger.Printf("Alert Merger reached alert limit of %d for rule \"%s\"", am.alertGeneratorLimit, ruleName)
 				return
 			}
-			alert, err := alerts.CreateFromDynamoRecord(record)
+			alert, err := am.backend.ToAlert(record)
 			if err != nil {
 				logger.Printf("Invalid alert record %s: %v", record, err)
 				continue
@@ -131,17 +133,17 @@ func (am *AlertMerger) dispatchAlert(a *alerts.Alert) {
 	logger.Printf("Dispatching %s to %s (attempt %d)", a, am.alertProc, a.Attempts)
 	// metrics.LogMetric(metrics.ALERT_MERGER_NAME, metrics.ALERT_ATTEMPTS, a.Attempts)
 
-	record, err := a.DynamoRecord()
-	if err != nil {
-	}
-	recordPayload, _ := json.Marshal(record)
+	dynamoRecord, _ := am.backend.ToRecord(a)
+	recordPayload, _ := json.Marshal(dynamoRecord)
 
 	payload := recordPayload
+	record_key := a.RecordKey()
 	if len(recordPayload) > MAX_LAMBDA_PAYLOAD_SIZE {
-		payload, _ = json.Marshal(a.DynamoKey)
+		payload, _ = json.Marshal(record_key)
 	}
 
-	am.lambdaClient.Invoke(am.context, &lambda.InvokeInput{
+	ctx := context.Background()
+	am.lambdaClient.Invoke(ctx, &lambda.InvokeInput{
 		FunctionName:   aws.String(am.alertProc),
 		InvocationType: types.InvocationTypeEvent,
 		Payload:        payload,
@@ -149,14 +151,14 @@ func (am *AlertMerger) dispatchAlert(a *alerts.Alert) {
 	})
 
 	a.Dispatched = time.Now()
-	am.table.MarkAsDispatched(a)
+	am.backend.MarkAsDispatched(a)
 }
 
 func (am *AlertMerger) Dispatch() {
 	var mergedAlerts []*alerts.Alert
 	var alertsToDelete []*alerts.Alert
 
-	for ruleName := range am.table.RuleNamesGenerator() {
+	for ruleName := range am.backend.RuleNamesGenerator() {
 		var mergeEnabledAlerts []*alerts.Alert
 		for alert := range am.getAlertGenerator(ruleName) {
 			if len(alert.RemainingOutputs(helpers.GetRequiredOutputs())) > 0 {
@@ -170,9 +172,7 @@ func (am *AlertMerger) Dispatch() {
 
 		for _, group := range am.mergeGroups(mergeEnabledAlerts) {
 
-			newAlert, err := alerts.Merge(group.alerts)
-			if err != nil {
-			}
+			newAlert, _ := alerts.Merge(group.alerts)
 			logger.Printf("Merged %d alerts into a new alert with ID %s", len(group.alerts), newAlert.AlertID)
 			mergedAlerts = append(mergedAlerts, newAlert)
 			alertsToDelete = append(alertsToDelete, group.alerts...)
@@ -180,7 +180,7 @@ func (am *AlertMerger) Dispatch() {
 	}
 
 	if len(mergedAlerts) > 0 {
-		am.table.AddAlerts(mergedAlerts)
+		am.backend.AddAlerts(mergedAlerts)
 		for _, alert := range mergedAlerts {
 			am.dispatchAlert(alert)
 		}
@@ -191,7 +191,7 @@ func (am *AlertMerger) Dispatch() {
 		for _, alert := range alertsToDelete {
 			keys = append(keys, []string{alert.RuleName, alert.AlertID})
 		}
-		am.table.DeleteAlerts(keys)
+		am.backend.DeleteAlerts(keys)
 	}
 }
 

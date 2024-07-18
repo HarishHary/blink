@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+
+	"github.com/harishhary/blink/src/shared"
 )
 
 // FormatterError custom error for Formatter
@@ -16,7 +18,7 @@ func (e *FormatterError) Error() string {
 }
 
 type IFormatter interface {
-	Format(ctx context.Context, record map[string]interface{}) (bool, error)
+	Format(ctx context.Context, record shared.Record) (bool, error)
 	Name() string
 	String() string
 }
@@ -36,7 +38,7 @@ func (f *Formatter) String() string {
 	return fmt.Sprintf("Formatter '%s' with id:'%s', description:'%s', disabled:'%t'", f.name, f.id, f.description, f.disabled)
 }
 
-func (f *Formatter) Format(ctx context.Context, record map[string]interface{}) (bool, error) {
+func (f *Formatter) Format(ctx context.Context, record shared.Record) (bool, error) {
 	log.Printf("Using formatter 'base formatter' with context:'%s' and record:'%s'", ctx, record)
 	return false, nil
 }

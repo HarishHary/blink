@@ -30,7 +30,7 @@ func main() {
 	}
 
 	// Example data to format
-	data := map[string]interface{}{"message": "this is a test"}
+	data := map[string]any{"message": "this is a test"}
 
 	for name, formatter := range formatterRepository.Formatters {
 		success, err := formatter.Format(context.Background(), data)

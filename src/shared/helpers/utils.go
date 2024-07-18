@@ -9,7 +9,7 @@ import (
 
 const DATETIME_FORMAT = "2006-01-02T15:04:05.000Z"
 
-func GetFirstKey(data interface{}, searchKey string, defaultValue interface{}) interface{} {
+func GetFirstKey(data any, searchKey string, defaultValue any) any {
 	keys := GetKeys(data, searchKey, 1)
 	if len(keys) > 0 {
 		return keys[0]
@@ -18,15 +18,15 @@ func GetFirstKey(data interface{}, searchKey string, defaultValue interface{}) i
 }
 
 // GetKeys searches for a key anywhere in the nested data structure, returning all associated values.
-func GetKeys(data interface{}, searchKey string, maxMatches int) []interface{} {
+func GetKeys(data any, searchKey string, maxMatches int) []any {
 	// Recursion is generally inefficient due to stack shuffling for each function call/return.
 	// Instead, we use a slice as a stack to avoid recursion.
 	type container struct {
-		data interface{}
+		data any
 	}
 
 	containers := []container{{data: data}}
-	results := []interface{}{}
+	results := []any{}
 
 	for len(containers) > 0 {
 		// Pop the last element
@@ -35,7 +35,7 @@ func GetKeys(data interface{}, searchKey string, maxMatches int) []interface{} {
 		containers = containers[:lastIndex]
 
 		switch obj := current.data.(type) {
-		case map[string]interface{}:
+		case map[string]any:
 			if value, found := obj[searchKey]; found {
 				results = append(results, value)
 				if maxMatches > 0 && len(results) == maxMatches {
@@ -49,7 +49,7 @@ func GetKeys(data interface{}, searchKey string, maxMatches int) []interface{} {
 					containers = append(containers, container{data: val})
 				}
 			}
-		case []interface{}:
+		case []any:
 			// Obj is a list - enqueue all nested dicts and lists for further searching
 			for _, val := range obj {
 				if val != nil && isContainerType(val) {
@@ -62,11 +62,11 @@ func GetKeys(data interface{}, searchKey string, maxMatches int) []interface{} {
 }
 
 // isContainerType checks if the value is a container type (map or slice)
-func isContainerType(val interface{}) bool {
+func isContainerType(val any) bool {
 	return reflect.TypeOf(val).Kind() == reflect.Map || reflect.TypeOf(val).Kind() == reflect.Slice
 }
 
-func JsonCompact(v interface{}) string {
+func JsonCompact(v any) string {
 	bytes, err := json.Marshal(v)
 	if err != nil {
 		return ""

@@ -11,6 +11,12 @@ import (
 
 type RuleOption func(*Rule)
 
+func Name(name string) RuleOption {
+	return func(rule *Rule) {
+		rule.name = name
+	}
+}
+
 func Description(description string) RuleOption {
 	return func(rule *Rule) {
 		rule.description = description

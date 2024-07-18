@@ -5,6 +5,7 @@ import (
 	"log"
 	"strings"
 
+	"github.com/harishhary/blink/src/shared"
 	"github.com/harishhary/blink/src/shared/formatters"
 )
 
@@ -12,7 +13,7 @@ type uppercaseFormatter struct {
 	formatters.Formatter
 }
 
-func (f *uppercaseFormatter) Format(ctx context.Context, record map[string]interface{}) (bool, error) {
+func (f *uppercaseFormatter) Format(ctx context.Context, record shared.Record) (bool, error) {
 	log.Printf("Using formatter '%s' with context: '%s' and record: '%s'", f.Name(), ctx, record)
 	if msg, ok := record["message"].(string); ok {
 		record["message"] = strings.ToUpper(msg)

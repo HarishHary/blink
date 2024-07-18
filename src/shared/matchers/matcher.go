@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+
+	"github.com/harishhary/blink/src/shared"
 )
 
 // MatcherError custom error for Matcher
@@ -16,7 +18,7 @@ func (e *MatcherError) Error() string {
 }
 
 type IMatcher interface {
-	Match(ctx context.Context, record map[string]interface{}) (bool, error)
+	Match(ctx context.Context, record shared.Record) (bool, error)
 	Name() string
 	String() string
 }
@@ -36,7 +38,7 @@ func (m *Matcher) String() string {
 	return fmt.Sprintf("Matcher '%s' with id:'%s', description:'%s', disabled:'%t'", m.name, m.id, m.description, m.disabled)
 }
 
-func (m *Matcher) Match(ctx context.Context, record map[string]interface{}) (bool, error) {
+func (m *Matcher) Match(ctx context.Context, record shared.Record) (bool, error) {
 	log.Printf("Using matcher 'base matcher' with context:'%s' and record:'%s'", ctx, record)
 	return false, nil
 }

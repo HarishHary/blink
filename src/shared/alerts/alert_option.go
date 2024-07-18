@@ -70,10 +70,10 @@ func OutputsSent(outputsSent []string) AlertOption {
 	}
 }
 
-// Publishers sets the publishers for the alert
-func Publishers(publishers []string) AlertOption {
+// Formatters sets the formatters for the alert
+func Formatters(formatters []string) AlertOption {
 	return func(a *Alert) {
-		a.Publishers = publishers
+		a.Formatters = formatters
 	}
 }
 

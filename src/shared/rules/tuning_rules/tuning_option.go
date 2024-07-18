@@ -39,3 +39,9 @@ func ID(id string) TuningRuleOption {
 		rule.id = id
 	}
 }
+
+func Name(name string) TuningRuleOption {
+	return func(rule *TuningRule) {
+		rule.name = name
+	}
+}

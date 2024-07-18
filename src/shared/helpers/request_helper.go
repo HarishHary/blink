@@ -28,7 +28,7 @@ func (e *OutputRequestFailure) Error() string {
 
 type RequestHelper struct{}
 
-func (h *RequestHelper) RetryOnException(fn func() (*http.Response, error), exceptions []interface{}) (*http.Response, error) {
+func (h *RequestHelper) RetryOnException(fn func() (*http.Response, error), exceptions []any) (*http.Response, error) {
 	var resp *http.Response
 	operation := func() error {
 		resp, err := fn()
@@ -57,7 +57,7 @@ func (h *RequestHelper) RetryOnException(fn func() (*http.Response, error), exce
 	return resp, nil
 }
 
-func (h *RequestHelper) PutRequest(url string, headers map[string]string, data interface{}) (*http.Response, error) {
+func (h *RequestHelper) PutRequest(url string, headers map[string]string, data any) (*http.Response, error) {
 	jsonData, err := json.Marshal(data)
 	if err != nil {
 		return nil, err
@@ -86,7 +86,7 @@ func (h *RequestHelper) GetRequest(url string, headers map[string]string) (*http
 	return client.Do(req)
 }
 
-func (h *RequestHelper) PostRequest(url string, headers map[string]string, data interface{}) (*http.Response, error) {
+func (h *RequestHelper) PostRequest(url string, headers map[string]string, data any) (*http.Response, error) {
 	jsonData, err := json.Marshal(data)
 	if err != nil {
 		return nil, err
@@ -103,7 +103,7 @@ func (h *RequestHelper) PostRequest(url string, headers map[string]string, data 
 	return client.Do(req)
 }
 
-func (h *RequestHelper) PutRequestRetry(url string, headers map[string]string, data interface{}, exceptions []interface{}) (*http.Response, error) {
+func (h *RequestHelper) PutRequestRetry(url string, headers map[string]string, data any, exceptions []any) (*http.Response, error) {
 	return h.RetryOnException(func() (*http.Response, error) {
 		resp, err := h.PutRequest(url, headers, data)
 		if err != nil {
@@ -117,7 +117,7 @@ func (h *RequestHelper) PutRequestRetry(url string, headers map[string]string, d
 	}, exceptions)
 }
 
-func (h *RequestHelper) GetRequestRetry(url string, headers map[string]string, exceptions []interface{}) (*http.Response, error) {
+func (h *RequestHelper) GetRequestRetry(url string, headers map[string]string, exceptions []any) (*http.Response, error) {
 	return h.RetryOnException(func() (*http.Response, error) {
 		resp, err := h.GetRequest(url, headers)
 		if err != nil {
@@ -131,7 +131,7 @@ func (h *RequestHelper) GetRequestRetry(url string, headers map[string]string, e
 	}, exceptions)
 }
 
-func (h *RequestHelper) PostRequestRetry(url string, headers map[string]string, data interface{}, exceptions []interface{}) (*http.Response, error) {
+func (h *RequestHelper) PostRequestRetry(url string, headers map[string]string, data any, exceptions []any) (*http.Response, error) {
 	return h.RetryOnException(func() (*http.Response, error) {
 		resp, err := h.PostRequest(url, headers, data)
 		if err != nil {
@@ -153,6 +153,6 @@ func (h *RequestHelper) CheckHTTPResponse(response *http.Response) bool {
 	return success
 }
 
-func (h *RequestHelper) CatchExceptions() []interface{} {
-	return []interface{}{&OutputRequestFailure{}, &url.Error{}}
+func (h *RequestHelper) CatchExceptions() []any {
+	return []any{&OutputRequestFailure{}, &url.Error{}}
 }

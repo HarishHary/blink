@@ -13,6 +13,7 @@ import (
 	"runtime"
 
 	"github.com/harishhary/blink/src/shared"
+	"github.com/harishhary/blink/src/shared/alerts"
 	"github.com/harishhary/blink/src/shared/dispatchers"
 	"github.com/harishhary/blink/src/shared/enrichments"
 	"github.com/harishhary/blink/src/shared/formatters"
@@ -131,9 +132,9 @@ func (r *Rule) ApplyFormatters(ctx context.Context, record shared.Record) error 
 }
 
 // ApplyDispatchers applies all dispatchers to the event.
-func (r *Rule) ApplyDispatchers(ctx context.Context, record shared.Record) error {
+func (r *Rule) ApplyDispatchers(ctx context.Context, alert alerts.Alert) error {
 	for _, dispatcher := range r.dispatchers {
-		dispatcher.Dispatch(ctx, record)
+		dispatcher.Dispatch(ctx, alert)
 	}
 	return nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/harishhary/blink/src/shared"
 	"github.com/harishhary/blink/src/shared/enrichments"
 )
 
@@ -12,7 +13,7 @@ type userEnrichment struct {
 	enrichments.Enrichment
 }
 
-func (e *userEnrichment) Enrich(ctx context.Context, record map[string]interface{}) error {
+func (e *userEnrichment) Enrich(ctx context.Context, record shared.Record) error {
 	if user, ok := record["UserID"].(string); ok {
 		EnrichedUser, err := getUserData(user)
 		if err != nil {
