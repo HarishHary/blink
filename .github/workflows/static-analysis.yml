@@ -1,0 +1,44 @@
+name: "go static analysis"
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  static-analysis:
+    name: "Run Go static analysis"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@63c24ba6bd7ba022e95695ff85de572c04a18142
+        with:
+          egress-policy: block
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            proxy.golang.org:443
+            storage.googleapis.com:443
+            sum.golang.org:443
+            golang.org:443
+            *.actions.githubusercontent.com:443
+            objects.githubusercontent.com:443
+            go.dev:443
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+        with:
+          fetch-depth: 1
+      - name: Set up Go
+        uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491
+        with:
+          go-version: 1.18
+      - uses: dominikh/staticcheck-action@ba605356b4b29a60e87ab9404b712f3461e566dc
+        with:
+          version: "2022.1"
+          install-go: false
+          working-directory: "./src"
