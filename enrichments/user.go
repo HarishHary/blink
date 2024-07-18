@@ -4,15 +4,16 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/harishhary/blink/src/shared"
 	"github.com/harishhary/blink/src/shared/enrichments"
 )
 
 // UserEnrichment enriches the event with user data
-type UserEnrichment struct {
+type userEnrichment struct {
 	enrichments.Enrichment
 }
 
-func (e *UserEnrichment) EnrichLogic(ctx context.Context, record map[string]interface{}) error {
+func (e *userEnrichment) Enrich(ctx context.Context, record shared.Record) error {
 	if user, ok := record["UserID"].(string); ok {
 		EnrichedUser, err := getUserData(user)
 		if err != nil {
@@ -34,4 +35,12 @@ func getUserData(userID string) (map[string]string, error) {
 		return map[string]string{}, fmt.Errorf("user not found")
 	}
 	return user, nil
+}
+
+var UserEnrichment = userEnrichment{
+	Enrichment: enrichments.NewEnrichment(
+		"User enrichment",
+		enrichments.Description("Enrich with user data"),
+		enrichments.Disabled(false),
+	),
 }

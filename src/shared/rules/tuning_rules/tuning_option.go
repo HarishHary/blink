@@ -4,50 +4,44 @@ import "github.com/harishhary/blink/src/shared/matchers"
 
 type TuningRuleOption func(*TuningRule)
 
-func Description(Description string) TuningRuleOption {
+func Description(description string) TuningRuleOption {
 	return func(rule *TuningRule) {
-		rule.Description = Description
+		rule.description = description
 	}
 }
 
-func Precedence(Precedence int) TuningRuleOption {
+func Precedence(precedence int) TuningRuleOption {
 	return func(rule *TuningRule) {
-		rule.Precedence = Precedence
+		rule.precedence = precedence
 	}
 }
 
-func Disabled(Disabled bool) TuningRuleOption {
+func Disabled(disabled bool) TuningRuleOption {
 	return func(rule *TuningRule) {
-		rule.Disabled = Disabled
+		rule.disabled = disabled
 	}
 }
 
-func Matchers(Matchers []matchers.IMatcher) TuningRuleOption {
+func Matchers(matchers []matchers.IMatcher) TuningRuleOption {
 	return func(rule *TuningRule) {
-		rule.Matchers = Matchers
+		rule.matchers = matchers
 	}
 }
 
-func Global(Global bool) TuningRuleOption {
+func Global(global bool) TuningRuleOption {
 	return func(rule *TuningRule) {
-		rule.Global = Global
+		rule.global = global
 	}
 }
 
-func RuleID(RuleID string) TuningRuleOption {
+func ID(id string) TuningRuleOption {
 	return func(rule *TuningRule) {
-		rule.RuleID = RuleID
+		rule.id = id
 	}
 }
 
-func InitialContext(InitialContext *map[string]interface{}) TuningRuleOption {
+func Name(name string) TuningRuleOption {
 	return func(rule *TuningRule) {
-		rule.InitialContext = InitialContext
-	}
-}
-
-func Context(Context *map[string]interface{}) TuningRuleOption {
-	return func(rule *TuningRule) {
-		rule.Context = Context
+		rule.name = name
 	}
 }

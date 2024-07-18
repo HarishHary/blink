@@ -1,15 +1,33 @@
 package matchers
 
+import "github.com/google/uuid"
+
 type MatcherOption func(*Matcher)
 
-func Name(Name string) MatcherOption {
+func ID(id string) MatcherOption {
 	return func(matcher *Matcher) {
-		matcher.Name = Name
+		if id == "" {
+			matcher.id = uuid.NewString()
+		} else {
+			matcher.id = id
+		}
 	}
 }
 
-func Description(Description string) MatcherOption {
+func Name(name string) MatcherOption {
 	return func(matcher *Matcher) {
-		matcher.Description = Description
+		matcher.name = name
+	}
+}
+
+func Description(description string) MatcherOption {
+	return func(matcher *Matcher) {
+		matcher.description = description
+	}
+}
+
+func Disabled(disabled bool) MatcherOption {
+	return func(matcher *Matcher) {
+		matcher.disabled = disabled
 	}
 }

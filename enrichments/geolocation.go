@@ -7,15 +7,16 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/harishhary/blink/src/shared"
 	"github.com/harishhary/blink/src/shared/enrichments"
 )
 
 // GeoLocationEnrichment enriches the event with geolocation data
-type GeoLocationEnrichment struct {
+type geoLocationEnrichment struct {
 	enrichments.Enrichment
 }
 
-func (e *GeoLocationEnrichment) EnrichLogic(ctx context.Context, record map[string]interface{}) error {
+func (e *geoLocationEnrichment) Enrich(ctx context.Context, record shared.Record) error {
 	if ip, ok := record["IP"].(string); ok {
 		geoLocation, err := getGeoLocation(ip)
 		if err != nil {
@@ -41,4 +42,12 @@ func getGeoLocation(ip string) (string, error) {
 		return "", err
 	}
 	return geoLocation, nil
+}
+
+var GeoLocationEnrichment = geoLocationEnrichment{
+	Enrichment: enrichments.NewEnrichment(
+		"Geo Location enrichment",
+		enrichments.Description("Enrich with geolocation"),
+		enrichments.Disabled(false),
+	),
 }

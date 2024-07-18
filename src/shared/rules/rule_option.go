@@ -3,99 +3,88 @@ package rules
 import (
 	"github.com/harishhary/blink/src/shared/dispatchers"
 	"github.com/harishhary/blink/src/shared/enrichments"
+	"github.com/harishhary/blink/src/shared/formatters"
 	"github.com/harishhary/blink/src/shared/inputs"
 	"github.com/harishhary/blink/src/shared/matchers"
-	"github.com/harishhary/blink/src/shared/publishers"
 	"github.com/harishhary/blink/src/shared/rules/tuning_rules"
 )
 
 type RuleOption func(*Rule)
 
-func Description(Description string) RuleOption {
+func Name(name string) RuleOption {
 	return func(rule *Rule) {
-		rule.Description = Description
+		rule.name = name
 	}
 }
 
-func Severity(Severity int) RuleOption {
+func Description(description string) RuleOption {
 	return func(rule *Rule) {
-		rule.Severity = Severity
+		rule.description = description
 	}
 }
 
-func MergeByKeys(MergeByKeys []string) RuleOption {
+func Severity(severity int) RuleOption {
 	return func(rule *Rule) {
-		rule.MergeByKeys = MergeByKeys
+		rule.severity = severity
 	}
 }
 
-func MergeWindowMins(MergeWindowMins int) RuleOption {
+func MergeByKeys(mergeByKeys []string) RuleOption {
 	return func(rule *Rule) {
-		rule.MergeWindowMins = MergeWindowMins
+		rule.mergeByKeys = mergeByKeys
 	}
 }
 
-func ReqSubkeys(ReqSubkeys []string) RuleOption {
+func MergeWindowMins(mergeWindowMins int) RuleOption {
 	return func(rule *Rule) {
-		rule.ReqSubkeys = ReqSubkeys
+		rule.mergeWindowMins = mergeWindowMins
 	}
 }
 
-func Disabled(Disabled bool) RuleOption {
+func ReqSubkeys(reqSubkeys []string) RuleOption {
 	return func(rule *Rule) {
-		rule.Disabled = Disabled
+		rule.reqSubkeys = reqSubkeys
 	}
 }
 
-func Inputs(Inputs []inputs.IInput) RuleOption {
+func Disabled(disabled bool) RuleOption {
 	return func(rule *Rule) {
-		rule.Inputs = Inputs
+		rule.disabled = disabled
 	}
 }
 
-func Dispatchers(Dispatchers []dispatchers.IDispatcher) RuleOption {
+func Inputs(inputs []inputs.IInput) RuleOption {
 	return func(rule *Rule) {
-		rule.Dispatchers = Dispatchers
+		rule.inputs = inputs
 	}
 }
 
-func DynamicDispatchers(DynamicDispatchers []dispatchers.IDynamicDispatcher) RuleOption {
+func Dispatchers(dispatchers []dispatchers.IDispatcher) RuleOption {
 	return func(rule *Rule) {
-		rule.DynamicDispatchers = DynamicDispatchers
-	}
-}
-func Matchers(Matchers []matchers.IMatcher) RuleOption {
-	return func(rule *Rule) {
-		rule.Matchers = Matchers
+		rule.dispatchers = dispatchers
 	}
 }
 
-func Publishers(Publishers []publishers.IPublisher) RuleOption {
+func Matchers(matchers []matchers.IMatcher) RuleOption {
 	return func(rule *Rule) {
-		rule.Publishers = Publishers
+		rule.matchers = matchers
 	}
 }
 
-func Enrichments(Enrichments []enrichments.IEnrichment) RuleOption {
+func Formatters(formatters []formatters.IFormatter) RuleOption {
 	return func(rule *Rule) {
-		rule.Enrichments = Enrichments
+		rule.formatters = formatters
 	}
 }
 
-func TuningRules(TuningRules []tuning_rules.ITuningRule) RuleOption {
+func Enrichments(enrichments []enrichments.IEnrichment) RuleOption {
 	return func(rule *Rule) {
-		rule.TuningRules = TuningRules
+		rule.enrichments = enrichments
 	}
 }
 
-func InitialContext(InitialContext *map[string]interface{}) RuleOption {
+func TuningRules(tuningRules []tuning_rules.ITuningRule) RuleOption {
 	return func(rule *Rule) {
-		rule.InitialContext = InitialContext
-	}
-}
-
-func Context(Context *map[string]interface{}) RuleOption {
-	return func(rule *Rule) {
-		rule.Context = Context
+		rule.tuningRules = tuningRules
 	}
 }

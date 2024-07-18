@@ -2,6 +2,7 @@
 package aws_matchers
 
 import (
+	"github.com/harishhary/blink/src/shared"
 	"github.com/harishhary/blink/src/shared/matchers"
 )
 
@@ -11,9 +12,12 @@ type AwsGuardDutyMatcher struct {
 }
 
 // GuardDuty checks if the record is a GuardDuty finding
-func (m *AwsGuardDutyMatcher) GuardDuty(record map[string]interface{}) bool {
+func (m *AwsGuardDutyMatcher) MatchLogic(record shared.Record) bool {
 	if detailType, ok := record["detail-type"].(string); ok {
 		return detailType == "GuardDuty Finding"
 	}
 	return false
 }
+
+// Export the plugin as a symbol
+var MatcherPlugin AwsGuardDutyMatcher

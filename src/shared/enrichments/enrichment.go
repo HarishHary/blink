@@ -3,6 +3,9 @@ package enrichments
 import (
 	"context"
 	"fmt"
+	"log"
+
+	"github.com/harishhary/blink/src/shared"
 )
 
 // EnrichmentError custom error for enrichment functions
@@ -22,21 +25,39 @@ const (
 )
 
 type IEnrichment interface {
-	Enrich(ctx context.Context, record map[string]interface{}) error
+	Enrich(ctx context.Context, record shared.Record) error
+	Name() string
+	String() string
 }
 
 type Enrichment struct {
-	Name         string
-	EnrichmentID string
-	Description  string
-	Disabled     string
-	Timing       EnrichmentTiming
+	name        string
+	id          string
+	description string
+	disabled    bool
+	timing      EnrichmentTiming
 }
 
-func (e *Enrichment) Enrich(ctx context.Context, record map[string]interface{}) error {
-	return e.EnrichLogic(ctx, record)
+func (e *Enrichment) Name() string {
+	return e.name
 }
 
-func (e *Enrichment) EnrichLogic(ctx context.Context, record map[string]interface{}) error {
+func (e *Enrichment) String() string {
+	return fmt.Sprintf("Enrichment '%s' with id:'%s', description:'%s', disabled:'%t', timing:'%d'", e.name, e.id, e.description, e.disabled, e.timing)
+}
+
+func (e *Enrichment) Enrich(ctx context.Context, record shared.Record) error {
+	log.Printf("Using enrichment 'base enrichement' with context:'%s' and record:'%s'", ctx, record)
 	return nil
+}
+
+func NewEnrichment(name string, setters ...EnrichmentOption) Enrichment {
+	// Default Options
+	r := Enrichment{
+		name: name,
+	}
+	for _, setter := range setters {
+		setter(&r)
+	}
+	return r
 }

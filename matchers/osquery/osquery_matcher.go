@@ -1,6 +1,9 @@
 package osquery_matchers
 
-import "github.com/harishhary/blink/src/shared/matchers"
+import (
+	"github.com/harishhary/blink/src/shared"
+	"github.com/harishhary/blink/src/shared/matchers"
+)
 
 // OsqueryMatcher contains matchers for Osquery events
 type OsqueryAddedMatcher struct {
@@ -8,7 +11,7 @@ type OsqueryAddedMatcher struct {
 }
 
 // Added checks if the record action is "added"
-func (m *OsqueryAddedMatcher) Added(record map[string]interface{}) bool {
+func (m *OsqueryAddedMatcher) Match(record shared.Record) bool {
 	if action, ok := record["action"].(string); ok {
 		return action == "added"
 	}
@@ -33,9 +36,9 @@ type OsqueryUserLoginMatcher struct {
 // This matcher assumes the use of the default osquery pack shipped with the osquery package
 // located at /usr/share/osquery/packs/incident-response.conf on the Linux host.
 // Update the pack name (rec["name"]) if it is different.
-func (m *OsqueryUserLoginMatcher) UserLogin(record map[string]interface{}) bool {
+func (m *OsqueryUserLoginMatcher) MatchLogic(record shared.Record) bool {
 	if name, ok := record["name"].(string); ok && name == "pack_incident-response_last" {
-		if columns, ok := record["columns"].(map[string]interface{}); ok {
+		if columns, ok := record["columns"].(map[string]any); ok {
 			if eventType, ok := columns["type"].(int); ok && eventType == EventTypeLogin {
 				if username, ok := columns["username"].(string); ok {
 					_, exists := Runlevels[username]
