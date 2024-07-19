@@ -51,13 +51,15 @@ func (e *Enrichment) Enrich(ctx context.Context, record shared.Record) error {
 	return nil
 }
 
-func NewEnrichment(name string, setters ...EnrichmentOption) Enrichment {
-	// Default Options
-	r := Enrichment{
+func NewEnrichment(name string, optFns ...EnrichmentOptions) (*Enrichment, error) {
+	if name == "" {
+		return nil, &EnrichmentError{Message: "Invalid Formatter options"}
+	}
+	enrichment := &Enrichment{
 		name: name,
 	}
-	for _, setter := range setters {
-		setter(&r)
+	for _, optFn := range optFns {
+		optFn(enrichment)
 	}
-	return r
+	return enrichment, nil
 }

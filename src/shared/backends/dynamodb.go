@@ -17,23 +17,24 @@ import (
 )
 
 type DynamoDBBackend struct {
-	ctx       context.Context
-	svc       *dynamodb.Client
-	tablename string
+	ctx    context.Context
+	db     *dynamodb.Client
+	dbName string
 }
 
-func NewDynamoDBBackend(ctx context.Context, tableName string) (*DynamoDBBackend, error) {
+func NewDynamoDBBackend(ctx context.Context, dbName string) (*DynamoDBBackend, error) {
 	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		return nil, err
 	}
 	return &DynamoDBBackend{
-		ctx:       ctx,
-		svc:       dynamodb.NewFromConfig(cfg),
-		tablename: tableName,
+		ctx:    ctx,
+		db:     dynamodb.NewFromConfig(cfg),
+		dbName: dbName,
 	}, nil
 }
 
+// PaginateScan function for DynamoDB Query
 func (at *DynamoDBBackend) paginateScan(scanFunc func(ctx context.Context, params *dynamodb.ScanInput, optFns ...func(*dynamodb.Options)) (*dynamodb.ScanOutput, error), input *dynamodb.ScanInput) <-chan map[string]types.AttributeValue {
 	out := make(chan map[string]types.AttributeValue)
 	go func() {
@@ -85,7 +86,7 @@ func (at *DynamoDBBackend) paginateQuery(queryFunc func(ctx context.Context, par
 
 func (at *DynamoDBBackend) RuleNamesGenerator() <-chan string {
 	input := &dynamodb.ScanInput{
-		TableName:            aws.String(at.tablename),
+		TableName:            aws.String(at.dbName),
 		ProjectionExpression: aws.String("RuleName"),
 		Select:               types.SelectSpecificAttributes,
 		ConsistentRead:       aws.Bool(false),
@@ -96,7 +97,8 @@ func (at *DynamoDBBackend) RuleNamesGenerator() <-chan string {
 
 	go func() {
 		defer close(out)
-		for item := range at.paginateScan(at.svc.Scan, input) {
+		generator := at.paginateScan(at.db.Scan, input)
+		for item := range generator {
 			ruleName := *item["RuleName"].(*types.AttributeValueMemberS)
 			if _, exists := ruleNames[ruleName.Value]; !exists {
 				ruleNames[ruleName.Value] = struct{}{}
@@ -107,7 +109,7 @@ func (at *DynamoDBBackend) RuleNamesGenerator() <-chan string {
 	return out
 }
 
-func (at *DynamoDBBackend) GetAlertRecords(ruleName string, alertProcTimeoutSec int) <-chan map[string]any {
+func (at *DynamoDBBackend) GetAlertRecords(ruleName string, alertProcTimeoutSec int) <-chan Record {
 	inProgressThreshold := time.Now().Add(-time.Duration(alertProcTimeoutSec) * time.Second).Format(helpers.DATETIME_FORMAT)
 	filter := expression.Name("Dispatched").LessThan(expression.Value(inProgressThreshold))
 	keyCond := expression.Key("RuleName").Equal(expression.Value(ruleName))
@@ -119,18 +121,18 @@ func (at *DynamoDBBackend) GetAlertRecords(ruleName string, alertProcTimeoutSec 
 	}
 
 	input := &dynamodb.QueryInput{
-		TableName:                 aws.String(at.tablename),
+		TableName:                 aws.String(at.dbName),
 		ConsistentRead:            aws.Bool(true),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
 		FilterExpression:          expr.Filter(),
 		KeyConditionExpression:    expr.KeyCondition(),
 	}
-	out := make(chan map[string]any)
+	out := make(chan Record)
 	go func() {
 		defer close(out)
-		for item := range at.paginateQuery(at.svc.Query, input) {
-			var value map[string]any
+		for item := range at.paginateQuery(at.db.Query, input) {
+			var value Record
 			_ = attributevalue.UnmarshalMap(item, &value)
 			out <- value
 		}
@@ -138,7 +140,7 @@ func (at *DynamoDBBackend) GetAlertRecords(ruleName string, alertProcTimeoutSec 
 	return out
 }
 
-func (at *DynamoDBBackend) GetAlertRecord(ruleName string, alertID string) (map[string]any, error) {
+func (at *DynamoDBBackend) GetAlertRecord(ruleName string, alertID string) (Record, error) {
 	keyCond := expression.Key("RuleName").Equal(expression.Value(ruleName)).And(expression.Key("AlertID").Equal(expression.Value(alertID)))
 
 	expr, err := expression.NewBuilder().WithKeyCondition(keyCond).Build()
@@ -147,14 +149,14 @@ func (at *DynamoDBBackend) GetAlertRecord(ruleName string, alertID string) (map[
 	}
 
 	input := &dynamodb.QueryInput{
-		TableName:                 aws.String(at.tablename),
+		TableName:                 aws.String(at.dbName),
 		ConsistentRead:            aws.Bool(true),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
 		KeyConditionExpression:    expr.KeyCondition(),
 	}
 
-	result, err := at.svc.Query(at.ctx, input)
+	result, err := at.db.Query(at.ctx, input)
 	if err != nil {
 		return nil, fmt.Errorf("error querying table: %w", err)
 	}
@@ -163,7 +165,7 @@ func (at *DynamoDBBackend) GetAlertRecord(ruleName string, alertID string) (map[
 		return nil, nil
 	}
 
-	var value map[string]any
+	var value Record
 	_ = attributevalue.UnmarshalMap(result.Items[0], &value)
 
 	return value, nil
@@ -181,16 +183,68 @@ func (at *DynamoDBBackend) AddAlerts(alerts []*alerts.Alert) error {
 			return fmt.Errorf("error marshalling alert: %w", err)
 		}
 
-		batchWrite.RequestItems[at.tablename] = append(batchWrite.RequestItems[at.tablename], types.WriteRequest{
+		batchWrite.RequestItems[at.dbName] = append(batchWrite.RequestItems[at.dbName], types.WriteRequest{
 			PutRequest: &types.PutRequest{
 				Item: item,
 			},
 		})
 	}
 
-	_, err := at.svc.BatchWriteItem(at.ctx, batchWrite)
+	_, err := at.db.BatchWriteItem(at.ctx, batchWrite)
 	if err != nil {
 		return fmt.Errorf("error writing batch: %w", err)
+	}
+
+	return nil
+}
+
+func (at *DynamoDBBackend) DeleteAlerts(alerts []*alerts.Alert) error {
+	batchWrite := &dynamodb.BatchWriteItemInput{}
+	for _, alert := range alerts {
+		key := alert.RecordKey()
+		item := map[string]types.AttributeValue{
+			"RuleName": &types.AttributeValueMemberS{Value: *aws.String(key["RuleName"])},
+			"AlertID":  &types.AttributeValueMemberS{Value: *aws.String(key["AlertID"])},
+		}
+		batchWrite.RequestItems[at.dbName] = append(batchWrite.RequestItems[at.dbName], types.WriteRequest{
+			DeleteRequest: &types.DeleteRequest{
+				Key: item,
+			},
+		})
+	}
+	_, err := at.db.BatchWriteItem(at.ctx, batchWrite)
+	if err != nil {
+		return fmt.Errorf("error writing batch: %w", err)
+	}
+	return nil
+}
+
+func (at *DynamoDBBackend) UpdateSentOutputs(alert *alerts.Alert) error {
+	record_key := alert.RecordKey()
+	key, err := attributevalue.MarshalMap(record_key)
+	if err != nil {
+		return fmt.Errorf("error marshalling key: %w", err)
+	}
+
+	update := expression.Set(expression.Name("OutputsSent"), expression.Value(alert.OutputsSent))
+
+	expr, err := expression.NewBuilder().WithUpdate(update).WithCondition(expression.AttributeExists(expression.Name("AlertID"))).Build()
+	if err != nil {
+		return fmt.Errorf("error building expression: %w", err)
+	}
+
+	input := &dynamodb.UpdateItemInput{
+		TableName:                 aws.String(at.dbName),
+		Key:                       key,
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+		UpdateExpression:          expr.Update(),
+		ConditionExpression:       expr.Condition(),
+	}
+
+	_, err = at.db.UpdateItem(at.ctx, input)
+	if err != nil {
+		return fmt.Errorf("error updating item: %w", err)
 	}
 
 	return nil
@@ -213,7 +267,7 @@ func (at *DynamoDBBackend) MarkAsDispatched(alert *alerts.Alert) error {
 	}
 
 	input := &dynamodb.UpdateItemInput{
-		TableName:                 aws.String(at.tablename),
+		TableName:                 aws.String(at.dbName),
 		Key:                       key,
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
@@ -221,73 +275,19 @@ func (at *DynamoDBBackend) MarkAsDispatched(alert *alerts.Alert) error {
 		ConditionExpression:       expr.Condition(),
 	}
 
-	_, err = at.svc.UpdateItem(at.ctx, input)
+	_, err = at.db.UpdateItem(at.ctx, input)
 	if err != nil {
 		return fmt.Errorf("error updating item: %w", err)
-	}
-
-	return nil
-}
-
-func (at *DynamoDBBackend) UpdateSentOutputs(alert *alerts.Alert) error {
-	dynamo_key := alert.RecordKey()
-	key, err := attributevalue.MarshalMap(dynamo_key)
-	if err != nil {
-		return fmt.Errorf("error marshalling key: %w", err)
-	}
-
-	update := expression.Set(expression.Name("OutputsSent"), expression.Value(alert.OutputsSent))
-
-	expr, err := expression.NewBuilder().WithUpdate(update).WithCondition(expression.AttributeExists(expression.Name("AlertID"))).Build()
-	if err != nil {
-		return fmt.Errorf("error building expression: %w", err)
-	}
-
-	input := &dynamodb.UpdateItemInput{
-		TableName:                 aws.String(at.tablename),
-		Key:                       key,
-		ExpressionAttributeNames:  expr.Names(),
-		ExpressionAttributeValues: expr.Values(),
-		UpdateExpression:          expr.Update(),
-		ConditionExpression:       expr.Condition(),
-	}
-
-	_, err = at.svc.UpdateItem(at.ctx, input)
-	if err != nil {
-		return fmt.Errorf("error updating item: %w", err)
-	}
-
-	return nil
-}
-
-func (at *DynamoDBBackend) DeleteAlerts(keys [][]string) error {
-	batchWrite := &dynamodb.BatchWriteItemInput{}
-	for _, key := range keys {
-		item := map[string]types.AttributeValue{
-			"RuleName": &types.AttributeValueMemberS{Value: *aws.String(key[0])},
-			"AlertID":  &types.AttributeValueMemberS{Value: *aws.String(key[1])},
-		}
-
-		batchWrite.RequestItems[at.tablename] = append(batchWrite.RequestItems[at.tablename], types.WriteRequest{
-			DeleteRequest: &types.DeleteRequest{
-				Key: item,
-			},
-		})
-	}
-
-	_, err := at.svc.BatchWriteItem(at.ctx, batchWrite)
-	if err != nil {
-		return fmt.Errorf("error writing batch: %w", err)
 	}
 
 	return nil
 }
 
 // CreateFromDynamoRecord creates an alert from a DynamoDB record
-func (at *DynamoDBBackend) ToAlert(table_record map[string]any) (*alerts.Alert, error) {
+func (at *DynamoDBBackend) ToAlert(record Record) (*alerts.Alert, error) {
 	a := new(alerts.Alert)
 
-	var dynamo_record, err = attributevalue.MarshalMap(table_record)
+	var dynamo_record, err = attributevalue.MarshalMap(record)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal record to dynamodb record: %w", err)
 	}
@@ -296,14 +296,14 @@ func (at *DynamoDBBackend) ToAlert(table_record map[string]any) (*alerts.Alert, 
 		return nil, fmt.Errorf("failed to unmarshal dynamodb record to alert: %w", err)
 	}
 
-	if createdStr, ok := table_record["Created"].(*types.AttributeValueMemberS); ok {
+	if createdStr, ok := record["Created"].(*types.AttributeValueMemberS); ok {
 		a.Created, err = time.Parse(helpers.DATETIME_FORMAT, createdStr.Value)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse Created timestamp: %w", err)
 		}
 	}
 
-	if dispatchedStr, ok := table_record["Dispatched"].(*types.AttributeValueMemberS); ok {
+	if dispatchedStr, ok := record["Dispatched"].(*types.AttributeValueMemberS); ok {
 		dispatchedTime, err := time.Parse(helpers.DATETIME_FORMAT, dispatchedStr.Value)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse Dispatched timestamp: %w", err)
@@ -311,7 +311,7 @@ func (at *DynamoDBBackend) ToAlert(table_record map[string]any) (*alerts.Alert, 
 		a.Dispatched = dispatchedTime
 	}
 
-	if recordStr, ok := table_record["Record"].(*types.AttributeValueMemberS); ok {
+	if recordStr, ok := record["Record"].(*types.AttributeValueMemberS); ok {
 		err = json.Unmarshal([]byte(recordStr.Value), &a.Record)
 		if err != nil {
 			return nil, fmt.Errorf("failed to unmarshal Record JSON: %w", err)
@@ -320,8 +320,8 @@ func (at *DynamoDBBackend) ToAlert(table_record map[string]any) (*alerts.Alert, 
 	return a, nil
 }
 
-func (at *DynamoDBBackend) ToRecord(alert *alerts.Alert) (map[string]any, error) {
-	item, err := attributevalue.MarshalMap(map[string]any{
+func (at *DynamoDBBackend) ToRecord(alert *alerts.Alert) (Record, error) {
+	item, err := attributevalue.MarshalMap(Record{
 		"RuleName":        alert.RuleName, // Partition Key
 		"AlertID":         alert.AlertID,  // Sort/Range Key
 		"Attempts":        alert.Attempts,
@@ -344,101 +344,10 @@ func (at *DynamoDBBackend) ToRecord(alert *alerts.Alert) (map[string]any, error)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal alert to dynamodb record: %w", err)
 	}
-	var result map[string]any
+	var result Record
 	err = attributevalue.UnmarshalMap(item, result)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal alert to dynamodb record: %w", err)
 	}
 	return result, nil
 }
-
-// // Please this is some hacky shit to pass typing... Fucking help me to be a better software eng...
-// // Converts MapAttributeValue to MapAny type...
-// func convertMapAttributeValueToMapAny(attributeValueMap map[string]types.AttributeValue) map[string]any {
-// 	result := make(map[string]any)
-
-// 	for key, value := range attributeValueMap {
-// 		result[key] = convertAttributeValueToAny(value)
-// 	}
-// 	return result
-// }
-
-// // Converts AttributeValue to Any type...
-// func convertAttributeValueToAny(attrValue types.AttributeValue) any {
-// 	switch v := attrValue.(type) {
-// 	case *types.AttributeValueMemberS:
-// 		return v.Value
-// 	case *types.AttributeValueMemberN:
-// 		return v.Value
-// 	case *types.AttributeValueMemberB:
-// 		return v.Value
-// 	case *types.AttributeValueMemberSS:
-// 		return v.Value
-// 	case *types.AttributeValueMemberNS:
-// 		return v.Value
-// 	case *types.AttributeValueMemberBS:
-// 		return v.Value
-// 	case *types.AttributeValueMemberBOOL:
-// 		return v.Value
-// 	case *types.AttributeValueMemberNULL:
-// 		return nil
-// 	case *types.AttributeValueMemberM:
-// 		return convertMapAttributeValueToMapAny(v.Value)
-// 	case *types.AttributeValueMemberL:
-// 		list := make([]any, len(v.Value))
-// 		for i, item := range v.Value {
-// 			list[i] = convertAttributeValueToAny(item)
-// 		}
-// 		return list
-// 	default:
-// 		return v
-// 	}
-// }
-
-// // Converts MapAny type to MapAttributeValue...
-// func convertMapAnyToMapAttributeValue(anyMap map[string]any) map[string]types.AttributeValue {
-// 	attrMap := make(map[string]types.AttributeValue)
-
-// 	for key, value := range anyMap {
-// 		attrMap[key] = convertAnyToAttributeValue(value)
-// 	}
-
-// 	return attrMap
-// }
-
-// // Converts Any type to AttributeValue...
-// func convertAnyToAttributeValue(value any) types.AttributeValue {
-// 	switch v := value.(type) {
-// 	case string:
-// 		return &types.AttributeValueMemberS{Value: v}
-// 	case bool:
-// 		return &types.AttributeValueMemberBOOL{Value: v}
-// 	case int, int8, int16, int32, int64:
-// 		return &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", v)}
-// 	case uint, uint8, uint16, uint32, uint64:
-// 		return &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", v)}
-// 	case float32, float64:
-// 		return &types.AttributeValueMemberN{Value: fmt.Sprintf("%f", v)}
-// 	case []byte:
-// 		return &types.AttributeValueMemberB{Value: v}
-// 	case []string:
-// 		return &types.AttributeValueMemberSS{Value: v}
-// 	case []int, []int8, []int16, []int32, []int64, []uint, []uint16, []uint32, []uint64, []float32, []float64:
-// 		var strValues []string
-// 		val := reflect.ValueOf(v)
-// 		for i := 0; i < val.Len(); i++ {
-// 			strValues = append(strValues, fmt.Sprintf("%v", val.Index(i)))
-// 		}
-// 		return &types.AttributeValueMemberNS{Value: strValues}
-// 	case []any:
-// 		var attrValues []types.AttributeValue
-// 		for _, item := range v {
-// 			attrValues = append(attrValues, convertAnyToAttributeValue(item))
-// 		}
-// 		return &types.AttributeValueMemberL{Value: attrValues}
-// 	case map[string]any:
-// 		return &types.AttributeValueMemberM{Value: convertMapAnyToMapAttributeValue(v)}
-// 	default:
-// 		return &types.AttributeValueMemberNULL{Value: true}
-// 	}
-// }

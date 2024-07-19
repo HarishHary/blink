@@ -71,3 +71,17 @@ func (d *Dispatcher) Dispatch(ctx context.Context, alert alerts.Alert) bool {
 	d.logStatus(sent, descriptor)
 	return sent
 }
+
+func NewDispatcher(name string, optFns ...DispatcherOptions) (*Dispatcher, error) {
+	if name == "" {
+		return nil, &DispatcherError{Message: "Invalid Dispatcher options"}
+	}
+	dispatcher := &Dispatcher{
+		name:          name,
+		requestHelper: &helpers.RequestHelper{},
+	}
+	for _, optFn := range optFns {
+		optFn(dispatcher)
+	}
+	return dispatcher, nil
+}

@@ -2,15 +2,9 @@ package formatters
 
 import "github.com/google/uuid"
 
-type FormatterOption func(*Formatter)
+type FormatterOptions func(*Formatter)
 
-func Name(name string) FormatterOption {
-	return func(formatter *Formatter) {
-		formatter.name = name
-	}
-}
-
-func ID(id string) FormatterOption {
+func ID(id string) FormatterOptions {
 	return func(formatter *Formatter) {
 		if id == "" {
 			formatter.id = uuid.NewString()
@@ -20,13 +14,13 @@ func ID(id string) FormatterOption {
 	}
 }
 
-func Description(description string) FormatterOption {
+func Description(description string) FormatterOptions {
 	return func(formatter *Formatter) {
 		formatter.description = description
 	}
 }
 
-func Disabled(disabled bool) FormatterOption {
+func Disabled(disabled bool) FormatterOptions {
 	return func(formatter *Formatter) {
 		formatter.disabled = disabled
 	}

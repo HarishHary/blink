@@ -6,8 +6,6 @@ import (
 	"github.com/harishhary/blink/src/shared/helpers"
 )
 
-type EnrichmentConstructor func(config map[string]string) (IEnrichment, error)
-
 type EnrichmentRepository struct {
 	Enrichments map[string]IEnrichment
 	isImported  bool

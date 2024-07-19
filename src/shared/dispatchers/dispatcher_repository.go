@@ -2,10 +2,8 @@ package dispatchers
 
 import "fmt"
 
-type DispatcherConstructor func(config map[string]string) (IDispatcher, error)
-
 type DispatcherRepository struct {
-	Dispatchers map[string]DispatcherConstructor
+	Dispatchers map[string]IDispatcher
 	isImported  bool
 }
 
@@ -17,7 +15,7 @@ func init() {
 
 func NewDispatcherRepository() DispatcherRepository {
 	return DispatcherRepository{
-		Dispatchers: make(map[string]DispatcherConstructor),
+		Dispatchers: make(map[string]IDispatcher),
 		isImported:  false,
 	}
 }
@@ -26,7 +24,7 @@ func GetDispatcherRepository() *DispatcherRepository {
 	return &dispatcherRepository
 }
 
-func (dpr *DispatcherRepository) GetDispatcher(name string) (DispatcherConstructor, error) {
+func (dpr *DispatcherRepository) GetDispatcher(name string) (IDispatcher, error) {
 	if dpr.HasDispatcher(name) {
 		return dpr.Dispatchers[name], nil
 	}
@@ -39,18 +37,11 @@ func (dpr *DispatcherRepository) HasDispatcher(name string) bool {
 	return exists
 }
 
-func (dpr *DispatcherRepository) RegisterDispatcher(name string, constructor DispatcherConstructor) error {
+func (dpr *DispatcherRepository) RegisterDispatcher(dispatcher IDispatcher) error {
+	name := dispatcher.Name()
 	if _, exists := dpr.Dispatchers[name]; exists {
 		return &DispatcherError{Message: fmt.Sprintf("Dispatcher %s already registered", name)}
 	}
-	dpr.Dispatchers[name] = constructor
+	dpr.Dispatchers[name] = dispatcher
 	return nil
-}
-
-func (dpr *DispatcherRepository) CreateDispatcher(name string, config map[string]string) (IDispatcher, error) {
-	constructor, ok := dpr.Dispatchers[name]
-	if !ok {
-		return nil, &DispatcherError{Message: fmt.Sprintf("Dispatcher %s not found", name)}
-	}
-	return constructor(config)
 }

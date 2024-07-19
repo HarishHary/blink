@@ -37,10 +37,11 @@ func getUserData(userID string) (map[string]string, error) {
 	return user, nil
 }
 
+var userEnrichmentInstance, _ = enrichments.NewEnrichment(
+	"User enrichment",
+	enrichments.Description("Enrich with user data"),
+	enrichments.Disabled(false),
+)
 var UserEnrichment = userEnrichment{
-	Enrichment: enrichments.NewEnrichment(
-		"User enrichment",
-		enrichments.Description("Enrich with user data"),
-		enrichments.Disabled(false),
-	),
+	Enrichment: *userEnrichmentInstance,
 }

@@ -1,26 +1,20 @@
 package dispatchers
 
-type DispatcherOption func(*Dispatcher)
+type DispatcherOptions func(*Dispatcher)
 
-func Name(name string) DispatcherOption {
-	return func(dispatcher *Dispatcher) {
-		dispatcher.name = name
-	}
-}
-
-func ID(id string) DispatcherOption {
+func ID(id string) DispatcherOptions {
 	return func(dispatcher *Dispatcher) {
 		dispatcher.id = id
 	}
 }
 
-func URL(url string) DispatcherOption {
+func URL(url string) DispatcherOptions {
 	return func(dispatcher *Dispatcher) {
 		dispatcher.url = url
 	}
 }
 
-func Config(config map[string]any) DispatcherOption {
+func Config(config map[string]any) DispatcherOptions {
 	return func(dispatcher *Dispatcher) {
 		dispatcher.config = config
 	}

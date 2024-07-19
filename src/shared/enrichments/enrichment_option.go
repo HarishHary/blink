@@ -1,26 +1,20 @@
 package enrichments
 
-type EnrichmentOption func(*Enrichment)
+type EnrichmentOptions func(*Enrichment)
 
-func Name(name string) EnrichmentOption {
-	return func(enrichment *Enrichment) {
-		enrichment.name = name
-	}
-}
-
-func Description(description string) EnrichmentOption {
+func Description(description string) EnrichmentOptions {
 	return func(enrichment *Enrichment) {
 		enrichment.description = description
 	}
 }
 
-func ID(id string) EnrichmentOption {
+func ID(id string) EnrichmentOptions {
 	return func(enrichment *Enrichment) {
 		enrichment.id = id
 	}
 }
 
-func Disabled(Disabled bool) EnrichmentOption {
+func Disabled(Disabled bool) EnrichmentOptions {
 	return func(enrichment *Enrichment) {
 		enrichment.disabled = Disabled
 	}

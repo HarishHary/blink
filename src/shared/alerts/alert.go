@@ -46,7 +46,10 @@ type Alert struct {
 }
 
 // NewAlert creates a new Alert
-func NewAlert(ruleName string, record shared.Record, dispatchers []string, opts ...AlertOption) (*Alert, error) {
+func NewAlert(ruleName string, record shared.Record, dispatchers []string, optFns ...AlertOptions) (*Alert, error) {
+	if !(ruleName != "" && len(dispatchers) > 0) {
+		return nil, &AlertError{Message: "Invalid Alert options"}
+	}
 	alert := &Alert{
 		AlertID:     uuid.NewString(),
 		Created:     time.Now().UTC(),
@@ -56,15 +59,9 @@ func NewAlert(ruleName string, record shared.Record, dispatchers []string, opts 
 		Formatters:  make([]string, 10),
 		OutputsSent: make([]string, 10),
 	}
-
-	for _, opt := range opts {
-		opt(alert)
+	for _, optFn := range optFns {
+		optFn(alert)
 	}
-
-	if !(alert.RuleName != "" && len(alert.Dispatchers) > 0) {
-		return nil, &AlertError{Message: "Invalid Alert options"}
-	}
-
 	return alert, nil
 }
 
@@ -236,8 +233,8 @@ func (a *Alert) RemainingOutputs(requiredOutputs []string) []string {
 	return helpers.Difference(outputsToSendNow, a.OutputsSent)
 }
 
-func (a *Alert) RecordKey() map[string]any {
-	key := map[string]any{
+func (a *Alert) RecordKey() map[string]string {
+	key := map[string]string{
 		"RuleName": a.RuleName,
 		"AlertID":  a.AlertID,
 	}

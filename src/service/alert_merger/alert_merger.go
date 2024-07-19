@@ -22,10 +22,12 @@ import (
 var logger = log.Default()
 
 const (
-	MAX_ALERTS_PER_GROUP          = 50
+	MAX_ALERTS_PER_GROUP          = 100
 	MAX_LAMBDA_PAYLOAD_SIZE       = 126000
 	ALERT_GENERATOR_DEFAULT_LIMIT = 5000
 )
+
+var instance *AlertMerger
 
 type AlertMergeGroup struct {
 	alerts []*alerts.Alert
@@ -54,8 +56,6 @@ type AlertMerger struct {
 	backend             backends.IBackend
 }
 
-var instance *AlertMerger
-
 func GetInstance() *AlertMerger {
 	if instance == nil {
 		instance = NewAlertMerger()
@@ -78,11 +78,11 @@ func NewAlertMerger() *AlertMerger {
 		alertProc:           os.Getenv("ALERT_PROCESSOR"),
 		alertProcTimeout:    getEnvInt("ALERT_PROCESSOR_TIMEOUT_SEC", 60),
 		lambdaClient:        lambda.NewFromConfig(sdkConfig),
-		alertGeneratorLimit: 5000,
+		alertGeneratorLimit: ALERT_GENERATOR_DEFAULT_LIMIT,
 	}
 }
 
-func (am *AlertMerger) getAlertGenerator(ruleName string) chan *alerts.Alert {
+func (am *AlertMerger) getAlertGenerator(ruleName string) <-chan *alerts.Alert {
 	out := make(chan *alerts.Alert)
 	go func() {
 		defer close(out)
@@ -187,11 +187,7 @@ func (am *AlertMerger) Dispatch() {
 	}
 
 	if len(alertsToDelete) > 0 {
-		var keys [][]string
-		for _, alert := range alertsToDelete {
-			keys = append(keys, []string{alert.RuleName, alert.AlertID})
-		}
-		am.backend.DeleteAlerts(keys)
+		am.backend.DeleteAlerts(alertsToDelete)
 	}
 }
 

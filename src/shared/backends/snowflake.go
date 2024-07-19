@@ -1,47 +1,28 @@
 package backends
 
-import "database/sql"
+import (
+	"context"
+	"database/sql"
+	"fmt"
 
-type SnowflakeReader struct {
-	DSN string
+	_ "github.com/snowflakedb/gosnowflake"
+)
+
+type SnowflakeBackend struct {
+	SQLiteBackend
 }
 
-func (r *SnowflakeReader) ReadData() ([]map[string]any, error) {
-	db, err := sql.Open("snowflake", r.DSN)
+func NewSnowflakeBackend(ctx context.Context, dbName string) (*SnowflakeBackend, error) {
+	db, err := sql.Open("snowflake", dbName)
 	if err != nil {
-		return nil, err
-	}
-	defer db.Close()
-
-	rows, err := db.Query("SELECT * FROM alerts")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	columns, err := rows.Columns()
-	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to open Snowflake database: %w", err)
 	}
 
-	results := make([]map[string]any, 0)
-	for rows.Next() {
-		values := make([]any, len(columns))
-		pointers := make([]any, len(columns))
-		for i := range values {
-			pointers[i] = &values[i]
-		}
-
-		if err := rows.Scan(pointers...); err != nil {
-			return nil, err
-		}
-
-		item := make(map[string]any)
-		for i, col := range columns {
-			item[col] = values[i]
-		}
-		results = append(results, item)
-	}
-
-	return results, nil
+	return &SnowflakeBackend{
+		SQLiteBackend: SQLiteBackend{
+			ctx:    ctx,
+			db:     db,
+			dbName: dbName,
+		},
+	}, nil
 }

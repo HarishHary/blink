@@ -43,13 +43,15 @@ func (m *Matcher) Match(ctx context.Context, record shared.Record) (bool, error)
 	return false, nil
 }
 
-func NewMatcher(name string, setters ...MatcherOption) Matcher {
-	// Default Options
-	r := Matcher{
+func NewMatcher(name string, optFns ...MatcherOptions) (*Matcher, error) {
+	if name == "" {
+		return nil, &MatcherError{Message: "Invalid Matcher options"}
+	}
+	matcher := &Matcher{
 		name: name,
 	}
-	for _, setter := range setters {
-		setter(&r)
+	for _, optFn := range optFns {
+		optFn(matcher)
 	}
-	return r
+	return matcher, nil
 }

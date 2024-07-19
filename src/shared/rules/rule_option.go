@@ -9,81 +9,81 @@ import (
 	"github.com/harishhary/blink/src/shared/rules/tuning_rules"
 )
 
-type RuleOption func(*Rule)
+type RuleOptions func(*Rule)
 
-func Name(name string) RuleOption {
+func Name(name string) RuleOptions {
 	return func(rule *Rule) {
 		rule.name = name
 	}
 }
 
-func Description(description string) RuleOption {
+func Description(description string) RuleOptions {
 	return func(rule *Rule) {
 		rule.description = description
 	}
 }
 
-func Severity(severity int) RuleOption {
+func Severity(severity int) RuleOptions {
 	return func(rule *Rule) {
 		rule.severity = severity
 	}
 }
 
-func MergeByKeys(mergeByKeys []string) RuleOption {
+func MergeByKeys(mergeByKeys []string) RuleOptions {
 	return func(rule *Rule) {
 		rule.mergeByKeys = mergeByKeys
 	}
 }
 
-func MergeWindowMins(mergeWindowMins int) RuleOption {
+func MergeWindowMins(mergeWindowMins int) RuleOptions {
 	return func(rule *Rule) {
 		rule.mergeWindowMins = mergeWindowMins
 	}
 }
 
-func ReqSubkeys(reqSubkeys []string) RuleOption {
+func ReqSubkeys(reqSubkeys []string) RuleOptions {
 	return func(rule *Rule) {
 		rule.reqSubkeys = reqSubkeys
 	}
 }
 
-func Disabled(disabled bool) RuleOption {
+func Disabled(disabled bool) RuleOptions {
 	return func(rule *Rule) {
 		rule.disabled = disabled
 	}
 }
 
-func Inputs(inputs []inputs.IInput) RuleOption {
+func Inputs(inputs []inputs.IInput) RuleOptions {
 	return func(rule *Rule) {
 		rule.inputs = inputs
 	}
 }
 
-func Dispatchers(dispatchers []dispatchers.IDispatcher) RuleOption {
+func Dispatchers(dispatchers []dispatchers.IDispatcher) RuleOptions {
 	return func(rule *Rule) {
 		rule.dispatchers = dispatchers
 	}
 }
 
-func Matchers(matchers []matchers.IMatcher) RuleOption {
+func Matchers(matchers []matchers.IMatcher) RuleOptions {
 	return func(rule *Rule) {
 		rule.matchers = matchers
 	}
 }
 
-func Formatters(formatters []formatters.IFormatter) RuleOption {
+func Formatters(formatters []formatters.IFormatter) RuleOptions {
 	return func(rule *Rule) {
 		rule.formatters = formatters
 	}
 }
 
-func Enrichments(enrichments []enrichments.IEnrichment) RuleOption {
+func Enrichments(enrichments []enrichments.IEnrichment) RuleOptions {
 	return func(rule *Rule) {
 		rule.enrichments = enrichments
 	}
 }
 
-func TuningRules(tuningRules []tuning_rules.ITuningRule) RuleOption {
+func TuningRules(tuningRules []tuning_rules.ITuningRule) RuleOptions {
 	return func(rule *Rule) {
 		rule.tuningRules = tuningRules
 	}

@@ -143,13 +143,15 @@ func (r *Rule) Evaluate(ctx context.Context, record shared.Record) bool {
 	return true
 }
 
-func NewRule(name string, setters ...RuleOption) Rule {
-	// Default Options
-	r := Rule{
+func NewRule(name string, optFns ...RuleOptions) (*Rule, error) {
+	if name == "" {
+		return nil, &RuleError{Message: "Invalid Rule options"}
+	}
+	rule := &Rule{
 		name: name,
 	}
-	for _, setter := range setters {
-		setter(&r)
+	for _, optFn := range optFns {
+		optFn(rule)
 	}
-	return r
+	return rule, nil
 }

@@ -43,13 +43,15 @@ func (f *Formatter) Format(ctx context.Context, record shared.Record) (bool, err
 	return false, nil
 }
 
-func NewFormatter(name string, setters ...FormatterOption) Formatter {
-	// Default Options
-	r := Formatter{
+func NewFormatter(name string, optFns ...FormatterOptions) (*Formatter, error) {
+	if name == "" {
+		return nil, &FormatterError{Message: "Invalid Formatter options"}
+	}
+	formatter := &Formatter{
 		name: name,
 	}
-	for _, setter := range setters {
-		setter(&r)
+	for _, optFn := range optFns {
+		optFn(formatter)
 	}
-	return r
+	return formatter, nil
 }

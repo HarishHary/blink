@@ -6,8 +6,6 @@ import (
 	"github.com/harishhary/blink/src/shared/helpers"
 )
 
-type FormatterConstructor func(config map[string]string) (IFormatter, error)
-
 type FormatterRepository struct {
 	Formatters map[string]IFormatter
 	isImported bool

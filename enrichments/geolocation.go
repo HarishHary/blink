@@ -44,10 +44,11 @@ func getGeoLocation(ip string) (string, error) {
 	return geoLocation, nil
 }
 
+var geoLocationEnrichmentInstance, _ = enrichments.NewEnrichment(
+	"Geo Location enrichment",
+	enrichments.Description("Enrich with geolocation"),
+	enrichments.Disabled(false),
+)
 var GeoLocationEnrichment = geoLocationEnrichment{
-	Enrichment: enrichments.NewEnrichment(
-		"Geo Location enrichment",
-		enrichments.Description("Enrich with geolocation"),
-		enrichments.Disabled(false),
-	),
+	Enrichment: *geoLocationEnrichmentInstance,
 }

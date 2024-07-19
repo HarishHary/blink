@@ -21,16 +21,18 @@ func (r *SuspiciousSignInByAadcSync) Evaluate(ctx context.Context, record shared
 	return true
 }
 
+var rule, _ = rules.NewRule("Suspicious Sigin",
+	rules.Description("This is my custom rule 2."),
+	rules.Severity(1),
+	rules.Enrichments([]enrichments.IEnrichment{
+		&global_enrichment.GeoLocationEnrichment,
+		&global_enrichment.UserEnrichment,
+	}),
+	rules.TuningRules([]tuning_rules.ITuningRule{}),
+)
+
 func New() rules.IRule {
 	return &SuspiciousSignInByAadcSync{
-		Rule: rules.NewRule("Suspicious Sigin",
-			rules.Description("This is my custom rule 2."),
-			rules.Severity(1),
-			rules.Enrichments([]enrichments.IEnrichment{
-				&global_enrichment.GeoLocationEnrichment,
-				&global_enrichment.UserEnrichment,
-			}),
-			rules.TuningRules([]tuning_rules.ITuningRule{}),
-		),
+		Rule: *rule,
 	}
 }

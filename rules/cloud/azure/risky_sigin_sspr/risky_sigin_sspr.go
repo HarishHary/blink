@@ -34,25 +34,27 @@ func (r *sampleTuningRule) Tune(ctx context.Context, record shared.Record) error
 	return nil
 }
 
+var tuning_rule, _ = tuning_rules.NewTuningRule(
+	"Sample tuning rule",
+)
 var sampletuningRule = sampleTuningRule{
-	TuningRule: tuning_rules.NewTuningRule(
-		"Sample tuning rule",
-	),
+	TuningRule: *tuning_rule,
 }
 
+var rule, _ = rules.NewRule("SampleRule",
+	rules.Description("This is my custom rule."),
+	rules.Severity(5),
+	rules.Enrichments([]enrichments.IEnrichment{
+		&global_enrichment.GeoLocationEnrichment,
+		&global_enrichment.UserEnrichment,
+	}),
+	rules.TuningRules([]tuning_rules.ITuningRule{
+		&sampletuningRule,
+	}),
+	rules.Formatters([]formatters.IFormatter{
+		&global_formatters.UppercaseFormatter,
+	}),
+)
 var Rule = &sampleRule{
-	Rule: rules.NewRule("SampleRule",
-		rules.Description("This is my custom rule."),
-		rules.Severity(5),
-		rules.Enrichments([]enrichments.IEnrichment{
-			&global_enrichment.GeoLocationEnrichment,
-			&global_enrichment.UserEnrichment,
-		}),
-		rules.TuningRules([]tuning_rules.ITuningRule{
-			&sampletuningRule,
-		}),
-		rules.Formatters([]formatters.IFormatter{
-			&global_formatters.UppercaseFormatter,
-		}),
-	),
+	Rule: *rule,
 }

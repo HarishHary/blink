@@ -36,15 +36,17 @@ func (r *TuningRule) Name() string {
 	return r.name
 }
 
-func NewTuningRule(name string, setters ...TuningRuleOption) TuningRule {
-	// Default Options
-	r := TuningRule{
+func NewTuningRule(name string, optFns ...TuningRuleOptions) (*TuningRule, error) {
+	if name == "" {
+		return nil, &TuningRuleError{Message: "Invalid Tuning Rule options"}
+	}
+	tuning_rule := &TuningRule{
 		name: name,
 	}
-	for _, setter := range setters {
-		setter(&r)
+	for _, optFn := range optFns {
+		optFn(tuning_rule)
 	}
-	return r
+	return tuning_rule, nil
 }
 
 func (r *TuningRule) ApplyMatchers(ctx context.Context, record shared.Record) bool {

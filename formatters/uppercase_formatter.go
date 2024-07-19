@@ -22,11 +22,13 @@ func (f *uppercaseFormatter) Format(ctx context.Context, record shared.Record) (
 	return false, &formatters.FormatterError{Message: "message key not found in record"}
 }
 
+var formatter, _ = formatters.NewFormatter(
+	"Uppercase formatter 1",
+	formatters.Description("Uppercasing the message..."),
+	formatters.Disabled(false),
+	formatters.ID(""),
+)
+
 var UppercaseFormatter = uppercaseFormatter{
-	Formatter: formatters.NewFormatter(
-		"Uppercase formatter 1",
-		formatters.Description("Uppercasing the message..."),
-		formatters.Disabled(false),
-		formatters.ID(""),
-	),
+	Formatter: *formatter,
 }

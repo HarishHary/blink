@@ -6,8 +6,6 @@ import (
 	"github.com/harishhary/blink/src/shared/helpers"
 )
 
-type MatcherConstructor func(config map[string]string) (IMatcher, error)
-
 type MatcherRepository struct {
 	Matchers   map[string]IMatcher
 	isImported bool

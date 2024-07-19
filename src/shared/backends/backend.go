@@ -4,13 +4,16 @@ import (
 	"github.com/harishhary/blink/src/shared/alerts"
 )
 
+type Record map[string]any
+
 type IBackend interface {
 	AddAlerts(alerts []*alerts.Alert) error
-	DeleteAlerts(keys [][]string) error
-	GetAlertRecords(ruleName string, alertProcTimeoutSec int) <-chan map[string]any
-	GetAlertRecord(ruleName string, alertID string) (map[string]any, error)
+	DeleteAlerts(alerts []*alerts.Alert) error
+	UpdateSentOutputs(alerts *alerts.Alert) error
+	GetAlertRecords(ruleName string, alertProcTimeoutSec int) <-chan Record
+	GetAlertRecord(ruleName string, alertID string) (Record, error)
 	RuleNamesGenerator() <-chan string
 	MarkAsDispatched(alert *alerts.Alert) error
-	ToAlert(table_record map[string]any) (*alerts.Alert, error)
-	ToRecord(alert *alerts.Alert) (map[string]any, error)
+	ToAlert(record Record) (*alerts.Alert, error)
+	ToRecord(alert *alerts.Alert) (Record, error)
 }

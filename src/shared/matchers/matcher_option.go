@@ -2,9 +2,9 @@ package matchers
 
 import "github.com/google/uuid"
 
-type MatcherOption func(*Matcher)
+type MatcherOptions func(*Matcher)
 
-func ID(id string) MatcherOption {
+func ID(id string) MatcherOptions {
 	return func(matcher *Matcher) {
 		if id == "" {
 			matcher.id = uuid.NewString()
@@ -14,19 +14,13 @@ func ID(id string) MatcherOption {
 	}
 }
 
-func Name(name string) MatcherOption {
-	return func(matcher *Matcher) {
-		matcher.name = name
-	}
-}
-
-func Description(description string) MatcherOption {
+func Description(description string) MatcherOptions {
 	return func(matcher *Matcher) {
 		matcher.description = description
 	}
 }
 
-func Disabled(disabled bool) MatcherOption {
+func Disabled(disabled bool) MatcherOptions {
 	return func(matcher *Matcher) {
 		matcher.disabled = disabled
 	}

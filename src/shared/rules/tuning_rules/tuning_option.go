@@ -2,46 +2,40 @@ package tuning_rules
 
 import "github.com/harishhary/blink/src/shared/matchers"
 
-type TuningRuleOption func(*TuningRule)
+type TuningRuleOptions func(*TuningRule)
 
-func Description(description string) TuningRuleOption {
+func Description(description string) TuningRuleOptions {
 	return func(rule *TuningRule) {
 		rule.description = description
 	}
 }
 
-func Precedence(precedence int) TuningRuleOption {
+func Precedence(precedence int) TuningRuleOptions {
 	return func(rule *TuningRule) {
 		rule.precedence = precedence
 	}
 }
 
-func Disabled(disabled bool) TuningRuleOption {
+func Disabled(disabled bool) TuningRuleOptions {
 	return func(rule *TuningRule) {
 		rule.disabled = disabled
 	}
 }
 
-func Matchers(matchers []matchers.IMatcher) TuningRuleOption {
+func Matchers(matchers []matchers.IMatcher) TuningRuleOptions {
 	return func(rule *TuningRule) {
 		rule.matchers = matchers
 	}
 }
 
-func Global(global bool) TuningRuleOption {
+func Global(global bool) TuningRuleOptions {
 	return func(rule *TuningRule) {
 		rule.global = global
 	}
 }
 
-func ID(id string) TuningRuleOption {
+func ID(id string) TuningRuleOptions {
 	return func(rule *TuningRule) {
 		rule.id = id
-	}
-}
-
-func Name(name string) TuningRuleOption {
-	return func(rule *TuningRule) {
-		rule.name = name
 	}
 }
