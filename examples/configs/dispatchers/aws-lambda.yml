@@ -1,0 +1,6 @@
+aws-lambda:
+  sample-lambda:
+    description: Sending it to aws-lambda
+    output: function-name:qualifier
+    key: value
+    key2: value2
