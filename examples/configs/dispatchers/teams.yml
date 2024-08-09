@@ -1,0 +1,4 @@
+teams1:
+  description: sending this to Microsoft Teams...
+  output: teams
+  webhook_url: "https://example.com/webhook"
