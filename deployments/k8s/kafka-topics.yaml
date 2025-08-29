@@ -1,0 +1,24 @@
+# KafkaTopic CRDs (one per log_type) for Blink processing
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: blink-events-application
+  labels:
+    strimzi.io/cluster: blink-kafka
+spec:
+  partitions: 3
+  replicas: 1
+
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: blink-events-auth
+  labels:
+    strimzi.io/cluster: blink-kafka
+spec:
+  partitions: 3
+  replicas: 1
+
+---
+# Add more topics for each log_type as needed, e.g. blink-events-system, blink-events-security, etc.

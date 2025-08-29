@@ -1,0 +1,30 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: blink-rule-executor-application
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: blink-rule-executor-application
+  minReplicas: 1
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 50
+  # Example external metric for consumer lag (requires Prometheus adapter):
+  # - type: External
+  #   external:
+  #     metric:
+  #       name: kafka_consumer_lag
+  #       selector:
+  #         matchLabels:
+  #           topic: blink-events-application
+  #           group: matcher-application
+  #     target:
+  #       type: Value
+  #       value: "100"

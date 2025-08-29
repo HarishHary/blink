@@ -12,6 +12,8 @@ import (
 
 type IEnrichment interface {
 	Enrich(ctx context.Context, alert *alerts.Alert) errors.Error
+	// DependsOn returns plugin names that must run before this enrichment.
+	DependsOn() []string
 
 	// Getters
 	Id() string
@@ -30,6 +32,10 @@ type Enrichment struct {
 	enabled     bool
 }
 
+// DependsOn returns no dependencies by default.
+func (e *Enrichment) DependsOn() []string {
+   return nil
+}
 func (e *Enrichment) Id() string {
 	return e.id
 }

@@ -1,5 +1,7 @@
 package scoring
 
+import "slices"
+
 type Severity = string
 
 var SeverityEnum = struct {
@@ -17,16 +19,11 @@ var SeverityEnum = struct {
 }
 
 func IsValidSeverity(severity Severity) bool {
-	for _, value := range []Severity{
+	return slices.Contains([]Severity{
 		SeverityEnum.Info,
 		SeverityEnum.Low,
 		SeverityEnum.Medium,
 		SeverityEnum.High,
 		SeverityEnum.Critical,
-	} {
-		if severity == value {
-			return true
-		}
-	}
-	return false
+	}, severity)
 }

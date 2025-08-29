@@ -38,14 +38,28 @@ This is the complete set of requirements. Of course, if you don't want to instal
 <!-- FIXME -->
 
 ## Components
+## Components
 
 The major components of the codebase are:
 
-<!-- FIXME -->
+- internal/broker: broker abstraction for event-driven messaging
+- internal/broker/kafka: Kafka implementation for the broker
+- cmd/{rule_engine,alert_engine,alert_processor}: standalone microservices wired via Kafka topics
+- deployments/k8s: example Kubernetes manifests for Kafka topics and Blink services
 
 ## Relevant commands
 
-<!-- FIXME -->
+# Relevant commands
+
+# Create Kafka cluster and topics (using Strimzi)
+kubectl apply -f deployments/k8s/kafka-cluster.yaml
+kubectl apply -f deployments/k8s/kafka-topics.yaml
+
+# Deploy rule-executor services (one per log_type)
+kubectl apply -f deployments/k8s/rule-executor-application.yaml
+kubectl apply -f deployments/k8s/rule-executor-auth.yaml
+
+# Note: duplicate rule-executor-<logtype>.yaml for each additional log_type
 
 ## IDEs
 
