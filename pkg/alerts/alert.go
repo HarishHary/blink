@@ -35,12 +35,11 @@ type Alert struct {
 	Confidence scoring.Confidence // coming from base rule but changed by tuning rules
 	Severity   scoring.Severity   // coming from base rule but changed by asset tagging and dynamicSeverity
 
-	// Add this field:
-	Rule rules.IRule
+	Rule rules.Metadata
 }
 
-// NewAlert creates a new Alert
-func NewAlert(rule rules.IRule, event events.Event, optFns ...AlertOptions) (*Alert, errors.Error) {
+// Creates a new Alert
+func NewAlert(rule rules.Metadata, event events.Event, optFns ...AlertOptions) (*Alert, errors.Error) {
 	alert := &Alert{
 		AlertID:  uuid.NewString(),
 		Created:  time.Now().UTC(),
@@ -55,7 +54,7 @@ func NewAlert(rule rules.IRule, event events.Event, optFns ...AlertOptions) (*Al
 	return alert, nil
 }
 
-// Merge merges multiple alerts into a new merged alert
+// Merges multiple alerts into a new merged alert
 func Merge(alerts []*Alert) (*Alert, errors.Error) {
 	if len(alerts) == 0 {
 		return nil, errors.New("no alerts to merge")
@@ -94,7 +93,7 @@ func Merge(alerts []*Alert) (*Alert, errors.Error) {
 	)
 }
 
-// computeCommon finds values common to all records
+// Finds values common to all records
 func computeCommon(events []events.Event) map[string]any {
 	if len(events) == 0 {
 		return make(map[string]any)
@@ -116,7 +115,7 @@ func computeCommon(events []events.Event) map[string]any {
 	return common
 }
 
-// getValueDiffs finds values in the records that are not in the common subset
+// Finds values in the records that are not in the common subset
 func getValueDiffs(common map[string]any, alerts []*Alert, events []events.Event) map[string]any {
 	valueDiffs := make(map[string]any)
 	for i, event := range events {
@@ -128,7 +127,7 @@ func getValueDiffs(common map[string]any, alerts []*Alert, events []events.Event
 	return valueDiffs
 }
 
-// anyStaged checks if any alert is staged
+// Checks if any alert is staged
 func anyStaged(alerts []*Alert) bool {
 	for _, alert := range alerts {
 		if alert.Staged {
@@ -138,7 +137,7 @@ func anyStaged(alerts []*Alert) bool {
 	return false
 }
 
-// OutputDict converts the alert to a dictionary ready to send to an output
+// Converts the alert to a dictionary ready to send to an output
 func (a *Alert) OutputDict() map[string]any {
 	output := map[string]any{
 		"cluster":          a.Cluster,
@@ -158,12 +157,12 @@ func (a *Alert) OutputDict() map[string]any {
 	return output
 }
 
-// String returns a simple representation of the alert
+// Returns a simple representation of the alert
 func (a *Alert) String() string {
 	return fmt.Sprintf("<Alert %s triggered from %s>", a.AlertID, a.Rule.Name())
 }
 
-// FullString returns a detailed representation of the alert
+// Returns a detailed representation of the alert
 func (a *Alert) FullString() (string, errors.Error) {
 	recordJSON, err := json.MarshalIndent(a, "", "  ")
 	if err != nil {
@@ -173,12 +172,12 @@ func (a *Alert) FullString() (string, errors.Error) {
 	return string(recordJSON), nil
 }
 
-// Less compares alerts by their creation time
+// Compares alerts by their creation time
 func (a *Alert) Less(other *Alert) bool {
 	return a.Created.Before(other.Created)
 }
 
-// CanMerge checks if two alerts can be merged together
+// Checks if two alerts can be merged together
 func (a *Alert) CanMerge(other *Alert) bool {
 	if !a.MergeEnabled() || !other.MergeEnabled() {
 		return false
@@ -229,10 +228,7 @@ func (a *Alert) RecordKey() map[string]string {
 }
 
 func (a *Alert) Signal() bool {
-	if a.Rule.Signal() && a.Rule.SignalThreshold() <= a.Confidence {
-		return false
-	}
-	return true
+	return a.Rule.Signal() && a.Rule.SignalThreshold() <= a.Confidence
 }
 
 func (a *Alert) RiskScore() scoring.RiskScore {
