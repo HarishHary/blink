@@ -28,21 +28,22 @@ type BaseError struct {
 	line          int    `json:"-"`
 }
 
-func New(message any) *BaseError {
-	_, file, line, ok := runtime.Caller(3)
-	if !ok {
-		file = "???"
-		line = 0
-	}
-
-	uuid := uuid.NewString()
+func newBase(message any, file string, line int) *BaseError {
 	return &BaseError{
 		message:       message,
 		context:       make([]any, 0),
-		correlationID: uuid,
+		correlationID: uuid.NewString(),
 		file:          file,
 		line:          line,
 	}
+}
+
+func New(message any) *BaseError {
+	_, file, line, ok := runtime.Caller(1)
+	if !ok {
+		file = "???"
+	}
+	return newBase(message, file, line)
 }
 
 func NewE(err error) Error {
@@ -50,12 +51,20 @@ func NewE(err error) Error {
 	case Error:
 		return e
 	default:
-		return New(err.Error())
+		_, file, line, ok := runtime.Caller(1)
+		if !ok {
+			file = "???"
+		}
+		return newBase(err.Error(), file, line)
 	}
 }
 
 func NewF(format string, args ...any) *BaseError {
-	return New(fmt.Sprintf(format, args...))
+	_, file, line, ok := runtime.Caller(1)
+	if !ok {
+		file = "???"
+	}
+	return newBase(fmt.Sprintf(format, args...), file, line)
 }
 
 func (err *BaseError) WithContext(context ...any) {
