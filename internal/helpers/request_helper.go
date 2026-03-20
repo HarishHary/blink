@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"time"
@@ -148,7 +149,7 @@ func (h *RequestHelper) PostRequestRetry(url string, headers map[string]string, 
 func (h *RequestHelper) CheckHTTPResponse(response *http.Response) bool {
 	success := response != nil && (response.StatusCode >= 200 && response.StatusCode <= 299)
 	if !success {
-		fmt.Printf("Encountered an error while sending: %v", response)
+		log.Printf("Encountered an error while sending: %v", response)
 	}
 	return success
 }

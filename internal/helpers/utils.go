@@ -1,12 +1,14 @@
 package helpers
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
-	"fmt"
+	"io"
 	"net"
+	"os"
 	"path/filepath"
-	"plugin"
 	"strings"
 )
 
@@ -70,23 +72,6 @@ func Difference(a, b []string) []string {
 	return result
 }
 
-func LoadPlugin[T any](path string) (T, error) {
-	var pluginInstance T
-	p, err := plugin.Open(path)
-	if err != nil {
-		return pluginInstance, err
-	}
-	sym, err := p.Lookup("Plugin")
-	if err != nil {
-		return pluginInstance, err
-	}
-	pluginInstance, ok := sym.(T)
-	if !ok {
-		return pluginInstance, fmt.Errorf("invalid type for plugin %s", path)
-	}
-	return pluginInstance, nil
-}
-
 func KeyValueListToDict(listObjects []map[string]any, key string, value string) map[string]any {
 	result := make(map[string]any)
 	for _, item := range listObjects {
@@ -95,11 +80,22 @@ func KeyValueListToDict(listObjects []map[string]any, key string, value string) 
 	return result
 }
 
-func IsBase64(b64 string) string {
-	if len(b64) < 12 {
+// IsBase64 reports whether s is a valid, non-trivially-short base64-encoded string.
+func IsBase64(s string) bool {
+	if len(s) < 12 {
+		return false
+	}
+	_, err := base64.StdEncoding.DecodeString(s)
+	return err == nil
+}
+
+// DecodeBase64 decodes a base64-encoded string and returns the result.
+// Returns "" if s is too short or cannot be decoded.
+func DecodeBase64(s string) string {
+	if len(s) < 12 {
 		return ""
 	}
-	decoded, err := base64.StdEncoding.DecodeString(b64)
+	decoded, err := base64.StdEncoding.DecodeString(s)
 	if err != nil {
 		return ""
 	}
@@ -143,4 +139,31 @@ func GetValFromList(listOfDicts []map[string]any, returnFieldKey, fieldCmpKey, f
 		}
 	}
 	return valuesOfReturnField
+}
+
+func BinaryBaseName(binPath string) string {
+	base := filepath.Base(binPath)
+	if ext := filepath.Ext(base); ext != "" {
+		// Only strip known non-binary extensions to avoid clobbering names like "rule.v1"
+		switch strings.ToLower(ext) {
+		case ".so":
+			base = strings.TrimSuffix(base, ext)
+		}
+	}
+	return base
+}
+
+func BinaryChecksum(binPath string) (string, error) {
+	file, err := os.Open(binPath)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", err
+	}
+
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
