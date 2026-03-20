@@ -1,19 +1,58 @@
 package scoring
 
-type SignalType = string
+import (
+	"encoding/json"
+	"fmt"
+)
+
+type SignalType int
+
+const (
+	SignalTypeLeaf SignalType = iota // 0
+	SignalTypeCore                   // 1
+)
 
 var SignalTypeEnum = struct {
-	Core SignalType
-	Leaf SignalType
+	Core, Leaf SignalType
 }{
-	Core: "core",
-	Leaf: "leaf",
+	Core: SignalTypeCore,
+	Leaf: SignalTypeLeaf,
 }
 
-// Function to compute the signal type
-func ComputeSignalType(confidence Confidence) SignalType {
-	if confidence >= ConfidenceEnum.Medium {
-		return SignalTypeEnum.Core
+func (s SignalType) String() string {
+	switch s {
+	case SignalTypeCore:
+		return "core"
+	case SignalTypeLeaf:
+		return "leaf"
+	default:
+		return fmt.Sprintf("signaltype(%d)", int(s))
 	}
-	return SignalTypeEnum.Leaf
+}
+
+func (s SignalType) MarshalJSON() ([]byte, error) {
+	return json.Marshal(s.String())
+}
+
+func (s *SignalType) UnmarshalJSON(data []byte) error {
+	var str string
+	if err := json.Unmarshal(data, &str); err != nil {
+		return err
+	}
+	switch str {
+	case "core":
+		*s = SignalTypeCore
+	case "leaf":
+		*s = SignalTypeLeaf
+	default:
+		return fmt.Errorf("unknown signal type %q", str)
+	}
+	return nil
+}
+
+func ComputeSignalType(confidence Confidence) SignalType {
+	if confidence >= ConfidenceMedium {
+		return SignalTypeCore
+	}
+	return SignalTypeLeaf
 }
