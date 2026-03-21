@@ -1,0 +1,22 @@
+syntax = "proto3";
+package rules;
+
+option go_package = "rpc_rules/;rpc_rules";
+
+message Empty {}
+
+message Event { bytes json = 1; }
+
+message EvaluateRequest { Event event = 1; }
+message EvaluateResponse { bool matched = 1; }
+
+message EvaluateBatchRequest { repeated Event events = 1; }
+message EvaluateBatchResponse { repeated bool matched = 1; }
+
+service Rule {
+  rpc Init(Empty) returns (Empty);
+  rpc Evaluate(EvaluateRequest) returns (EvaluateResponse);
+  rpc EvaluateBatch(EvaluateBatchRequest) returns (EvaluateBatchResponse);
+  rpc Shutdown(Empty) returns (Empty);
+  rpc Ping(Empty) returns (Empty);
+}
