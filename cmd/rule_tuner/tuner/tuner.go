@@ -115,7 +115,7 @@ func (service *TunerService) Run(ctx context.Context) errors.Error {
 					}
 					service.Error(errors.NewE(err))
 					tuningErrors.Inc()
-					continue
+					return false, false
 				}
 				if res.applies {
 					results = append(results, res)

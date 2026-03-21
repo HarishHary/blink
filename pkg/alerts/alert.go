@@ -23,8 +23,9 @@ type Alert struct {
 	Created     time.Time
 	Dispatched  time.Time
 	Event       events.Event
-	Staged      bool
-	OutputsSent []string
+	Staged              bool
+	OutputsSent         []string
+	EnrichmentsApplied  []string
 
 	LogSource string
 	LogType   string

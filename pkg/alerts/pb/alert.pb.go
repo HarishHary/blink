@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.9
 // 	protoc        v7.34.0
-// source: alert.proto
+// source: pb/alert.proto
 
 package pb
 
@@ -57,7 +57,7 @@ type RuleMetadata struct {
 
 func (x *RuleMetadata) Reset() {
 	*x = RuleMetadata{}
-	mi := &file_alert_proto_msgTypes[0]
+	mi := &file_pb_alert_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -69,7 +69,7 @@ func (x *RuleMetadata) String() string {
 func (*RuleMetadata) ProtoMessage() {}
 
 func (x *RuleMetadata) ProtoReflect() protoreflect.Message {
-	mi := &file_alert_proto_msgTypes[0]
+	mi := &file_pb_alert_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -82,7 +82,7 @@ func (x *RuleMetadata) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuleMetadata.ProtoReflect.Descriptor instead.
 func (*RuleMetadata) Descriptor() ([]byte, []int) {
-	return file_alert_proto_rawDescGZIP(), []int{0}
+	return file_pb_alert_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *RuleMetadata) GetId() string {
@@ -256,29 +256,30 @@ func (x *RuleMetadata) GetRiskScore() string {
 // Alert is the Kafka wire format for a single alert travelling through the
 // tuner → enricher → formatter → dispatcher pipeline.
 type Alert struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	AlertId       string                 `protobuf:"bytes,1,opt,name=alert_id,json=alertId,proto3" json:"alert_id,omitempty"`
-	Attempts      int32                  `protobuf:"varint,2,opt,name=attempts,proto3" json:"attempts,omitempty"`
-	Cluster       string                 `protobuf:"bytes,3,opt,name=cluster,proto3" json:"cluster,omitempty"`
-	CreatedNs     int64                  `protobuf:"varint,4,opt,name=created_ns,json=createdNs,proto3" json:"created_ns,omitempty"`          // time.Time as Unix nanoseconds
-	DispatchedNs  int64                  `protobuf:"varint,5,opt,name=dispatched_ns,json=dispatchedNs,proto3" json:"dispatched_ns,omitempty"` // time.Time as Unix nanoseconds (0 = not yet dispatched)
-	Event         *structpb.Struct       `protobuf:"bytes,6,opt,name=event,proto3" json:"event,omitempty"`                                    // events.Event as structured protobuf
-	Staged        bool                   `protobuf:"varint,7,opt,name=staged,proto3" json:"staged,omitempty"`
-	OutputsSent   []string               `protobuf:"bytes,8,rep,name=outputs_sent,json=outputsSent,proto3" json:"outputs_sent,omitempty"`
-	LogSource     string                 `protobuf:"bytes,9,opt,name=log_source,json=logSource,proto3" json:"log_source,omitempty"`
-	LogType       string                 `protobuf:"bytes,10,opt,name=log_type,json=logType,proto3" json:"log_type,omitempty"`
-	SourceEntity  string                 `protobuf:"bytes,11,opt,name=source_entity,json=sourceEntity,proto3" json:"source_entity,omitempty"`
-	SourceService string                 `protobuf:"bytes,12,opt,name=source_service,json=sourceService,proto3" json:"source_service,omitempty"`
-	Confidence    string                 `protobuf:"bytes,13,opt,name=confidence,proto3" json:"confidence,omitempty"`
-	Severity      string                 `protobuf:"bytes,14,opt,name=severity,proto3" json:"severity,omitempty"`
-	Rule          *RuleMetadata          `protobuf:"bytes,15,opt,name=rule,proto3" json:"rule,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	AlertId            string                 `protobuf:"bytes,1,opt,name=alert_id,json=alertId,proto3" json:"alert_id,omitempty"`
+	Attempts           int32                  `protobuf:"varint,2,opt,name=attempts,proto3" json:"attempts,omitempty"`
+	Cluster            string                 `protobuf:"bytes,3,opt,name=cluster,proto3" json:"cluster,omitempty"`
+	CreatedNs          int64                  `protobuf:"varint,4,opt,name=created_ns,json=createdNs,proto3" json:"created_ns,omitempty"`          // time.Time as Unix nanoseconds
+	DispatchedNs       int64                  `protobuf:"varint,5,opt,name=dispatched_ns,json=dispatchedNs,proto3" json:"dispatched_ns,omitempty"` // time.Time as Unix nanoseconds (0 = not yet dispatched)
+	Event              *structpb.Struct       `protobuf:"bytes,6,opt,name=event,proto3" json:"event,omitempty"`                                    // events.Event as structured protobuf
+	Staged             bool                   `protobuf:"varint,7,opt,name=staged,proto3" json:"staged,omitempty"`
+	OutputsSent        []string               `protobuf:"bytes,8,rep,name=outputs_sent,json=outputsSent,proto3" json:"outputs_sent,omitempty"`
+	LogSource          string                 `protobuf:"bytes,9,opt,name=log_source,json=logSource,proto3" json:"log_source,omitempty"`
+	LogType            string                 `protobuf:"bytes,10,opt,name=log_type,json=logType,proto3" json:"log_type,omitempty"`
+	SourceEntity       string                 `protobuf:"bytes,11,opt,name=source_entity,json=sourceEntity,proto3" json:"source_entity,omitempty"`
+	SourceService      string                 `protobuf:"bytes,12,opt,name=source_service,json=sourceService,proto3" json:"source_service,omitempty"`
+	Confidence         string                 `protobuf:"bytes,13,opt,name=confidence,proto3" json:"confidence,omitempty"`
+	Severity           string                 `protobuf:"bytes,14,opt,name=severity,proto3" json:"severity,omitempty"`
+	Rule               *RuleMetadata          `protobuf:"bytes,15,opt,name=rule,proto3" json:"rule,omitempty"`
+	EnrichmentsApplied []string               `protobuf:"bytes,16,rep,name=enrichments_applied,json=enrichmentsApplied,proto3" json:"enrichments_applied,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *Alert) Reset() {
 	*x = Alert{}
-	mi := &file_alert_proto_msgTypes[1]
+	mi := &file_pb_alert_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -290,7 +291,7 @@ func (x *Alert) String() string {
 func (*Alert) ProtoMessage() {}
 
 func (x *Alert) ProtoReflect() protoreflect.Message {
-	mi := &file_alert_proto_msgTypes[1]
+	mi := &file_pb_alert_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -303,7 +304,7 @@ func (x *Alert) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Alert.ProtoReflect.Descriptor instead.
 func (*Alert) Descriptor() ([]byte, []int) {
-	return file_alert_proto_rawDescGZIP(), []int{1}
+	return file_pb_alert_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *Alert) GetAlertId() string {
@@ -411,11 +412,18 @@ func (x *Alert) GetRule() *RuleMetadata {
 	return nil
 }
 
-var File_alert_proto protoreflect.FileDescriptor
+func (x *Alert) GetEnrichmentsApplied() []string {
+	if x != nil {
+		return x.EnrichmentsApplied
+	}
+	return nil
+}
 
-const file_alert_proto_rawDesc = "" +
+var File_pb_alert_proto protoreflect.FileDescriptor
+
+const file_pb_alert_proto_rawDesc = "" +
 	"\n" +
-	"\valert.proto\x12\x06alerts\x1a\x1cgoogle/protobuf/struct.proto\"\xe7\x05\n" +
+	"\x0epb/alert.proto\x12\x06alerts\x1a\x1cgoogle/protobuf/struct.proto\"\xe7\x05\n" +
 	"\fRuleMetadata\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12 \n" +
@@ -449,7 +457,7 @@ const file_alert_proto_rawDesc = "" +
 	"references\x18\x17 \x03(\tR\n" +
 	"references\x12\x1d\n" +
 	"\n" +
-	"risk_score\x18\x18 \x01(\tR\triskScore\"\xf2\x03\n" +
+	"risk_score\x18\x18 \x01(\tR\triskScore\"\xa3\x04\n" +
 	"\x05Alert\x12\x19\n" +
 	"\balert_id\x18\x01 \x01(\tR\aalertId\x12\x1a\n" +
 	"\battempts\x18\x02 \x01(\x05R\battempts\x12\x18\n" +
@@ -470,27 +478,28 @@ const file_alert_proto_rawDesc = "" +
 	"confidence\x18\r \x01(\tR\n" +
 	"confidence\x12\x1a\n" +
 	"\bseverity\x18\x0e \x01(\tR\bseverity\x12(\n" +
-	"\x04rule\x18\x0f \x01(\v2\x14.alerts.RuleMetadataR\x04ruleB\bZ\x06pb/;pbb\x06proto3"
+	"\x04rule\x18\x0f \x01(\v2\x14.alerts.RuleMetadataR\x04rule\x12/\n" +
+	"\x13enrichments_applied\x18\x10 \x03(\tR\x12enrichmentsAppliedB\bZ\x06pb/;pbb\x06proto3"
 
 var (
-	file_alert_proto_rawDescOnce sync.Once
-	file_alert_proto_rawDescData []byte
+	file_pb_alert_proto_rawDescOnce sync.Once
+	file_pb_alert_proto_rawDescData []byte
 )
 
-func file_alert_proto_rawDescGZIP() []byte {
-	file_alert_proto_rawDescOnce.Do(func() {
-		file_alert_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_alert_proto_rawDesc), len(file_alert_proto_rawDesc)))
+func file_pb_alert_proto_rawDescGZIP() []byte {
+	file_pb_alert_proto_rawDescOnce.Do(func() {
+		file_pb_alert_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_pb_alert_proto_rawDesc), len(file_pb_alert_proto_rawDesc)))
 	})
-	return file_alert_proto_rawDescData
+	return file_pb_alert_proto_rawDescData
 }
 
-var file_alert_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
-var file_alert_proto_goTypes = []any{
+var file_pb_alert_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_pb_alert_proto_goTypes = []any{
 	(*RuleMetadata)(nil),    // 0: alerts.RuleMetadata
 	(*Alert)(nil),           // 1: alerts.Alert
 	(*structpb.Struct)(nil), // 2: google.protobuf.Struct
 }
-var file_alert_proto_depIdxs = []int32{
+var file_pb_alert_proto_depIdxs = []int32{
 	2, // 0: alerts.Alert.event:type_name -> google.protobuf.Struct
 	0, // 1: alerts.Alert.rule:type_name -> alerts.RuleMetadata
 	2, // [2:2] is the sub-list for method output_type
@@ -500,26 +509,26 @@ var file_alert_proto_depIdxs = []int32{
 	0, // [0:2] is the sub-list for field type_name
 }
 
-func init() { file_alert_proto_init() }
-func file_alert_proto_init() {
-	if File_alert_proto != nil {
+func init() { file_pb_alert_proto_init() }
+func file_pb_alert_proto_init() {
+	if File_pb_alert_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_alert_proto_rawDesc), len(file_alert_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pb_alert_proto_rawDesc), len(file_pb_alert_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   2,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
-		GoTypes:           file_alert_proto_goTypes,
-		DependencyIndexes: file_alert_proto_depIdxs,
-		MessageInfos:      file_alert_proto_msgTypes,
+		GoTypes:           file_pb_alert_proto_goTypes,
+		DependencyIndexes: file_pb_alert_proto_depIdxs,
+		MessageInfos:      file_pb_alert_proto_msgTypes,
 	}.Build()
-	File_alert_proto = out.File
-	file_alert_proto_goTypes = nil
-	file_alert_proto_depIdxs = nil
+	File_pb_alert_proto = out.File
+	file_pb_alert_proto_goTypes = nil
+	file_pb_alert_proto_depIdxs = nil
 }

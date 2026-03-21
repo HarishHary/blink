@@ -81,9 +81,21 @@ func (service *EnricherService) Run(ctx context.Context) errors.Error {
 		func(ctx context.Context, _ []byte, alert *alerts.Alert) (skip bool, deadLetter bool) {
 			service.Info("enriching alert %s", alert.AlertID)
 
-			var anyMissing atomic.Bool
-			var wg sync.WaitGroup
+			applied := make(map[string]struct{}, len(alert.EnrichmentsApplied))
+			for _, name := range alert.EnrichmentsApplied {
+				applied[name] = struct{}{}
+			}
+
+			var (
+				anyMissing atomic.Bool
+				mu         sync.Mutex
+				succeeded  []string
+				wg         sync.WaitGroup
+			)
 			for _, name := range alert.Rule.Enrichments() {
+				if _, done := applied[name]; done {
+					continue
+				}
 				wg.Add(1)
 				go func(enrName string) {
 					defer wg.Done()
@@ -104,20 +116,27 @@ func (service *EnricherService) Run(ctx context.Context) errors.Error {
 						service.Error(errors.NewF("enrichment %s failed: %v", enrName, err))
 					default:
 						enrichmentsApplied.WithLabelValues(enrName).Inc()
+						mu.Lock()
+						succeeded = append(succeeded, enrName)
+						mu.Unlock()
 					}
 					enrichmentLatency.WithLabelValues(enrName).Observe(time.Since(start).Seconds())
 				}(name)
 			}
 			wg.Wait()
 
+			alert.EnrichmentsApplied = append(alert.EnrichmentsApplied, succeeded...)
+
 			if anyMissing.Load() {
 				alert.Attempts++
 				if alert.Attempts >= services.MaxPluginAttempts {
 					service.Info("alert %s passed through after %d attempts (enrichment unavailable)", alert.AlertID, alert.Attempts)
+					alert.EnrichmentsApplied = nil
 					return false, false
 				}
 				return false, true
 			}
+			alert.EnrichmentsApplied = nil
 			return false, false
 		},
 	)

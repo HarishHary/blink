@@ -72,6 +72,12 @@ func (service *FormatterService) Run(ctx context.Context) errors.Error {
 		func(ctx context.Context, _ []byte, alert *alerts.Alert) (skip bool, deadLetter bool) {
 			service.Info("applying formatters for alert %s", alert.AlertID)
 
+			snapshot, merr := alerts.Marshal(alert)
+			if merr != nil {
+				service.Error(errors.NewE(merr))
+				return false, false
+			}
+
 			for _, name := range alert.Rule.Formatters() {
 				_, absent, removed, err := service.pool.Format(ctx, name, alert, "")
 				switch {
@@ -90,6 +96,10 @@ func (service *FormatterService) Run(ctx context.Context) errors.Error {
 				case err != nil:
 					formatterErrors.WithLabelValues(name).Inc()
 					service.Error(err)
+					if restored, uerr := alerts.Unmarshal(snapshot); uerr == nil {
+						*alert = *restored
+					}
+					return false, false
 				default:
 					formattersApplied.WithLabelValues(name).Inc()
 				}
