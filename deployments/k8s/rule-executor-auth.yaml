@@ -1,0 +1,52 @@
+# Rule Executor for 'auth' log_type
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blink-rule-executor-auth
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: blink-rule-executor-auth
+  template:
+    metadata:
+      labels:
+        app: blink-rule-executor-auth
+    spec:
+      containers:
+      - name: rule-executor
+        image: your-registry/blink:latest
+        command: ["/bin/blink-rule-executor"]
+        env:
+        - name: LOG_TYPE
+          value: "auth"
+        - name: KAFKA_BROKERS
+          value: "blink-kafka-bootstrap:9092"
+        - name: KAFKA_TOPIC_SYNC
+          value: "blink-events-auth"
+        - name: KAFKA_GROUP_SYNC
+          value: "matcher-auth"
+        - name: KAFKA_TOPIC_EXEC
+          value: "blink-exec-auth"
+        - name: KAFKA_GROUP_EXEC
+          value: "rule-exec-auth"
+        resources:
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+          requests:
+            cpu: "200m"
+            memory: "256Mi"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: blink-rule-executor-auth
+spec:
+  selector:
+    app: blink-rule-executor-auth
+  ports:
+  - name: metrics
+    port: 9100
+    targetPort: 9100

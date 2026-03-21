@@ -1,0 +1,54 @@
+# Alert Engine deployment using Kafka topics for sync, enrichment, and tuning
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blink-alert-engine
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: blink-alert-engine
+  template:
+    metadata:
+      labels:
+        app: blink-alert-engine
+    spec:
+      containers:
+      - name: alert-engine
+        image: your-registry/blink:latest
+        command: ["/bin/blink-alert-engine"]
+        env:
+        - name: KAFKA_BROKERS
+          value: "kafka:9092"
+        - name: KAFKA_TOPIC_SYNC
+          value: "blink-sync"
+        - name: KAFKA_GROUP_SYNC
+          value: "blink-alert-sync"
+        - name: KAFKA_TOPIC_ENRICH
+          value: "blink-enrich"
+        - name: KAFKA_GROUP_ENRICH
+          value: "blink-alert-enrich"
+        - name: KAFKA_TOPIC_TUNE
+          value: "blink-tune"
+        - name: KAFKA_GROUP_TUNE
+          value: "blink-alert-tune"
+        resources:
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+          requests:
+            cpu: "200m"
+            memory: "256Mi"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: blink-alert-engine
+spec:
+  selector:
+    app: blink-alert-engine
+  ports:
+  - name: metrics
+    port: 8080
+    targetPort: 8080
