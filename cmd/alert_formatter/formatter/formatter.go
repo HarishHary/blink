@@ -1,69 +1,100 @@
 package formatter
 
 import (
-	"log"
+	"context"
 
-	"github.com/harishhary/blink/cmd/alert_formatter/internal/message"
+	"github.com/harishhary/blink/internal/broker"
+	"github.com/harishhary/blink/internal/broker/kafka"
 	"github.com/harishhary/blink/internal/configuration"
-	"github.com/harishhary/blink/internal/context"
+	svcctx "github.com/harishhary/blink/internal/context"
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/logger"
-	"github.com/harishhary/blink/internal/messaging"
+	"github.com/harishhary/blink/internal/services"
 	"github.com/harishhary/blink/pkg/alerts"
-	"github.com/harishhary/blink/pkg/formatters"
+	fmtcatalog "github.com/harishhary/blink/pkg/formatters/pool"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
-// FormatterService formats enriched alerts and publishes to dispatcher.
+var (
+	alertsIn          = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "alert_formatter", Name: "alerts_in_total"})
+	alertsOut         = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "alert_formatter", Name: "alerts_out_total"})
+	alertsDLQ         = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "alert_formatter", Name: "alerts_dlq_total"})
+	formattersApplied = promauto.NewCounterVec(prometheus.CounterOpts{Namespace: "blink", Subsystem: "alert_formatter", Name: "formatters_applied_total"}, []string{"formatter"})
+	formatterErrors   = promauto.NewCounterVec(prometheus.CounterOpts{Namespace: "blink", Subsystem: "alert_formatter", Name: "formatter_errors_total"}, []string{"formatter"})
+	parseErrors       = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "alert_formatter", Name: "parse_errors_total"})
+	writeErrors       = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "alert_formatter", Name: "write_errors_total"})
+)
+
 type FormatterService struct {
-	context.ServiceContext
-	syncMessages      messaging.MessageQueue
-	formatterMessages messaging.MessageQueue
+	svcctx.ServiceContext
+	reader broker.Reader
+	writer broker.Writer
+	dlq    broker.Writer
+	pool   *fmtcatalog.Pool
 }
 
-// New constructs an alert formatter service.
-func New() *FormatterService {
-	serviceContext := context.New("BLINK-ALERT-FORMATTER - FORMAT")
+func NewFormatterService(pool *fmtcatalog.Pool) (*FormatterService, error) {
+	serviceContext := svcctx.New("BLINK-ALERT-FORMATTER - FORMAT")
 	if err := configuration.LoadFromEnvironment(&serviceContext); err != nil {
-		log.Fatalln(err)
+		return nil, err
 	}
 	serviceContext.Logger = logger.New(serviceContext.Name(), "dev")
 
-	return &FormatterService{
-		ServiceContext:    serviceContext,
-		syncMessages:      serviceContext.Messages().Subscribe(message.SyncService, false),
-		formatterMessages: serviceContext.Messages().Subscribe(message.FormatService, true),
+	cfg := serviceContext.Configuration()
+	b := kafka.NewKafkaBroker(cfg.Kafka)
+	reader := b.NewReader(cfg.Topics.FormatterTopic, cfg.Topics.FormatterGroup)
+	writer := b.NewWriter(cfg.Topics.DispatcherTopic)
+
+	var dlq broker.Writer
+	if cfg.Topics.FormatterDLQTopic != "" {
+		dlq = b.NewWriter(cfg.Topics.FormatterDLQTopic)
 	}
+
+	return &FormatterService{
+		ServiceContext: serviceContext,
+		reader:         reader,
+		writer:         writer,
+		dlq:            dlq,
+		pool:           pool,
+	}, nil
 }
 
-// Name returns the formatter service name.
 func (service *FormatterService) Name() string { return "alert-formatter" }
 
-// Run applies formatters to incoming alerts and publishes to dispatcher stage.
-func (service *FormatterService) Run() errors.Error {
-	formatterRepo := formatters.GetFormatterRepository()
-	for {
-		msg := <-service.formatterMessages
-		alertMsg, ok := msg.(alerts.AlertMessage)
-		if !ok {
-			service.Error(errors.New("invalid message type"))
-			continue
-		}
-		alert := alertMsg.Alert
-		service.Info("applying formatters for alert %s", alert.AlertID)
-		for _, name := range alert.Rule.Formatters() {
-			fmttr, err := formatterRepo.Get(name)
-			if err != nil {
-				service.Error(err)
-				continue
+// Reads alerts from Kafka, applies formatters, and writes to the dispatcher topic.
+func (service *FormatterService) Run(ctx context.Context) errors.Error {
+	return services.RunAlertPipeline(ctx, service.Logger, service.reader, service.writer, service.dlq, 50,
+		services.PipelineCounters{
+			In: alertsIn.Inc, Out: alertsOut.Inc, DLQ: alertsDLQ.Inc,
+			ParseError: parseErrors.Inc, WriteError: writeErrors.Inc,
+		},
+		func(ctx context.Context, _ []byte, alert *alerts.Alert) (skip bool, deadLetter bool) {
+			service.Info("applying formatters for alert %s", alert.AlertID)
+
+			for _, name := range alert.Rule.Formatters() {
+				_, absent, removed, err := service.pool.Format(ctx, name, alert, "")
+				switch {
+				case removed || absent:
+					label := "not found"
+					if removed {
+						label = "removed"
+					}
+					service.Error(errors.NewF("formatter %s %s - alert %s missing formatter", name, label, alert.AlertID))
+					alert.Attempts++
+					if alert.Attempts >= services.MaxPluginAttempts {
+						service.Info("alert %s passed through after %d attempts (formatter unavailable)", alert.AlertID, alert.Attempts)
+						continue
+					}
+					return false, true
+				case err != nil:
+					formatterErrors.WithLabelValues(name).Inc()
+					service.Error(err)
+				default:
+					formattersApplied.WithLabelValues(name).Inc()
+				}
 			}
-			if !fmttr.Enabled() {
-				service.Info("disabled formatter %s therefore skipping", fmttr.Name())
-				continue
-			}
-			if _, err := fmttr.Format(alert); err != nil {
-				service.Error(err)
-			}
-		}
-		service.Messages().Publish(message.DispatchService, alerts.AlertMessage{Alert: alert})
-	}
+			return false, false
+		},
+	)
 }

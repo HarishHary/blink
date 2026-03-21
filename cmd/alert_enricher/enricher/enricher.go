@@ -1,121 +1,124 @@
 package enricher
 
 import (
-	stdctx "context"
-	"log"
+	"context"
 	"sync"
+	"sync/atomic"
+	"time"
 
-	"github.com/harishhary/blink/cmd/alert_enricher/internal/message"
+	"github.com/harishhary/blink/internal/broker"
+	"github.com/harishhary/blink/internal/broker/kafka"
 	"github.com/harishhary/blink/internal/configuration"
-	ctx "github.com/harishhary/blink/internal/context"
+	svcctx "github.com/harishhary/blink/internal/context"
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/logger"
-	"github.com/harishhary/blink/internal/messaging"
+	"github.com/harishhary/blink/internal/services"
 	"github.com/harishhary/blink/pkg/alerts"
-	"github.com/harishhary/blink/pkg/enrichments"
-	"golang.org/x/sync/semaphore"
+	enrichcatalog "github.com/harishhary/blink/pkg/enrichments/pool"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
-// EnricherService enriches alerts with external data and publishes to formatter.
-// EnricherService enriches alerts with external data and publishes to formatter.
+const (
+	defaultEnrichmentTimeout = 5 * time.Second
+)
+
+var (
+	alertsIn           = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "alert_enricher", Name: "alerts_in_total"})
+	alertsOut          = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "alert_enricher", Name: "alerts_out_total"})
+	alertsDLQ          = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "alert_enricher", Name: "alerts_dlq_total"})
+	enrichmentsApplied = promauto.NewCounterVec(prometheus.CounterOpts{Namespace: "blink", Subsystem: "alert_enricher", Name: "enrichments_applied_total"}, []string{"enrichment"})
+	enrichmentErrors   = promauto.NewCounterVec(prometheus.CounterOpts{Namespace: "blink", Subsystem: "alert_enricher", Name: "enrichment_errors_total"}, []string{"enrichment"})
+	enrichmentLatency  = promauto.NewHistogramVec(prometheus.HistogramOpts{Namespace: "blink", Subsystem: "alert_enricher", Name: "enrichment_latency_seconds", Buckets: prometheus.DefBuckets}, []string{"enrichment"})
+	parseErrors        = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "alert_enricher", Name: "parse_errors_total"})
+	writeErrors        = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "alert_enricher", Name: "write_errors_total"})
+)
+
+// EnricherService reads alerts from Kafka, enriches them, and writes to the formatter topic.
 type EnricherService struct {
-	ctx.ServiceContext
-	syncMessages     messaging.MessageQueue
-	enricherMessages messaging.MessageQueue
-
-	// phases holds the enrichment execution phases (dependencies resolved)
-	phases    [][]enrichments.IEnrichment
-	phaseLock sync.RWMutex
-
-	// semaphore to bound concurrent enrichments
-	sem *semaphore.Weighted
+	svcctx.ServiceContext
+	reader broker.Reader
+	writer broker.Writer
+	dlq    broker.Writer
+	pool   *enrichcatalog.Pool
 }
 
-// New constructs an alert enricher service.
-func New() *EnricherService {
-	serviceContext := ctx.New("BLINK-ALERT-ENRICHER - ENRICH")
+func NewEnricherService(pool *enrichcatalog.Pool) (*EnricherService, error) {
+	serviceContext := svcctx.New("BLINK-ALERT-ENRICHER - ENRICH")
 	if err := configuration.LoadFromEnvironment(&serviceContext); err != nil {
-		log.Fatalln(err)
+		return nil, err
 	}
 	serviceContext.Logger = logger.New(serviceContext.Name(), "dev")
 
-	// initialize semaphore for concurrency (from config or default)
-	maxConc := serviceContext.Configuration().Kafka.MaxConcurrentEnrich
-	if maxConc <= 0 {
-		maxConc = 10
+	cfg := serviceContext.Configuration()
+	b := kafka.NewKafkaBroker(cfg.Kafka)
+	reader := b.NewReader(cfg.Topics.EnricherTopic, cfg.Topics.EnricherGroup)
+	writer := b.NewWriter(cfg.Topics.FormatterTopic)
+
+	var dlq broker.Writer
+	if cfg.Topics.EnricherDLQTopic != "" {
+		dlq = b.NewWriter(cfg.Topics.EnricherDLQTopic)
 	}
-	sem := semaphore.NewWeighted(int64(maxConc))
 
 	return &EnricherService{
-		ServiceContext:   serviceContext,
-		syncMessages:     serviceContext.Messages().Subscribe(message.SyncService, false),
-		enricherMessages: serviceContext.Messages().Subscribe(message.EnricherService, true),
-		sem:              sem,
-	}
+		ServiceContext: serviceContext,
+		reader:         reader,
+		writer:         writer,
+		dlq:            dlq,
+		pool:           pool,
+	}, nil
 }
 
-// Name returns the enricher service name.
 func (service *EnricherService) Name() string { return "alert-enricher" }
 
-// Run applies enrichments on incoming alerts and publishes to the formatter stage.
-func (service *EnricherService) Run() errors.Error {
-	enricherRepo := enrichments.GetEnrichmentRepository()
+// Reads alerts from Kafka, applies enrichments declared by the alert's rule, and writes to the formatter topic.
+func (service *EnricherService) Run(ctx context.Context) errors.Error {
+	return services.RunAlertPipeline(ctx, service.Logger, service.reader, service.writer, service.dlq, 50,
+		services.PipelineCounters{
+			In: alertsIn.Inc, Out: alertsOut.Inc, DLQ: alertsDLQ.Inc,
+			ParseError: parseErrors.Inc, WriteError: writeErrors.Inc,
+		},
+		func(ctx context.Context, _ []byte, alert *alerts.Alert) (skip bool, deadLetter bool) {
+			service.Info("enriching alert %s", alert.AlertID)
 
-	// plugin-sync loop: handle new/unregistered enrichers, rebuild phases
-	go func() {
-		for range service.syncMessages {
-			enricherRepo.Record(<-service.syncMessages)
-			all := enricherRepo.All()
-			phases, err := buildPhases(all)
-			if err != nil {
-				service.Error(errors.NewE(err))
-				continue
-			}
-			service.phaseLock.Lock()
-			service.phases = phases
-			service.phaseLock.Unlock()
-			service.Info("rebuilt enrichment phases—%d phases", len(phases))
-		}
-	}()
-
-	// event loop: apply existing phases to each alert
-	for msg := range service.enricherMessages {
-		alertMsg, ok := msg.(alerts.AlertMessage)
-		if !ok {
-			service.Error(errors.New("invalid message type"))
-			continue
-		}
-		alert := alertMsg.Alert
-		service.Info("enriching alert %s", alert.AlertID)
-
-		service.phaseLock.RLock()
-		phases := service.phases
-		service.phaseLock.RUnlock()
-
-		for _, phase := range phases {
+			var anyMissing atomic.Bool
 			var wg sync.WaitGroup
-			for _, enr := range phase {
-				if !enr.Enabled() {
-					continue
-				}
+			for _, name := range alert.Rule.Enrichments() {
 				wg.Add(1)
-				go func(enr enrichments.IEnrichment) {
+				go func(enrName string) {
 					defer wg.Done()
-					if err := service.sem.Acquire(service.Context(), 1); err != nil {
-						service.Error(errors.NewE(err))
-						return
-					}
-					defer service.sem.Release(1)
 
-					cctx, cancel := stdctx.WithTimeout(service.Context(), service.Configuration().Kafka.EnrichmentTimeout)
+					cctx, cancel := context.WithTimeout(ctx, defaultEnrichmentTimeout)
 					defer cancel()
-					if err := enr.Enrich(cctx, &alert); err != nil {
-						service.Error(errors.NewF("enrichment %s failed: %v", enr.Name(), err))
+					start := time.Now()
+					absent, removed, err := service.pool.Enrich(cctx, enrName, alert, "")
+					switch {
+					case removed:
+						anyMissing.Store(true)
+						service.Error(errors.NewF("enrichment %s removed - alert %s missing enrichment", enrName, alert.AlertID))
+					case absent:
+						anyMissing.Store(true)
+						service.Error(errors.NewF("enrichment %s not found - alert %s missing enrichment", enrName, alert.AlertID))
+					case err != nil:
+						enrichmentErrors.WithLabelValues(enrName).Inc()
+						service.Error(errors.NewF("enrichment %s failed: %v", enrName, err))
+					default:
+						enrichmentsApplied.WithLabelValues(enrName).Inc()
 					}
-				}(enr)
+					enrichmentLatency.WithLabelValues(enrName).Observe(time.Since(start).Seconds())
+				}(name)
 			}
 			wg.Wait()
-		}
-		service.Messages().Publish(message.FormatService, alerts.AlertMessage{Alert: alert})
-	}
+
+			if anyMissing.Load() {
+				alert.Attempts++
+				if alert.Attempts >= services.MaxPluginAttempts {
+					service.Info("alert %s passed through after %d attempts (enrichment unavailable)", alert.AlertID, alert.Attempts)
+					return false, false
+				}
+				return false, true
+			}
+			return false, false
+		},
+	)
 }
