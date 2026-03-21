@@ -1,10 +1,12 @@
 package services
 
 import (
+	"context"
+
 	"github.com/harishhary/blink/internal/errors"
 )
 
 type Service interface {
 	Name() string
-	Run() errors.Error
+	Run(ctx context.Context) errors.Error
 }

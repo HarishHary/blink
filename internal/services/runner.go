@@ -1,17 +1,44 @@
 package services
 
 import (
+	"context"
 	"log"
+	"math"
+	"math/rand"
 	"os"
 	"sync"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+)
+
+var (
+	serviceRestarts = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "blink",
+		Subsystem: "runner",
+		Name:      "service_restarts_total",
+		Help:      "Total number of times a service has been restarted after failure.",
+	}, []string{"service"})
+
+	serviceRestartDelay = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "blink",
+		Subsystem: "runner",
+		Name:      "service_restart_delay_seconds",
+		Help:      "Delay before restarting a failed service.",
+		Buckets:   []float64{1, 2, 4, 8, 16, 32, 60},
+	}, []string{"service"})
+)
+
+const (
+	backoffBase = time.Second
+	backoffMax  = 60 * time.Second
 )
 
 type Runner struct {
 	inits    []Service
 	services []Service
-
-	logger *log.Logger
+	logger   *log.Logger
 }
 
 func New() *Runner {
@@ -21,50 +48,72 @@ func New() *Runner {
 	}
 }
 
-func (runner *Runner) RegisterInit(services ...Service) {
-	runner.inits = append(runner.inits, services...)
+func (r *Runner) RegisterInit(services ...Service) {
+	r.inits = append(r.inits, services...)
 }
 
-func (runner *Runner) Register(services ...Service) {
-	runner.services = append(runner.services, services...)
+func (r *Runner) Register(services ...Service) {
+	r.services = append(r.services, services...)
 }
 
-func (runner *Runner) Run() {
-	initGroup := sync.WaitGroup{}
-	for i := range runner.inits {
-		initGroup.Add(1)
-
-		init := runner.inits[i]
+// Run executes all registered services. Init services run first to completion,
+// then regular services are started concurrently with auto-restart on failure.
+// Run blocks until ctx is cancelled.
+func (r *Runner) Run(ctx context.Context) {
+	var wg sync.WaitGroup
+	for i := range r.inits {
+		wg.Add(1)
+		svc := r.inits[i]
 		go func() {
-			runner.logger.Printf("service %s started\n", init.Name())
-			if err := init.Run(); err != nil {
-				runner.logger.Printf("init service %s terminated with an error\n%s\n", init.Name(), err)
+			defer wg.Done()
+			r.logger.Printf("init service %s started\n", svc.Name())
+			if err := svc.Run(ctx); err != nil { //nolint:staticcheck
+				r.logger.Printf("init service %s terminated with error: %s\n", svc.Name(), err)
 			} else {
-				runner.logger.Printf("service %s terminated successfully\n", init.Name())
+				r.logger.Printf("init service %s completed\n", svc.Name())
 			}
-
-			initGroup.Done()
 		}()
 	}
+	wg.Wait()
 
-	initGroup.Wait()
-
-	for _, service := range runner.services {
-		go runner.run(service)
+	for _, svc := range r.services {
+		go r.runWithBackoff(ctx, svc)
 	}
 
-	// pause indefinitely
-	select {}
+	<-ctx.Done()
+	r.logger.Println("runner: context cancelled, shutting down")
 }
 
-func (runner *Runner) run(service Service) {
+// runWithBackoff runs a service with exponential backoff on failure,
+// stopping when ctx is cancelled.
+func (r *Runner) runWithBackoff(ctx context.Context, svc Service) {
+	attempt := 0
 	for {
-		runner.logger.Printf("service %s started\n", service.Name())
-		if err := service.Run(); err != nil {
-			runner.logger.Printf("service %s terminated with an error\n%s\n", service.Name(), err)
+		r.logger.Printf("service %s starting (attempt %d)\n", svc.Name(), attempt+1)
+		if err := svc.Run(ctx); err != nil {
+			r.logger.Printf("service %s error: %s\n", svc.Name(), err)
 		}
-		runner.logger.Printf("service %s terminated, restarting in 5 seconds\n", service.Name())
 
-		time.Sleep(5 * time.Second)
+		if ctx.Err() != nil {
+			r.logger.Printf("service %s stopped (context cancelled)\n", svc.Name())
+			return
+		}
+
+		serviceRestarts.WithLabelValues(svc.Name()).Inc()
+		attempt++
+
+		// Exponential backoff: base * 2^(attempt-1), capped at backoffMax, with ±25% jitter.
+		exp := math.Min(float64(backoffBase)*math.Pow(2, float64(attempt-1)), float64(backoffMax))
+		jitter := time.Duration(rand.Int63n(int64(exp / 4)))
+		delay := time.Duration(exp) + jitter
+		serviceRestartDelay.WithLabelValues(svc.Name()).Observe(delay.Seconds())
+		r.logger.Printf("service %s restarting in %v\n", svc.Name(), delay.Round(time.Millisecond))
+
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			r.logger.Printf("service %s restart cancelled (context cancelled)\n", svc.Name())
+			return
+		}
 	}
 }
