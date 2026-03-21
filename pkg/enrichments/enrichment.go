@@ -3,76 +3,63 @@ package enrichments
 import (
 	"context"
 	"fmt"
-	"log"
 
-	"github.com/google/uuid"
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/pkg/alerts"
 )
+
+func ValidateDependencyGraph(enrichments []IEnrichment) error {
+	index := make(map[string]IEnrichment, len(enrichments))
+	for _, e := range enrichments {
+		index[e.Name()] = e
+	}
+
+	const (
+		unvisited = iota
+		inProgress
+		done
+	)
+	state := make(map[string]int, len(enrichments))
+
+	var visit func(name string, path []string) error
+	visit = func(name string, path []string) error {
+		switch state[name] {
+		case done:
+			return nil
+		case inProgress:
+			return fmt.Errorf("enrichment dependency cycle detected: %v → %s", path, name)
+		}
+		state[name] = inProgress
+		e, ok := index[name]
+		if !ok {
+			return fmt.Errorf("enrichment %q depends on unknown enrichment %q", path[len(path)-1], name)
+		}
+		for _, dep := range e.DependsOn() {
+			if err := visit(dep, append(path, name)); err != nil {
+				return err
+			}
+		}
+		state[name] = done
+		return nil
+	}
+
+	for _, e := range enrichments {
+		if err := visit(e.Name(), []string{}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 type IEnrichment interface {
 	Enrich(ctx context.Context, alert *alerts.Alert) errors.Error
 	// DependsOn returns plugin names that must run before this enrichment.
 	DependsOn() []string
 
-	// Getters
 	Id() string
 	Name() string
 	Description() string
 	Enabled() bool
-
-	// Methods
+	Checksum() string
 	String() string
-}
-
-type Enrichment struct {
-	id          string
-	name        string
-	description string
-	enabled     bool
-}
-
-// DependsOn returns no dependencies by default.
-func (e *Enrichment) DependsOn() []string {
-   return nil
-}
-func (e *Enrichment) Id() string {
-	return e.id
-}
-
-func (e *Enrichment) Name() string {
-	return e.name
-}
-
-func (e *Enrichment) Description() string {
-	return e.description
-}
-
-func (e *Enrichment) Enabled() bool {
-	return e.enabled
-}
-
-func (e *Enrichment) String() string {
-	return fmt.Sprintf("Enrichment '%s' with id:'%s', description:'%s', enabled:'%t'", e.name, e.id, e.description, e.enabled)
-}
-
-func (e *Enrichment) Enrich(ctx context.Context, alert *alerts.Alert) errors.Error {
-	log.Printf("Using enrichment 'base enrichement' with event:'%v'", alert)
-	return nil
-}
-
-func NewEnrichment(name string, optFns ...EnrichmentOptions) (*Enrichment, errors.Error) {
-	if name == "" {
-		return nil, errors.New("invalid enrichment options")
-	}
-	enrichment := &Enrichment{
-		id:          uuid.NewString(),
-		name:        name,
-		description: "Unknown description",
-		enabled:     true,
-	}
-	for _, optFn := range optFns {
-		optFn(enrichment)
-	}
-	return enrichment, nil
 }
