@@ -14,7 +14,7 @@ Tune(alert alerts.Alert) (bool, errors.Error)
 Format(alert alerts.Alert) (map[string]any, errors.Error) // done by the processor service
 Dispatch(alert alerts.Alert) (bool, errors.Error) // done by the processor service => implement retry logic, and try later queue
 
-// need to add docs
+// need to add dosc asdqwe
 // need to add tests
 // need to add CI/CD
 // need to add a way to test a rule with the local rule engine
@@ -28,23 +28,20 @@ Dispatch(alert alerts.Alert) (bool, errors.Error) // done by the processor servi
 // need to implement UI
 // need a way to load rules from metadata in yaml + files
 
+## Performance:
 
-Performance:
-    1. **Pre‑compile your rules** (e.g. regex, expression trees) at startup so rule matching per event is just executing an in‑memory function rather than parsing on every message.
-    2. **Partition by rule‑group**: if you have 10 K rules, shard them into N groups so each instance only holds ~1 K rules.
-    3. **Batch matching** (if possible): consume small batches of events and run them through your rule‑engine in parallel goroutines, reusing the compiled rule set in memory.
+    * **Pre‑compile your rules** (e.g. regex, expression trees) at startup so rule matching per event is just executing an in‑memory function rather than parsing on every message.
+    * **Partition by rule‑group**: if you have 10 K rules, shard them into N groups so each instance only holds ~1 K rules.
+    * **Batch matching** (if possible): consume small batches of events and run them through your rule‑engine in parallel goroutines, reusing the compiled rule set in memory.
 
+    Enrichment and tuning often require calling external systems (databases, ML models, HTTP APIs).  Those calls:
+      * Vary hugely in latency (50 ms for a simple lookup vs seconds/minutes for a model inference)
+      * May need caching
 
-Enrichment and tuning often require calling external systems (databases, ML models, HTTP APIs).  Those calls:
-
-    * Vary hugely in latency (50 ms for a simple lookup vs seconds/minutes for a model inference)
-    * May need caching
-
-Pattern: pull only the events/alerts you need to enrich from your broker, fan‑out enrichment requests to a worker pool with concurrency limits, and publish back a “enriched alert”
+A quick pattern: pull only the events/alerts you need to enrich from your broker, fan‑out enrichment requests to a worker pool with concurrency limits, and publish back a “enriched alert”
 message when done.  Failures go to a DLQ.  You can scale this layer up (more pods, bigger instance types) independently to match the slowest external call.
 
-
-## 7. Autoscaling & resource sizing
+## Autoscaling & resource sizing
 
 On Kubernetes:
 
@@ -61,9 +58,7 @@ Instrument your services (Prometheus + client‑go) to expose metrics like:
 
 Then hook those metrics into your HPA.
 
------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-
-## 8. Observability & tracing
+## Observability & tracing
 
 At cloud scale you can’t diagnose manually.  Add:
 
