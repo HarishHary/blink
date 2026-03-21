@@ -1,0 +1,19 @@
+id: "00000000-0000-0000-0000-000000000001"
+name: "test_login_alert"
+display_name: "Test Login Alert"
+description: "Test rule — fires on any application event. Use for end-to-end pipeline testing only."
+enabled: true
+version: "1.0.0"
+
+severity: "low"
+confidence: "medium"
+
+log_types: ["application"]
+matchers: ["allow-all"]
+
+req_subkeys: []
+merge_by_keys: []
+merge_window_mins: 0
+
+signal: false
+tags: ["test"]

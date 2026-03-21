@@ -68,6 +68,13 @@ type PluginAdapter[T ISyncable] interface {
 	Workers(binPath string) int
 }
 
+// startFailure tracks consecutive start failures for a binary path.
+type startFailure struct {
+	count     int
+	nextRetry time.Time
+	hash      string // hash at time of last failure; reset backoff if binary changes
+}
+
 // PluginManager[T] is the generic plugin subprocess manager.
 // It watches a directory for executable binaries, manages their subprocess lifecycle, and calls notify for Register/Update/Unregister events so the caller can update pools.
 type PluginManager[T ISyncable] struct {
@@ -78,6 +85,8 @@ type PluginManager[T ISyncable] struct {
 	metrics        *PluginManagerMetrics
 	mu             sync.RWMutex
 	plugin_handles map[string][]*PluginHandle
+	failures       map[string]*startFailure
+	restarting     map[string]struct{} // paths mid-restart; reconcile skips these to prevent double-start
 }
 
 func NewPluginManager[T ISyncable](
@@ -94,6 +103,8 @@ func NewPluginManager[T ISyncable](
 		adapter:        adapter,
 		metrics:        metrics,
 		plugin_handles: make(map[string][]*PluginHandle),
+		failures:       make(map[string]*startFailure),
+		restarting:     make(map[string]struct{}),
 	}
 }
 
@@ -184,7 +195,12 @@ func (m *PluginManager[T]) reconcile(reason string) error {
 
 		m.mu.RLock()
 		handles, exists := m.plugin_handles[path]
+		_, pending := m.restarting[path]
 		m.mu.RUnlock()
+
+		if pending {
+			continue // pingLoop is already handling the restart
+		}
 
 		if exists {
 			if handles[0].Hash == h {
@@ -196,7 +212,7 @@ func (m *PluginManager[T]) reconcile(reason string) error {
 			continue
 		}
 
-		if err := m.start(path, h); err != nil {
+		if err := m.startWithBackoff(path, h); err != nil {
 			m.log.ErrorF("start %s %s: %v", m.adapter.PluginKey(), path, err)
 		}
 	}
@@ -331,6 +347,49 @@ func (m *PluginManager[T]) spawnN(path, hash string, n int) ([]T, []*PluginHandl
 	return wrapped, handles, nil
 }
 
+// wraps start() with exponential backoff on consecutive failures.
+func (m *PluginManager[T]) startWithBackoff(path, hash string) error {
+	m.mu.Lock()
+	f := m.failures[path]
+	if f != nil {
+		if f.hash != hash {
+			// Binary changed — reset backoff immediately.
+			delete(m.failures, path)
+			f = nil
+		} else if time.Now().Before(f.nextRetry) {
+			m.mu.Unlock()
+			m.log.Info("%s %s start deferred (backoff, retry in %v)", m.adapter.PluginKey(), path, time.Until(f.nextRetry).Round(time.Second))
+			return nil
+		}
+	}
+	m.mu.Unlock()
+
+	err := m.start(path, hash)
+	if err != nil {
+		m.mu.Lock()
+		f = m.failures[path]
+		if f == nil {
+			f = &startFailure{hash: hash}
+			m.failures[path] = f
+		}
+		f.count++
+		backoff := time.Duration(10<<min(f.count-1, 5)) * time.Second // 10s→320s, cap 5min
+		if backoff > 5*time.Minute {
+			backoff = 5 * time.Minute
+		}
+		f.nextRetry = time.Now().Add(backoff)
+		m.mu.Unlock()
+		m.log.ErrorF("%s %s start failed (attempt %d), next retry in %v", m.adapter.PluginKey(), path, f.count, backoff)
+		return err
+	}
+
+	// Success — clear any failure state.
+	m.mu.Lock()
+	delete(m.failures, path)
+	m.mu.Unlock()
+	return nil
+}
+
 // spawns n worker subprocesses and notifies the pool to register them.
 func (m *PluginManager[T]) start(path, hash string) error {
 	n := m.adapter.Workers(path)
@@ -407,10 +466,26 @@ func (m *PluginManager[T]) remove(key string, handles []*PluginHandle) {
 	m.log.Info("%s removed: %s [%s]", m.adapter.PluginKey(), handles[0].Name, handles[0].ID)
 }
 
-// stops the subprocesses and immediately starts them again with the same binary and hash.
+// stops the subprocesses and restarts them with backoff.
+// Sets restarting[path] before stop() so reconcile() does not race to fill the
+// now-empty plugin_handles slot while the new spawn is in progress.
 func (m *PluginManager[T]) restart(key string, handles []*PluginHandle) error {
+	path := handles[0].BinPath
+	hash := handles[0].Hash
+
+	m.mu.Lock()
+	m.restarting[path] = struct{}{}
+	m.mu.Unlock()
+
 	m.stop(key, handles)
-	return m.start(handles[0].BinPath, handles[0].Hash)
+
+	err := m.startWithBackoff(path, hash)
+
+	m.mu.Lock()
+	delete(m.restarting, path)
+	m.mu.Unlock()
+
+	return err
 }
 
 func (m *PluginManager[T]) pingLoop(handle *PluginHandle) {
