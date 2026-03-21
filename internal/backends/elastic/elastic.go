@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"time"
 
 	"github.com/elastic/go-elasticsearch/v8"
@@ -134,7 +135,7 @@ func (es *ElasticsearchBackend) UpdateSentOutputs(alert *alerts.Alert) error {
 	return nil
 }
 
-func (es *ElasticsearchBackend) GetAlertRecords(ruleName string, alertProcTimeoutSec int) <-chan backends.Record {
+func (es *ElasticsearchBackend) GetAlertRecords(ctx context.Context, ruleName string, alertProcTimeoutSec int) <-chan backends.Record {
 	out := make(chan backends.Record)
 	go func() {
 		defer close(out)
@@ -174,16 +175,16 @@ func (es *ElasticsearchBackend) GetAlertRecords(ruleName string, alertProcTimeou
 			Scroll: 2 * time.Minute, // set scroll timeout to 2 minutes
 		}
 
-		res, err := req.Do(es.ctx, es.client)
+		res, err := req.Do(ctx, es.client)
 		if err != nil {
-			fmt.Printf("Error searching records: %v\n", err)
+			log.Printf("Error searching records: %v\n", err)
 			return
 		}
 		defer res.Body.Close()
 
 		if res.IsError() {
 			body, _ := io.ReadAll(res.Body)
-			fmt.Printf("search request error: %s\n", body)
+			log.Printf("search request error: %s\n", body)
 			return
 		}
 
@@ -198,7 +199,7 @@ func (es *ElasticsearchBackend) GetAlertRecords(ruleName string, alertProcTimeou
 				} `json:"hits"`
 			}
 			if err := json.NewDecoder(res.Body).Decode(&result); err != nil {
-				fmt.Printf("Error decoding search response: %v\n", err)
+				log.Printf("Error decoding search response: %v\n", err)
 				return
 			}
 
@@ -216,16 +217,16 @@ func (es *ElasticsearchBackend) GetAlertRecords(ruleName string, alertProcTimeou
 				Scroll:   2 * time.Minute,
 			}
 
-			res, err = scrollReq.Do(es.ctx, es.client)
+			res, err = scrollReq.Do(ctx, es.client)
 			if err != nil {
-				fmt.Printf("Error scrolling search results: %v\n", err)
+				log.Printf("Error scrolling search results: %v\n", err)
 				return
 			}
 			defer res.Body.Close()
 
 			if res.IsError() {
 				body, _ := io.ReadAll(res.Body)
-				fmt.Printf("scroll request error: %s\n", body)
+				log.Printf("scroll request error: %s\n", body)
 				return
 			}
 		}
@@ -289,14 +290,14 @@ func (es *ElasticsearchBackend) RuleNamesGenerator() <-chan string {
 
 		res, err := req.Do(es.ctx, es.client)
 		if err != nil {
-			fmt.Printf("Error getting rule names: %v\n", err)
+			log.Printf("Error getting rule names: %v\n", err)
 			return
 		}
 		defer res.Body.Close()
 
 		if res.IsError() {
 			body, _ := io.ReadAll(res.Body)
-			fmt.Printf("search request error: %s\n", body)
+			log.Printf("search request error: %s\n", body)
 			return
 		}
 
@@ -310,7 +311,7 @@ func (es *ElasticsearchBackend) RuleNamesGenerator() <-chan string {
 			} `json:"aggregations"`
 		}
 		if err := json.NewDecoder(res.Body).Decode(&result); err != nil {
-			fmt.Printf("Error decoding search response: %v\n", err)
+			log.Printf("Error decoding search response: %v\n", err)
 			return
 		}
 		for _, bucket := range result.Aggregations.UniqueRuleNames.Buckets {

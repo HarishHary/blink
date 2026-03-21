@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -45,7 +46,7 @@ func (at *DynamoDBBackend) paginateScan(scanFunc func(ctx context.Context, param
 		for {
 			result, err := scanFunc(at.ctx, input)
 			if err != nil {
-				fmt.Printf("Error paginating scan: %v", err)
+				log.Printf("Error paginating scan: %v", err)
 				return
 			}
 
@@ -70,7 +71,7 @@ func (at *DynamoDBBackend) paginateQuery(queryFunc func(ctx context.Context, par
 		for {
 			result, err := queryFunc(at.ctx, input)
 			if err != nil {
-				fmt.Printf("Error paginating query: %v", err)
+				log.Printf("Error paginating query: %v", err)
 				return
 			}
 
@@ -112,14 +113,14 @@ func (at *DynamoDBBackend) RuleNamesGenerator() <-chan string {
 	return out
 }
 
-func (at *DynamoDBBackend) GetAlertRecords(ruleName string, alertProcTimeoutSec int) <-chan backends.Record {
+func (at *DynamoDBBackend) GetAlertRecords(_ context.Context, ruleName string, alertProcTimeoutSec int) <-chan backends.Record {
 	inProgressThreshold := time.Now().Add(-time.Duration(alertProcTimeoutSec) * time.Second).Format(helpers.DATETIME_FORMAT)
 	filter := expression.Name("Dispatched").LessThan(expression.Value(inProgressThreshold))
 	keyCond := expression.Key("RuleName").Equal(expression.Value(ruleName))
 
 	expr, err := expression.NewBuilder().WithFilter(filter).WithKeyCondition(keyCond).Build()
 	if err != nil {
-		fmt.Printf("Error building expression: %v", err)
+		log.Printf("Error building expression: %v", err)
 		return nil
 	}
 
@@ -355,20 +356,20 @@ func (at *DynamoDBBackend) ToRecord(alert *alerts.Alert) (backends.Record, error
 	return result, nil
 }
 
-func (at *DynamoDBBackend) FetchAllRules() (<-chan rules.IRule, error) {
+func (at *DynamoDBBackend) FetchAllRules() (<-chan rules.Metadata, error) {
 	input := &dynamodb.ScanInput{
 		TableName: aws.String(at.dbName),
 		Select:    types.SelectAllAttributes,
 	}
 
-	out := make(chan rules.IRule)
+	out := make(chan rules.Metadata)
 	go func() {
 		defer close(out)
 		generator := at.paginateScan(at.db.Scan, input)
 		for item := range generator {
 			rule, err := at.unmarshalRule(item)
 			if err != nil {
-				fmt.Printf("failed to unmarshal rule: %v\n", err)
+				log.Printf("failed to unmarshal rule: %v\n", err)
 				continue
 			}
 			out <- rule
@@ -378,8 +379,8 @@ func (at *DynamoDBBackend) FetchAllRules() (<-chan rules.IRule, error) {
 	return out, nil
 }
 
-func (at *DynamoDBBackend) unmarshalRule(item map[string]types.AttributeValue) (rules.IRule, error) {
-	var rule rules.IRule
+func (at *DynamoDBBackend) unmarshalRule(item map[string]types.AttributeValue) (rules.Metadata, error) {
+	var rule rules.Metadata
 	err := attributevalue.UnmarshalMap(item, &rule)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal item to rule: %w", err)

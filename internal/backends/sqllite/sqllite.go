@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/harishhary/blink/internal/backends"
@@ -103,7 +104,7 @@ func (s *SQLiteBackend) RuleNamesGenerator() <-chan string {
 
 		rows, err := s.Db.QueryContext(s.Ctx, "SELECT DISTINCT RuleName FROM alerts")
 		if err != nil {
-			fmt.Printf("Error querying rule names: %v\n", err)
+			log.Printf("Error querying rule names: %v\n", err)
 			return
 		}
 		defer rows.Close()
@@ -112,7 +113,7 @@ func (s *SQLiteBackend) RuleNamesGenerator() <-chan string {
 		for rows.Next() {
 			var ruleName string
 			if err := rows.Scan(&ruleName); err != nil {
-				fmt.Printf("Error scanning rule name: %v\n", err)
+				log.Printf("Error scanning rule name: %v\n", err)
 				return
 			}
 			if _, exists := ruleNames[ruleName]; !exists {
@@ -122,13 +123,13 @@ func (s *SQLiteBackend) RuleNamesGenerator() <-chan string {
 		}
 
 		if err := rows.Err(); err != nil {
-			fmt.Printf("Error iterating through rule names: %v\n", err)
+			log.Printf("Error iterating through rule names: %v\n", err)
 		}
 	}()
 	return out
 }
 
-func (s *SQLiteBackend) GetAlertRecords(ruleName string, alertProcTimeoutSec int) <-chan backends.Record {
+func (s *SQLiteBackend) GetAlertRecords(ctx context.Context, ruleName string, alertProcTimeoutSec int) <-chan backends.Record {
 	out := make(chan backends.Record)
 	go func() {
 		defer close(out)
@@ -136,9 +137,9 @@ func (s *SQLiteBackend) GetAlertRecords(ruleName string, alertProcTimeoutSec int
 		inProgressThreshold := time.Now().Add(-time.Duration(alertProcTimeoutSec) * time.Second).Format(helpers.DATETIME_FORMAT)
 		query := `SELECT * FROM alerts WHERE RuleName = ? AND Dispatched < ?`
 
-		rows, err := s.Db.QueryContext(s.Ctx, query, ruleName, inProgressThreshold)
+		rows, err := s.Db.QueryContext(ctx, query, ruleName, inProgressThreshold)
 		if err != nil {
-			fmt.Printf("Error querying alert records: %v\n", err)
+			log.Printf("Error querying alert records: %v\n", err)
 			return
 		}
 		defer rows.Close()
@@ -146,14 +147,14 @@ func (s *SQLiteBackend) GetAlertRecords(ruleName string, alertProcTimeoutSec int
 		for rows.Next() {
 			record, err := scanRecord(rows)
 			if err != nil {
-				fmt.Printf("Error scanning alert record: %v\n", err)
+				log.Printf("Error scanning alert record: %v\n", err)
 				return
 			}
 			out <- record
 		}
 
 		if err := rows.Err(); err != nil {
-			fmt.Printf("Error iterating through alert records: %v\n", err)
+			log.Printf("Error iterating through alert records: %v\n", err)
 		}
 	}()
 	return out

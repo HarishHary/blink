@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -44,7 +45,7 @@ func (a *AthenaBackend) RuleNamesGenerator() <-chan string {
 		query := fmt.Sprintf("SELECT DISTINCT RuleName FROM %s.%s", a.dbName, a.tableName)
 		results, err := a.executeAthenaQuery(query)
 		if err != nil {
-			fmt.Printf("Error executing Athena query: %v\n", err)
+			log.Printf("Error executing Athena query: %v\n", err)
 			return
 		}
 
@@ -60,7 +61,7 @@ func (a *AthenaBackend) RuleNamesGenerator() <-chan string {
 	return out
 }
 
-func (a *AthenaBackend) GetAlertRecords(ruleName string, alertProcTimeoutSec int) <-chan backends.Record {
+func (a *AthenaBackend) GetAlertRecords(ctx context.Context, ruleName string, alertProcTimeoutSec int) <-chan backends.Record {
 	out := make(chan backends.Record)
 	go func() {
 		defer close(out)
@@ -68,7 +69,7 @@ func (a *AthenaBackend) GetAlertRecords(ruleName string, alertProcTimeoutSec int
 		query := fmt.Sprintf("SELECT * FROM %s.%s WHERE RuleName = '%s' AND Dispatched < '%s'", a.dbName, a.tableName, ruleName, inProgressThreshold)
 		results, err := a.executeAthenaQuery(query)
 		if err != nil {
-			fmt.Printf("Error executing Athena query: %v\n", err)
+			log.Printf("Error executing Athena query: %v\n", err)
 			return
 		}
 
