@@ -129,7 +129,7 @@ func (service *EnricherService) Run(ctx context.Context) errors.Error {
 
 			if anyMissing.Load() {
 				alert.Attempts++
-				if alert.Attempts >= services.MaxPluginAttempts {
+				if alert.Attempts >= services.MaxPluginAttempts || service.dlq == nil {
 					service.Info("alert %s passed through after %d attempts (enrichment unavailable)", alert.AlertID, alert.Attempts)
 					alert.EnrichmentsApplied = nil
 					return false, false
