@@ -1,0 +1,79 @@
+# Rule Executor for 'auth' log_type.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blink-rule-executor-auth
+  namespace: blink
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: blink-rule-executor-auth
+  template:
+    metadata:
+      labels:
+        app: blink-rule-executor-auth
+    spec:
+      containers:
+        - name: rule-executor
+          image: localhost/blink-rule-executor:latest
+          command: ["/bin/blink-rule-executor"]
+          envFrom:
+            - configMapRef:
+                name: blink-config
+            - secretRef:
+                name: blink-auth
+          env:
+            - name: APP_NAME
+              value: "rule-executor-auth"
+            - name: KAFKA_TOPIC_MATCHER
+              value: "blink-matcher-auth"
+            - name: KAFKA_GROUP_MATCHER
+              value: "blink-matcher-auth"
+            - name: KAFKA_TOPIC_EXEC
+              value: "blink-exec"
+            - name: KAFKA_GROUP_EXEC
+              value: "blink-exec-auth"
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          volumeMounts:
+            - name: plugins
+              mountPath: /plugins
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "512Mi"
+      volumes:
+        - name: plugins
+          hostPath:
+            path: /blink/plugins
+            type: Directory
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: blink-rule-executor-auth
+  namespace: blink
+spec:
+  selector:
+    app: blink-rule-executor-auth
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

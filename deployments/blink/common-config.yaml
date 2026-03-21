@@ -1,0 +1,53 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: blink-config
+  namespace: blink
+data:
+  APP_STACK_ENVIRONMENT: "prod"
+  TENANT: "default"
+  DOMAIN: "blink.local"
+  KAFKA_BROKERS: "blink-kafka-cluster-kafka-bootstrap.kafka:9092"
+
+  # Pipeline topic names
+  KAFKA_TOPIC_MATCHER:    "blink-matcher-application"
+  KAFKA_GROUP_MATCHER:    "blink-matcher"
+  KAFKA_TOPIC_EXEC:       "blink-exec"
+  KAFKA_GROUP_EXEC:       "blink-exec"
+  KAFKA_TOPIC_MERGER:     "blink-merger"
+  KAFKA_GROUP_MERGER:     "blink-merger"
+  KAFKA_TOPIC_TUNER:          "blink-tuner"
+  KAFKA_GROUP_TUNER:          "blink-tuner"
+  KAFKA_TOPIC_TUNER_DLQ:      "blink-tuner-dlq"
+  KAFKA_TOPIC_ENRICHER:       "blink-enricher"
+  KAFKA_GROUP_ENRICHER:       "blink-enricher"
+  KAFKA_TOPIC_ENRICHER_DLQ:   "blink-enricher-dlq"
+  KAFKA_TOPIC_FORMATTER:      "blink-formatter"
+  KAFKA_GROUP_FORMATTER:      "blink-formatter"
+  KAFKA_TOPIC_FORMATTER_DLQ:  "blink-formatter-dlq"
+  KAFKA_TOPIC_DISPATCHER: "blink-dispatcher"
+  KAFKA_GROUP_DISPATCHER: "blink-dispatcher"
+
+  # Executor tuning (optional - services fall back to code defaults if 0)
+  EXECUTOR_BATCH_SIZE:    "50"
+  EXECUTOR_CONCURRENCY:  "4"
+  EXECUTOR_TIMEOUT_SEC:  "10"
+
+  # Plugin directories
+  RULE_PLUGIN_DIR:        "/plugins/rules"
+  MATCHER_PLUGIN_DIR:     "/plugins/matchers"
+  TUNER_PLUGIN_DIR:       "/plugins/tuning_rules"
+  ENRICHER_PLUGIN_DIR:    "/plugins/enrichments"
+  FORMATTER_PLUGIN_DIR:   "/plugins/formatters"
+  DISPATCHER_CONFIG_DIR:  "/plugins/dispatchers"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: blink-auth
+  namespace: blink
+stringData:
+  PRODUCT: "blink"
+  AUTH0_AUDIENCE: "https://api.example.com"   # FIXME
+  AUTH0_ISSUER:   "https://example.auth0.com/" # FIXME
