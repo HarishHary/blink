@@ -8,7 +8,7 @@ import (
 	"sync"
 
 	"github.com/harishhary/blink/internal/errors"
-	"gopkg.in/yaml.v2"
+	"go.yaml.in/yaml/v4"
 )
 
 type DispatcherRepository struct {

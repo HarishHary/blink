@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	eventhub "github.com/Azure/azure-sdk-for-go/sdk/messaging/azeventhubs"
+	eventhub "github.com/Azure/azure-sdk-for-go/sdk/messaging/azeventhubs/v2"
 	"github.com/harishhary/blink/internal/errors"
 )
 

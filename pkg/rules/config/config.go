@@ -39,7 +39,7 @@ import (
 
 	internal "github.com/harishhary/blink/internal/pools"
 	"github.com/harishhary/blink/pkg/scoring"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // Observable describes one observable field that a rule can surface in an alert.
