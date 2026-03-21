@@ -367,7 +367,7 @@ func (m *PluginManager[T]) startWithBackoff(path, hash string) error {
 	err := m.start(path, hash)
 	if err != nil {
 		m.mu.Lock()
-		f = m.failures[path]
+		f = m.failures[path] // re-fetch: another goroutine may have updated this key between the two lock acquisitions
 		if f == nil {
 			f = &startFailure{hash: hash}
 			m.failures[path] = f
@@ -425,7 +425,11 @@ func (m *PluginManager[T]) update(path string, oldHandles []*PluginHandle, newHa
 func (m *PluginManager[T]) kill(handle *PluginHandle) {
 	handle.killOnce.Do(func() {
 		close(handle.stopped)
-		defer func() { recover() }() //nolint:errcheck - best-effort shutdown
+		defer func() {
+			if r := recover(); r != nil {
+				m.log.ErrorF("panic during shutdown of %s [%s]: %v", handle.Name, handle.ID, r)
+			}
+		}()
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		_ = handle.Lifecycle.Shutdown(ctx)
 		cancel()
@@ -469,11 +473,16 @@ func (m *PluginManager[T]) remove(key string, handles []*PluginHandle) {
 // stops the subprocesses and restarts them with backoff.
 // Sets restarting[path] before stop() so reconcile() does not race to fill the
 // now-empty plugin_handles slot while the new spawn is in progress.
+// If restarting[path] is already set, another pingLoop worker beat us to it — bail.
 func (m *PluginManager[T]) restart(key string, handles []*PluginHandle) error {
 	path := handles[0].BinPath
 	hash := handles[0].Hash
 
 	m.mu.Lock()
+	if _, already := m.restarting[path]; already {
+		m.mu.Unlock()
+		return nil // another pingLoop worker is already handling this restart
+	}
 	m.restarting[path] = struct{}{}
 	m.mu.Unlock()
 
@@ -523,6 +532,18 @@ func (m *PluginManager[T]) pingLoop(handle *PluginHandle) {
 				m.mu.RLock()
 				group := m.plugin_handles[handle.BinPath]
 				m.mu.RUnlock()
+				// Guard: if our handle is no longer in the group, update() replaced it
+				// while Ping() was running. The new workers' pingLoops own any future restarts.
+				inGroup := false
+				for _, h := range group {
+					if h == handle {
+						inGroup = true
+						break
+					}
+				}
+				if !inGroup {
+					return
+				}
 				if restartErr := m.restart(handle.BinPath, group); restartErr != nil {
 					m.log.Error(errors.NewF("restart failed for %s: %v", handle.BinPath, restartErr))
 				}
