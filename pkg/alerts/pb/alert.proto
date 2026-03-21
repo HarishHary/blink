@@ -53,4 +53,5 @@ message Alert {
   string confidence     = 13;
   string severity       = 14;
   RuleMetadata rule     = 15;
+  repeated string enrichments_applied = 16;
 }

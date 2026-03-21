@@ -1,0 +1,144 @@
+# --- Event input topics (one per log_type) ---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: blink-matcher-application
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: blink-kafka-cluster
+spec:
+  partitions: 6
+  replicas: 3
+  config:
+    retention.ms: "86400000"
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: blink-matcher-auth
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: blink-kafka-cluster
+spec:
+  partitions: 6
+  replicas: 3
+  config:
+    retention.ms: "86400000"
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: blink-exec
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: blink-kafka-cluster
+spec:
+  partitions: 12
+  replicas: 3
+  config:
+    retention.ms: "3600000"
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: blink-merger
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: blink-kafka-cluster
+spec:
+  partitions: 6
+  replicas: 3
+  config:
+    retention.ms: "3600000"
+
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: blink-tuner
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: blink-kafka-cluster
+spec:
+  partitions: 6
+  replicas: 3
+  config:
+    retention.ms: "3600000"
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: blink-tuner-dlq
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: blink-kafka-cluster
+spec:
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "86400000"
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: blink-enricher
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: blink-kafka-cluster
+spec:
+  partitions: 6
+  replicas: 3
+  config:
+    retention.ms: "3600000"
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: blink-enricher-dlq
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: blink-kafka-cluster
+spec:
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "86400000"
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: blink-formatter
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: blink-kafka-cluster
+spec:
+  partitions: 6
+  replicas: 3
+  config:
+    retention.ms: "3600000"
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: blink-formatter-dlq
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: blink-kafka-cluster
+spec:
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "86400000"
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: blink-dispatcher
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: blink-kafka-cluster
+spec:
+  partitions: 6
+  replicas: 3
+  config:
+    retention.ms: "3600000"

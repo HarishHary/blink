@@ -64,20 +64,15 @@ func RunAlertPipeline(
 
 			skip, deadLetter := process(ctx, m.Key, alert)
 
-			if deadLetter {
+			if deadLetter && dlq != nil {
 				payload, merr := alerts.Marshal(alert)
 				if merr != nil {
 					log.Error(errors.NewE(merr))
 					continue
 				}
-				if dlq != nil {
-					if werr := dlq.WriteMessages(ctx, broker.Message{Key: m.Key, Value: payload}); werr != nil {
-						log.Error(errors.NewE(werr))
-					} else {
-						incr(counters.DLQ)
-					}
+				if werr := dlq.WriteMessages(ctx, broker.Message{Key: m.Key, Value: payload}); werr != nil {
+					log.Error(errors.NewE(werr))
 				} else {
-					log.Error(errors.NewF("DLQ not configured: dropping alert %s", alert.AlertID))
 					incr(counters.DLQ)
 				}
 				continue
