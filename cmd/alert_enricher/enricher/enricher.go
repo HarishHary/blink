@@ -3,7 +3,6 @@ package enricher
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/harishhary/blink/internal/broker"
@@ -19,9 +18,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
-const (
-	defaultEnrichmentTimeout = 5 * time.Second
-)
+const defaultEnrichmentTimeout = 5 * time.Second
 
 var (
 	alertsIn           = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "alert_enricher", Name: "alerts_in_total"})
@@ -33,6 +30,13 @@ var (
 	parseErrors        = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "alert_enricher", Name: "parse_errors_total"})
 	writeErrors        = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "alert_enricher", Name: "write_errors_total"})
 )
+
+// enrichAlertState holds a decoded alert and its enrichment outcome for a batch entry.
+type enrichAlertState struct {
+	key        []byte
+	alert      *alerts.Alert
+	anyMissing bool
+}
 
 // EnricherService reads alerts from Kafka, enriches them, and writes to the formatter topic.
 type EnricherService struct {
@@ -71,73 +75,147 @@ func NewEnricherService(pool *enrichcatalog.Pool) (*EnricherService, error) {
 
 func (service *EnricherService) Name() string { return "alert-enricher" }
 
-// Reads alerts from Kafka, applies enrichments declared by the alert's rule, and writes to the formatter topic.
 func (service *EnricherService) Run(ctx context.Context) errors.Error {
-	return services.RunAlertPipeline(ctx, service.Logger, service.reader, service.writer, service.dlq, 50,
-		services.PipelineCounters{
-			In: alertsIn.Inc, Out: alertsOut.Inc, DLQ: alertsDLQ.Inc,
-			ParseError: parseErrors.Inc, WriteError: writeErrors.Inc,
-		},
-		func(ctx context.Context, _ []byte, alert *alerts.Alert) (skip bool, deadLetter bool) {
-			service.Info("enriching alert %s", alert.AlertID)
+	for {
+		msgs, err := service.reader.ReadBatch(ctx, 50)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			service.Error(errors.NewE(err))
+			continue
+		}
 
-			applied := make(map[string]struct{}, len(alert.EnrichmentsApplied))
-			for _, name := range alert.EnrichmentsApplied {
-				applied[name] = struct{}{}
+		service.processBatch(ctx, msgs)
+
+		if err := service.reader.CommitMessages(ctx, msgs...); err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			service.Error(errors.NewE(err))
+		}
+	}
+}
+
+func (service *EnricherService) processBatch(ctx context.Context, msgs []broker.Message) {
+	// Decode all alerts.
+	states := make([]*enrichAlertState, 0, len(msgs))
+	for _, m := range msgs {
+		alert, err := alerts.Unmarshal(m.Value)
+		if err != nil {
+			parseErrors.Inc()
+			service.Error(errors.NewE(err))
+			continue
+		}
+		alertsIn.Inc()
+		states = append(states, &enrichAlertState{key: m.Key, alert: alert})
+	}
+	if len(states) == 0 {
+		return
+	}
+
+	// Group by enrichment name: name → indices into states.
+	// Respect already-applied enrichments from prior DLQ retries.
+	byEnrichment := make(map[string][]int)
+	for i, s := range states {
+		applied := make(map[string]struct{}, len(s.alert.EnrichmentsApplied))
+		for _, name := range s.alert.EnrichmentsApplied {
+			applied[name] = struct{}{}
+		}
+		for _, name := range s.alert.Rule.Enrichments() {
+			if _, done := applied[name]; done {
+				continue
+			}
+			byEnrichment[name] = append(byEnrichment[name], i)
+		}
+	}
+
+	// Fan out: one goroutine per enrichment with all its alerts.
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for name, idxs := range byEnrichment {
+		wg.Add(1)
+		go func(name string, idxs []int) {
+			defer wg.Done()
+
+			alrts := make([]*alerts.Alert, len(idxs))
+			for j, idx := range idxs {
+				alrts[j] = states[idx].alert
 			}
 
-			var (
-				anyMissing atomic.Bool
-				mu         sync.Mutex
-				succeeded  []string
-				wg         sync.WaitGroup
-			)
-			for _, name := range alert.Rule.Enrichments() {
-				if _, done := applied[name]; done {
+			cctx, cancel := context.WithTimeout(ctx, defaultEnrichmentTimeout)
+			defer cancel()
+			start := time.Now()
+			absent, removed, errs := service.pool.Enrich(cctx, name, alrts, "")
+			enrichmentLatency.WithLabelValues(name).Observe(time.Since(start).Seconds())
+
+			mu.Lock()
+			defer mu.Unlock()
+			switch {
+			case removed:
+				service.Error(errors.NewF("enrichment %s removed", name))
+				for _, idx := range idxs {
+					states[idx].anyMissing = true
+				}
+			case absent:
+				service.Error(errors.NewF("enrichment %s not found", name))
+				for _, idx := range idxs {
+					states[idx].anyMissing = true
+				}
+			default:
+				for j, idx := range idxs {
+					if errs[j] != nil {
+						enrichmentErrors.WithLabelValues(name).Inc()
+						service.Error(errs[j])
+					} else {
+						enrichmentsApplied.WithLabelValues(name).Inc()
+						states[idx].alert.EnrichmentsApplied = append(states[idx].alert.EnrichmentsApplied, name)
+					}
+				}
+			}
+		}(name, idxs)
+	}
+	wg.Wait()
+
+	// Write results.
+	for _, s := range states {
+		if s.anyMissing {
+			s.alert.Attempts++
+			if s.alert.Attempts >= services.MaxPluginAttempts || service.dlq == nil {
+				service.Info("alert %s passed through after %d attempts (enrichment unavailable)", s.alert.AlertID, s.alert.Attempts)
+				s.alert.EnrichmentsApplied = nil
+				// fall through to write
+			} else {
+				payload, err := alerts.Marshal(s.alert)
+				if err != nil {
+					writeErrors.Inc()
+					service.Error(errors.NewE(err))
 					continue
 				}
-				wg.Add(1)
-				go func(enrName string) {
-					defer wg.Done()
-
-					cctx, cancel := context.WithTimeout(ctx, defaultEnrichmentTimeout)
-					defer cancel()
-					start := time.Now()
-					absent, removed, err := service.pool.Enrich(cctx, enrName, alert, "")
-					switch {
-					case removed:
-						anyMissing.Store(true)
-						service.Error(errors.NewF("enrichment %s removed - alert %s missing enrichment", enrName, alert.AlertID))
-					case absent:
-						anyMissing.Store(true)
-						service.Error(errors.NewF("enrichment %s not found - alert %s missing enrichment", enrName, alert.AlertID))
-					case err != nil:
-						enrichmentErrors.WithLabelValues(enrName).Inc()
-						service.Error(errors.NewF("enrichment %s failed: %v", enrName, err))
-					default:
-						enrichmentsApplied.WithLabelValues(enrName).Inc()
-						mu.Lock()
-						succeeded = append(succeeded, enrName)
-						mu.Unlock()
-					}
-					enrichmentLatency.WithLabelValues(enrName).Observe(time.Since(start).Seconds())
-				}(name)
-			}
-			wg.Wait()
-
-			alert.EnrichmentsApplied = append(alert.EnrichmentsApplied, succeeded...)
-
-			if anyMissing.Load() {
-				alert.Attempts++
-				if alert.Attempts >= services.MaxPluginAttempts || service.dlq == nil {
-					service.Info("alert %s passed through after %d attempts (enrichment unavailable)", alert.AlertID, alert.Attempts)
-					alert.EnrichmentsApplied = nil
-					return false, false
+				err = service.dlq.WriteMessages(ctx, broker.Message{Key: s.key, Value: payload})
+				if err != nil {
+					writeErrors.Inc()
+					service.Error(errors.NewE(err))
+				} else {
+					alertsDLQ.Inc()
 				}
-				return false, true
+				continue
 			}
-			alert.EnrichmentsApplied = nil
-			return false, false
-		},
-	)
+		}
+
+		s.alert.EnrichmentsApplied = nil
+		payload, err := alerts.Marshal(s.alert)
+		if err != nil {
+			writeErrors.Inc()
+			service.Error(errors.NewE(err))
+			continue
+		}
+		err = service.writer.WriteMessages(ctx, broker.Message{Key: s.key, Value: payload})
+		if err != nil {
+			writeErrors.Inc()
+			service.Error(errors.NewE(err))
+			continue
+		}
+		alertsOut.Inc()
+	}
 }

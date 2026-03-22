@@ -33,6 +33,7 @@ type TuningRule interface {
 	Name() string
 	Description() string
 	Enabled() bool
+	Version() string
 	Global() bool
 	RuleType() RuleType
 	Confidence() scoring.Confidence

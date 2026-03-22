@@ -63,6 +63,7 @@ type FormatterMetadata struct {
 	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	Description   string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
 	Enabled       bool                   `protobuf:"varint,4,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	Version       string                 `protobuf:"bytes,5,opt,name=version,proto3" json:"version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -123,6 +124,13 @@ func (x *FormatterMetadata) GetEnabled() bool {
 		return x.Enabled
 	}
 	return false
+}
+
+func (x *FormatterMetadata) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
 }
 
 type FormatRequest struct {

@@ -3,6 +3,8 @@ package tuner
 import (
 	"context"
 	stderrors "errors"
+	"sync"
+	"sync/atomic"
 
 	"github.com/harishhary/blink/internal/broker"
 	"github.com/harishhary/blink/internal/broker/kafka"
@@ -76,7 +78,7 @@ func NewTunerService(pool *tuningcatalog.Pool) (*TunerService, error) {
 func (service *TunerService) Name() string { return "rule-tuner" }
 
 func (service *TunerService) Run(ctx context.Context) errors.Error {
-	return services.RunAlertPipeline(ctx, service.Logger, service.reader, service.writer, service.dlq, 50,
+	return services.RunAlertPipeline(ctx, service.Logger, service.reader, service.writer, service.dlq, 50, 4,
 		services.PipelineCounters{
 			In: alertsIn.Inc, Out: alertsOut.Inc, DLQ: alertsDLQ.Inc,
 			ParseError: parseErrors.Inc, WriteError: writeErrors.Inc,
@@ -84,41 +86,66 @@ func (service *TunerService) Run(ctx context.Context) errors.Error {
 		func(ctx context.Context, _ []byte, alert *alerts.Alert) (skip bool, deadLetter bool) {
 			service.Info("applying tuning rules for alert %s", alert.AlertID)
 
-			var results []tuneResult
-			for _, name := range alert.Rule.TuningRules() {
-				var res tuneResult
-				if err := service.pool.Call(ctx, name, "", func(callCtx context.Context, r tuning_rules.TuningRule) error {
-					if !r.Enabled() {
+			names := alert.Rule.TuningRules()
+			if len(names) == 0 {
+				return false, false
+			}
+
+			// Fan out tuning rule evaluations. Each r.Tune receives a copy of the
+			// alert (*alert dereference), so goroutines read independent state.
+			var (
+				mu         sync.Mutex
+				anyMissing atomic.Bool
+				results    []tuneResult
+				wg         sync.WaitGroup
+			)
+			for _, name := range names {
+				wg.Add(1)
+				go func(name string) {
+					defer wg.Done()
+					var res tuneResult
+					err := service.pool.Call(ctx, name, "", func(callCtx context.Context, r tuning_rules.TuningRule) error {
+						if !r.Enabled() {
+							return nil
+						}
+						res.ruleType = r.RuleType()
+						res.confidence = r.Confidence()
+						applies, e := r.Tune(callCtx, *alert)
+						if e != nil {
+							return e
+						}
+						res.applies = applies
 						return nil
-					}
-					res.ruleType = r.RuleType()
-					res.confidence = r.Confidence()
-					applies, e := r.Tune(callCtx, *alert)
-					if e != nil {
-						return e
-					}
-					res.applies = applies
-					return nil
-				}); err != nil {
-					if stderrors.Is(err, pools.ErrPluginRemoved) || stderrors.Is(err, pools.ErrPluginNotFound) {
-						label := "not found"
-						if stderrors.Is(err, pools.ErrPluginRemoved) {
-							label = "removed"
+					})
+					if err != nil {
+						if stderrors.Is(err, pools.ErrPluginRemoved) || stderrors.Is(err, pools.ErrPluginNotFound) {
+							label := "not found"
+							if stderrors.Is(err, pools.ErrPluginRemoved) {
+								label = "removed"
+							}
+							service.Error(errors.NewF("tuning rule %s %s - alert %s missing tuning", name, label, alert.AlertID))
+							anyMissing.Store(true)
+							return
 						}
-						service.Error(errors.NewF("tuning rule %s %s - alert %s missing tuning", name, label, alert.AlertID))
-						alert.Attempts++
-						if alert.Attempts >= services.MaxPluginAttempts {
-							service.Info("alert %s passed through after %d attempts (tuning rule unavailable)", alert.AlertID, alert.Attempts)
-							continue
-						}
-						return false, true
+						service.Error(errors.NewE(err))
+						tuningErrors.Inc()
+						return
 					}
-					service.Error(errors.NewE(err))
-					tuningErrors.Inc()
-					return false, false
-				}
-				if res.applies {
-					results = append(results, res)
+					if res.applies {
+						mu.Lock()
+						results = append(results, res)
+						mu.Unlock()
+					}
+				}(name)
+			}
+			wg.Wait()
+
+			if anyMissing.Load() {
+				alert.Attempts++
+				if alert.Attempts >= services.MaxPluginAttempts || service.dlq == nil {
+					service.Info("alert %s passed through after %d attempts (tuning rule unavailable)", alert.AlertID, alert.Attempts)
+				} else {
+					return false, true
 				}
 			}
 

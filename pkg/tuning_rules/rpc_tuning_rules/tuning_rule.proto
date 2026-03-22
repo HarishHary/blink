@@ -14,6 +14,7 @@ message TuningMetadata {
   bool   global      = 5;
   int32  rule_type   = 6; // 0=Ignore, 1=SetConfidence, 2=IncreaseConfidence, 3=DecreaseConfidence
   string confidence  = 7; // "verylow|low|medium|high|veryhigh"
+  string version     = 8;
 }
 
 message TuneRequest {

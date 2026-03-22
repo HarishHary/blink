@@ -39,6 +39,10 @@ func (r *rpcTuningRule) Enabled() bool {
 	return r.meta.GetEnabled()
 }
 
+func (r *rpcTuningRule) Version() string {
+	return r.meta.GetVersion()
+}
+
 func (r *rpcTuningRule) Checksum() string {
 	return r.checksum
 }

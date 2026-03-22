@@ -65,7 +65,8 @@ type TuningMetadata struct {
 	Enabled       bool                   `protobuf:"varint,4,opt,name=enabled,proto3" json:"enabled,omitempty"`
 	Global        bool                   `protobuf:"varint,5,opt,name=global,proto3" json:"global,omitempty"`
 	RuleType      int32                  `protobuf:"varint,6,opt,name=rule_type,json=ruleType,proto3" json:"rule_type,omitempty"` // 0=Ignore, 1=SetConfidence, 2=IncreaseConfidence, 3=DecreaseConfidence
-	Confidence    string                 `protobuf:"bytes,7,opt,name=confidence,proto3" json:"confidence,omitempty"`              // "verylow|low|medium|high|veryhigh"
+	Confidence    string                 `protobuf:"bytes,7,opt,name=confidence,proto3" json:"confidence,omitempty"` // "verylow|low|medium|high|veryhigh"
+	Version       string                 `protobuf:"bytes,8,opt,name=version,proto3" json:"version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -145,6 +146,13 @@ func (x *TuningMetadata) GetRuleType() int32 {
 func (x *TuningMetadata) GetConfidence() string {
 	if x != nil {
 		return x.Confidence
+	}
+	return ""
+}
+
+func (x *TuningMetadata) GetVersion() string {
+	if x != nil {
+		return x.Version
 	}
 	return ""
 }

@@ -64,7 +64,7 @@ func (service *FormatterService) Name() string { return "alert-formatter" }
 
 // Reads alerts from Kafka, applies formatters, and writes to the dispatcher topic.
 func (service *FormatterService) Run(ctx context.Context) errors.Error {
-	return services.RunAlertPipeline(ctx, service.Logger, service.reader, service.writer, service.dlq, 50,
+	return services.RunAlertPipeline(ctx, service.Logger, service.reader, service.writer, service.dlq, 50, 4,
 		services.PipelineCounters{
 			In: alertsIn.Inc, Out: alertsOut.Inc, DLQ: alertsDLQ.Inc,
 			ParseError: parseErrors.Inc, WriteError: writeErrors.Inc,
