@@ -35,9 +35,9 @@ func (f *rpcFormatter) String() string {
 	return fmt.Sprintf("Formatter '%s' (id:%s, enabled:%t)", f.meta.GetName(), f.meta.GetId(), f.meta.GetEnabled())
 }
 
-func (f *rpcFormatter) Format(ctx context.Context, alrts []*alerts.Alert) ([]map[string]any, errors.Error) {
-	alertJSONs := make([][]byte, 0, len(alrts))
-	for _, alrt := range alrts {
+func (f *rpcFormatter) Format(ctx context.Context, alerts []*alerts.Alert) ([]map[string]any, errors.Error) {
+	alertJSONs := make([][]byte, 0, len(alerts))
+	for _, alrt := range alerts {
 		b, err := json.Marshal(alrt)
 		if err != nil {
 			return nil, errors.NewE(err)

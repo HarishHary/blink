@@ -14,7 +14,7 @@ func (allowAll) Metadata() sdk.MatcherMetadata {
 	return sdk.MatcherMetadata{
 		ID:          "allow-all",
 		Name:        "Allow All",
-		Description: "Matches every event — use for testing only.",
+		Description: "Matches every event - use for testing only.",
 		Enabled:     true,
 		Version:     "1.0.0",
 	}

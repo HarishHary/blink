@@ -22,32 +22,40 @@ func NewPool(routing *internal.RoutingTable, drainTimeout time.Duration) *Pool {
 	}
 }
 
-// Runs the matcher identified by matcherID against event.
-func (p *Pool) Match(ctx context.Context, matcherID string, event events.Event, canaryHashKey string) (bool, errors.Error) {
-	var matched bool
+// Match runs the matcher identified by matcherID against all events in a single pool call.
+// Disabled matchers are treated as pass-through (all results true).
+func (p *Pool) Match(ctx context.Context, matcherID string, evts []events.Event, canaryHashKey string) ([]bool, errors.Error) {
+	var results []bool
 	err := p.Call(ctx, matcherID, canaryHashKey, func(callCtx context.Context, m matchers.Matcher) error {
 		if !m.Enabled() {
-			matched = true // treat disabled matcher as pass-through
+			results = make([]bool, len(evts))
+			for i := range results {
+				results[i] = true
+			}
 			return nil
 		}
 		var e errors.Error
-		matched, e = m.Match(callCtx, event)
+		results, e = m.Match(callCtx, evts)
 		return e
 	})
 	if err != nil {
-		return false, errors.NewE(err)
+		return nil, errors.NewE(err)
 	}
-	return matched, nil
+	return results, nil
 }
 
 // Handles plugin lifecycle messages from the plugin manager bus, registering or deregistering matchers in the pool.
+func poolKey(m matchers.Matcher) internal.PoolKey {
+	version := m.Version()
+	if cs := m.Checksum(); cs != "" {
+		version = version + "@" + cs
+	}
+	return internal.PoolKey{PluginID: m.Id(), Version: version}
+}
+
 func (p *Pool) Sync(msg messaging.Message) {
 	register := func(onDrained func(), items []matchers.Matcher, maxProcs int) {
-		version := items[0].Checksum()
-		if version == "" {
-			version = "1.0.0"
-		}
-		p.Register(internal.PoolKey{PluginID: items[0].Id(), Version: version}, items, maxProcs, onDrained)
+		p.Register(poolKey(items[0]), items, maxProcs, onDrained)
 	}
 	switch m := msg.(type) {
 	case pluginmgr.RegisterMessage[matchers.Matcher]:

@@ -138,15 +138,15 @@ func (service *EnricherService) processBatch(ctx context.Context, msgs []broker.
 		go func(name string, idxs []int) {
 			defer wg.Done()
 
-			alrts := make([]*alerts.Alert, len(idxs))
+			alerts := make([]*alerts.Alert, len(idxs))
 			for j, idx := range idxs {
-				alrts[j] = states[idx].alert
+				alerts[j] = states[idx].alert
 			}
 
 			cctx, cancel := context.WithTimeout(ctx, defaultEnrichmentTimeout)
 			defer cancel()
 			start := time.Now()
-			absent, removed, errs := service.pool.Enrich(cctx, name, alrts, "")
+			absent, removed, errs := service.pool.Enrich(cctx, name, alerts, "")
 			enrichmentLatency.WithLabelValues(name).Observe(time.Since(start).Seconds())
 
 			mu.Lock()

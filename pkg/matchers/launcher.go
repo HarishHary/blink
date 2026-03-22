@@ -42,6 +42,9 @@ func (l *MatcherAdapter) Handshake(ctx context.Context, raw interface{}, _ strin
 	return m, &matcherLifecycle{rpc: rpc}, meta.GetId(), meta.GetName(), nil
 }
 
+// IsReady always returns true - matchers have no YAML sidecar prerequisite.
+func (l *MatcherAdapter) IsReady(_ string) bool                    { return true }
+func (l *MatcherAdapter) IsShadow(_ string) bool                   { return false }
 func (l *MatcherAdapter) IsEnabled(_ *pluginmgr.PluginHandle) bool { return true }
 
 func (l *MatcherAdapter) Workers(_ string) int { return 1 }

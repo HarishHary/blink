@@ -2,27 +2,27 @@ package pools
 
 import "sync"
 
-// PluginRouting holds the routing configuration for a single plugin.
-type PluginRouting struct {
+// RoutingEntry holds the routing configuration for a single plugin.
+type RoutingEntry struct {
 	Mode       RolloutMode
 	RolloutPct float64
 }
 
-// RoutingTable is a thread-safe map from pluginID to PluginRouting.
+// RoutingTable is a thread-safe map from pluginID to RoutingEntry.
 // Pass RoutingTable.Config() to NewProcessPool to enable live routing control.
 // An empty table is valid - missing entries default to blue-green.
 type RoutingTable struct {
 	mu      sync.RWMutex
-	entries map[string]PluginRouting
+	entries map[string]RoutingEntry
 }
 
 // Creates an empty RoutingTable.
 func NewRoutingTable() *RoutingTable {
-	return &RoutingTable{entries: make(map[string]PluginRouting)}
+	return &RoutingTable{entries: make(map[string]RoutingEntry)}
 }
 
 // Updates the routing config for pluginID. Reflected immediately on the next Call.
-func (t *RoutingTable) Set(pluginID string, r PluginRouting) {
+func (t *RoutingTable) Set(pluginID string, r RoutingEntry) {
 	t.mu.Lock()
 	t.entries[pluginID] = r
 	t.mu.Unlock()

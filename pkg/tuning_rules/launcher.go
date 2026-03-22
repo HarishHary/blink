@@ -42,6 +42,9 @@ func (l *TuningRuleAdapter) Handshake(ctx context.Context, raw interface{}, _ st
 	return tr, &tuningLifecycle{rpc: rpc}, meta.GetId(), meta.GetName(), nil
 }
 
+func (l *TuningRuleAdapter) IsReady(_ string) bool  { return true }
+func (l *TuningRuleAdapter) IsShadow(_ string) bool { return false }
+
 // IsEnabled always returns true - tuning rules have no YAML sidecar.
 func (l *TuningRuleAdapter) IsEnabled(_ *pluginmgr.PluginHandle) bool { return true }
 

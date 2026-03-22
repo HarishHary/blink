@@ -35,9 +35,9 @@ func (r *rpcEnrichment) String() string {
 	return "RpcEnrichment '" + r.meta.GetName() + "' id:'" + r.meta.GetId() + "'"
 }
 
-func (r *rpcEnrichment) Enrich(ctx context.Context, alrts []*alerts.Alert) errors.Error {
-	protoAlerts := make([]*rpc_enrichments.Alert, 0, len(alrts))
-	for _, alrt := range alrts {
+func (r *rpcEnrichment) Enrich(ctx context.Context, alerts []*alerts.Alert) errors.Error {
+	protoAlerts := make([]*rpc_enrichments.Alert, 0, len(alerts))
+	for _, alrt := range alerts {
 		b, err := json.Marshal(alrt.Event)
 		if err != nil {
 			return errors.New(err)
@@ -54,7 +54,7 @@ func (r *rpcEnrichment) Enrich(ctx context.Context, alrts []*alerts.Alert) error
 			return errors.New(err)
 		}
 		for k, v := range enriched {
-			alrts[i].Event[k] = v
+			alerts[i].Event[k] = v
 		}
 	}
 	return nil

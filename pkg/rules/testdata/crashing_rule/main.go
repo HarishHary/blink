@@ -17,7 +17,7 @@ func (crashingRule) Evaluate(_ context.Context, _ events.Event) (bool, errors.Er
 }
 
 func main() {
-	// Exit 300ms after startup — long enough for the manager to complete the
+	// Exit 300ms after startup - long enough for the manager to complete the
 	// Init handshake (~50ms), short enough for crash tests to run quickly.
 	go func() {
 		time.Sleep(300 * time.Millisecond)

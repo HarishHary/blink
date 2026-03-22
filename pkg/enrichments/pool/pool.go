@@ -23,12 +23,20 @@ func NewPool(routing *internal.RoutingTable, drainTimeout time.Duration) *Pool {
 	}
 }
 
-func (p *Pool) Enrich(ctx context.Context, enrichmentID string, alert *alerts.Alert, canaryHashKey string) (absent bool, removed bool, _ errors.Error) {
-	err := p.Call(ctx, enrichmentID, canaryHashKey, func(ctx context.Context, e enrichments.IEnrichment) error {
+// Enrich calls enrichmentID once with all alerts, applying enrichment sequentially.
+// absent/removed refer to the plugin state. errs contains per-alert errors (nil on success).
+func (p *Pool) Enrich(ctx context.Context, enrichmentID string, alerts []*alerts.Alert, canaryHashKey string) (absent bool, removed bool, errs []errors.Error) {
+	errs = make([]errors.Error, len(alerts))
+	err := p.Call(ctx, enrichmentID, canaryHashKey, func(callCtx context.Context, e enrichments.IEnrichment) error {
 		if !e.Enabled() {
 			return nil
 		}
-		return e.Enrich(ctx, alert)
+		if err := e.Enrich(callCtx, alerts); err != nil {
+			for i := range errs {
+				errs[i] = errors.NewE(err)
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		if stderrors.Is(err, internal.ErrPluginNotFound) {
@@ -37,18 +45,22 @@ func (p *Pool) Enrich(ctx context.Context, enrichmentID string, alert *alerts.Al
 		if stderrors.Is(err, internal.ErrPluginRemoved) {
 			return false, true, nil
 		}
-		return false, false, errors.NewE(err)
+		return false, false, []errors.Error{errors.NewE(err)}
 	}
-	return false, false, nil
+	return false, false, errs
+}
+
+func poolKey(e enrichments.IEnrichment) internal.PoolKey {
+	version := e.Version()
+	if cs := e.Checksum(); cs != "" {
+		version = version + "@" + cs
+	}
+	return internal.PoolKey{PluginID: e.Id(), Version: version}
 }
 
 func (p *Pool) Sync(msg messaging.Message) {
 	register := func(onDrained func(), items []enrichments.IEnrichment, maxProcs int) {
-		version := items[0].Checksum()
-		if version == "" {
-			version = "1.0.0"
-		}
-		p.Register(internal.PoolKey{PluginID: items[0].Id(), Version: version}, items, maxProcs, onDrained)
+		p.Register(poolKey(items[0]), items, maxProcs, onDrained)
 	}
 	switch m := msg.(type) {
 	case pluginmgr.RegisterMessage[enrichments.IEnrichment]:

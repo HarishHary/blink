@@ -17,14 +17,14 @@ import (
 )
 
 var (
-	alertsIn       = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "alert_merger", Name: "alerts_in_total"})
-	alertsOut      = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "alert_merger", Name: "alerts_out_total"})
-	alertsMerged   = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "alert_merger", Name: "alerts_merged_total"})
-	groupsFlushed  = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "alert_merger", Name: "groups_flushed_total"})
-	groupsEvicted  = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "alert_merger", Name: "groups_evicted_total"})
-	parseErrors    = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "alert_merger", Name: "parse_errors_total"})
-	writeErrors    = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "alert_merger", Name: "write_errors_total"})
-	activeGroups   = promauto.NewGauge(prometheus.GaugeOpts{Namespace: "blink", Subsystem: "alert_merger", Name: "active_groups"})
+	alertsIn      = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "alert_merger", Name: "alerts_in_total"})
+	alertsOut     = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "alert_merger", Name: "alerts_out_total"})
+	alertsMerged  = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "alert_merger", Name: "alerts_merged_total"})
+	groupsFlushed = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "alert_merger", Name: "groups_flushed_total"})
+	groupsEvicted = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "alert_merger", Name: "groups_evicted_total"})
+	parseErrors   = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "alert_merger", Name: "parse_errors_total"})
+	writeErrors   = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "alert_merger", Name: "write_errors_total"})
+	activeGroups  = promauto.NewGauge(prometheus.GaugeOpts{Namespace: "blink", Subsystem: "alert_merger", Name: "active_groups"})
 )
 
 // mergeGroup holds a set of alerts that share the same rule and merge-by key values and are within each other's merge window.
@@ -122,7 +122,7 @@ func (s *MergerService) accumulate(ctx context.Context, alert *alerts.Alert) {
 		return
 	}
 
-	// Either no existing group or the window has moved on — flush the old group
+	// Either no existing group or the window has moved on - flush the old group
 	// (if any) and start a new one.
 	toFlush := make([]*mergeGroup, 0, 2)
 	if exists {
@@ -251,4 +251,3 @@ func (s *MergerService) writeAlert(ctx context.Context, alert *alerts.Alert) {
 	}
 	alertsOut.Inc()
 }
-

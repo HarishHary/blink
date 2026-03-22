@@ -52,7 +52,7 @@ func ValidateDependencyGraph(enrichments []IEnrichment) error {
 }
 
 type IEnrichment interface {
-	Enrich(ctx context.Context, alrts []*alerts.Alert) errors.Error
+	Enrich(ctx context.Context, alerts []*alerts.Alert) errors.Error
 	// DependsOn returns plugin names that must run before this enrichment.
 	DependsOn() []string
 

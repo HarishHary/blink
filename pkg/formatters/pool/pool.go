@@ -23,18 +23,26 @@ func NewPool(routing *internal.RoutingTable, drainTimeout time.Duration) *Pool {
 	}
 }
 
-// Format runs the formatter identified by formatterID against alert.
-// It respects kill switches and the rollout mode from the current catalog snapshot.
-//   - absent=true: no active pool - plugin transiently missing, caller should dead-letter.
-//   - removed=true: plugin was explicitly deregistered, caller should drop permanently.
-func (p *Pool) Format(ctx context.Context, formatterID string, alert *alerts.Alert, canaryHashKey string) (out map[string]any, absent bool, removed bool, _ errors.Error) {
+// Format runs the formatter identified by formatterID against all alerts in a single pool call.
+//   - absent=true: plugin transiently missing, caller should dead-letter.
+//   - removed=true: plugin deregistered, caller should drop permanently.
+//   - outs/errs are per-alert (same length as alerts).
+func (p *Pool) Format(ctx context.Context, formatterID string, alerts []*alerts.Alert, canaryHashKey string) (outs []map[string]any, absent bool, removed bool, errs []errors.Error) {
+	outs = make([]map[string]any, len(alerts))
+	errs = make([]errors.Error, len(alerts))
 	err := p.Call(ctx, formatterID, canaryHashKey, func(callCtx context.Context, f formatters.IFormatter) error {
 		if !f.Enabled() {
 			return nil
 		}
-		var e errors.Error
-		out, e = f.Format(callCtx, alert)
-		return e
+		batchOuts, e := f.Format(callCtx, alerts)
+		if e != nil {
+			for i := range errs {
+				errs[i] = e
+			}
+			return nil
+		}
+		copy(outs, batchOuts)
+		return nil
 	})
 	if err != nil {
 		if stderrors.Is(err, internal.ErrPluginNotFound) {
@@ -43,18 +51,22 @@ func (p *Pool) Format(ctx context.Context, formatterID string, alert *alerts.Ale
 		if stderrors.Is(err, internal.ErrPluginRemoved) {
 			return nil, false, true, nil
 		}
-		return nil, false, false, errors.NewE(err)
+		return nil, false, false, []errors.Error{errors.NewE(err)}
 	}
-	return out, false, false, nil
+	return outs, false, false, errs
+}
+
+func poolKey(f formatters.IFormatter) internal.PoolKey {
+	version := f.Version()
+	if cs := f.Checksum(); cs != "" {
+		version = version + "@" + cs
+	}
+	return internal.PoolKey{PluginID: f.Id(), Version: version}
 }
 
 func (p *Pool) Sync(msg messaging.Message) {
 	register := func(onDrained func(), items []formatters.IFormatter, maxProcs int) {
-		version := items[0].Checksum()
-		if version == "" {
-			version = "1.0.0"
-		}
-		p.Register(internal.PoolKey{PluginID: items[0].Id(), Version: version}, items, maxProcs, onDrained)
+		p.Register(poolKey(items[0]), items, maxProcs, onDrained)
 	}
 	switch m := msg.(type) {
 	case pluginmgr.RegisterMessage[formatters.IFormatter]:

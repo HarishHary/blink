@@ -42,6 +42,9 @@ func (l *EnrichmentAdapter) Handshake(ctx context.Context, raw interface{}, _ st
 	return e, &enrichmentLifecycle{rpc: rpc}, meta.GetId(), meta.GetName(), nil
 }
 
+// IsReady always returns true - enrichments have no YAML sidecar prerequisite.
+func (l *EnrichmentAdapter) IsReady(_ string) bool                    { return true }
+func (l *EnrichmentAdapter) IsShadow(_ string) bool                   { return false }
 func (l *EnrichmentAdapter) IsEnabled(_ *pluginmgr.PluginHandle) bool { return true }
 
 func (l *EnrichmentAdapter) Workers(_ string) int { return 1 }

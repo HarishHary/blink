@@ -64,9 +64,9 @@ func (r *rpcTuningRule) Confidence() scoring.Confidence {
 	return conf
 }
 
-func (r *rpcTuningRule) Tune(ctx context.Context, alrts []alerts.Alert) ([]bool, errors.Error) {
-	alertJSONs := make([][]byte, 0, len(alrts))
-	for _, alrt := range alrts {
+func (r *rpcTuningRule) Tune(ctx context.Context, alerts []alerts.Alert) ([]bool, errors.Error) {
+	alertJSONs := make([][]byte, 0, len(alerts))
+	for _, alrt := range alerts {
 		b, err := json.Marshal(alrt)
 		if err != nil {
 			return nil, errors.NewE(err)

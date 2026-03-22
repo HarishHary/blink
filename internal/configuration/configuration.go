@@ -83,6 +83,6 @@ type MergerConfig struct {
 	// MaxGroups caps the number of live merge groups held in memory per replica.
 	// When the cap is exceeded the oldest group (earliest expiry) is flushed
 	// immediately rather than waiting for its window to close.
-	// 0 means unlimited — only safe when merge_by_keys have low cardinality.
+	// 0 means unlimited - only safe when merge_by_keys have low cardinality.
 	MaxGroups int `env:"MERGER_MAX_GROUPS,optional"`
 }

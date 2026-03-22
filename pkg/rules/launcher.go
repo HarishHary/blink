@@ -10,6 +10,7 @@ import (
 
 	"github.com/harishhary/blink/internal/helpers"
 	"github.com/harishhary/blink/internal/pluginmgr"
+	internal "github.com/harishhary/blink/internal/pools"
 	"github.com/harishhary/blink/pkg/rules/config"
 	"github.com/harishhary/blink/pkg/rules/rpc_rules"
 )
@@ -44,6 +45,32 @@ func (l *RuleAdapter) Handshake(ctx context.Context, raw interface{}, binPath st
 
 	rule := newRpcRule(fileName, rpc, l.Watcher, hash)
 	return rule, &ruleLifecycle{rpc: rpc}, cfg.Id(), cfg.Name(), nil
+}
+
+// Reports whether this binary is safe to start:
+//  1. Its YAML sidecar exists in the current registry (prevents crash loops when binary arrives on disk before YAML is flushed).
+//  2. Its plugin ID has no blocking validation errors (missing/invalid version, all-shadow
+//     group with no stable baseline, etc.). Validation runs fresh on every call - not from
+//     a cached set - so there is no race between the config watcher's reload debounce and
+//     the manager's reconcile reacting to the same fsnotify event.
+func (l *RuleAdapter) IsReady(binPath string) bool {
+	cfg := l.Watcher.Current().ByFileName(helpers.BinaryBaseName(binPath))
+	if cfg == nil {
+		return false
+	}
+	return !l.Watcher.HasBlockingErrorFor(cfg.Id(), cfg.FileName()+".yaml")
+}
+
+// IsShadow reports whether this binary's YAML declares it as a shadow or canary version.
+// reconcile() starts non-shadow binaries first so the stable version always wins the active
+// pool slot on a fresh start, regardless of filename alphabetical order.
+func (l *RuleAdapter) IsShadow(binPath string) bool {
+	cfg := l.Watcher.Current().ByFileName(helpers.BinaryBaseName(binPath))
+	if cfg == nil {
+		return false
+	}
+	m := cfg.RolloutMode()
+	return m == internal.RolloutModeCanary || m == internal.RolloutModeShadow
 }
 
 // IsEnabled reports whether the rule's YAML sidecar still exists and is enabled.

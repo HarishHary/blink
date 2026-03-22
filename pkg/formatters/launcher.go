@@ -43,6 +43,9 @@ func (l *FormatterAdapter) Handshake(ctx context.Context, raw interface{}, _ str
 	return f, &formatterLifecycle{rpc: rpc}, meta.GetId(), meta.GetName(), nil
 }
 
+// IsReady always returns true - formatters have no YAML sidecar prerequisite.
+func (l *FormatterAdapter) IsReady(_ string) bool                    { return true }
+func (l *FormatterAdapter) IsShadow(_ string) bool                   { return false }
 func (l *FormatterAdapter) IsEnabled(_ *pluginmgr.PluginHandle) bool { return true }
 
 func (l *FormatterAdapter) Workers(_ string) int { return 1 }
