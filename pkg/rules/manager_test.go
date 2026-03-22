@@ -29,6 +29,7 @@ name: "simple-rule"
 file_name: "simple_rule"
 description: "always matches - used for integration tests"
 enabled: true
+version: "1.0.0"
 severity: "info"
 confidence: "low"
 log_types: ["test"]

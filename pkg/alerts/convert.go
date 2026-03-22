@@ -37,22 +37,22 @@ func AlertToProto(a *Alert) (*pb.Alert, error) {
 		return nil, err
 	}
 	p := &pb.Alert{
-		AlertId:       a.AlertID,
-		Attempts:      int32(a.Attempts),
-		Cluster:       a.Cluster,
-		CreatedNs:     a.Created.UnixNano(),
-		DispatchedNs:  a.Dispatched.UnixNano(),
-		Event:         eventStruct,
-		Staged:              a.Staged,
-		OutputsSent:         a.OutputsSent,
-		EnrichmentsApplied:  a.EnrichmentsApplied,
-		LogSource:     a.LogSource,
-		LogType:       a.LogType,
-		SourceEntity:  a.SourceEntity,
-		SourceService: a.SourceService,
-		Confidence:    a.Confidence.String(),
-		Severity:      a.Severity.String(),
-		Rule:          ruleToProto(a.Rule),
+		AlertId:            a.AlertID,
+		Attempts:           int32(a.Attempts),
+		Cluster:            a.Cluster,
+		CreatedNs:          a.Created.UnixNano(),
+		DispatchedNs:       a.Dispatched.UnixNano(),
+		Event:              eventStruct,
+		Staged:             a.Staged,
+		OutputsSent:        a.OutputsSent,
+		EnrichmentsApplied: a.EnrichmentsApplied,
+		LogSource:          a.LogSource,
+		LogType:            a.LogType,
+		SourceEntity:       a.SourceEntity,
+		SourceService:      a.SourceService,
+		Confidence:         a.Confidence.String(),
+		Severity:           a.Severity.String(),
+		Rule:               ruleToProto(a.Rule),
 	}
 	return p, nil
 }
@@ -67,22 +67,22 @@ func ProtoToAlert(p *pb.Alert) (*Alert, error) {
 	sev, _ := scoring.ParseSeverity(p.GetSeverity())
 
 	a := &Alert{
-		AlertID:       p.GetAlertId(),
-		Attempts:      int(p.GetAttempts()),
-		Cluster:       p.GetCluster(),
-		Created:       time.Unix(0, p.GetCreatedNs()).UTC(),
-		Dispatched:    time.Unix(0, p.GetDispatchedNs()).UTC(),
-		Event:         event,
+		AlertID:            p.GetAlertId(),
+		Attempts:           int(p.GetAttempts()),
+		Cluster:            p.GetCluster(),
+		Created:            time.Unix(0, p.GetCreatedNs()).UTC(),
+		Dispatched:         time.Unix(0, p.GetDispatchedNs()).UTC(),
+		Event:              event,
 		Staged:             p.GetStaged(),
 		OutputsSent:        p.GetOutputsSent(),
 		EnrichmentsApplied: p.GetEnrichmentsApplied(),
-		LogSource:     p.GetLogSource(),
-		LogType:       p.GetLogType(),
-		SourceEntity:  p.GetSourceEntity(),
-		SourceService: p.GetSourceService(),
-		Confidence:    conf,
-		Severity:      sev,
-		Rule:          protoToRuleMetadata(p.GetRule()),
+		LogSource:          p.GetLogSource(),
+		LogType:            p.GetLogType(),
+		SourceEntity:       p.GetSourceEntity(),
+		SourceService:      p.GetSourceService(),
+		Confidence:         conf,
+		Severity:           sev,
+		Rule:               protoToRuleMetadata(p.GetRule()),
 	}
 	return a, nil
 }
@@ -125,7 +125,7 @@ func protoToRuleMetadata(m *pb.RuleMetadata) *config.RuleMetadata {
 		return &config.RuleMetadata{}
 	}
 	cfg, _ := config.New(config.RuleMetadata{
-		IDField:              m.GetId(),
+		IdField:              m.GetId(),
 		NameField:            m.GetName(),
 		DisplayNameField:     m.GetDisplayName(),
 		DescriptionField:     m.GetDescription(),

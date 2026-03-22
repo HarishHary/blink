@@ -28,6 +28,11 @@ func NewWatcher(dir string) (*Watcher, error) {
 
 	w := &Watcher{ServiceContext: sc, dir: dir}
 
+	errs := Validate(dir)
+	for _, err := range errs {
+		w.ErrorF("config validation: %v", err)
+	}
+
 	reg, err := NewRegistry(dir)
 	if err != nil && reg == nil {
 		return nil, err
@@ -37,6 +42,40 @@ func NewWatcher(dir string) (*Watcher, error) {
 	}
 	w.current.Store(reg)
 	return w, nil
+}
+
+// HasBlockingError reports whether pluginID currently has any blocking validation error.
+// It runs Validate() fresh on every call so that IsReady() in the rule adapter always
+// sees the current disk state - avoiding the race between the config watcher's reload
+// debounce and the manager's reconcile firing from the same fsnotify event.
+func (w *Watcher) HasBlockingError(pluginID string) bool {
+	if pluginID == "" {
+		return false
+	}
+	for _, err := range Validate(w.dir) {
+		if err.Blocking() && err.PluginID == pluginID {
+			return true
+		}
+	}
+	return false
+}
+
+// HasBlockingErrorFor is like HasBlockingError but also matches by YAML file name
+// (e.g. "brute_force.yaml"). This catches rules whose id: field is missing - those
+// errors carry no PluginID, but do carry File set to the YAML filename.
+func (w *Watcher) HasBlockingErrorFor(pluginID, yamlFile string) bool {
+	for _, e := range Validate(w.dir) {
+		if !e.Blocking() {
+			continue
+		}
+		if pluginID != "" && e.PluginID == pluginID {
+			return true
+		}
+		if yamlFile != "" && e.File == yamlFile {
+			return true
+		}
+	}
+	return false
 }
 
 // Returns the most recently loaded Registry.
@@ -88,6 +127,11 @@ func (w *Watcher) Run(ctx context.Context) errors.Error {
 }
 
 func (w *Watcher) reload() {
+	errs := Validate(w.dir)
+	for _, err := range errs {
+		w.ErrorF("config validation: %v", err)
+	}
+
 	reg, err := NewRegistry(w.dir)
 	if err != nil {
 		w.ErrorF("reload error: %v", err)
