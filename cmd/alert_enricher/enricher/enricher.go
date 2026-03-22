@@ -31,11 +31,11 @@ var (
 	writeErrors        = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "alert_enricher", Name: "write_errors_total"})
 )
 
-// enrichAlertState holds a decoded alert and its enrichment outcome for a batch entry.
-type enrichAlertState struct {
+// alertState holds a decoded alert and its enrichment outcome for a batch entry.
+type alertState struct {
 	key        []byte
 	alert      *alerts.Alert
-	anyMissing bool
+	deadLetter bool
 }
 
 // EnricherService reads alerts from Kafka, enriches them, and writes to the formatter topic.
@@ -99,7 +99,7 @@ func (service *EnricherService) Run(ctx context.Context) errors.Error {
 
 func (service *EnricherService) processBatch(ctx context.Context, msgs []broker.Message) {
 	// Decode all alerts.
-	states := make([]*enrichAlertState, 0, len(msgs))
+	states := make([]*alertState, 0, len(msgs))
 	for _, m := range msgs {
 		alert, err := alerts.Unmarshal(m.Value)
 		if err != nil {
@@ -108,7 +108,7 @@ func (service *EnricherService) processBatch(ctx context.Context, msgs []broker.
 			continue
 		}
 		alertsIn.Inc()
-		states = append(states, &enrichAlertState{key: m.Key, alert: alert})
+		states = append(states, &alertState{key: m.Key, alert: alert})
 	}
 	if len(states) == 0 {
 		return
@@ -138,15 +138,15 @@ func (service *EnricherService) processBatch(ctx context.Context, msgs []broker.
 		go func(name string, idxs []int) {
 			defer wg.Done()
 
-			alerts := make([]*alerts.Alert, len(idxs))
+			batch := make([]*alerts.Alert, len(idxs))
 			for j, idx := range idxs {
-				alerts[j] = states[idx].alert
+				batch[j] = states[idx].alert
 			}
 
 			cctx, cancel := context.WithTimeout(ctx, defaultEnrichmentTimeout)
 			defer cancel()
 			start := time.Now()
-			absent, removed, errs := service.pool.Enrich(cctx, name, alerts, "")
+			absent, removed, errs := service.pool.Enrich(cctx, name, batch, "")
 			enrichmentLatency.WithLabelValues(name).Observe(time.Since(start).Seconds())
 
 			mu.Lock()
@@ -155,12 +155,12 @@ func (service *EnricherService) processBatch(ctx context.Context, msgs []broker.
 			case removed:
 				service.Error(errors.NewF("enrichment %s removed", name))
 				for _, idx := range idxs {
-					states[idx].anyMissing = true
+					states[idx].deadLetter = true
 				}
 			case absent:
 				service.Error(errors.NewF("enrichment %s not found", name))
 				for _, idx := range idxs {
-					states[idx].anyMissing = true
+					states[idx].deadLetter = true
 				}
 			default:
 				for j, idx := range idxs {
@@ -179,7 +179,7 @@ func (service *EnricherService) processBatch(ctx context.Context, msgs []broker.
 
 	// Write results.
 	for _, s := range states {
-		if s.anyMissing {
+		if s.deadLetter {
 			s.alert.Attempts++
 			if s.alert.Attempts >= services.MaxPluginAttempts || service.dlq == nil {
 				service.Info("alert %s passed through after %d attempts (enrichment unavailable)", s.alert.AlertID, s.alert.Attempts)

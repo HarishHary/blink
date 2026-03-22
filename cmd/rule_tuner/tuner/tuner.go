@@ -44,7 +44,7 @@ type alertState struct {
 	key        []byte
 	alert      *alerts.Alert
 	results    []tuneResult
-	anyMissing bool
+	deadLetter bool
 }
 
 // TunerService reads alerts from Kafka, applies tuning rules, and writes to the enricher topic.
@@ -154,7 +154,7 @@ func (service *TunerService) processBatch(ctx context.Context, msgs []broker.Mes
 					service.Error(errors.NewF("tuning rule %s %s", name, label))
 					mu.Lock()
 					for _, idx := range idxs {
-						states[idx].anyMissing = true
+						states[idx].deadLetter = true
 					}
 					mu.Unlock()
 					return
@@ -179,7 +179,7 @@ func (service *TunerService) processBatch(ctx context.Context, msgs []broker.Mes
 
 	// Apply results and write.
 	for _, s := range states {
-		if s.anyMissing {
+		if s.deadLetter {
 			s.alert.Attempts++
 			if s.alert.Attempts >= services.MaxPluginAttempts || service.dlq == nil {
 				service.Info("alert %s passed through after %d attempts (tuning rule unavailable)", s.alert.AlertID, s.alert.Attempts)
