@@ -28,29 +28,34 @@ func (r *rpcEnrichment) Id() string {
 func (r *rpcEnrichment) Name() string        { return r.meta.GetName() }
 func (r *rpcEnrichment) Description() string { return r.meta.GetDescription() }
 func (r *rpcEnrichment) Enabled() bool       { return r.meta.GetEnabled() }
+func (r *rpcEnrichment) Version() string     { return r.meta.GetVersion() }
 func (r *rpcEnrichment) Checksum() string    { return r.checksum }
 func (r *rpcEnrichment) DependsOn() []string { return r.meta.GetDependsOn() }
 func (r *rpcEnrichment) String() string {
 	return "RpcEnrichment '" + r.meta.GetName() + "' id:'" + r.meta.GetId() + "'"
 }
 
-func (r *rpcEnrichment) Enrich(ctx context.Context, alert *alerts.Alert) errors.Error {
-	b, err := json.Marshal(alert.Event)
+func (r *rpcEnrichment) Enrich(ctx context.Context, alrts []*alerts.Alert) errors.Error {
+	protoAlerts := make([]*rpc_enrichments.Alert, 0, len(alrts))
+	for _, alrt := range alrts {
+		b, err := json.Marshal(alrt.Event)
+		if err != nil {
+			return errors.New(err)
+		}
+		protoAlerts = append(protoAlerts, &rpc_enrichments.Alert{Json: b})
+	}
+	resp, err := r.client.EnrichBatch(ctx, &rpc_enrichments.EnrichBatchRequest{Alerts: protoAlerts})
 	if err != nil {
 		return errors.New(err)
 	}
-	resp, err := r.client.Enrich(ctx, &rpc_enrichments.EnrichRequest{
-		Alert: &rpc_enrichments.Alert{Json: b},
-	})
-	if err != nil {
-		return errors.New(err)
-	}
-	var enriched map[string]any
-	if err := json.Unmarshal(resp.GetAlert().GetJson(), &enriched); err != nil {
-		return errors.New(err)
-	}
-	for k, v := range enriched {
-		alert.Event[k] = v
+	for i, a := range resp.GetAlerts() {
+		var enriched map[string]any
+		if err := json.Unmarshal(a.GetJson(), &enriched); err != nil {
+			return errors.New(err)
+		}
+		for k, v := range enriched {
+			alrts[i].Event[k] = v
+		}
 	}
 	return nil
 }

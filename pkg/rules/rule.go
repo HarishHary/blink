@@ -41,10 +41,12 @@ type Metadata interface {
 	Version() string
 }
 
-// Rule is the full interface for live rule plugins: metadata + evaluation.
+// Rule is the full interface for live rule plugins: metadata + batch evaluation.
+// All rules receive a slice of events and return a matched bool per event.
+// The SDK server handles looping over individual events on the subprocess side.
 type Rule interface {
 	Metadata
-	Evaluate(ctx context.Context, event events.Event) (bool, errors.Error)
+	Evaluate(ctx context.Context, evts []events.Event) ([]bool, errors.Error)
 }
 
 // --- Optional capability interfaces ---

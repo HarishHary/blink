@@ -12,13 +12,16 @@ message EnrichmentMetadata {
   string version = 6;
 }
 message Alert { bytes json = 1; }
-message EnrichRequest { Alert alert = 1; }
+message EnrichRequest  { Alert alert = 1; }
 message EnrichResponse { Alert alert = 1; }
+message EnrichBatchRequest  { repeated Alert alerts = 1; }
+message EnrichBatchResponse { repeated Alert alerts = 1; }
 
 service Enrichment {
-  rpc GetMetadata(Empty) returns (EnrichmentMetadata);
-  rpc Init(Empty) returns (Empty);
-  rpc Enrich(EnrichRequest) returns (EnrichResponse);
-  rpc Shutdown(Empty) returns (Empty);
-  rpc Ping(Empty) returns (Empty);
+  rpc GetMetadata(Empty)                    returns (EnrichmentMetadata);
+  rpc Init(Empty)                           returns (Empty);
+  rpc Enrich(EnrichRequest)                 returns (EnrichResponse);
+  rpc EnrichBatch(EnrichBatchRequest)       returns (EnrichBatchResponse);
+  rpc Shutdown(Empty)                       returns (Empty);
+  rpc Ping(Empty)                           returns (Empty);
 }

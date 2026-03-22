@@ -4,7 +4,6 @@ import (
 	"context"
 	stderrors "errors"
 	"sync"
-	"sync/atomic"
 
 	"github.com/harishhary/blink/internal/broker"
 	"github.com/harishhary/blink/internal/broker/kafka"
@@ -33,11 +32,19 @@ var (
 	writeErrors       = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "rule_tuner", Name: "write_errors_total"})
 )
 
-// tuneResult holds the outcome of a single tuning rule evaluation.
+// tuneResult holds the outcome of a single tuning rule evaluation for one alert.
 type tuneResult struct {
 	ruleType   tuning_rules.RuleType
 	confidence scoring.Confidence
 	applies    bool
+}
+
+// alertState groups a decoded alert with its accumulated tuning results.
+type alertState struct {
+	key        []byte
+	alert      *alerts.Alert
+	results    []tuneResult
+	anyMissing bool
 }
 
 // TunerService reads alerts from Kafka, applies tuning rules, and writes to the enricher topic.
@@ -78,91 +85,148 @@ func NewTunerService(pool *tuningcatalog.Pool) (*TunerService, error) {
 func (service *TunerService) Name() string { return "rule-tuner" }
 
 func (service *TunerService) Run(ctx context.Context) errors.Error {
-	return services.RunAlertPipeline(ctx, service.Logger, service.reader, service.writer, service.dlq, 50, 4,
-		services.PipelineCounters{
-			In: alertsIn.Inc, Out: alertsOut.Inc, DLQ: alertsDLQ.Inc,
-			ParseError: parseErrors.Inc, WriteError: writeErrors.Inc,
-		},
-		func(ctx context.Context, _ []byte, alert *alerts.Alert) (skip bool, deadLetter bool) {
-			service.Info("applying tuning rules for alert %s", alert.AlertID)
+	for {
+		msgs, err := service.reader.ReadBatch(ctx, 50)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			service.Error(errors.NewE(err))
+			continue
+		}
 
-			names := alert.Rule.TuningRules()
-			if len(names) == 0 {
-				return false, false
+		service.processBatch(ctx, msgs)
+
+		if err := service.reader.CommitMessages(ctx, msgs...); err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			service.Error(errors.NewE(err))
+		}
+	}
+}
+
+func (service *TunerService) processBatch(ctx context.Context, msgs []broker.Message) {
+	// Decode all alerts.
+	states := make([]*alertState, 0, len(msgs))
+	for _, m := range msgs {
+		alert, err := alerts.Unmarshal(m.Value)
+		if err != nil {
+			parseErrors.Inc()
+			service.Error(errors.NewE(err))
+			continue
+		}
+		alertsIn.Inc()
+		states = append(states, &alertState{key: m.Key, alert: alert})
+	}
+	if len(states) == 0 {
+		return
+	}
+
+	// Group by tuning rule name: name => indices into states.
+	byRule := make(map[string][]int)
+	for i, s := range states {
+		for _, name := range s.alert.Rule.TuningRules() {
+			byRule[name] = append(byRule[name], i)
+		}
+	}
+
+	// Fan out: one goroutine per tuning rule with all its alerts.
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for name, idxs := range byRule {
+		wg.Add(1)
+		go func(name string, idxs []int) {
+			defer wg.Done()
+
+			copies := make([]alerts.Alert, len(idxs))
+			for j, idx := range idxs {
+				copies[j] = *states[idx].alert
 			}
 
-			// Fan out tuning rule evaluations. Each r.Tune receives a copy of the
-			// alert (*alert dereference), so goroutines read independent state.
-			var (
-				mu         sync.Mutex
-				anyMissing atomic.Bool
-				results    []tuneResult
-				wg         sync.WaitGroup
-			)
-			for _, name := range names {
-				wg.Add(1)
-				go func(name string) {
-					defer wg.Done()
-					var res tuneResult
-					err := service.pool.Call(ctx, name, "", func(callCtx context.Context, r tuning_rules.TuningRule) error {
-						if !r.Enabled() {
-							return nil
-						}
-						res.ruleType = r.RuleType()
-						res.confidence = r.Confidence()
-						applies, e := r.Tune(callCtx, *alert)
-						if e != nil {
-							return e
-						}
-						res.applies = applies
-						return nil
+			ruleType, confidence, applies, err := service.pool.Tune(ctx, name, copies, "")
+			if err != nil {
+				if stderrors.Is(err, pools.ErrPluginRemoved) || stderrors.Is(err, pools.ErrPluginNotFound) {
+					label := "not found"
+					if stderrors.Is(err, pools.ErrPluginRemoved) {
+						label = "removed"
+					}
+					service.Error(errors.NewF("tuning rule %s %s", name, label))
+					mu.Lock()
+					for _, idx := range idxs {
+						states[idx].anyMissing = true
+					}
+					mu.Unlock()
+					return
+				}
+				service.Error(errors.NewE(err))
+				tuningErrors.Inc()
+				return
+			}
+
+			mu.Lock()
+			for j, idx := range idxs {
+				if applies[j] {
+					states[idx].results = append(states[idx].results, tuneResult{
+						ruleType: ruleType, confidence: confidence, applies: true,
 					})
-					if err != nil {
-						if stderrors.Is(err, pools.ErrPluginRemoved) || stderrors.Is(err, pools.ErrPluginNotFound) {
-							label := "not found"
-							if stderrors.Is(err, pools.ErrPluginRemoved) {
-								label = "removed"
-							}
-							service.Error(errors.NewF("tuning rule %s %s - alert %s missing tuning", name, label, alert.AlertID))
-							anyMissing.Store(true)
-							return
-						}
-						service.Error(errors.NewE(err))
-						tuningErrors.Inc()
-						return
-					}
-					if res.applies {
-						mu.Lock()
-						results = append(results, res)
-						mu.Unlock()
-					}
-				}(name)
-			}
-			wg.Wait()
-
-			if anyMissing.Load() {
-				alert.Attempts++
-				if alert.Attempts >= services.MaxPluginAttempts || service.dlq == nil {
-					service.Info("alert %s passed through after %d attempts (tuning rule unavailable)", alert.AlertID, alert.Attempts)
-				} else {
-					return false, true
 				}
 			}
+			mu.Unlock()
+		}(name, idxs)
+	}
+	wg.Wait()
 
-			before := alert.Confidence
-			confidence, ignored := applyTuningResults(alert.Confidence, results)
-			if ignored {
-				service.Info("alert %s ignored by tuning rule", alert.AlertID)
-				alertsIgnored.Inc()
-				return true, false
+	// Apply results and write.
+	for _, s := range states {
+		if s.anyMissing {
+			s.alert.Attempts++
+			if s.alert.Attempts >= services.MaxPluginAttempts || service.dlq == nil {
+				service.Info("alert %s passed through after %d attempts (tuning rule unavailable)", s.alert.AlertID, s.alert.Attempts)
+				// fall through to write
+			} else {
+				payload, err := alerts.Marshal(s.alert)
+				if err != nil {
+					writeErrors.Inc()
+					service.Error(errors.NewE(err))
+					continue
+				}
+				err = service.dlq.WriteMessages(ctx, broker.Message{Key: s.key, Value: payload})
+				if err != nil {
+					service.Error(errors.NewE(err))
+				} else {
+					alertsDLQ.Inc()
+				}
+				continue
 			}
-			if confidence != before {
-				confidenceChanged.Inc()
-			}
-			alert.Confidence = confidence
-			return false, false
-		},
-	)
+		}
+
+		before := s.alert.Confidence
+		confidence, ignored := applyTuningResults(s.alert.Confidence, s.results)
+		if ignored {
+			service.Info("alert %s ignored by tuning rule", s.alert.AlertID)
+			alertsIgnored.Inc()
+			continue
+		}
+		if confidence != before {
+			confidenceChanged.Inc()
+		}
+		s.alert.Confidence = confidence
+
+		payload, err := alerts.Marshal(s.alert)
+		if err != nil {
+			writeErrors.Inc()
+			service.Error(errors.NewE(err))
+			continue
+		}
+		err = service.writer.WriteMessages(ctx, broker.Message{Key: s.key, Value: payload})
+		if err != nil {
+			writeErrors.Inc()
+			service.Error(errors.NewE(err))
+			continue
+		}
+		alertsOut.Inc()
+	}
 }
 
 // applyTuningResults applies tuning results in priority order: Ignore > SetConfidence > Increase/Decrease.

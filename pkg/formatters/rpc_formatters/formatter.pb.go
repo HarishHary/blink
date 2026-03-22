@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.9
 // 	protoc        v7.34.0
-// source: formatter.proto
+// source: pkg/formatters/rpc_formatters/formatter.proto
 
 package rpc_formatters
 
@@ -29,7 +29,7 @@ type Empty struct {
 
 func (x *Empty) Reset() {
 	*x = Empty{}
-	mi := &file_formatter_proto_msgTypes[0]
+	mi := &file_pkg_formatters_rpc_formatters_formatter_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -41,7 +41,7 @@ func (x *Empty) String() string {
 func (*Empty) ProtoMessage() {}
 
 func (x *Empty) ProtoReflect() protoreflect.Message {
-	mi := &file_formatter_proto_msgTypes[0]
+	mi := &file_pkg_formatters_rpc_formatters_formatter_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -54,7 +54,7 @@ func (x *Empty) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Empty.ProtoReflect.Descriptor instead.
 func (*Empty) Descriptor() ([]byte, []int) {
-	return file_formatter_proto_rawDescGZIP(), []int{0}
+	return file_pkg_formatters_rpc_formatters_formatter_proto_rawDescGZIP(), []int{0}
 }
 
 type FormatterMetadata struct {
@@ -70,7 +70,7 @@ type FormatterMetadata struct {
 
 func (x *FormatterMetadata) Reset() {
 	*x = FormatterMetadata{}
-	mi := &file_formatter_proto_msgTypes[1]
+	mi := &file_pkg_formatters_rpc_formatters_formatter_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -82,7 +82,7 @@ func (x *FormatterMetadata) String() string {
 func (*FormatterMetadata) ProtoMessage() {}
 
 func (x *FormatterMetadata) ProtoReflect() protoreflect.Message {
-	mi := &file_formatter_proto_msgTypes[1]
+	mi := &file_pkg_formatters_rpc_formatters_formatter_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -95,7 +95,7 @@ func (x *FormatterMetadata) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FormatterMetadata.ProtoReflect.Descriptor instead.
 func (*FormatterMetadata) Descriptor() ([]byte, []int) {
-	return file_formatter_proto_rawDescGZIP(), []int{1}
+	return file_pkg_formatters_rpc_formatters_formatter_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *FormatterMetadata) GetId() string {
@@ -142,7 +142,7 @@ type FormatRequest struct {
 
 func (x *FormatRequest) Reset() {
 	*x = FormatRequest{}
-	mi := &file_formatter_proto_msgTypes[2]
+	mi := &file_pkg_formatters_rpc_formatters_formatter_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -154,7 +154,7 @@ func (x *FormatRequest) String() string {
 func (*FormatRequest) ProtoMessage() {}
 
 func (x *FormatRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_formatter_proto_msgTypes[2]
+	mi := &file_pkg_formatters_rpc_formatters_formatter_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -167,7 +167,7 @@ func (x *FormatRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FormatRequest.ProtoReflect.Descriptor instead.
 func (*FormatRequest) Descriptor() ([]byte, []int) {
-	return file_formatter_proto_rawDescGZIP(), []int{2}
+	return file_pkg_formatters_rpc_formatters_formatter_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *FormatRequest) GetAlertJson() []byte {
@@ -186,7 +186,7 @@ type FormatResponse struct {
 
 func (x *FormatResponse) Reset() {
 	*x = FormatResponse{}
-	mi := &file_formatter_proto_msgTypes[3]
+	mi := &file_pkg_formatters_rpc_formatters_formatter_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -198,7 +198,7 @@ func (x *FormatResponse) String() string {
 func (*FormatResponse) ProtoMessage() {}
 
 func (x *FormatResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_formatter_proto_msgTypes[3]
+	mi := &file_pkg_formatters_rpc_formatters_formatter_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -211,7 +211,7 @@ func (x *FormatResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FormatResponse.ProtoReflect.Descriptor instead.
 func (*FormatResponse) Descriptor() ([]byte, []int) {
-	return file_formatter_proto_rawDescGZIP(), []int{3}
+	return file_pkg_formatters_rpc_formatters_formatter_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *FormatResponse) GetResultJson() []byte {
@@ -221,88 +221,188 @@ func (x *FormatResponse) GetResultJson() []byte {
 	return nil
 }
 
-var File_formatter_proto protoreflect.FileDescriptor
+type FormatBatchRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	AlertJson     [][]byte               `protobuf:"bytes,1,rep,name=alert_json,json=alertJson,proto3" json:"alert_json,omitempty"` // one JSON-encoded alerts.Alert per alert
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
 
-const file_formatter_proto_rawDesc = "" +
+func (x *FormatBatchRequest) Reset() {
+	*x = FormatBatchRequest{}
+	mi := &file_pkg_formatters_rpc_formatters_formatter_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FormatBatchRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FormatBatchRequest) ProtoMessage() {}
+
+func (x *FormatBatchRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_formatters_rpc_formatters_formatter_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FormatBatchRequest.ProtoReflect.Descriptor instead.
+func (*FormatBatchRequest) Descriptor() ([]byte, []int) {
+	return file_pkg_formatters_rpc_formatters_formatter_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *FormatBatchRequest) GetAlertJson() [][]byte {
+	if x != nil {
+		return x.AlertJson
+	}
+	return nil
+}
+
+type FormatBatchResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ResultJson    [][]byte               `protobuf:"bytes,1,rep,name=result_json,json=resultJson,proto3" json:"result_json,omitempty"` // one JSON-encoded map[string]any per alert
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FormatBatchResponse) Reset() {
+	*x = FormatBatchResponse{}
+	mi := &file_pkg_formatters_rpc_formatters_formatter_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FormatBatchResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FormatBatchResponse) ProtoMessage() {}
+
+func (x *FormatBatchResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_formatters_rpc_formatters_formatter_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FormatBatchResponse.ProtoReflect.Descriptor instead.
+func (*FormatBatchResponse) Descriptor() ([]byte, []int) {
+	return file_pkg_formatters_rpc_formatters_formatter_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *FormatBatchResponse) GetResultJson() [][]byte {
+	if x != nil {
+		return x.ResultJson
+	}
+	return nil
+}
+
+var File_pkg_formatters_rpc_formatters_formatter_proto protoreflect.FileDescriptor
+
+const file_pkg_formatters_rpc_formatters_formatter_proto_rawDesc = "" +
 	"\n" +
-	"\x0fformatter.proto\x12\n" +
+	"-pkg/formatters/rpc_formatters/formatter.proto\x12\n" +
 	"formatters\"\a\n" +
-	"\x05Empty\"s\n" +
+	"\x05Empty\"\x8d\x01\n" +
 	"\x11FormatterMetadata\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12 \n" +
 	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\x18\n" +
-	"\aenabled\x18\x04 \x01(\bR\aenabled\".\n" +
+	"\aenabled\x18\x04 \x01(\bR\aenabled\x12\x18\n" +
+	"\aversion\x18\x05 \x01(\tR\aversion\".\n" +
 	"\rFormatRequest\x12\x1d\n" +
 	"\n" +
 	"alert_json\x18\x01 \x01(\fR\talertJson\"1\n" +
 	"\x0eFormatResponse\x12\x1f\n" +
 	"\vresult_json\x18\x01 \x01(\fR\n" +
-	"resultJson2\x9b\x02\n" +
+	"resultJson\"3\n" +
+	"\x12FormatBatchRequest\x12\x1d\n" +
+	"\n" +
+	"alert_json\x18\x01 \x03(\fR\talertJson\"6\n" +
+	"\x13FormatBatchResponse\x12\x1f\n" +
+	"\vresult_json\x18\x01 \x03(\fR\n" +
+	"resultJson2\xeb\x02\n" +
 	"\tFormatter\x12?\n" +
 	"\vGetMetadata\x12\x11.formatters.Empty\x1a\x1d.formatters.FormatterMetadata\x12,\n" +
 	"\x04Init\x12\x11.formatters.Empty\x1a\x11.formatters.Empty\x12?\n" +
-	"\x06Format\x12\x19.formatters.FormatRequest\x1a\x1a.formatters.FormatResponse\x120\n" +
+	"\x06Format\x12\x19.formatters.FormatRequest\x1a\x1a.formatters.FormatResponse\x12N\n" +
+	"\vFormatBatch\x12\x1e.formatters.FormatBatchRequest\x1a\x1f.formatters.FormatBatchResponse\x120\n" +
 	"\bShutdown\x12\x11.formatters.Empty\x1a\x11.formatters.Empty\x12,\n" +
 	"\x04Ping\x12\x11.formatters.Empty\x1a\x11.formatters.EmptyB;Z9github.com/harishhary/blink/pkg/formatters/rpc_formattersb\x06proto3"
 
 var (
-	file_formatter_proto_rawDescOnce sync.Once
-	file_formatter_proto_rawDescData []byte
+	file_pkg_formatters_rpc_formatters_formatter_proto_rawDescOnce sync.Once
+	file_pkg_formatters_rpc_formatters_formatter_proto_rawDescData []byte
 )
 
-func file_formatter_proto_rawDescGZIP() []byte {
-	file_formatter_proto_rawDescOnce.Do(func() {
-		file_formatter_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_formatter_proto_rawDesc), len(file_formatter_proto_rawDesc)))
+func file_pkg_formatters_rpc_formatters_formatter_proto_rawDescGZIP() []byte {
+	file_pkg_formatters_rpc_formatters_formatter_proto_rawDescOnce.Do(func() {
+		file_pkg_formatters_rpc_formatters_formatter_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_pkg_formatters_rpc_formatters_formatter_proto_rawDesc), len(file_pkg_formatters_rpc_formatters_formatter_proto_rawDesc)))
 	})
-	return file_formatter_proto_rawDescData
+	return file_pkg_formatters_rpc_formatters_formatter_proto_rawDescData
 }
 
-var file_formatter_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
-var file_formatter_proto_goTypes = []any{
-	(*Empty)(nil),             // 0: formatters.Empty
-	(*FormatterMetadata)(nil), // 1: formatters.FormatterMetadata
-	(*FormatRequest)(nil),     // 2: formatters.FormatRequest
-	(*FormatResponse)(nil),    // 3: formatters.FormatResponse
+var file_pkg_formatters_rpc_formatters_formatter_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_pkg_formatters_rpc_formatters_formatter_proto_goTypes = []any{
+	(*Empty)(nil),               // 0: formatters.Empty
+	(*FormatterMetadata)(nil),   // 1: formatters.FormatterMetadata
+	(*FormatRequest)(nil),       // 2: formatters.FormatRequest
+	(*FormatResponse)(nil),      // 3: formatters.FormatResponse
+	(*FormatBatchRequest)(nil),  // 4: formatters.FormatBatchRequest
+	(*FormatBatchResponse)(nil), // 5: formatters.FormatBatchResponse
 }
-var file_formatter_proto_depIdxs = []int32{
+var file_pkg_formatters_rpc_formatters_formatter_proto_depIdxs = []int32{
 	0, // 0: formatters.Formatter.GetMetadata:input_type -> formatters.Empty
 	0, // 1: formatters.Formatter.Init:input_type -> formatters.Empty
 	2, // 2: formatters.Formatter.Format:input_type -> formatters.FormatRequest
-	0, // 3: formatters.Formatter.Shutdown:input_type -> formatters.Empty
-	0, // 4: formatters.Formatter.Ping:input_type -> formatters.Empty
-	1, // 5: formatters.Formatter.GetMetadata:output_type -> formatters.FormatterMetadata
-	0, // 6: formatters.Formatter.Init:output_type -> formatters.Empty
-	3, // 7: formatters.Formatter.Format:output_type -> formatters.FormatResponse
-	0, // 8: formatters.Formatter.Shutdown:output_type -> formatters.Empty
-	0, // 9: formatters.Formatter.Ping:output_type -> formatters.Empty
-	5, // [5:10] is the sub-list for method output_type
-	0, // [0:5] is the sub-list for method input_type
+	4, // 3: formatters.Formatter.FormatBatch:input_type -> formatters.FormatBatchRequest
+	0, // 4: formatters.Formatter.Shutdown:input_type -> formatters.Empty
+	0, // 5: formatters.Formatter.Ping:input_type -> formatters.Empty
+	1, // 6: formatters.Formatter.GetMetadata:output_type -> formatters.FormatterMetadata
+	0, // 7: formatters.Formatter.Init:output_type -> formatters.Empty
+	3, // 8: formatters.Formatter.Format:output_type -> formatters.FormatResponse
+	5, // 9: formatters.Formatter.FormatBatch:output_type -> formatters.FormatBatchResponse
+	0, // 10: formatters.Formatter.Shutdown:output_type -> formatters.Empty
+	0, // 11: formatters.Formatter.Ping:output_type -> formatters.Empty
+	6, // [6:12] is the sub-list for method output_type
+	0, // [0:6] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
 	0, // [0:0] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
 }
 
-func init() { file_formatter_proto_init() }
-func file_formatter_proto_init() {
-	if File_formatter_proto != nil {
+func init() { file_pkg_formatters_rpc_formatters_formatter_proto_init() }
+func file_pkg_formatters_rpc_formatters_formatter_proto_init() {
+	if File_pkg_formatters_rpc_formatters_formatter_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_formatter_proto_rawDesc), len(file_formatter_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_formatters_rpc_formatters_formatter_proto_rawDesc), len(file_pkg_formatters_rpc_formatters_formatter_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   4,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_formatter_proto_goTypes,
-		DependencyIndexes: file_formatter_proto_depIdxs,
-		MessageInfos:      file_formatter_proto_msgTypes,
+		GoTypes:           file_pkg_formatters_rpc_formatters_formatter_proto_goTypes,
+		DependencyIndexes: file_pkg_formatters_rpc_formatters_formatter_proto_depIdxs,
+		MessageInfos:      file_pkg_formatters_rpc_formatters_formatter_proto_msgTypes,
 	}.Build()
-	File_formatter_proto = out.File
-	file_formatter_proto_goTypes = nil
-	file_formatter_proto_depIdxs = nil
+	File_pkg_formatters_rpc_formatters_formatter_proto = out.File
+	file_pkg_formatters_rpc_formatters_formatter_proto_goTypes = nil
+	file_pkg_formatters_rpc_formatters_formatter_proto_depIdxs = nil
 }

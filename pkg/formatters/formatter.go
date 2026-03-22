@@ -8,12 +8,13 @@ import (
 )
 
 type IFormatter interface {
-	Format(ctx context.Context, alert *alerts.Alert) (map[string]any, errors.Error)
+	Format(ctx context.Context, alrts []*alerts.Alert) ([]map[string]any, errors.Error)
 
 	Id() string
 	Name() string
 	Description() string
 	Enabled() bool
+	Version() string
 	Checksum() string
 	String() string
 }

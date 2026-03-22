@@ -22,10 +22,19 @@ message FormatResponse {
   bytes result_json = 1; // JSON-encoded map[string]any
 }
 
+message FormatBatchRequest {
+  repeated bytes alert_json = 1; // one JSON-encoded alerts.Alert per alert
+}
+
+message FormatBatchResponse {
+  repeated bytes result_json = 1; // one JSON-encoded map[string]any per alert
+}
+
 service Formatter {
-  rpc GetMetadata(Empty)          returns (FormatterMetadata);
-  rpc Init(Empty)                 returns (Empty);
-  rpc Format(FormatRequest)       returns (FormatResponse);
-  rpc Shutdown(Empty)             returns (Empty);
-  rpc Ping(Empty)                 returns (Empty);
+  rpc GetMetadata(Empty)              returns (FormatterMetadata);
+  rpc Init(Empty)                     returns (Empty);
+  rpc Format(FormatRequest)           returns (FormatResponse);
+  rpc FormatBatch(FormatBatchRequest) returns (FormatBatchResponse);
+  rpc Shutdown(Empty)                 returns (Empty);
+  rpc Ping(Empty)                     returns (Empty);
 }

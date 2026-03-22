@@ -27,7 +27,7 @@ func IsValidRuleType(ruleType RuleType) bool {
 }
 
 type TuningRule interface {
-	Tune(ctx context.Context, alert alerts.Alert) (bool, errors.Error)
+	Tune(ctx context.Context, alrts []alerts.Alert) ([]bool, errors.Error)
 
 	Id() string
 	Name() string
@@ -44,14 +44,15 @@ type TuningRule interface {
 // Returns (confidence, ignored, err). When ignored=true the alert should be discarded.
 func ProcessTuningRules(ctx context.Context, alert alerts.Alert, rules []TuningRule) (scoring.Confidence, bool, errors.Error) {
 	confidence := alert.Confidence
+	batch := []alerts.Alert{alert}
 
 	for _, rule := range rules {
 		if rule.RuleType() == Ignore {
-			applies, err := rule.Tune(ctx, alert)
+			results, err := rule.Tune(ctx, batch)
 			if err != nil {
 				return confidence, false, err
 			}
-			if applies {
+			if results[0] {
 				return 0, true, nil
 			}
 		}
@@ -60,11 +61,11 @@ func ProcessTuningRules(ctx context.Context, alert alerts.Alert, rules []TuningR
 	setByRule := false
 	for _, rule := range rules {
 		if rule.RuleType() == SetConfidence {
-			applies, err := rule.Tune(ctx, alert)
+			results, err := rule.Tune(ctx, batch)
 			if err != nil {
 				return confidence, false, err
 			}
-			if applies {
+			if results[0] {
 				if !setByRule || rule.Confidence() > confidence {
 					confidence = rule.Confidence()
 					setByRule = true
@@ -79,11 +80,11 @@ func ProcessTuningRules(ctx context.Context, alert alerts.Alert, rules []TuningR
 
 	for _, rule := range rules {
 		if rule.RuleType() == IncreaseConfidence || rule.RuleType() == DecreaseConfidence {
-			applies, err := rule.Tune(ctx, alert)
+			results, err := rule.Tune(ctx, batch)
 			if err != nil {
 				return confidence, false, err
 			}
-			if applies {
+			if results[0] {
 				if rule.RuleType() == IncreaseConfidence && rule.Confidence() > confidence {
 					confidence = rule.Confidence()
 				} else if rule.RuleType() == DecreaseConfidence && rule.Confidence() < confidence {

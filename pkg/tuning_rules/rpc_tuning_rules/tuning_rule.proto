@@ -25,10 +25,19 @@ message TuneResponse {
   bool applies = 1;
 }
 
+message TuneBatchRequest {
+  repeated bytes alert_json = 1; // one JSON-encoded alerts.Alert per alert
+}
+
+message TuneBatchResponse {
+  repeated bool applies = 1; // one result per alert
+}
+
 service TuningRule {
-  rpc GetMetadata(Empty)          returns (TuningMetadata);
-  rpc Init(Empty)                 returns (Empty);
-  rpc Tune(TuneRequest)           returns (TuneResponse);
-  rpc Shutdown(Empty)             returns (Empty);
-  rpc Ping(Empty)                 returns (Empty);
+  rpc GetMetadata(Empty)              returns (TuningMetadata);
+  rpc Init(Empty)                     returns (Empty);
+  rpc Tune(TuneRequest)               returns (TuneResponse);
+  rpc TuneBatch(TuneBatchRequest)     returns (TuneBatchResponse);
+  rpc Shutdown(Empty)                 returns (Empty);
+  rpc Ping(Empty)                     returns (Empty);
 }

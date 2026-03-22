@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             v7.34.0
-// source: tuning_rule.proto
+// source: pkg/tuning_rules/rpc_tuning_rules/tuning_rule.proto
 
 package rpc_tuning_rules
 
@@ -22,6 +22,7 @@ const (
 	TuningRule_GetMetadata_FullMethodName = "/tuning_rules.TuningRule/GetMetadata"
 	TuningRule_Init_FullMethodName        = "/tuning_rules.TuningRule/Init"
 	TuningRule_Tune_FullMethodName        = "/tuning_rules.TuningRule/Tune"
+	TuningRule_TuneBatch_FullMethodName   = "/tuning_rules.TuningRule/TuneBatch"
 	TuningRule_Shutdown_FullMethodName    = "/tuning_rules.TuningRule/Shutdown"
 	TuningRule_Ping_FullMethodName        = "/tuning_rules.TuningRule/Ping"
 )
@@ -33,6 +34,7 @@ type TuningRuleClient interface {
 	GetMetadata(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*TuningMetadata, error)
 	Init(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
 	Tune(ctx context.Context, in *TuneRequest, opts ...grpc.CallOption) (*TuneResponse, error)
+	TuneBatch(ctx context.Context, in *TuneBatchRequest, opts ...grpc.CallOption) (*TuneBatchResponse, error)
 	Shutdown(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
 	Ping(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
 }
@@ -75,6 +77,16 @@ func (c *tuningRuleClient) Tune(ctx context.Context, in *TuneRequest, opts ...gr
 	return out, nil
 }
 
+func (c *tuningRuleClient) TuneBatch(ctx context.Context, in *TuneBatchRequest, opts ...grpc.CallOption) (*TuneBatchResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TuneBatchResponse)
+	err := c.cc.Invoke(ctx, TuningRule_TuneBatch_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *tuningRuleClient) Shutdown(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Empty)
@@ -102,6 +114,7 @@ type TuningRuleServer interface {
 	GetMetadata(context.Context, *Empty) (*TuningMetadata, error)
 	Init(context.Context, *Empty) (*Empty, error)
 	Tune(context.Context, *TuneRequest) (*TuneResponse, error)
+	TuneBatch(context.Context, *TuneBatchRequest) (*TuneBatchResponse, error)
 	Shutdown(context.Context, *Empty) (*Empty, error)
 	Ping(context.Context, *Empty) (*Empty, error)
 	mustEmbedUnimplementedTuningRuleServer()
@@ -122,6 +135,9 @@ func (UnimplementedTuningRuleServer) Init(context.Context, *Empty) (*Empty, erro
 }
 func (UnimplementedTuningRuleServer) Tune(context.Context, *TuneRequest) (*TuneResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Tune not implemented")
+}
+func (UnimplementedTuningRuleServer) TuneBatch(context.Context, *TuneBatchRequest) (*TuneBatchResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method TuneBatch not implemented")
 }
 func (UnimplementedTuningRuleServer) Shutdown(context.Context, *Empty) (*Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Shutdown not implemented")
@@ -204,6 +220,24 @@ func _TuningRule_Tune_Handler(srv interface{}, ctx context.Context, dec func(int
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TuningRule_TuneBatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TuneBatchRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TuningRuleServer).TuneBatch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TuningRule_TuneBatch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TuningRuleServer).TuneBatch(ctx, req.(*TuneBatchRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _TuningRule_Shutdown_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(Empty)
 	if err := dec(in); err != nil {
@@ -260,6 +294,10 @@ var TuningRule_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _TuningRule_Tune_Handler,
 		},
 		{
+			MethodName: "TuneBatch",
+			Handler:    _TuningRule_TuneBatch_Handler,
+		},
+		{
 			MethodName: "Shutdown",
 			Handler:    _TuningRule_Shutdown_Handler,
 		},
@@ -269,5 +307,5 @@ var TuningRule_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "tuning_rule.proto",
+	Metadata: "pkg/tuning_rules/rpc_tuning_rules/tuning_rule.proto",
 }

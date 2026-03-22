@@ -82,6 +82,26 @@ func (s *server) Enrich(ctx context.Context, req *rpc_enrichments.EnrichRequest)
 	return &rpc_enrichments.EnrichResponse{Alert: &rpc_enrichments.Alert{Json: b}}, nil
 }
 
+func (s *server) EnrichBatch(ctx context.Context, req *rpc_enrichments.EnrichBatchRequest) (*rpc_enrichments.EnrichBatchResponse, error) {
+	results := make([]*rpc_enrichments.Alert, 0, len(req.GetAlerts()))
+	for _, a := range req.GetAlerts() {
+		var alert map[string]any
+		if err := json.Unmarshal(a.GetJson(), &alert); err != nil {
+			return nil, err
+		}
+		enriched, err := s.enrichment.Enrich(ctx, alert)
+		if err != nil {
+			return nil, err
+		}
+		b, err2 := json.Marshal(enriched)
+		if err2 != nil {
+			return nil, err2
+		}
+		results = append(results, &rpc_enrichments.Alert{Json: b})
+	}
+	return &rpc_enrichments.EnrichBatchResponse{Alerts: results}, nil
+}
+
 func (s *server) Ping(_ context.Context, _ *rpc_enrichments.Empty) (*rpc_enrichments.Empty, error) {
 	return &rpc_enrichments.Empty{}, nil
 }

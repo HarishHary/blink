@@ -76,6 +76,22 @@ func (s *server) Tune(ctx context.Context, req *rpc_tuning_rules.TuneRequest) (*
 	return &rpc_tuning_rules.TuneResponse{Applies: applies}, nil
 }
 
+func (s *server) TuneBatch(ctx context.Context, req *rpc_tuning_rules.TuneBatchRequest) (*rpc_tuning_rules.TuneBatchResponse, error) {
+	results := make([]bool, 0, len(req.GetAlertJson()))
+	for _, raw := range req.GetAlertJson() {
+		var alert map[string]any
+		if err := json.Unmarshal(raw, &alert); err != nil {
+			return nil, err
+		}
+		applies, err := s.rule.Tune(ctx, alert)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, applies)
+	}
+	return &rpc_tuning_rules.TuneBatchResponse{Applies: results}, nil
+}
+
 func (s *server) Ping(_ context.Context, _ *rpc_tuning_rules.Empty) (*rpc_tuning_rules.Empty, error) {
 	return &rpc_tuning_rules.Empty{}, nil
 }

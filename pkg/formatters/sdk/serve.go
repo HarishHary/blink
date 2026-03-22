@@ -73,6 +73,26 @@ func (s *server) Format(ctx context.Context, req *rpc_formatters.FormatRequest) 
 	return &rpc_formatters.FormatResponse{ResultJson: b}, nil
 }
 
+func (s *server) FormatBatch(ctx context.Context, req *rpc_formatters.FormatBatchRequest) (*rpc_formatters.FormatBatchResponse, error) {
+	results := make([][]byte, 0, len(req.GetAlertJson()))
+	for _, raw := range req.GetAlertJson() {
+		var alert map[string]any
+		if err := json.Unmarshal(raw, &alert); err != nil {
+			return nil, err
+		}
+		result, err := s.formatter.Format(ctx, alert)
+		if err != nil {
+			return nil, err
+		}
+		b, err2 := json.Marshal(result)
+		if err2 != nil {
+			return nil, err2
+		}
+		results = append(results, b)
+	}
+	return &rpc_formatters.FormatBatchResponse{ResultJson: results}, nil
+}
+
 func (s *server) Ping(_ context.Context, _ *rpc_formatters.Empty) (*rpc_formatters.Empty, error) {
 	return &rpc_formatters.Empty{}, nil
 }

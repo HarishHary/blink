@@ -81,6 +81,22 @@ func (s *server) Match(ctx context.Context, req *rpc_matchers.MatchRequest) (*rp
 	return &rpc_matchers.MatchResponse{Matched: matched}, nil
 }
 
+func (s *server) MatchBatch(ctx context.Context, req *rpc_matchers.MatchBatchRequest) (*rpc_matchers.MatchBatchResponse, error) {
+	results := make([]bool, 0, len(req.GetEvents()))
+	for _, ev := range req.GetEvents() {
+		var event events.Event
+		if err := json.Unmarshal(ev.GetJson(), &event); err != nil {
+			return nil, err
+		}
+		matched, err := s.matcher.Match(ctx, event)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, matched)
+	}
+	return &rpc_matchers.MatchBatchResponse{Matched: results}, nil
+}
+
 func (s *server) Ping(_ context.Context, _ *rpc_matchers.Empty) (*rpc_matchers.Empty, error) {
 	return &rpc_matchers.Empty{}, nil
 }

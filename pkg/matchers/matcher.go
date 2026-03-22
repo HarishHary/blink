@@ -12,7 +12,8 @@ type Matcher interface {
 	Name() string
 	Description() string
 	Enabled() bool
+	Version() string
 	Checksum() string
 	String() string
-	Match(ctx context.Context, event events.Event) (bool, errors.Error)
+	Match(ctx context.Context, evts []events.Event) ([]bool, errors.Error)
 }

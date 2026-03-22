@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -17,15 +18,15 @@ import (
 
 // Alert struct encapsulates a single alert and handles serialization
 type Alert struct {
-	AlertID     string
-	Attempts    int
-	Cluster     string
-	Created     time.Time
-	Dispatched  time.Time
-	Event       events.Event
-	Staged              bool
-	OutputsSent         []string
-	EnrichmentsApplied  []string
+	AlertID            string
+	Attempts           int
+	Cluster            string
+	Created            time.Time
+	Dispatched         time.Time
+	Event              events.Event
+	Staged             bool
+	OutputsSent        []string
+	EnrichmentsApplied []string
 
 	LogSource string
 	LogType   string
@@ -208,6 +209,20 @@ func (a *Alert) CanMerge(other *Alert) bool {
 
 func (a *Alert) MergeEnabled() bool {
 	return len(a.Rule.MergeByKeys()) > 0 && a.Rule.MergeWindowMins() > 0
+}
+
+// MergePartitionKey returns a stable Kafka partition key for this alert so that alerts belonging to the same merge group always land on the same partition and therefore the same alert-merger replica.
+// The key is "rule_name|key1=val1|key2=val2" with merge-by fields sorted alphabetically.  When merge is not enabled the rule name alone is returned, which is still a stable key - the merger will pass those alerts straight through on whichever partition they arrive.
+func (a *Alert) MergePartitionKey() string {
+	keys := a.Rule.MergeByKeys()
+	sort.Strings(keys)
+	merged := a.Event.GetMergedKeys(keys)
+	parts := make([]string, 0, len(keys)+1)
+	parts = append(parts, a.Rule.Name())
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("%v", merged[k]))
+	}
+	return strings.Join(parts, "|")
 }
 
 func (a *Alert) RemainingOutputs(requiredOutputs []string) []string {

@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.9
 // 	protoc        v7.34.0
-// source: tuning_rule.proto
+// source: pkg/tuning_rules/rpc_tuning_rules/tuning_rule.proto
 
 package rpc_tuning_rules
 
@@ -29,7 +29,7 @@ type Empty struct {
 
 func (x *Empty) Reset() {
 	*x = Empty{}
-	mi := &file_tuning_rule_proto_msgTypes[0]
+	mi := &file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -41,7 +41,7 @@ func (x *Empty) String() string {
 func (*Empty) ProtoMessage() {}
 
 func (x *Empty) ProtoReflect() protoreflect.Message {
-	mi := &file_tuning_rule_proto_msgTypes[0]
+	mi := &file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -54,7 +54,7 @@ func (x *Empty) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Empty.ProtoReflect.Descriptor instead.
 func (*Empty) Descriptor() ([]byte, []int) {
-	return file_tuning_rule_proto_rawDescGZIP(), []int{0}
+	return file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_rawDescGZIP(), []int{0}
 }
 
 type TuningMetadata struct {
@@ -65,7 +65,7 @@ type TuningMetadata struct {
 	Enabled       bool                   `protobuf:"varint,4,opt,name=enabled,proto3" json:"enabled,omitempty"`
 	Global        bool                   `protobuf:"varint,5,opt,name=global,proto3" json:"global,omitempty"`
 	RuleType      int32                  `protobuf:"varint,6,opt,name=rule_type,json=ruleType,proto3" json:"rule_type,omitempty"` // 0=Ignore, 1=SetConfidence, 2=IncreaseConfidence, 3=DecreaseConfidence
-	Confidence    string                 `protobuf:"bytes,7,opt,name=confidence,proto3" json:"confidence,omitempty"` // "verylow|low|medium|high|veryhigh"
+	Confidence    string                 `protobuf:"bytes,7,opt,name=confidence,proto3" json:"confidence,omitempty"`              // "verylow|low|medium|high|veryhigh"
 	Version       string                 `protobuf:"bytes,8,opt,name=version,proto3" json:"version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -73,7 +73,7 @@ type TuningMetadata struct {
 
 func (x *TuningMetadata) Reset() {
 	*x = TuningMetadata{}
-	mi := &file_tuning_rule_proto_msgTypes[1]
+	mi := &file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -85,7 +85,7 @@ func (x *TuningMetadata) String() string {
 func (*TuningMetadata) ProtoMessage() {}
 
 func (x *TuningMetadata) ProtoReflect() protoreflect.Message {
-	mi := &file_tuning_rule_proto_msgTypes[1]
+	mi := &file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -98,7 +98,7 @@ func (x *TuningMetadata) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TuningMetadata.ProtoReflect.Descriptor instead.
 func (*TuningMetadata) Descriptor() ([]byte, []int) {
-	return file_tuning_rule_proto_rawDescGZIP(), []int{1}
+	return file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *TuningMetadata) GetId() string {
@@ -166,7 +166,7 @@ type TuneRequest struct {
 
 func (x *TuneRequest) Reset() {
 	*x = TuneRequest{}
-	mi := &file_tuning_rule_proto_msgTypes[2]
+	mi := &file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -178,7 +178,7 @@ func (x *TuneRequest) String() string {
 func (*TuneRequest) ProtoMessage() {}
 
 func (x *TuneRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_tuning_rule_proto_msgTypes[2]
+	mi := &file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -191,7 +191,7 @@ func (x *TuneRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TuneRequest.ProtoReflect.Descriptor instead.
 func (*TuneRequest) Descriptor() ([]byte, []int) {
-	return file_tuning_rule_proto_rawDescGZIP(), []int{2}
+	return file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *TuneRequest) GetAlertJson() []byte {
@@ -210,7 +210,7 @@ type TuneResponse struct {
 
 func (x *TuneResponse) Reset() {
 	*x = TuneResponse{}
-	mi := &file_tuning_rule_proto_msgTypes[3]
+	mi := &file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -222,7 +222,7 @@ func (x *TuneResponse) String() string {
 func (*TuneResponse) ProtoMessage() {}
 
 func (x *TuneResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_tuning_rule_proto_msgTypes[3]
+	mi := &file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -235,7 +235,7 @@ func (x *TuneResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TuneResponse.ProtoReflect.Descriptor instead.
 func (*TuneResponse) Descriptor() ([]byte, []int) {
-	return file_tuning_rule_proto_rawDescGZIP(), []int{3}
+	return file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *TuneResponse) GetApplies() bool {
@@ -245,12 +245,100 @@ func (x *TuneResponse) GetApplies() bool {
 	return false
 }
 
-var File_tuning_rule_proto protoreflect.FileDescriptor
+type TuneBatchRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	AlertJson     [][]byte               `protobuf:"bytes,1,rep,name=alert_json,json=alertJson,proto3" json:"alert_json,omitempty"` // one JSON-encoded alerts.Alert per alert
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
 
-const file_tuning_rule_proto_rawDesc = "" +
+func (x *TuneBatchRequest) Reset() {
+	*x = TuneBatchRequest{}
+	mi := &file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TuneBatchRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TuneBatchRequest) ProtoMessage() {}
+
+func (x *TuneBatchRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TuneBatchRequest.ProtoReflect.Descriptor instead.
+func (*TuneBatchRequest) Descriptor() ([]byte, []int) {
+	return file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *TuneBatchRequest) GetAlertJson() [][]byte {
+	if x != nil {
+		return x.AlertJson
+	}
+	return nil
+}
+
+type TuneBatchResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Applies       []bool                 `protobuf:"varint,1,rep,packed,name=applies,proto3" json:"applies,omitempty"` // one result per alert
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TuneBatchResponse) Reset() {
+	*x = TuneBatchResponse{}
+	mi := &file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TuneBatchResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TuneBatchResponse) ProtoMessage() {}
+
+func (x *TuneBatchResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TuneBatchResponse.ProtoReflect.Descriptor instead.
+func (*TuneBatchResponse) Descriptor() ([]byte, []int) {
+	return file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *TuneBatchResponse) GetApplies() []bool {
+	if x != nil {
+		return x.Applies
+	}
+	return nil
+}
+
+var File_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto protoreflect.FileDescriptor
+
+const file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_rawDesc = "" +
 	"\n" +
-	"\x11tuning_rule.proto\x12\ftuning_rules\"\a\n" +
-	"\x05Empty\"\xc5\x01\n" +
+	"3pkg/tuning_rules/rpc_tuning_rules/tuning_rule.proto\x12\ftuning_rules\"\a\n" +
+	"\x05Empty\"\xdf\x01\n" +
 	"\x0eTuningMetadata\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12 \n" +
@@ -260,77 +348,88 @@ const file_tuning_rule_proto_rawDesc = "" +
 	"\trule_type\x18\x06 \x01(\x05R\bruleType\x12\x1e\n" +
 	"\n" +
 	"confidence\x18\a \x01(\tR\n" +
-	"confidence\",\n" +
+	"confidence\x12\x18\n" +
+	"\aversion\x18\b \x01(\tR\aversion\",\n" +
 	"\vTuneRequest\x12\x1d\n" +
 	"\n" +
 	"alert_json\x18\x01 \x01(\fR\talertJson\"(\n" +
 	"\fTuneResponse\x12\x18\n" +
-	"\aapplies\x18\x01 \x01(\bR\aapplies2\xa7\x02\n" +
+	"\aapplies\x18\x01 \x01(\bR\aapplies\"1\n" +
+	"\x10TuneBatchRequest\x12\x1d\n" +
+	"\n" +
+	"alert_json\x18\x01 \x03(\fR\talertJson\"-\n" +
+	"\x11TuneBatchResponse\x12\x18\n" +
+	"\aapplies\x18\x01 \x03(\bR\aapplies2\xf5\x02\n" +
 	"\n" +
 	"TuningRule\x12@\n" +
 	"\vGetMetadata\x12\x13.tuning_rules.Empty\x1a\x1c.tuning_rules.TuningMetadata\x120\n" +
 	"\x04Init\x12\x13.tuning_rules.Empty\x1a\x13.tuning_rules.Empty\x12=\n" +
-	"\x04Tune\x12\x19.tuning_rules.TuneRequest\x1a\x1a.tuning_rules.TuneResponse\x124\n" +
+	"\x04Tune\x12\x19.tuning_rules.TuneRequest\x1a\x1a.tuning_rules.TuneResponse\x12L\n" +
+	"\tTuneBatch\x12\x1e.tuning_rules.TuneBatchRequest\x1a\x1f.tuning_rules.TuneBatchResponse\x124\n" +
 	"\bShutdown\x12\x13.tuning_rules.Empty\x1a\x13.tuning_rules.Empty\x120\n" +
 	"\x04Ping\x12\x13.tuning_rules.Empty\x1a\x13.tuning_rules.EmptyB?Z=github.com/harishhary/blink/pkg/tuning_rules/rpc_tuning_rulesb\x06proto3"
 
 var (
-	file_tuning_rule_proto_rawDescOnce sync.Once
-	file_tuning_rule_proto_rawDescData []byte
+	file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_rawDescOnce sync.Once
+	file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_rawDescData []byte
 )
 
-func file_tuning_rule_proto_rawDescGZIP() []byte {
-	file_tuning_rule_proto_rawDescOnce.Do(func() {
-		file_tuning_rule_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_tuning_rule_proto_rawDesc), len(file_tuning_rule_proto_rawDesc)))
+func file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_rawDescGZIP() []byte {
+	file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_rawDescOnce.Do(func() {
+		file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_rawDesc), len(file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_rawDesc)))
 	})
-	return file_tuning_rule_proto_rawDescData
+	return file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_rawDescData
 }
 
-var file_tuning_rule_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
-var file_tuning_rule_proto_goTypes = []any{
-	(*Empty)(nil),          // 0: tuning_rules.Empty
-	(*TuningMetadata)(nil), // 1: tuning_rules.TuningMetadata
-	(*TuneRequest)(nil),    // 2: tuning_rules.TuneRequest
-	(*TuneResponse)(nil),   // 3: tuning_rules.TuneResponse
+var file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_goTypes = []any{
+	(*Empty)(nil),             // 0: tuning_rules.Empty
+	(*TuningMetadata)(nil),    // 1: tuning_rules.TuningMetadata
+	(*TuneRequest)(nil),       // 2: tuning_rules.TuneRequest
+	(*TuneResponse)(nil),      // 3: tuning_rules.TuneResponse
+	(*TuneBatchRequest)(nil),  // 4: tuning_rules.TuneBatchRequest
+	(*TuneBatchResponse)(nil), // 5: tuning_rules.TuneBatchResponse
 }
-var file_tuning_rule_proto_depIdxs = []int32{
+var file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_depIdxs = []int32{
 	0, // 0: tuning_rules.TuningRule.GetMetadata:input_type -> tuning_rules.Empty
 	0, // 1: tuning_rules.TuningRule.Init:input_type -> tuning_rules.Empty
 	2, // 2: tuning_rules.TuningRule.Tune:input_type -> tuning_rules.TuneRequest
-	0, // 3: tuning_rules.TuningRule.Shutdown:input_type -> tuning_rules.Empty
-	0, // 4: tuning_rules.TuningRule.Ping:input_type -> tuning_rules.Empty
-	1, // 5: tuning_rules.TuningRule.GetMetadata:output_type -> tuning_rules.TuningMetadata
-	0, // 6: tuning_rules.TuningRule.Init:output_type -> tuning_rules.Empty
-	3, // 7: tuning_rules.TuningRule.Tune:output_type -> tuning_rules.TuneResponse
-	0, // 8: tuning_rules.TuningRule.Shutdown:output_type -> tuning_rules.Empty
-	0, // 9: tuning_rules.TuningRule.Ping:output_type -> tuning_rules.Empty
-	5, // [5:10] is the sub-list for method output_type
-	0, // [0:5] is the sub-list for method input_type
+	4, // 3: tuning_rules.TuningRule.TuneBatch:input_type -> tuning_rules.TuneBatchRequest
+	0, // 4: tuning_rules.TuningRule.Shutdown:input_type -> tuning_rules.Empty
+	0, // 5: tuning_rules.TuningRule.Ping:input_type -> tuning_rules.Empty
+	1, // 6: tuning_rules.TuningRule.GetMetadata:output_type -> tuning_rules.TuningMetadata
+	0, // 7: tuning_rules.TuningRule.Init:output_type -> tuning_rules.Empty
+	3, // 8: tuning_rules.TuningRule.Tune:output_type -> tuning_rules.TuneResponse
+	5, // 9: tuning_rules.TuningRule.TuneBatch:output_type -> tuning_rules.TuneBatchResponse
+	0, // 10: tuning_rules.TuningRule.Shutdown:output_type -> tuning_rules.Empty
+	0, // 11: tuning_rules.TuningRule.Ping:output_type -> tuning_rules.Empty
+	6, // [6:12] is the sub-list for method output_type
+	0, // [0:6] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
 	0, // [0:0] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
 }
 
-func init() { file_tuning_rule_proto_init() }
-func file_tuning_rule_proto_init() {
-	if File_tuning_rule_proto != nil {
+func init() { file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_init() }
+func file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_init() {
+	if File_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_tuning_rule_proto_rawDesc), len(file_tuning_rule_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_rawDesc), len(file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   4,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_tuning_rule_proto_goTypes,
-		DependencyIndexes: file_tuning_rule_proto_depIdxs,
-		MessageInfos:      file_tuning_rule_proto_msgTypes,
+		GoTypes:           file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_goTypes,
+		DependencyIndexes: file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_depIdxs,
+		MessageInfos:      file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_msgTypes,
 	}.Build()
-	File_tuning_rule_proto = out.File
-	file_tuning_rule_proto_goTypes = nil
-	file_tuning_rule_proto_depIdxs = nil
+	File_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto = out.File
+	file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_goTypes = nil
+	file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_depIdxs = nil
 }

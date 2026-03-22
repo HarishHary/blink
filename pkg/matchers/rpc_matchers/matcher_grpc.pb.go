@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             v7.34.0
-// source: matcher.proto
+// source: pkg/matchers/rpc_matchers/matcher.proto
 
 package rpc_matchers
 
@@ -22,6 +22,7 @@ const (
 	Matcher_GetMetadata_FullMethodName = "/matchers.Matcher/GetMetadata"
 	Matcher_Init_FullMethodName        = "/matchers.Matcher/Init"
 	Matcher_Match_FullMethodName       = "/matchers.Matcher/Match"
+	Matcher_MatchBatch_FullMethodName  = "/matchers.Matcher/MatchBatch"
 	Matcher_Shutdown_FullMethodName    = "/matchers.Matcher/Shutdown"
 	Matcher_Ping_FullMethodName        = "/matchers.Matcher/Ping"
 )
@@ -33,6 +34,7 @@ type MatcherClient interface {
 	GetMetadata(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*MatcherMetadata, error)
 	Init(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
 	Match(ctx context.Context, in *MatchRequest, opts ...grpc.CallOption) (*MatchResponse, error)
+	MatchBatch(ctx context.Context, in *MatchBatchRequest, opts ...grpc.CallOption) (*MatchBatchResponse, error)
 	Shutdown(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
 	Ping(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
 }
@@ -75,6 +77,16 @@ func (c *matcherClient) Match(ctx context.Context, in *MatchRequest, opts ...grp
 	return out, nil
 }
 
+func (c *matcherClient) MatchBatch(ctx context.Context, in *MatchBatchRequest, opts ...grpc.CallOption) (*MatchBatchResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MatchBatchResponse)
+	err := c.cc.Invoke(ctx, Matcher_MatchBatch_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *matcherClient) Shutdown(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Empty)
@@ -102,6 +114,7 @@ type MatcherServer interface {
 	GetMetadata(context.Context, *Empty) (*MatcherMetadata, error)
 	Init(context.Context, *Empty) (*Empty, error)
 	Match(context.Context, *MatchRequest) (*MatchResponse, error)
+	MatchBatch(context.Context, *MatchBatchRequest) (*MatchBatchResponse, error)
 	Shutdown(context.Context, *Empty) (*Empty, error)
 	Ping(context.Context, *Empty) (*Empty, error)
 	mustEmbedUnimplementedMatcherServer()
@@ -122,6 +135,9 @@ func (UnimplementedMatcherServer) Init(context.Context, *Empty) (*Empty, error) 
 }
 func (UnimplementedMatcherServer) Match(context.Context, *MatchRequest) (*MatchResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Match not implemented")
+}
+func (UnimplementedMatcherServer) MatchBatch(context.Context, *MatchBatchRequest) (*MatchBatchResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method MatchBatch not implemented")
 }
 func (UnimplementedMatcherServer) Shutdown(context.Context, *Empty) (*Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Shutdown not implemented")
@@ -204,6 +220,24 @@ func _Matcher_Match_Handler(srv interface{}, ctx context.Context, dec func(inter
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Matcher_MatchBatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MatchBatchRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MatcherServer).MatchBatch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Matcher_MatchBatch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MatcherServer).MatchBatch(ctx, req.(*MatchBatchRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Matcher_Shutdown_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(Empty)
 	if err := dec(in); err != nil {
@@ -260,6 +294,10 @@ var Matcher_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Matcher_Match_Handler,
 		},
 		{
+			MethodName: "MatchBatch",
+			Handler:    _Matcher_MatchBatch_Handler,
+		},
+		{
 			MethodName: "Shutdown",
 			Handler:    _Matcher_Shutdown_Handler,
 		},
@@ -269,5 +307,5 @@ var Matcher_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "matcher.proto",
+	Metadata: "pkg/matchers/rpc_matchers/matcher.proto",
 }

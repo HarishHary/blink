@@ -234,19 +234,7 @@ func (r *rpcRule) SubKeysInEvent(event events.Event) bool {
 }
 
 // ctx carries the caller's deadline (e.g. the executor's per-event timeout).
-func (r *rpcRule) Evaluate(ctx context.Context, event events.Event) (bool, errors.Error) {
-	b, err := json.Marshal(event)
-	if err != nil {
-		return false, errors.New(err)
-	}
-	resp, err := r.client.Evaluate(ctx, &rpc_rules.EvaluateRequest{Event: &rpc_rules.Event{Json: b}})
-	if err != nil {
-		return false, errors.New(err)
-	}
-	return resp.GetMatched(), nil
-}
-
-func (r *rpcRule) EvaluateBatch(ctx context.Context, evts []events.Event) ([]bool, errors.Error) {
+func (r *rpcRule) Evaluate(ctx context.Context, evts []events.Event) ([]bool, errors.Error) {
 	protoEvents := make([]*rpc_rules.Event, 0, len(evts))
 	for _, ev := range evts {
 		b, err := json.Marshal(ev)
