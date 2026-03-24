@@ -5,40 +5,57 @@ import (
 	"encoding/json"
 
 	"github.com/harishhary/blink/internal/errors"
+	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/alerts"
+	"github.com/harishhary/blink/pkg/enrichments/config"
 	"github.com/harishhary/blink/pkg/enrichments/rpc_enrichments"
 )
 
 type rpcEnrichment struct {
-	meta     *rpc_enrichments.EnrichmentMetadata
-	checksum string
-	client   rpc_enrichments.EnrichmentClient
+	cfgWatcher *config.Watcher
+	fileName   string
+	checksum   string
+	client     rpc_enrichments.EnrichmentClient
 }
 
-func newRpcEnrichment(meta *rpc_enrichments.EnrichmentMetadata, client rpc_enrichments.EnrichmentClient, checksum string) *rpcEnrichment {
-	return &rpcEnrichment{meta: meta, checksum: checksum, client: client}
-}
-
-func (r *rpcEnrichment) Id() string {
-	if id := r.meta.GetId(); id != "" {
-		return id
+func newRpcEnrichment(fileName string, client rpc_enrichments.EnrichmentClient, watcher *config.Watcher, checksum string) *rpcEnrichment {
+	return &rpcEnrichment{
+		cfgWatcher: watcher,
+		fileName:   fileName,
+		checksum:   checksum,
+		client:     client,
 	}
-	return r.meta.GetName()
 }
-func (r *rpcEnrichment) Name() string        { return r.meta.GetName() }
-func (r *rpcEnrichment) Description() string { return r.meta.GetDescription() }
-func (r *rpcEnrichment) Enabled() bool       { return r.meta.GetEnabled() }
-func (r *rpcEnrichment) Version() string     { return r.meta.GetVersion() }
+
+func (r *rpcEnrichment) cfg() *config.EnrichmentMetadata {
+	if r.cfgWatcher == nil {
+		return nil
+	}
+	return r.cfgWatcher.Current().ByFileName(r.fileName)
+}
+
+// EnrichmentMetadata returns the live YAML-derived enrichment configuration.
+func (r *rpcEnrichment) EnrichmentMetadata() *config.EnrichmentMetadata {
+	if c := r.cfg(); c != nil {
+		return c
+	}
+	return &config.EnrichmentMetadata{FileNameField: r.fileName}
+}
+
+func (r *rpcEnrichment) PluginMetadata() plugin.PluginMetadata {
+	return r.EnrichmentMetadata().PluginMetadata()
+}
+
+func (r *rpcEnrichment) DependsOn() []string { return r.EnrichmentMetadata().DependsOn() }
 func (r *rpcEnrichment) Checksum() string    { return r.checksum }
-func (r *rpcEnrichment) DependsOn() []string { return r.meta.GetDependsOn() }
 func (r *rpcEnrichment) String() string {
-	return "RpcEnrichment '" + r.meta.GetName() + "' id:'" + r.meta.GetId() + "'"
+	return "RpcEnrichment '" + r.EnrichmentMetadata().Name() + "' id:'" + r.EnrichmentMetadata().Id() + "'"
 }
 
 func (r *rpcEnrichment) Enrich(ctx context.Context, alerts []*alerts.Alert) errors.Error {
 	protoAlerts := make([]*rpc_enrichments.Alert, 0, len(alerts))
 	for _, alrt := range alerts {
-		b, err := json.Marshal(alrt.Event)
+		b, err := json.Marshal(alrt)
 		if err != nil {
 			return errors.New(err)
 		}

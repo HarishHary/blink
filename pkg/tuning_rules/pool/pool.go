@@ -6,7 +6,7 @@ import (
 
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/messaging"
-	"github.com/harishhary/blink/internal/pluginmgr"
+	"github.com/harishhary/blink/internal/plugin"
 	internal "github.com/harishhary/blink/internal/pools"
 	"github.com/harishhary/blink/pkg/alerts"
 	"github.com/harishhary/blink/pkg/scoring"
@@ -30,7 +30,7 @@ func (p *Pool) Tune(ctx context.Context, tuningRuleID string, alerts []alerts.Al
 ) {
 	applies = make([]bool, len(alerts))
 	err := p.Call(ctx, tuningRuleID, canaryHashKey, func(callCtx context.Context, t tuning.TuningRule) error {
-		if !t.Enabled() {
+		if !t.TuningMetadata().Enabled() {
 			return nil
 		}
 		ruleType = t.RuleType()
@@ -47,11 +47,12 @@ func (p *Pool) Tune(ctx context.Context, tuningRuleID string, alerts []alerts.Al
 
 // Handles plugin lifecycle messages from the plugin manager bus, registering or deregistering tuning rules in the pool.
 func poolKey(t tuning.TuningRule) internal.PoolKey {
-	version := t.Version()
+	cfg := t.TuningMetadata()
+	version := cfg.Version()
 	if cs := t.Checksum(); cs != "" {
 		version = version + "@" + cs
 	}
-	return internal.PoolKey{PluginID: t.Id(), Version: version}
+	return internal.PoolKey{PluginID: cfg.Id(), Version: version}
 }
 
 func (p *Pool) Sync(msg messaging.Message) {
@@ -59,13 +60,13 @@ func (p *Pool) Sync(msg messaging.Message) {
 		p.Register(poolKey(items[0]), items, maxProcs, onDrained)
 	}
 	switch m := msg.(type) {
-	case pluginmgr.RegisterMessage[tuning.TuningRule]:
+	case plugin.RegisterMessage[tuning.TuningRule]:
 		register(nil, m.Items, m.MaxProcs)
-	case pluginmgr.UpdateMessage[tuning.TuningRule]:
+	case plugin.UpdateMessage[tuning.TuningRule]:
 		register(m.OnDrained, m.Items, m.MaxProcs)
-	case pluginmgr.UnregisterMessage[tuning.TuningRule]:
+	case plugin.UnregisterMessage[tuning.TuningRule]:
 		p.Unregister(m.ItemID)
-	case pluginmgr.RemoveMessage[tuning.TuningRule]:
+	case plugin.RemoveMessage[tuning.TuningRule]:
 		p.Remove(m.ItemID)
 	}
 }

@@ -6,33 +6,57 @@ import (
 	"fmt"
 
 	"github.com/harishhary/blink/internal/errors"
+	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/alerts"
+	"github.com/harishhary/blink/pkg/formatters/config"
 	"github.com/harishhary/blink/pkg/formatters/rpc_formatters"
 )
 
 type rpcFormatter struct {
-	meta     *rpc_formatters.FormatterMetadata
-	checksum string
-	client   rpc_formatters.FormatterClient
+	cfgWatcher *config.Watcher
+	fileName   string
+	checksum   string
+	client     rpc_formatters.FormatterClient
 }
 
-func newRpcFormatter(meta *rpc_formatters.FormatterMetadata, client rpc_formatters.FormatterClient, checksum string) *rpcFormatter {
-	return &rpcFormatter{meta: meta, checksum: checksum, client: client}
-}
-
-func (f *rpcFormatter) Id() string {
-	if id := f.meta.GetId(); id != "" {
-		return id
+func newRpcFormatter(fileName string, client rpc_formatters.FormatterClient, watcher *config.Watcher, checksum string) *rpcFormatter {
+	return &rpcFormatter{
+		cfgWatcher: watcher,
+		fileName:   fileName,
+		checksum:   checksum,
+		client:     client,
 	}
-	return f.meta.GetName()
 }
-func (f *rpcFormatter) Name() string        { return f.meta.GetName() }
-func (f *rpcFormatter) Description() string { return f.meta.GetDescription() }
-func (f *rpcFormatter) Enabled() bool       { return f.meta.GetEnabled() }
-func (f *rpcFormatter) Version() string     { return f.meta.GetVersion() }
-func (f *rpcFormatter) Checksum() string    { return f.checksum }
+
+func (f *rpcFormatter) cfg() *config.FormatterMetadata {
+	if f.cfgWatcher == nil {
+		return nil
+	}
+	return f.cfgWatcher.Current().ByFileName(f.fileName)
+}
+
+// FormatterMetadata returns the live YAML-derived formatter configuration.
+func (f *rpcFormatter) FormatterMetadata() *config.FormatterMetadata {
+	if c := f.cfg(); c != nil {
+		return c
+	}
+	return &config.FormatterMetadata{FileNameField: f.fileName}
+}
+
+func (f *rpcFormatter) PluginMetadata() plugin.PluginMetadata {
+	c := f.FormatterMetadata()
+	return plugin.PluginMetadata{
+		ID:          c.Id(),
+		Name:        c.Name(),
+		Description: c.Description(),
+		Enabled:     c.Enabled(),
+		Version:     c.Version(),
+	}
+}
+
+func (f *rpcFormatter) Checksum() string { return f.checksum }
 func (f *rpcFormatter) String() string {
-	return fmt.Sprintf("Formatter '%s' (id:%s, enabled:%t)", f.meta.GetName(), f.meta.GetId(), f.meta.GetEnabled())
+	return fmt.Sprintf("Formatter '%s' (id:%s)", f.FormatterMetadata().Name(), f.FormatterMetadata().Id())
 }
 
 func (f *rpcFormatter) Format(ctx context.Context, alerts []*alerts.Alert) ([]map[string]any, errors.Error) {

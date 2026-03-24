@@ -10,7 +10,7 @@ import (
 
 	"github.com/harishhary/blink/cmd/rule_executor/executor"
 	"github.com/harishhary/blink/internal/logger"
-	"github.com/harishhary/blink/internal/pluginmgr"
+	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/internal/services"
 	"github.com/harishhary/blink/pkg/rules"
 	"github.com/harishhary/blink/pkg/rules/config"
@@ -47,7 +47,7 @@ func main() {
 		"rule-executor-sync",
 		"BLINK-RULE-EXECUTOR - SYNC",
 		"RULE_PLUGIN_DIR",
-		func(log *logger.Logger, dir string) pluginmgr.Plugin {
+		func(log *logger.Logger, dir string) plugin.Plugin {
 			return rules.NewManager(log, rulePool.Sync, dir, cfgWatcher)
 		},
 	)

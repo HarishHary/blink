@@ -9,13 +9,13 @@ import (
 
 	"github.com/harishhary/blink/internal/configuration"
 	"github.com/harishhary/blink/internal/logger"
-	"github.com/harishhary/blink/internal/pluginmgr"
+	"github.com/harishhary/blink/internal/plugin"
 )
 
 type PluginSyncService struct {
 	svcctx.ServiceContext
 	serviceName string
-	plugin      pluginmgr.Plugin
+	plugin      plugin.Plugin
 }
 
 // NewPluginSyncService creates a service that starts the plugin manager and waits for
@@ -23,7 +23,7 @@ type PluginSyncService struct {
 // callback so lifecycle events flow directly to the pool with no intermediate bus.
 func NewPluginSyncService(
 	name, displayName, envVar string,
-	newPluginManager func(*logger.Logger, string) pluginmgr.Plugin,
+	newPluginManager func(*logger.Logger, string) plugin.Plugin,
 ) (*PluginSyncService, error) {
 	sc := svcctx.New(displayName)
 	if err := configuration.LoadFromEnvironment(&sc); err != nil {

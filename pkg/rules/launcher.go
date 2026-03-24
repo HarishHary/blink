@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"time"
 
-	plugin "github.com/hashicorp/go-plugin"
+	goplugin "github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
 
 	"github.com/harishhary/blink/internal/helpers"
-	"github.com/harishhary/blink/internal/pluginmgr"
+	"github.com/harishhary/blink/internal/plugin"
 	internal "github.com/harishhary/blink/internal/pools"
 	"github.com/harishhary/blink/pkg/rules/config"
 	"github.com/harishhary/blink/pkg/rules/rpc_rules"
@@ -21,10 +21,10 @@ type RuleAdapter struct {
 
 func (l *RuleAdapter) PluginKey() string         { return "rule" }
 func (l *RuleAdapter) MagicValue() string        { return "rule_v1" }
-func (l *RuleAdapter) GRPCPlugin() plugin.Plugin { return &rulePlugin{} }
+func (l *RuleAdapter) GRPCPlugin() goplugin.Plugin { return &rulePlugin{} }
 
 // Connects to the rule subprocess, reads the YAML sidecar for its metadata, calls Init, and returns a ready rpcRule. The rule binary's basename must match the YAML file_name field.
-func (l *RuleAdapter) Handshake(ctx context.Context, raw interface{}, binPath string, hash string) (Rule, pluginmgr.PluginLifecycle, string, string, error) {
+func (l *RuleAdapter) Handshake(ctx context.Context, raw interface{}, binPath string, hash string) (Rule, plugin.PluginLifecycle, string, string, error) {
 	rpc, ok := raw.(rpc_rules.RuleClient)
 	if !ok {
 		return nil, nil, "", "", fmt.Errorf("dispense: unexpected type %T", raw)
@@ -75,7 +75,7 @@ func (l *RuleAdapter) IsShadow(binPath string) bool {
 
 // IsEnabled reports whether the rule's YAML sidecar still exists and is enabled.
 // Called during every reconcile func so process-zombies (binary running but YAML removed/disabled) are stopped without waiting for a binary change.
-func (l *RuleAdapter) IsEnabled(h *pluginmgr.PluginHandle) bool {
+func (l *RuleAdapter) IsEnabled(h *plugin.PluginHandle) bool {
 	cfg := l.Watcher.Current().ByFileName(helpers.BinaryBaseName(h.BinPath))
 	return cfg != nil && cfg.Enabled()
 }
@@ -103,11 +103,11 @@ func (l *ruleLifecycle) Shutdown(ctx context.Context) error {
 }
 
 // rulePlugin is the go-plugin client-side stub.
-type rulePlugin struct{ plugin.NetRPCUnsupportedPlugin }
+type rulePlugin struct{ goplugin.NetRPCUnsupportedPlugin }
 
-func (p *rulePlugin) GRPCServer(_ *plugin.GRPCBroker, _ *grpc.Server) error {
+func (p *rulePlugin) GRPCServer(_ *goplugin.GRPCBroker, _ *grpc.Server) error {
 	return nil
 }
-func (p *rulePlugin) GRPCClient(_ context.Context, _ *plugin.GRPCBroker, c *grpc.ClientConn) (interface{}, error) {
+func (p *rulePlugin) GRPCClient(_ context.Context, _ *goplugin.GRPCBroker, c *grpc.ClientConn) (interface{}, error) {
 	return rpc_rules.NewRuleClient(c), nil
 }

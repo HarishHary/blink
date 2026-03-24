@@ -1,0 +1,14 @@
+id: "550e8400-e29b-41d4-a716-446655440010"
+name: "add_geo"
+display_name: "Add Geo"
+description: "Annotates alerts with geo_country and geo_is_internal derived from source_ip."
+enabled: true
+version: "1.0.0"
+
+# Dependency ordering: enrichments listed here must run before this one.
+depends_on: []
+
+# Rollout control (optional — defaults to blue-green).
+# mode: "blue-green"  # blue-green | canary | shadow
+# min_procs: 1
+# max_procs: 2

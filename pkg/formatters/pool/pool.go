@@ -7,19 +7,19 @@ import (
 
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/messaging"
-	"github.com/harishhary/blink/internal/pluginmgr"
+	"github.com/harishhary/blink/internal/plugin"
 	internal "github.com/harishhary/blink/internal/pools"
 	"github.com/harishhary/blink/pkg/alerts"
 	"github.com/harishhary/blink/pkg/formatters"
 )
 
 type Pool struct {
-	*internal.ProcessPool[formatters.IFormatter]
+	*internal.ProcessPool[formatters.Formatter]
 }
 
 func NewPool(routing *internal.RoutingTable, drainTimeout time.Duration) *Pool {
 	return &Pool{
-		ProcessPool: internal.NewProcessPool[formatters.IFormatter](routing.Config(), internal.NewPoolMetrics("formatters"), drainTimeout),
+		ProcessPool: internal.NewProcessPool[formatters.Formatter](routing.Config(), internal.NewPoolMetrics("formatters"), drainTimeout),
 	}
 }
 
@@ -30,8 +30,8 @@ func NewPool(routing *internal.RoutingTable, drainTimeout time.Duration) *Pool {
 func (p *Pool) Format(ctx context.Context, formatterID string, alerts []*alerts.Alert, canaryHashKey string) (outs []map[string]any, absent bool, removed bool, errs []errors.Error) {
 	outs = make([]map[string]any, len(alerts))
 	errs = make([]errors.Error, len(alerts))
-	err := p.Call(ctx, formatterID, canaryHashKey, func(callCtx context.Context, f formatters.IFormatter) error {
-		if !f.Enabled() {
+	err := p.Call(ctx, formatterID, canaryHashKey, func(callCtx context.Context, f formatters.Formatter) error {
+		if !f.FormatterMetadata().Enabled() {
 			return nil
 		}
 		batchOuts, e := f.Format(callCtx, alerts)
@@ -56,26 +56,27 @@ func (p *Pool) Format(ctx context.Context, formatterID string, alerts []*alerts.
 	return outs, false, false, errs
 }
 
-func poolKey(f formatters.IFormatter) internal.PoolKey {
-	version := f.Version()
+func poolKey(f formatters.Formatter) internal.PoolKey {
+	cfg := f.FormatterMetadata()
+	version := cfg.Version()
 	if cs := f.Checksum(); cs != "" {
 		version = version + "@" + cs
 	}
-	return internal.PoolKey{PluginID: f.Id(), Version: version}
+	return internal.PoolKey{PluginID: cfg.Id(), Version: version}
 }
 
 func (p *Pool) Sync(msg messaging.Message) {
-	register := func(onDrained func(), items []formatters.IFormatter, maxProcs int) {
+	register := func(onDrained func(), items []formatters.Formatter, maxProcs int) {
 		p.Register(poolKey(items[0]), items, maxProcs, onDrained)
 	}
 	switch m := msg.(type) {
-	case pluginmgr.RegisterMessage[formatters.IFormatter]:
+	case plugin.RegisterMessage[formatters.Formatter]:
 		register(nil, m.Items, m.MaxProcs)
-	case pluginmgr.UpdateMessage[formatters.IFormatter]:
+	case plugin.UpdateMessage[formatters.Formatter]:
 		register(m.OnDrained, m.Items, m.MaxProcs)
-	case pluginmgr.UnregisterMessage[formatters.IFormatter]:
+	case plugin.UnregisterMessage[formatters.Formatter]:
 		p.Unregister(m.ItemID)
-	case pluginmgr.RemoveMessage[formatters.IFormatter]:
+	case plugin.RemoveMessage[formatters.Formatter]:
 		p.Remove(m.ItemID)
 	}
 }

@@ -7,7 +7,7 @@ option go_package = "pb/;pb";
 
 // RuleMetadata carries rule configuration in the alert wire format.
 // Mirrors pkg/rules/rule.proto Metadata with additions for file_name,
-// display_name, references, checksum, and risk_score.
+// display_name, references, and risk_score.
 message RuleMetadata {
   string id               = 1;
   string name             = 2;
@@ -28,11 +28,10 @@ message RuleMetadata {
   repeated string enrichments = 17;
   repeated string tuning_rules = 18;
   string version          = 19;
-  string checksum         = 20;
-  string file_name        = 21;
-  string display_name     = 22;
-  repeated string references = 23;
-  string risk_score       = 24;
+  string file_name        = 20;
+  string display_name     = 21;
+  repeated string references = 22;
+  string risk_score       = 23;
 }
 
 // Alert is the Kafka wire format for a single alert travelling through the
@@ -53,5 +52,6 @@ message Alert {
   string confidence     = 13;
   string severity       = 14;
   RuleMetadata rule     = 15;
-  repeated string enrichments_applied = 16;
+  repeated string enrichments_applied      = 16;
+  repeated string override_merge_by_keys   = 17; // set by plugin's AlertMergeByKeys; overrides rule.merge_by_keys when non-empty
 }

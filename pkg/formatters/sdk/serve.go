@@ -18,15 +18,12 @@ const (
 	MagicValue      = "formatter_v1"
 )
 
-type FormatterMetadata struct {
-	ID          string
-	Name        string
-	Description string
-	Enabled     bool
-}
-
+// FormatterPlugin is the interface that all formatter plugin binaries must implement.
+// Embed sdk.BaseFormatter to get no-op defaults for Init and Shutdown.
+//
+// All static metadata (name, id, enabled, etc.) lives in the YAML
+// sidecar file alongside the binary — the subprocess owns only formatting logic.
 type FormatterPlugin interface {
-	Metadata() FormatterMetadata
 	Init() error
 	Format(ctx context.Context, alert map[string]any) (map[string]any, errors.Error)
 	Shutdown() error
@@ -43,34 +40,8 @@ type server struct {
 	formatter FormatterPlugin
 }
 
-func (s *server) GetMetadata(_ context.Context, _ *rpc_formatters.Empty) (*rpc_formatters.FormatterMetadata, error) {
-	m := s.formatter.Metadata()
-	return &rpc_formatters.FormatterMetadata{
-		Id:          m.ID,
-		Name:        m.Name,
-		Description: m.Description,
-		Enabled:     m.Enabled,
-	}, nil
-}
-
 func (s *server) Init(_ context.Context, _ *rpc_formatters.Empty) (*rpc_formatters.Empty, error) {
 	return &rpc_formatters.Empty{}, s.formatter.Init()
-}
-
-func (s *server) Format(ctx context.Context, req *rpc_formatters.FormatRequest) (*rpc_formatters.FormatResponse, error) {
-	var alert map[string]any
-	if err := json.Unmarshal(req.GetAlertJson(), &alert); err != nil {
-		return nil, err
-	}
-	result, err := s.formatter.Format(ctx, alert)
-	if err != nil {
-		return nil, err
-	}
-	b, err2 := json.Marshal(result)
-	if err2 != nil {
-		return nil, err2
-	}
-	return &rpc_formatters.FormatResponse{ResultJson: b}, nil
 }
 
 func (s *server) FormatBatch(ctx context.Context, req *rpc_formatters.FormatBatchRequest) (*rpc_formatters.FormatBatchResponse, error) {

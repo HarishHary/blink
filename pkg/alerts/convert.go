@@ -5,7 +5,6 @@ import (
 
 	"github.com/harishhary/blink/pkg/alerts/pb"
 	"github.com/harishhary/blink/pkg/events"
-	"github.com/harishhary/blink/pkg/rules"
 	"github.com/harishhary/blink/pkg/rules/config"
 	"github.com/harishhary/blink/pkg/scoring"
 	proto "google.golang.org/protobuf/proto"
@@ -45,7 +44,8 @@ func AlertToProto(a *Alert) (*pb.Alert, error) {
 		Event:              eventStruct,
 		Staged:             a.Staged,
 		OutputsSent:        a.OutputsSent,
-		EnrichmentsApplied: a.EnrichmentsApplied,
+		EnrichmentsApplied:    a.EnrichmentsApplied,
+		OverrideMergeByKeys:   a.OverrideMergeByKeys,
 		LogSource:          a.LogSource,
 		LogType:            a.LogType,
 		SourceEntity:       a.SourceEntity,
@@ -75,7 +75,8 @@ func ProtoToAlert(p *pb.Alert) (*Alert, error) {
 		Event:              event,
 		Staged:             p.GetStaged(),
 		OutputsSent:        p.GetOutputsSent(),
-		EnrichmentsApplied: p.GetEnrichmentsApplied(),
+		EnrichmentsApplied:  p.GetEnrichmentsApplied(),
+		OverrideMergeByKeys: p.GetOverrideMergeByKeys(),
 		LogSource:          p.GetLogSource(),
 		LogType:            p.GetLogType(),
 		SourceEntity:       p.GetSourceEntity(),
@@ -87,8 +88,8 @@ func ProtoToAlert(p *pb.Alert) (*Alert, error) {
 	return a, nil
 }
 
-// Converts a Metadata value to its protobuf representation for embedding in an alert payload.
-func ruleToProto(r rules.Metadata) *pb.RuleMetadata {
+// Converts a *config.RuleMetadata to its protobuf representation for embedding in an alert payload.
+func ruleToProto(r *config.RuleMetadata) *pb.RuleMetadata {
 	if r == nil {
 		return nil
 	}
@@ -112,7 +113,6 @@ func ruleToProto(r rules.Metadata) *pb.RuleMetadata {
 		Enrichments:     r.Enrichments(),
 		TuningRules:     r.TuningRules(),
 		Version:         r.Version(),
-		Checksum:        r.Checksum(),
 		FileName:        r.FileName(),
 		DisplayName:     r.DisplayName(),
 		References:      r.References(),
@@ -132,7 +132,6 @@ func protoToRuleMetadata(m *pb.RuleMetadata) *config.RuleMetadata {
 		EnabledField:         m.GetEnabled(),
 		VersionField:         m.GetVersion(),
 		FileNameField:        m.GetFileName(),
-		ChecksumField:        m.GetChecksum(),
 		SeverityStr:          m.GetSeverity(),
 		ConfidenceStr:        m.GetConfidence(),
 		SignalThresholdStr:   m.GetSignalThreshold(),

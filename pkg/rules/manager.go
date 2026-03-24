@@ -2,12 +2,12 @@ package rules
 
 import (
 	"github.com/harishhary/blink/internal/logger"
-	"github.com/harishhary/blink/internal/pluginmgr"
+	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/rules/config"
 )
 
-var ruleManagerMetrics = pluginmgr.NewPluginManagerMetrics("rulesvc")
+var ruleManagerMetrics = plugin.NewPluginManagerMetrics("rulesvc")
 
-func NewManager(log *logger.Logger, notify pluginmgr.Notify, dir string, watcher *config.Watcher) *pluginmgr.PluginManager[Rule] {
-	return pluginmgr.NewPluginManager[Rule](log, notify, dir, &RuleAdapter{Watcher: watcher}, ruleManagerMetrics)
+func NewManager(log *logger.Logger, notify plugin.Notify, dir string, watcher *config.Watcher) *plugin.PluginManager[Rule] {
+	return plugin.NewPluginManager[Rule](log, notify, dir, &RuleAdapter{Watcher: watcher}, ruleManagerMetrics)
 }

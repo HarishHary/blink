@@ -6,61 +6,80 @@ import (
 	"fmt"
 
 	"github.com/harishhary/blink/internal/errors"
+	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/alerts"
 	"github.com/harishhary/blink/pkg/scoring"
+	"github.com/harishhary/blink/pkg/tuning_rules/config"
 	"github.com/harishhary/blink/pkg/tuning_rules/rpc_tuning_rules"
 )
 
 type rpcTuningRule struct {
-	meta     *rpc_tuning_rules.TuningMetadata
-	checksum string
-	client   rpc_tuning_rules.TuningRuleClient
+	cfgWatcher *config.Watcher
+	fileName   string
+	checksum   string
+	client     rpc_tuning_rules.TuningRuleClient
 }
 
-func newRpcTuningRule(meta *rpc_tuning_rules.TuningMetadata, client rpc_tuning_rules.TuningRuleClient, checksum string) *rpcTuningRule {
-	return &rpcTuningRule{meta: meta, checksum: checksum, client: client}
-}
-
-func (r *rpcTuningRule) Id() string {
-	if id := r.meta.GetId(); id != "" {
-		return id
+func newRpcTuningRule(fileName string, client rpc_tuning_rules.TuningRuleClient, watcher *config.Watcher, checksum string) *rpcTuningRule {
+	return &rpcTuningRule{
+		cfgWatcher: watcher,
+		fileName:   fileName,
+		checksum:   checksum,
+		client:     client,
 	}
-	return r.meta.GetName()
-}
-func (r *rpcTuningRule) Name() string {
-	return r.meta.GetName()
 }
 
-func (r *rpcTuningRule) Description() string {
-	return r.meta.GetDescription()
+func (r *rpcTuningRule) cfg() *config.TuningMetadata {
+	if r.cfgWatcher == nil {
+		return nil
+	}
+	return r.cfgWatcher.Current().ByFileName(r.fileName)
 }
 
-func (r *rpcTuningRule) Enabled() bool {
-	return r.meta.GetEnabled()
+// TuningMetadata returns the live YAML-derived tuning rule configuration.
+func (r *rpcTuningRule) TuningMetadata() *config.TuningMetadata {
+	if c := r.cfg(); c != nil {
+		return c
+	}
+	return &config.TuningMetadata{FileNameField: r.fileName}
 }
 
-func (r *rpcTuningRule) Version() string {
-	return r.meta.GetVersion()
+func (r *rpcTuningRule) PluginMetadata() plugin.PluginMetadata {
+	c := r.TuningMetadata()
+	return plugin.PluginMetadata{
+		ID:          c.Id(),
+		Name:        c.Name(),
+		Description: c.Description(),
+		Enabled:     c.Enabled(),
+		Version:     c.Version(),
+	}
 }
 
-func (r *rpcTuningRule) Checksum() string {
-	return r.checksum
-}
-
+func (r *rpcTuningRule) Checksum() string { return r.checksum }
 func (r *rpcTuningRule) String() string {
-	return fmt.Sprintf("TuningRule '%s' (id:%s, enabled:%t)", r.meta.GetName(), r.meta.GetId(), r.meta.GetEnabled())
+	c := r.TuningMetadata()
+	return fmt.Sprintf("TuningRule '%s' (id:%s, enabled:%t)", c.Name(), c.Id(), c.Enabled())
 }
 
-func (r *rpcTuningRule) Global() bool {
-	return r.meta.GetGlobal()
-}
+func (r *rpcTuningRule) Global() bool { return r.TuningMetadata().Global() }
 
+// RuleType parses the YAML rule_type string into a typed RuleType constant.
 func (r *rpcTuningRule) RuleType() RuleType {
-	return RuleType(r.meta.GetRuleType())
+	switch r.TuningMetadata().RuleTypeStr() {
+	case "set_confidence":
+		return SetConfidence
+	case "increase_confidence":
+		return IncreaseConfidence
+	case "decrease_confidence":
+		return DecreaseConfidence
+	default:
+		return Ignore
+	}
 }
 
+// Confidence parses the YAML confidence string into a scoring.Confidence value.
 func (r *rpcTuningRule) Confidence() scoring.Confidence {
-	conf, _ := scoring.ParseConfidence(r.meta.GetConfidence())
+	conf, _ := scoring.ParseConfidence(r.TuningMetadata().ConfidenceStr())
 	return conf
 }
 

@@ -2,65 +2,25 @@ package enrichments
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/harishhary/blink/internal/errors"
+	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/alerts"
+	"github.com/harishhary/blink/pkg/enrichments/config"
 )
 
-func ValidateDependencyGraph(enrichments []IEnrichment) error {
-	index := make(map[string]IEnrichment, len(enrichments))
-	for _, e := range enrichments {
-		index[e.Name()] = e
-	}
+// PluginMetadata is re-exported from internal/plugin so plugin authors don't need to
+// import an internal package.
+type PluginMetadata = plugin.PluginMetadata
 
-	const (
-		unvisited = iota
-		inProgress
-		done
-	)
-	state := make(map[string]int, len(enrichments))
-
-	var visit func(name string, path []string) error
-	visit = func(name string, path []string) error {
-		switch state[name] {
-		case done:
-			return nil
-		case inProgress:
-			return fmt.Errorf("enrichment dependency cycle detected: %v → %s", path, name)
-		}
-		state[name] = inProgress
-		e, ok := index[name]
-		if !ok {
-			return fmt.Errorf("enrichment %q depends on unknown enrichment %q", path[len(path)-1], name)
-		}
-		for _, dep := range e.DependsOn() {
-			if err := visit(dep, append(path, name)); err != nil {
-				return err
-			}
-		}
-		state[name] = done
-		return nil
-	}
-
-	for _, e := range enrichments {
-		if err := visit(e.Name(), []string{}); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-type IEnrichment interface {
+type Enrichment interface {
 	Enrich(ctx context.Context, alerts []*alerts.Alert) errors.Error
 	// DependsOn returns plugin names that must run before this enrichment.
+	// Populated from the YAML sidecar depends_on field.
 	DependsOn() []string
 
-	Id() string
-	Name() string
-	Description() string
-	Enabled() bool
-	Version() string
+	EnrichmentMetadata() *config.EnrichmentMetadata
+	PluginMetadata() PluginMetadata // satisfies plugin.Syncable
 	Checksum() string
 	String() string
 }

@@ -10,9 +10,10 @@ import (
 
 	"github.com/harishhary/blink/cmd/event_matcher/matcher"
 	"github.com/harishhary/blink/internal/logger"
-	"github.com/harishhary/blink/internal/pluginmgr"
+	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/internal/services"
 	"github.com/harishhary/blink/pkg/matchers"
+	matcherconfig "github.com/harishhary/blink/pkg/matchers/config"
 	pools "github.com/harishhary/blink/internal/pools"
 	matchcatalog "github.com/harishhary/blink/pkg/matchers/pool"
 	"github.com/harishhary/blink/pkg/rules/config"
@@ -30,6 +31,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Rule config watcher (used by the matcher service to look up rules).
 	ruleConfigDir := os.Getenv("RULE_CONFIG_DIR")
 	if ruleConfigDir == "" {
 		log.Fatal("RULE_CONFIG_DIR is required")
@@ -39,6 +41,13 @@ func main() {
 		log.Fatalf("config watcher: %v", err)
 	}
 
+	// Matcher plugin config watcher (YAML sidecars for matcher binaries).
+	matcherPluginDir := os.Getenv("MATCHER_PLUGIN_DIR")
+	matcherCfgWatcher, err := matcherconfig.NewWatcher(matcherPluginDir)
+	if err != nil {
+		log.Fatalf("matcher config watcher: %v", err)
+	}
+
 	routingTable := pools.NewRoutingTable()
 	matcherPool := matchcatalog.NewPool(routingTable, 0)
 
@@ -46,8 +55,8 @@ func main() {
 		"event-matcher-sync",
 		"BLINK-EVENT-MATCHER - SYNC",
 		"MATCHER_PLUGIN_DIR",
-		func(log *logger.Logger, dir string) pluginmgr.Plugin {
-			return matchers.NewManager(log, matcherPool.Sync, dir)
+		func(log *logger.Logger, dir string) plugin.Plugin {
+			return matchers.NewManager(log, matcherPool.Sync, dir, matcherCfgWatcher)
 		},
 	)
 	if err != nil {
@@ -61,6 +70,7 @@ func main() {
 	runner := services.New()
 	runner.Register(
 		cfgWatcherSvc,
+		matcherCfgWatcher,
 		syncSvc,
 		matcherSvc,
 	)

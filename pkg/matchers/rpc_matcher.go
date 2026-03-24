@@ -6,39 +6,60 @@ import (
 	"time"
 
 	"github.com/harishhary/blink/internal/errors"
+	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/events"
+	"github.com/harishhary/blink/pkg/matchers/config"
 	"github.com/harishhary/blink/pkg/matchers/rpc_matchers"
 )
 
 type rpcMatcher struct {
-	client   rpc_matchers.MatcherClient
-	meta     *rpc_matchers.MatcherMetadata
-	checksum string
-	timeout  time.Duration
+	cfgWatcher *config.Watcher
+	fileName   string
+	checksum   string
+	client     rpc_matchers.MatcherClient
+	timeout    time.Duration
 }
 
-func newRpcMatcher(meta *rpc_matchers.MatcherMetadata, client rpc_matchers.MatcherClient, timeout time.Duration, checksum string) *rpcMatcher {
+func newRpcMatcher(fileName string, client rpc_matchers.MatcherClient, watcher *config.Watcher, timeout time.Duration, checksum string) *rpcMatcher {
 	return &rpcMatcher{
-		meta:     meta,
-		checksum: checksum,
-		client:   client,
-		timeout:  timeout,
+		cfgWatcher: watcher,
+		fileName:   fileName,
+		checksum:   checksum,
+		client:     client,
+		timeout:    timeout,
 	}
 }
 
-func (r *rpcMatcher) Id() string {
-	if id := r.meta.GetId(); id != "" {
-		return id
+func (r *rpcMatcher) cfg() *config.MatcherMetadata {
+	if r.cfgWatcher == nil {
+		return nil
 	}
-	return r.meta.GetName()
+	return r.cfgWatcher.Current().ByFileName(r.fileName)
 }
-func (r *rpcMatcher) Name() string        { return r.meta.GetName() }
-func (r *rpcMatcher) Description() string { return r.meta.GetDescription() }
-func (r *rpcMatcher) Enabled() bool       { return r.meta.GetEnabled() }
-func (r *rpcMatcher) Version() string     { return r.meta.GetVersion() }
-func (r *rpcMatcher) Checksum() string    { return r.checksum }
+
+// MatcherMetadata returns the live YAML-derived matcher configuration.
+func (r *rpcMatcher) MatcherMetadata() *config.MatcherMetadata {
+	if c := r.cfg(); c != nil {
+		return c
+	}
+	return &config.MatcherMetadata{FileNameField: r.fileName}
+}
+
+func (r *rpcMatcher) PluginMetadata() plugin.PluginMetadata {
+	c := r.MatcherMetadata()
+	return plugin.PluginMetadata{
+		ID:          c.Id(),
+		Name:        c.Name(),
+		Description: c.Description(),
+		Enabled:     c.Enabled(),
+		Version:     c.Version(),
+	}
+}
+
+func (r *rpcMatcher) Global() bool     { return r.MatcherMetadata().Global() }
+func (r *rpcMatcher) Checksum() string { return r.checksum }
 func (r *rpcMatcher) String() string {
-	return "RpcMatcher '" + r.meta.GetName() + "' id:'" + r.meta.GetId() + "'"
+	return "RpcMatcher '" + r.MatcherMetadata().Name() + "' id:'" + r.MatcherMetadata().Id() + "'"
 }
 
 func (r *rpcMatcher) Match(ctx context.Context, evts []events.Event) ([]bool, errors.Error) {

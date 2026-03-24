@@ -2,11 +2,12 @@ package matchers
 
 import (
 	"github.com/harishhary/blink/internal/logger"
-	"github.com/harishhary/blink/internal/pluginmgr"
+	"github.com/harishhary/blink/internal/plugin"
+	"github.com/harishhary/blink/pkg/matchers/config"
 )
 
-var matcherManagerMetrics = pluginmgr.NewPluginManagerMetrics("matchersvc")
+var matcherManagerMetrics = plugin.NewPluginManagerMetrics("matchersvc")
 
-func NewManager(log *logger.Logger, notify pluginmgr.Notify, dir string) pluginmgr.Plugin {
-	return pluginmgr.NewPluginManager[Matcher](log, notify, dir, &MatcherAdapter{}, matcherManagerMetrics)
+func NewManager(log *logger.Logger, notify plugin.Notify, dir string, watcher *config.Watcher) *plugin.PluginManager[Matcher] {
+	return plugin.NewPluginManager[Matcher](log, notify, dir, &MatcherAdapter{Watcher: watcher}, matcherManagerMetrics)
 }

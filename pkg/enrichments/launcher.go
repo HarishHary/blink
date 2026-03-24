@@ -5,49 +5,79 @@ import (
 	"fmt"
 	"time"
 
-	plugin "github.com/hashicorp/go-plugin"
+	goplugin "github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
 
-	"github.com/harishhary/blink/internal/pluginmgr"
+	"github.com/harishhary/blink/internal/helpers"
+	"github.com/harishhary/blink/internal/plugin"
+	internal "github.com/harishhary/blink/internal/pools"
+	"github.com/harishhary/blink/pkg/enrichments/config"
 	"github.com/harishhary/blink/pkg/enrichments/rpc_enrichments"
 )
 
-type EnrichmentAdapter struct{}
+type EnrichmentAdapter struct {
+	Watcher *config.Watcher
+}
 
-func (l *EnrichmentAdapter) PluginKey() string         { return "enrichment" }
-func (l *EnrichmentAdapter) MagicValue() string        { return "enrichment_v1" }
-func (l *EnrichmentAdapter) GRPCPlugin() plugin.Plugin { return &enrichmentPlugin{} }
+func (l *EnrichmentAdapter) PluginKey() string           { return "enrichment" }
+func (l *EnrichmentAdapter) MagicValue() string          { return "enrichment_v1" }
+func (l *EnrichmentAdapter) GRPCPlugin() goplugin.Plugin { return &enrichmentPlugin{} }
 
-func (l *EnrichmentAdapter) Handshake(ctx context.Context, raw interface{}, _ string, hash string) (IEnrichment, pluginmgr.PluginLifecycle, string, string, error) {
+// Handshake connects to the enrichment subprocess, calls Init, and returns a
+// ready rpcEnrichment.
+func (l *EnrichmentAdapter) Handshake(ctx context.Context, raw interface{}, binPath string, hash string) (Enrichment, plugin.PluginLifecycle, string, string, error) {
 	rpc, ok := raw.(rpc_enrichments.EnrichmentClient)
 	if !ok {
 		return nil, nil, "", "", fmt.Errorf("dispense: unexpected type %T", raw)
 	}
 
-	metaCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	meta, err := rpc.GetMetadata(metaCtx, &rpc_enrichments.Empty{})
-	cancel()
-	if err != nil {
-		return nil, nil, "", "", fmt.Errorf("metadata: %w", err)
-	}
+	fileName := helpers.BinaryBaseName(binPath)
 
 	initCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	_, err = rpc.Init(initCtx, &rpc_enrichments.Empty{})
+	_, err := rpc.Init(initCtx, &rpc_enrichments.Empty{})
 	cancel()
 	if err != nil {
 		return nil, nil, "", "", fmt.Errorf("init: %w", err)
 	}
 
-	e := newRpcEnrichment(meta, rpc, hash)
-	return e, &enrichmentLifecycle{rpc: rpc}, meta.GetId(), meta.GetName(), nil
+	e := newRpcEnrichment(fileName, rpc, l.Watcher, hash)
+	cfg := l.Watcher.Current().ByFileName(fileName)
+	id, name := fileName, fileName
+	if cfg != nil {
+		id = cfg.Id()
+		name = cfg.Name()
+	}
+	return e, &enrichmentLifecycle{rpc: rpc}, id, name, nil
 }
 
-// IsReady always returns true - enrichments have no YAML sidecar prerequisite.
-func (l *EnrichmentAdapter) IsReady(_ string) bool                    { return true }
-func (l *EnrichmentAdapter) IsShadow(_ string) bool                   { return false }
-func (l *EnrichmentAdapter) IsEnabled(_ *pluginmgr.PluginHandle) bool { return true }
+// IsReady reports whether this binary's YAML sidecar exists in the current registry.
+func (l *EnrichmentAdapter) IsReady(binPath string) bool {
+	return l.Watcher.Current().ByFileName(helpers.BinaryBaseName(binPath)) != nil
+}
 
-func (l *EnrichmentAdapter) Workers(_ string) int { return 1 }
+// IsShadow reports whether this binary's YAML declares it as a shadow or canary version.
+func (l *EnrichmentAdapter) IsShadow(binPath string) bool {
+	cfg := l.Watcher.Current().ByFileName(helpers.BinaryBaseName(binPath))
+	if cfg == nil {
+		return false
+	}
+	m := cfg.RolloutMode()
+	return m == internal.RolloutModeCanary || m == internal.RolloutModeShadow
+}
+
+// IsEnabled reports whether the enrichment's YAML sidecar still exists and is enabled.
+func (l *EnrichmentAdapter) IsEnabled(h *plugin.PluginHandle) bool {
+	cfg := l.Watcher.Current().ByFileName(helpers.BinaryBaseName(h.BinPath))
+	return cfg != nil && cfg.Enabled()
+}
+
+func (l *EnrichmentAdapter) Workers(binPath string) int {
+	cfg := l.Watcher.Current().ByFileName(helpers.BinaryBaseName(binPath))
+	if cfg == nil || cfg.MaxProcs() <= 0 {
+		return 1
+	}
+	return cfg.MaxProcs()
+}
 
 type enrichmentLifecycle struct {
 	rpc rpc_enrichments.EnrichmentClient
@@ -63,9 +93,11 @@ func (l *enrichmentLifecycle) Shutdown(ctx context.Context) error {
 	return err
 }
 
-type enrichmentPlugin struct{ plugin.NetRPCUnsupportedPlugin }
+type enrichmentPlugin struct {
+	goplugin.NetRPCUnsupportedPlugin
+}
 
-func (p *enrichmentPlugin) GRPCServer(_ *plugin.GRPCBroker, _ *grpc.Server) error { return nil }
-func (p *enrichmentPlugin) GRPCClient(_ context.Context, _ *plugin.GRPCBroker, c *grpc.ClientConn) (interface{}, error) {
+func (p *enrichmentPlugin) GRPCServer(_ *goplugin.GRPCBroker, _ *grpc.Server) error { return nil }
+func (p *enrichmentPlugin) GRPCClient(_ context.Context, _ *goplugin.GRPCBroker, c *grpc.ClientConn) (interface{}, error) {
 	return rpc_enrichments.NewEnrichmentClient(c), nil
 }

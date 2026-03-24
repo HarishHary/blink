@@ -18,62 +18,31 @@ const (
 	MagicValue      = "tuning_rule_v1"
 )
 
-// TuningMetadata holds the static properties returned by TuningRulePlugin.Metadata().
-type TuningMetadata struct {
-	ID          string
-	Name        string
-	Description string
-	Enabled     bool
-	Global      bool
-	RuleType    int32 // 0=Ignore, 1=SetConfidence, 2=IncreaseConfidence, 3=DecreaseConfidence
-	Confidence  string
-}
-
+// TuningRulePlugin is the interface that all tuning rule plugin binaries must implement.
+// Embed sdk.BaseTuningRule to get no-op defaults for Init and Shutdown.
+//
+// All static metadata (name, id, enabled, global, rule_type, confidence, etc.) lives in
+// the YAML sidecar file alongside the binary — the subprocess owns only tuning logic.
 type TuningRulePlugin interface {
-	Metadata() TuningMetadata
 	Init() error
 	Tune(ctx context.Context, alert map[string]any) (bool, errors.Error)
 	Shutdown() error
 }
 
+// BaseTuningRule provides no-op defaults for Init and Shutdown. Embed in your rule struct.
 type BaseTuningRule struct{}
 
 func (BaseTuningRule) Init() error     { return nil }
 func (BaseTuningRule) Shutdown() error { return nil }
 
-// server wraps a TuningRulePlugin and serve the gRPC TuningRuleServer interface.
+// server wraps a TuningRulePlugin and serves the gRPC TuningRuleServer interface.
 type server struct {
 	rpc_tuning_rules.UnimplementedTuningRuleServer
 	rule TuningRulePlugin
 }
 
-func (s *server) GetMetadata(_ context.Context, _ *rpc_tuning_rules.Empty) (*rpc_tuning_rules.TuningMetadata, error) {
-	m := s.rule.Metadata()
-	return &rpc_tuning_rules.TuningMetadata{
-		Id:          m.ID,
-		Name:        m.Name,
-		Description: m.Description,
-		Enabled:     m.Enabled,
-		Global:      m.Global,
-		RuleType:    m.RuleType,
-		Confidence:  m.Confidence,
-	}, nil
-}
-
 func (s *server) Init(_ context.Context, _ *rpc_tuning_rules.Empty) (*rpc_tuning_rules.Empty, error) {
 	return &rpc_tuning_rules.Empty{}, s.rule.Init()
-}
-
-func (s *server) Tune(ctx context.Context, req *rpc_tuning_rules.TuneRequest) (*rpc_tuning_rules.TuneResponse, error) {
-	var alert map[string]any
-	if err := json.Unmarshal(req.GetAlertJson(), &alert); err != nil {
-		return nil, err
-	}
-	applies, err := s.rule.Tune(ctx, alert)
-	if err != nil {
-		return nil, err
-	}
-	return &rpc_tuning_rules.TuneResponse{Applies: applies}, nil
 }
 
 func (s *server) TuneBatch(ctx context.Context, req *rpc_tuning_rules.TuneBatchRequest) (*rpc_tuning_rules.TuneBatchResponse, error) {

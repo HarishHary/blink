@@ -6,7 +6,7 @@ import (
 
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/messaging"
-	"github.com/harishhary/blink/internal/pluginmgr"
+	"github.com/harishhary/blink/internal/plugin"
 	internal "github.com/harishhary/blink/internal/pools"
 	"github.com/harishhary/blink/pkg/events"
 	"github.com/harishhary/blink/pkg/rules"
@@ -30,11 +30,11 @@ func NewPool(watcher *config.Watcher, drainTimeout time.Duration) *Pool {
 }
 
 // Evaluate runs all evts against the rule identified by ruleID in a single pool call.
-func (p *Pool) Evaluate(ctx context.Context, ruleID string, evts []events.Event, canaryHashKey string) ([]bool, errors.Error) {
-	var results []bool
+func (p *Pool) Evaluate(ctx context.Context, ruleID string, evts []events.Event, canaryHashKey string) ([]rules.EvalResult, errors.Error) {
+	var results []rules.EvalResult
 	err := p.Call(ctx, ruleID, canaryHashKey, func(ctx context.Context, r rules.Rule) error {
-		if !r.Enabled() {
-			results = make([]bool, len(evts))
+		if !r.RuleMetadata().Enabled() {
+			results = make([]rules.EvalResult, len(evts))
 			return nil
 		}
 		var e errors.Error
@@ -52,23 +52,24 @@ func (p *Pool) Evaluate(ctx context.Context, ruleID string, evts []events.Event,
 // always produces a distinct key even if the operator forgot to bump the version
 // string in the rule config - preventing silent same-key overwrites in the pool.
 func poolKey(r rules.Rule) internal.PoolKey {
-	version := r.Version()
+	cfg := r.RuleMetadata()
+	version := cfg.Version()
 	if cs := r.Checksum(); cs != "" {
 		version = version + "@" + cs
 	}
-	return internal.PoolKey{PluginID: r.Id(), Version: version}
+	return internal.PoolKey{PluginID: cfg.Id(), Version: version}
 }
 
 // Handles plugin lifecycle messages from the plugin manager bus, registering or deregistering rules in the pool.
 func (p *Pool) Sync(msg messaging.Message) {
 	switch m := msg.(type) {
-	case pluginmgr.RegisterMessage[rules.Rule]:
+	case plugin.RegisterMessage[rules.Rule]:
 		p.Register(poolKey(m.Items[0]), m.Items, m.MaxProcs, nil)
-	case pluginmgr.UpdateMessage[rules.Rule]:
+	case plugin.UpdateMessage[rules.Rule]:
 		p.Register(poolKey(m.Items[0]), m.Items, m.MaxProcs, m.OnDrained)
-	case pluginmgr.UnregisterMessage[rules.Rule]:
+	case plugin.UnregisterMessage[rules.Rule]:
 		p.Unregister(m.ItemID)
-	case pluginmgr.RemoveMessage[rules.Rule]:
+	case plugin.RemoveMessage[rules.Rule]:
 		p.Remove(m.ItemID)
 	}
 }

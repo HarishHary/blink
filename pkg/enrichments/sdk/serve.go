@@ -20,18 +20,12 @@ const (
 	DefaultTimeout  = 5 * time.Second
 )
 
-type EnrichmentMetadata struct {
-	ID          string
-	Name        string
-	Description string
-	Enabled     bool
-	DependsOn   []string
-	Version     string
-}
-
+// EnrichmentPlugin is the interface that all enrichment plugin binaries must implement.
+// Embed sdk.BaseEnrichment to get no-op defaults for Init and Shutdown.
+//
+// All static metadata (name, id, enabled, depends_on, etc.) lives in the YAML
+// sidecar file alongside the binary - the subprocess owns only enrichment logic.
 type EnrichmentPlugin interface {
-	// Metadata returns static enrichment configuration. Called once during handshake.
-	Metadata() EnrichmentMetadata
 	// Init is called once after the plugin connects, before any Enrich calls.
 	Init() error
 	// Enrich enriches the alert event fields and returns the modified fields.
@@ -40,6 +34,8 @@ type EnrichmentPlugin interface {
 	Shutdown() error
 }
 
+// BaseEnrichment provides no-op defaults for Init and Shutdown.
+// Embed in your enrichment struct to avoid implementing them when not needed.
 type BaseEnrichment struct{}
 
 func (BaseEnrichment) Init() error     { return nil }
@@ -50,36 +46,8 @@ type server struct {
 	enrichment EnrichmentPlugin
 }
 
-func (s *server) GetMetadata(_ context.Context, _ *rpc_enrichments.Empty) (*rpc_enrichments.EnrichmentMetadata, error) {
-	m := s.enrichment.Metadata()
-	return &rpc_enrichments.EnrichmentMetadata{
-		Id:          m.ID,
-		Name:        m.Name,
-		Description: m.Description,
-		Enabled:     m.Enabled,
-		DependsOn:   m.DependsOn,
-		Version:     m.Version,
-	}, nil
-}
-
 func (s *server) Init(_ context.Context, _ *rpc_enrichments.Empty) (*rpc_enrichments.Empty, error) {
 	return &rpc_enrichments.Empty{}, s.enrichment.Init()
-}
-
-func (s *server) Enrich(ctx context.Context, req *rpc_enrichments.EnrichRequest) (*rpc_enrichments.EnrichResponse, error) {
-	var alert map[string]any
-	if err := json.Unmarshal(req.GetAlert().GetJson(), &alert); err != nil {
-		return nil, err
-	}
-	enriched, err := s.enrichment.Enrich(ctx, alert)
-	if err != nil {
-		return nil, err
-	}
-	b, err2 := json.Marshal(enriched)
-	if err2 != nil {
-		return nil, err2
-	}
-	return &rpc_enrichments.EnrichResponse{Alert: &rpc_enrichments.Alert{Json: b}}, nil
 }
 
 func (s *server) EnrichBatch(ctx context.Context, req *rpc_enrichments.EnrichBatchRequest) (*rpc_enrichments.EnrichBatchResponse, error) {

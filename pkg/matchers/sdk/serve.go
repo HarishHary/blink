@@ -21,20 +21,12 @@ const (
 	DefaultTimeout  = 5 * time.Second
 )
 
-// MatcherMetadata holds the static properties of a matcher, returned by MatcherPlugin.Metadata().
-type MatcherMetadata struct {
-	ID          string
-	Name        string
-	Description string
-	Enabled     bool
-	Global      bool
-	Version     string
-}
-
 // MatcherPlugin is the interface that all matcher plugin binaries must implement.
 // Embed sdk.BaseMatcher to get no-op defaults for Init and Shutdown.
+//
+// All static metadata (name, id, enabled, global, etc.) lives in the YAML
+// sidecar file alongside the binary — the subprocess owns only matching logic.
 type MatcherPlugin interface {
-	Metadata() MatcherMetadata
 	Init() error
 	Match(ctx context.Context, event events.Event) (bool, errors.Error)
 	Shutdown() error
@@ -53,32 +45,8 @@ type server struct {
 	matcher MatcherPlugin
 }
 
-func (s *server) GetMetadata(_ context.Context, _ *rpc_matchers.Empty) (*rpc_matchers.MatcherMetadata, error) {
-	m := s.matcher.Metadata()
-	return &rpc_matchers.MatcherMetadata{
-		Id:          m.ID,
-		Name:        m.Name,
-		Description: m.Description,
-		Enabled:     m.Enabled,
-		Global:      m.Global,
-		Version:     m.Version,
-	}, nil
-}
-
 func (s *server) Init(_ context.Context, _ *rpc_matchers.Empty) (*rpc_matchers.Empty, error) {
 	return &rpc_matchers.Empty{}, s.matcher.Init()
-}
-
-func (s *server) Match(ctx context.Context, req *rpc_matchers.MatchRequest) (*rpc_matchers.MatchResponse, error) {
-	var event events.Event
-	if err := json.Unmarshal(req.GetEvent().GetJson(), &event); err != nil {
-		return nil, err
-	}
-	matched, err := s.matcher.Match(ctx, event)
-	if err != nil {
-		return nil, err
-	}
-	return &rpc_matchers.MatchResponse{Matched: matched}, nil
 }
 
 func (s *server) MatchBatch(ctx context.Context, req *rpc_matchers.MatchBatchRequest) (*rpc_matchers.MatchBatchResponse, error) {

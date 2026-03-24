@@ -1,0 +1,15 @@
+id: "550e8400-e29b-41d4-a716-446655440012"
+name: "allow_all"
+display_name: "Allow All"
+description: "Matches every event. Use for testing only."
+enabled: true
+version: "1.0.0"
+
+# global: true means this matcher runs on all rules regardless of their
+# matchers list. Set to false (or omit) for opt-in use only.
+global: false
+
+# Rollout control (optional — defaults to blue-green).
+# mode: "blue-green"  # blue-green | canary | shadow
+# min_procs: 1
+# max_procs: 2
