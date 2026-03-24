@@ -34,7 +34,8 @@ func (r *rpcMatcher) cfg() *config.MatcherMetadata {
 	if r.cfgWatcher == nil {
 		return nil
 	}
-	return r.cfgWatcher.Current().ByFileName(r.fileName)
+	v, _ := r.cfgWatcher.Current().ByFileName(r.fileName)
+	return v
 }
 
 // MatcherMetadata returns the live YAML-derived matcher configuration.
@@ -42,24 +43,18 @@ func (r *rpcMatcher) MatcherMetadata() *config.MatcherMetadata {
 	if c := r.cfg(); c != nil {
 		return c
 	}
-	return &config.MatcherMetadata{FileNameField: r.fileName}
+	return &config.MatcherMetadata{PluginMetadata: plugin.PluginMetadata{Id: r.fileName, Name: r.fileName, FileName: r.fileName}}
 }
 
-func (r *rpcMatcher) PluginMetadata() plugin.PluginMetadata {
-	c := r.MatcherMetadata()
-	return plugin.PluginMetadata{
-		ID:          c.Id(),
-		Name:        c.Name(),
-		Description: c.Description(),
-		Enabled:     c.Enabled(),
-		Version:     c.Version(),
-	}
+func (r *rpcMatcher) Metadata() plugin.PluginMetadata {
+	return r.MatcherMetadata().Metadata()
 }
 
-func (r *rpcMatcher) Global() bool     { return r.MatcherMetadata().Global() }
+func (r *rpcMatcher) Global() bool     { return r.MatcherMetadata().Global }
 func (r *rpcMatcher) Checksum() string { return r.checksum }
 func (r *rpcMatcher) String() string {
-	return "RpcMatcher '" + r.MatcherMetadata().Name() + "' id:'" + r.MatcherMetadata().Id() + "'"
+	m := r.MatcherMetadata().Metadata()
+	return "RpcMatcher '" + m.Name + "' id:'" + m.Id + "'"
 }
 
 func (r *rpcMatcher) Match(ctx context.Context, evts []events.Event) ([]bool, errors.Error) {

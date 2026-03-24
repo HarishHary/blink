@@ -28,7 +28,7 @@ func NewPool(routing *internal.RoutingTable, drainTimeout time.Duration) *Pool {
 func (p *Pool) Enrich(ctx context.Context, enrichmentID string, alerts []*alerts.Alert, canaryHashKey string) (absent bool, removed bool, errs []errors.Error) {
 	errs = make([]errors.Error, len(alerts))
 	err := p.Call(ctx, enrichmentID, canaryHashKey, func(callCtx context.Context, e enrichments.Enrichment) error {
-		if !e.EnrichmentMetadata().Enabled() {
+		if !e.EnrichmentMetadata().Enabled {
 			return nil
 		}
 		if err := e.Enrich(callCtx, alerts); err != nil {
@@ -52,11 +52,7 @@ func (p *Pool) Enrich(ctx context.Context, enrichmentID string, alerts []*alerts
 
 func poolKey(e enrichments.Enrichment) internal.PoolKey {
 	cfg := e.EnrichmentMetadata()
-	version := cfg.Version()
-	if cs := e.Checksum(); cs != "" {
-		version = version + "@" + cs
-	}
-	return internal.PoolKey{PluginID: cfg.Id(), Version: version}
+	return internal.PoolKey{Id: cfg.Id, Version: cfg.Version, Hash: e.Checksum()}
 }
 
 func (p *Pool) Sync(msg messaging.Message) {
@@ -69,8 +65,8 @@ func (p *Pool) Sync(msg messaging.Message) {
 	case plugin.UpdateMessage[enrichments.Enrichment]:
 		register(m.OnDrained, m.Items, m.MaxProcs)
 	case plugin.UnregisterMessage[enrichments.Enrichment]:
-		p.Unregister(m.ItemID)
+		p.Unregister(m.ItemKey)
 	case plugin.RemoveMessage[enrichments.Enrichment]:
-		p.Remove(m.ItemID)
+		p.Remove(m.ItemKey)
 	}
 }

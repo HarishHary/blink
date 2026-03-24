@@ -10,7 +10,7 @@ import (
 
 	"github.com/harishhary/blink/internal/logger"
 	"github.com/harishhary/blink/internal/messaging"
-	"github.com/harishhary/blink/internal/pluginmgr"
+	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/rules"
 	"github.com/harishhary/blink/pkg/rules/config"
 )
@@ -65,8 +65,8 @@ func waitForRegister(t *testing.T, ch <-chan messaging.Message, name string, tim
 	for {
 		select {
 		case msg := <-ch:
-			if rm, ok := msg.(pluginmgr.RegisterMessage[rules.Rule]); ok {
-				if len(rm.Items) > 0 && rm.Items[0].Name() == name {
+			if rm, ok := msg.(plugin.RegisterMessage[rules.Rule]); ok {
+				if len(rm.Items) > 0 && rm.Items[0].RuleMetadata().Name == name {
 					return true
 				}
 			}
@@ -82,8 +82,8 @@ func waitForUnregister(t *testing.T, ch <-chan messaging.Message, name string, t
 	for {
 		select {
 		case msg := <-ch:
-			if um, ok := msg.(pluginmgr.UnregisterMessage[rules.Rule]); ok {
-				if um.ItemID == name {
+			if um, ok := msg.(plugin.UnregisterMessage[rules.Rule]); ok {
+				if um.ItemKey.Id == name {
 					return true
 				}
 			}
@@ -99,8 +99,8 @@ func waitForRemove(t *testing.T, ch <-chan messaging.Message, id string, timeout
 	for {
 		select {
 		case msg := <-ch:
-			if rm, ok := msg.(pluginmgr.RemoveMessage[rules.Rule]); ok {
-				if rm.ItemID == id {
+			if rm, ok := msg.(plugin.RemoveMessage[rules.Rule]); ok {
+				if rm.ItemKey.Id == id {
 					return true
 				}
 			}

@@ -12,6 +12,7 @@ import (
 // PluginMetadata is re-exported from internal/plugin so plugin authors don't need to
 // import an internal package.
 type PluginMetadata = plugin.PluginMetadata
+type EnrichmentMetadata = config.EnrichmentMetadata
 
 type Enrichment interface {
 	Enrich(ctx context.Context, alerts []*alerts.Alert) errors.Error
@@ -19,8 +20,8 @@ type Enrichment interface {
 	// Populated from the YAML sidecar depends_on field.
 	DependsOn() []string
 
-	EnrichmentMetadata() *config.EnrichmentMetadata
-	PluginMetadata() PluginMetadata // satisfies plugin.Syncable
+	EnrichmentMetadata() *EnrichmentMetadata
+	Metadata() PluginMetadata // satisfies plugin.Syncable
 	Checksum() string
 	String() string
 }

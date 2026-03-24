@@ -30,7 +30,7 @@ func (p *Pool) Tune(ctx context.Context, tuningRuleID string, alerts []alerts.Al
 ) {
 	applies = make([]bool, len(alerts))
 	err := p.Call(ctx, tuningRuleID, canaryHashKey, func(callCtx context.Context, t tuning.TuningRule) error {
-		if !t.TuningMetadata().Enabled() {
+		if !t.TuningMetadata().Enabled {
 			return nil
 		}
 		ruleType = t.RuleType()
@@ -48,11 +48,7 @@ func (p *Pool) Tune(ctx context.Context, tuningRuleID string, alerts []alerts.Al
 // Handles plugin lifecycle messages from the plugin manager bus, registering or deregistering tuning rules in the pool.
 func poolKey(t tuning.TuningRule) internal.PoolKey {
 	cfg := t.TuningMetadata()
-	version := cfg.Version()
-	if cs := t.Checksum(); cs != "" {
-		version = version + "@" + cs
-	}
-	return internal.PoolKey{PluginID: cfg.Id(), Version: version}
+	return internal.PoolKey{Id: cfg.Id, Version: cfg.Version, Hash: t.Checksum()}
 }
 
 func (p *Pool) Sync(msg messaging.Message) {
@@ -65,8 +61,8 @@ func (p *Pool) Sync(msg messaging.Message) {
 	case plugin.UpdateMessage[tuning.TuningRule]:
 		register(m.OnDrained, m.Items, m.MaxProcs)
 	case plugin.UnregisterMessage[tuning.TuningRule]:
-		p.Unregister(m.ItemID)
+		p.Unregister(m.ItemKey)
 	case plugin.RemoveMessage[tuning.TuningRule]:
-		p.Remove(m.ItemID)
+		p.Remove(m.ItemKey)
 	}
 }

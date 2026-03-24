@@ -33,7 +33,8 @@ func (r *rpcTuningRule) cfg() *config.TuningMetadata {
 	if r.cfgWatcher == nil {
 		return nil
 	}
-	return r.cfgWatcher.Current().ByFileName(r.fileName)
+	v, _ := r.cfgWatcher.Current().ByFileName(r.fileName)
+	return v
 }
 
 // TuningMetadata returns the live YAML-derived tuning rule configuration.
@@ -41,31 +42,24 @@ func (r *rpcTuningRule) TuningMetadata() *config.TuningMetadata {
 	if c := r.cfg(); c != nil {
 		return c
 	}
-	return &config.TuningMetadata{FileNameField: r.fileName}
+	return &config.TuningMetadata{PluginMetadata: plugin.PluginMetadata{Id: r.fileName, Name: r.fileName, FileName: r.fileName}}
 }
 
-func (r *rpcTuningRule) PluginMetadata() plugin.PluginMetadata {
-	c := r.TuningMetadata()
-	return plugin.PluginMetadata{
-		ID:          c.Id(),
-		Name:        c.Name(),
-		Description: c.Description(),
-		Enabled:     c.Enabled(),
-		Version:     c.Version(),
-	}
+func (r *rpcTuningRule) Metadata() plugin.PluginMetadata {
+	return r.TuningMetadata().Metadata()
 }
 
 func (r *rpcTuningRule) Checksum() string { return r.checksum }
 func (r *rpcTuningRule) String() string {
-	c := r.TuningMetadata()
-	return fmt.Sprintf("TuningRule '%s' (id:%s, enabled:%t)", c.Name(), c.Id(), c.Enabled())
+	m := r.TuningMetadata().Metadata()
+	return fmt.Sprintf("TuningRule '%s' (id:%s, enabled:%t)", m.Name, m.Id, m.Enabled)
 }
 
-func (r *rpcTuningRule) Global() bool { return r.TuningMetadata().Global() }
+func (r *rpcTuningRule) Global() bool { return r.TuningMetadata().Global }
 
 // RuleType parses the YAML rule_type string into a typed RuleType constant.
 func (r *rpcTuningRule) RuleType() RuleType {
-	switch r.TuningMetadata().RuleTypeStr() {
+	switch r.TuningMetadata().RuleType {
 	case "set_confidence":
 		return SetConfidence
 	case "increase_confidence":
@@ -79,7 +73,7 @@ func (r *rpcTuningRule) RuleType() RuleType {
 
 // Confidence parses the YAML confidence string into a scoring.Confidence value.
 func (r *rpcTuningRule) Confidence() scoring.Confidence {
-	conf, _ := scoring.ParseConfidence(r.TuningMetadata().ConfidenceStr())
+	conf, _ := scoring.ParseConfidence(r.TuningMetadata().Confidence)
 	return conf
 }
 

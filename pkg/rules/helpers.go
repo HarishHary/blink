@@ -8,7 +8,7 @@ import (
 
 // DefaultSubKeysInEvent checks that every required subkey is present in the event.
 func DefaultSubKeysInEvent(r *config.RuleMetadata, event events.Event) bool {
-	if !r.Enabled() {
+	if !r.Enabled {
 		return false
 	}
 	for _, k := range r.ReqSubkeys() {

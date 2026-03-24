@@ -44,7 +44,7 @@ func (l *RuleAdapter) Handshake(ctx context.Context, raw interface{}, binPath st
 	}
 
 	rule := newRpcRule(fileName, rpc, l.Watcher, hash)
-	return rule, &ruleLifecycle{rpc: rpc}, cfg.Id(), cfg.Name(), nil
+	return rule, &ruleLifecycle{rpc: rpc}, cfg.Id, cfg.Name, nil
 }
 
 // Reports whether this binary is safe to start:
@@ -58,7 +58,7 @@ func (l *RuleAdapter) IsReady(binPath string) bool {
 	if cfg == nil {
 		return false
 	}
-	return !l.Watcher.HasBlockingErrorFor(cfg.Id(), cfg.FileName()+".yaml")
+	return !l.Watcher.HasBlockingErrorFor(cfg.Id, cfg.FileName+".yaml")
 }
 
 // IsShadow reports whether this binary's YAML declares it as a shadow or canary version.
@@ -69,23 +69,22 @@ func (l *RuleAdapter) IsShadow(binPath string) bool {
 	if cfg == nil {
 		return false
 	}
-	m := cfg.RolloutMode()
-	return m == internal.RolloutModeCanary || m == internal.RolloutModeShadow
+	return cfg.RolloutMode == internal.RolloutModeCanary || cfg.RolloutMode == internal.RolloutModeShadow
 }
 
 // IsEnabled reports whether the rule's YAML sidecar still exists and is enabled.
 // Called during every reconcile func so process-zombies (binary running but YAML removed/disabled) are stopped without waiting for a binary change.
 func (l *RuleAdapter) IsEnabled(h *plugin.PluginHandle) bool {
 	cfg := l.Watcher.Current().ByFileName(helpers.BinaryBaseName(h.BinPath))
-	return cfg != nil && cfg.Enabled()
+	return cfg != nil && cfg.Enabled
 }
 
 func (l *RuleAdapter) Workers(binPath string) int {
 	cfg := l.Watcher.Current().ByFileName(helpers.BinaryBaseName(binPath))
-	if cfg == nil || cfg.MaxProcs() <= 0 {
+	if cfg == nil || cfg.MaxProcs <= 0 {
 		return 1
 	}
-	return cfg.MaxProcs()
+	return cfg.MaxProcs
 }
 
 type ruleLifecycle struct {

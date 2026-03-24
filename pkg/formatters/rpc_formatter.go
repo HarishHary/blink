@@ -32,7 +32,8 @@ func (f *rpcFormatter) cfg() *config.FormatterMetadata {
 	if f.cfgWatcher == nil {
 		return nil
 	}
-	return f.cfgWatcher.Current().ByFileName(f.fileName)
+	v, _ := f.cfgWatcher.Current().ByFileName(f.fileName)
+	return v
 }
 
 // FormatterMetadata returns the live YAML-derived formatter configuration.
@@ -40,23 +41,17 @@ func (f *rpcFormatter) FormatterMetadata() *config.FormatterMetadata {
 	if c := f.cfg(); c != nil {
 		return c
 	}
-	return &config.FormatterMetadata{FileNameField: f.fileName}
+	return &config.FormatterMetadata{PluginMetadata: plugin.PluginMetadata{Id: f.fileName, Name: f.fileName, FileName: f.fileName}}
 }
 
-func (f *rpcFormatter) PluginMetadata() plugin.PluginMetadata {
-	c := f.FormatterMetadata()
-	return plugin.PluginMetadata{
-		ID:          c.Id(),
-		Name:        c.Name(),
-		Description: c.Description(),
-		Enabled:     c.Enabled(),
-		Version:     c.Version(),
-	}
+func (f *rpcFormatter) Metadata() plugin.PluginMetadata {
+	return f.FormatterMetadata().Metadata()
 }
 
 func (f *rpcFormatter) Checksum() string { return f.checksum }
 func (f *rpcFormatter) String() string {
-	return fmt.Sprintf("Formatter '%s' (id:%s)", f.FormatterMetadata().Name(), f.FormatterMetadata().Id())
+	m := f.FormatterMetadata().Metadata()
+	return fmt.Sprintf("Formatter '%s' (id:%s)", m.Name, m.Id)
 }
 
 func (f *rpcFormatter) Format(ctx context.Context, alerts []*alerts.Alert) ([]map[string]any, errors.Error) {

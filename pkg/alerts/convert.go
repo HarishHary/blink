@@ -3,6 +3,7 @@ package alerts
 import (
 	"time"
 
+	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/alerts/pb"
 	"github.com/harishhary/blink/pkg/events"
 	"github.com/harishhary/blink/pkg/rules/config"
@@ -94,10 +95,10 @@ func ruleToProto(r *config.RuleMetadata) *pb.RuleMetadata {
 		return nil
 	}
 	return &pb.RuleMetadata{
-		Id:              r.Id(),
-		Name:            r.Name(),
-		Description:     r.Description(),
-		Enabled:         r.Enabled(),
+		Id:              r.Id,
+		Name:            r.Name,
+		Description:     r.Description,
+		Enabled:         r.Enabled,
 		Severity:        r.Severity().String(),
 		Confidence:      r.Confidence().String(),
 		MergeByKeys:     r.MergeByKeys(),
@@ -112,9 +113,9 @@ func ruleToProto(r *config.RuleMetadata) *pb.RuleMetadata {
 		Formatters:      r.Formatters(),
 		Enrichments:     r.Enrichments(),
 		TuningRules:     r.TuningRules(),
-		Version:         r.Version(),
-		FileName:        r.FileName(),
-		DisplayName:     r.DisplayName(),
+		Version:         r.Version,
+		FileName:        r.FileName,
+		DisplayName:     r.DisplayName,
 		References:      r.References(),
 	}
 }
@@ -125,13 +126,15 @@ func protoToRuleMetadata(m *pb.RuleMetadata) *config.RuleMetadata {
 		return &config.RuleMetadata{}
 	}
 	cfg, _ := config.New(config.RuleMetadata{
-		IdField:              m.GetId(),
-		NameField:            m.GetName(),
-		DisplayNameField:     m.GetDisplayName(),
-		DescriptionField:     m.GetDescription(),
-		EnabledField:         m.GetEnabled(),
-		VersionField:         m.GetVersion(),
-		FileNameField:        m.GetFileName(),
+		PluginMetadata: plugin.PluginMetadata{
+			Id:          m.GetId(),
+			Name:        m.GetName(),
+			DisplayName: m.GetDisplayName(),
+			Description: m.GetDescription(),
+			Enabled:     m.GetEnabled(),
+			Version:     m.GetVersion(),
+			FileName:    m.GetFileName(),
+		},
 		SeverityStr:          m.GetSeverity(),
 		ConfidenceStr:        m.GetConfidence(),
 		SignalThresholdStr:   m.GetSignalThreshold(),

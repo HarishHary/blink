@@ -9,7 +9,8 @@ import (
 	"github.com/harishhary/blink/pkg/rules/config"
 )
 
-type Observables = config.Observable
+type PluginMetadata = plugin.PluginMetadata
+type RuleMetadata = config.RuleMetadata
 
 // EvalResult is the per-event outcome returned by Rule.Evaluate.
 // Fields beyond Matched are populated only when the plugin implements the
@@ -28,8 +29,8 @@ type EvalResult struct {
 // All rules receive a slice of events and return one EvalResult per event.
 // PluginMetadata + Checksum together satisfy plugin.Syncable.
 type Rule interface {
-	RuleMetadata() *config.RuleMetadata
-	PluginMetadata() plugin.PluginMetadata
+	RuleMetadata() *RuleMetadata
+	Metadata() PluginMetadata
 	Checksum() string
 	Evaluate(ctx context.Context, evts []events.Event) ([]EvalResult, errors.Error)
 }

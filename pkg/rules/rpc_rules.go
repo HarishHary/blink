@@ -41,14 +41,14 @@ func (r *rpcRule) RuleMetadata() *config.RuleMetadata {
 		return c
 	}
 	// Return a minimal stub so callers don't need to nil-check.
-	return &config.RuleMetadata{FileNameField: r.fileName}
+	return &config.RuleMetadata{PluginMetadata: plugin.PluginMetadata{FileName: r.fileName, Name: r.fileName, Id: r.fileName}}
 }
 
 func (r *rpcRule) Checksum() string { return r.checksum }
 
-func (r *rpcRule) PluginMetadata() plugin.PluginMetadata {
+func (r *rpcRule) Metadata() plugin.PluginMetadata {
 	if c := r.cfg(); c != nil {
-		return c.PluginMetadata()
+		return c.Metadata()
 	}
 	return plugin.PluginMetadata{Name: r.fileName}
 }

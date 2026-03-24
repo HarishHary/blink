@@ -31,7 +31,7 @@ func (p *Pool) Format(ctx context.Context, formatterID string, alerts []*alerts.
 	outs = make([]map[string]any, len(alerts))
 	errs = make([]errors.Error, len(alerts))
 	err := p.Call(ctx, formatterID, canaryHashKey, func(callCtx context.Context, f formatters.Formatter) error {
-		if !f.FormatterMetadata().Enabled() {
+		if !f.FormatterMetadata().Enabled {
 			return nil
 		}
 		batchOuts, e := f.Format(callCtx, alerts)
@@ -58,11 +58,7 @@ func (p *Pool) Format(ctx context.Context, formatterID string, alerts []*alerts.
 
 func poolKey(f formatters.Formatter) internal.PoolKey {
 	cfg := f.FormatterMetadata()
-	version := cfg.Version()
-	if cs := f.Checksum(); cs != "" {
-		version = version + "@" + cs
-	}
-	return internal.PoolKey{PluginID: cfg.Id(), Version: version}
+	return internal.PoolKey{Id: cfg.Id, Version: cfg.Version, Hash: f.Checksum()}
 }
 
 func (p *Pool) Sync(msg messaging.Message) {
@@ -75,8 +71,8 @@ func (p *Pool) Sync(msg messaging.Message) {
 	case plugin.UpdateMessage[formatters.Formatter]:
 		register(m.OnDrained, m.Items, m.MaxProcs)
 	case plugin.UnregisterMessage[formatters.Formatter]:
-		p.Unregister(m.ItemID)
+		p.Unregister(m.ItemKey)
 	case plugin.RemoveMessage[formatters.Formatter]:
-		p.Remove(m.ItemID)
+		p.Remove(m.ItemKey)
 	}
 }

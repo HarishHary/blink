@@ -31,7 +31,8 @@ func (r *rpcEnrichment) cfg() *config.EnrichmentMetadata {
 	if r.cfgWatcher == nil {
 		return nil
 	}
-	return r.cfgWatcher.Current().ByFileName(r.fileName)
+	v, _ := r.cfgWatcher.Current().ByFileName(r.fileName)
+	return v
 }
 
 // EnrichmentMetadata returns the live YAML-derived enrichment configuration.
@@ -39,17 +40,18 @@ func (r *rpcEnrichment) EnrichmentMetadata() *config.EnrichmentMetadata {
 	if c := r.cfg(); c != nil {
 		return c
 	}
-	return &config.EnrichmentMetadata{FileNameField: r.fileName}
+	return &config.EnrichmentMetadata{PluginMetadata: plugin.PluginMetadata{Id: r.fileName, Name: r.fileName, FileName: r.fileName}}
 }
 
-func (r *rpcEnrichment) PluginMetadata() plugin.PluginMetadata {
-	return r.EnrichmentMetadata().PluginMetadata()
+func (r *rpcEnrichment) Metadata() plugin.PluginMetadata {
+	return r.EnrichmentMetadata().Metadata()
 }
 
-func (r *rpcEnrichment) DependsOn() []string { return r.EnrichmentMetadata().DependsOn() }
+func (r *rpcEnrichment) DependsOn() []string { return r.EnrichmentMetadata().DependsOn }
 func (r *rpcEnrichment) Checksum() string    { return r.checksum }
 func (r *rpcEnrichment) String() string {
-	return "RpcEnrichment '" + r.EnrichmentMetadata().Name() + "' id:'" + r.EnrichmentMetadata().Id() + "'"
+	m := r.EnrichmentMetadata().Metadata()
+	return "RpcEnrichment '" + m.Name + "' id:'" + m.Id + "'"
 }
 
 func (r *rpcEnrichment) Enrich(ctx context.Context, alerts []*alerts.Alert) errors.Error {

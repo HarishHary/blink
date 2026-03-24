@@ -22,23 +22,54 @@ const (
 )
 
 // RulePlugin is the interface that all rule plugin binaries must implement.
-// Embed sdk.BaseRule to get no-op defaults for Init and Shutdown.
-// All rule metadata (name, severity, log_types, etc.) lives in the YAML
-// sidecar file alongside the binary - the subprocess only owns Evaluate.
+// Embed sdk.BaseRule to get default no-op / pass-through implementations for
+// every method. Override only the methods you need.
+//
+// All static rule metadata (name, severity, log_types, etc.) lives in the YAML
+// sidecar file alongside the binary — the subprocess owns only evaluation logic.
 type RulePlugin interface {
-	// Init is called once after the plugin connects, before any Evaluate calls.
-	// Use it to compile regexes, load ML models, or open connections.
 	Init() error
 	Evaluate(ctx context.Context, event events.Event) (bool, errors.Error)
 	Shutdown() error
+
+	// AlertTitle returns a dynamic title for the alert.
+	// Return "" to use the YAML display_name (default).
+	AlertTitle(event events.Event) string
+
+	// AlertDescription returns a dynamic description for the alert.
+	// Return "" to use the YAML description (default).
+	AlertDescription(event events.Event) string
+
+	// AlertSeverity returns an event-level severity override.
+	// Return one of: "info", "low", "medium", "high", "critical", or "" to use the YAML value.
+	AlertSeverity(event events.Event) string
+
+	// AlertContext returns extra key-value pairs merged into the alert event.
+	// Return nil to add nothing.
+	AlertContext(event events.Event) map[string]any
+
+	// AlertMergeByKeys returns the merge keys for this event, overriding YAML merge_by_keys.
+	// Return nil to use the YAML value.
+	AlertMergeByKeys(event events.Event) []string
+
+	// AlertReqSubkeys guards evaluation: return false to skip Evaluate for this event.
+	// Useful for dynamic field presence checks beyond the static req_subkeys in YAML.
+	// Return true to always evaluate (default).
+	AlertReqSubkeys(event events.Event) bool
 }
 
-// BaseRule provides no-op defaults for Init and Shutdown.
-// Embed in your rule struct to avoid implementing them when not needed.
+// BaseRule provides pass-through / no-op defaults for all RulePlugin methods.
+// Embed in your rule struct and override only what you need.
 type BaseRule struct{}
 
-func (BaseRule) Init() error     { return nil }
-func (BaseRule) Shutdown() error { return nil }
+func (BaseRule) Init() error                                  { return nil }
+func (BaseRule) Shutdown() error                              { return nil }
+func (BaseRule) AlertTitle(_ events.Event) string             { return "" }
+func (BaseRule) AlertDescription(_ events.Event) string       { return "" }
+func (BaseRule) AlertSeverity(_ events.Event) string          { return "" }
+func (BaseRule) AlertContext(_ events.Event) map[string]any   { return nil }
+func (BaseRule) AlertMergeByKeys(_ events.Event) []string     { return nil }
+func (BaseRule) AlertReqSubkeys(_ events.Event) bool          { return true }
 
 // server wraps a RulePlugin and serves the gRPC RuleServer interface.
 type server struct {
@@ -50,32 +81,39 @@ func (s *server) Init(_ context.Context, _ *rpc_rules.Empty) (*rpc_rules.Empty, 
 	return &rpc_rules.Empty{}, s.rule.Init()
 }
 
-func (s *server) Evaluate(ctx context.Context, req *rpc_rules.EvaluateRequest) (*rpc_rules.EvaluateResponse, error) {
-	var event events.Event
-	if err := json.Unmarshal(req.GetEvent().GetJson(), &event); err != nil {
-		return nil, err
-	}
-	matched, err := s.rule.Evaluate(ctx, event)
-	if err != nil {
-		return nil, err
-	}
-	return &rpc_rules.EvaluateResponse{Matched: matched}, nil
-}
-
 func (s *server) EvaluateBatch(ctx context.Context, req *rpc_rules.EvaluateBatchRequest) (*rpc_rules.EvaluateBatchResponse, error) {
-	results := make([]bool, 0, len(req.GetEvents()))
+	results := make([]*rpc_rules.EventResult, 0, len(req.GetEvents()))
 	for _, ev := range req.GetEvents() {
 		var event events.Event
 		if err := json.Unmarshal(ev.GetJson(), &event); err != nil {
 			return nil, err
 		}
+
+		if !s.rule.AlertReqSubkeys(event) {
+			results = append(results, &rpc_rules.EventResult{Matched: false})
+			continue
+		}
+
 		matched, err := s.rule.Evaluate(ctx, event)
 		if err != nil {
 			return nil, err
 		}
-		results = append(results, matched)
+
+		result := &rpc_rules.EventResult{Matched: matched}
+		if matched {
+			result.Title = s.rule.AlertTitle(event)
+			result.Description = s.rule.AlertDescription(event)
+			result.Severity = s.rule.AlertSeverity(event)
+			result.MergeByKeys = s.rule.AlertMergeByKeys(event)
+			if c := s.rule.AlertContext(event); len(c) > 0 {
+				if b, err := json.Marshal(c); err == nil {
+					result.ContextJson = b
+				}
+			}
+		}
+		results = append(results, result)
 	}
-	return &rpc_rules.EvaluateBatchResponse{Matched: results}, nil
+	return &rpc_rules.EvaluateBatchResponse{Results: results}, nil
 }
 
 func (s *server) Ping(_ context.Context, _ *rpc_rules.Empty) (*rpc_rules.Empty, error) {

@@ -326,7 +326,7 @@ func (at *DynamoDBBackend) ToAlert(record backends.Record) (*alerts.Alert, error
 
 func (at *DynamoDBBackend) ToRecord(alert *alerts.Alert) (backends.Record, error) {
 	item, err := attributevalue.MarshalMap(backends.Record{
-		"RuleName":        alert.Rule.Name(), // Partition Key
+		"RuleName":        alert.Rule.Name, // Partition Key
 		"AlertID":         alert.AlertID,     // Sort/Range Key
 		"Attempts":        alert.Attempts,
 		"Cluster":         alert.Cluster,
@@ -340,7 +340,7 @@ func (at *DynamoDBBackend) ToRecord(alert *alerts.Alert) (backends.Record, error
 		"OutputsSent":     alert.OutputsSent,
 		"Formatters":      alert.Rule.Formatters(),
 		"Event":           helpers.JsonCompact(alert.Event),
-		"RuleDescription": alert.Rule.Description(),
+		"RuleDescription": alert.Rule.Description,
 		"SourceEntity":    alert.SourceEntity,
 		"SourceService":   alert.SourceService,
 		"Staged":          alert.Staged,

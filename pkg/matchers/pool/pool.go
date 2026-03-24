@@ -27,7 +27,7 @@ func NewPool(routing *internal.RoutingTable, drainTimeout time.Duration) *Pool {
 func (p *Pool) Match(ctx context.Context, matcherID string, evts []events.Event, canaryHashKey string) ([]bool, errors.Error) {
 	var results []bool
 	err := p.Call(ctx, matcherID, canaryHashKey, func(callCtx context.Context, m matchers.Matcher) error {
-		if !m.MatcherMetadata().Enabled() {
+		if !m.MatcherMetadata().Enabled {
 			results = make([]bool, len(evts))
 			for i := range results {
 				results[i] = true
@@ -47,11 +47,7 @@ func (p *Pool) Match(ctx context.Context, matcherID string, evts []events.Event,
 // Handles plugin lifecycle messages from the plugin manager bus, registering or deregistering matchers in the pool.
 func poolKey(m matchers.Matcher) internal.PoolKey {
 	cfg := m.MatcherMetadata()
-	version := cfg.Version()
-	if cs := m.Checksum(); cs != "" {
-		version = version + "@" + cs
-	}
-	return internal.PoolKey{PluginID: cfg.Id(), Version: version}
+	return internal.PoolKey{Id: cfg.Id, Version: cfg.Version, Hash: m.Checksum()}
 }
 
 func (p *Pool) Sync(msg messaging.Message) {
@@ -64,8 +60,8 @@ func (p *Pool) Sync(msg messaging.Message) {
 	case plugin.UpdateMessage[matchers.Matcher]:
 		register(m.OnDrained, m.Items, m.MaxProcs)
 	case plugin.UnregisterMessage[matchers.Matcher]:
-		p.Unregister(m.ItemID)
+		p.Unregister(m.ItemKey)
 	case plugin.RemoveMessage[matchers.Matcher]:
-		p.Remove(m.ItemID)
+		p.Remove(m.ItemKey)
 	}
 }

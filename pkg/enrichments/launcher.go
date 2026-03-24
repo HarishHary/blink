@@ -41,42 +41,43 @@ func (l *EnrichmentAdapter) Handshake(ctx context.Context, raw interface{}, binP
 	}
 
 	e := newRpcEnrichment(fileName, rpc, l.Watcher, hash)
-	cfg := l.Watcher.Current().ByFileName(fileName)
+	cfg, ok := l.Watcher.Current().ByFileName(fileName)
 	id, name := fileName, fileName
-	if cfg != nil {
-		id = cfg.Id()
-		name = cfg.Name()
+	if ok {
+		id = cfg.Id
+		name = cfg.Name
 	}
 	return e, &enrichmentLifecycle{rpc: rpc}, id, name, nil
 }
 
 // IsReady reports whether this binary's YAML sidecar exists in the current registry.
 func (l *EnrichmentAdapter) IsReady(binPath string) bool {
-	return l.Watcher.Current().ByFileName(helpers.BinaryBaseName(binPath)) != nil
+	_, ok := l.Watcher.Current().ByFileName(helpers.BinaryBaseName(binPath))
+	return ok
 }
 
 // IsShadow reports whether this binary's YAML declares it as a shadow or canary version.
 func (l *EnrichmentAdapter) IsShadow(binPath string) bool {
-	cfg := l.Watcher.Current().ByFileName(helpers.BinaryBaseName(binPath))
-	if cfg == nil {
+	cfg, ok := l.Watcher.Current().ByFileName(helpers.BinaryBaseName(binPath))
+	if !ok {
 		return false
 	}
-	m := cfg.RolloutMode()
+	m := cfg.RolloutMode
 	return m == internal.RolloutModeCanary || m == internal.RolloutModeShadow
 }
 
 // IsEnabled reports whether the enrichment's YAML sidecar still exists and is enabled.
 func (l *EnrichmentAdapter) IsEnabled(h *plugin.PluginHandle) bool {
-	cfg := l.Watcher.Current().ByFileName(helpers.BinaryBaseName(h.BinPath))
-	return cfg != nil && cfg.Enabled()
+	cfg, ok := l.Watcher.Current().ByFileName(helpers.BinaryBaseName(h.BinPath))
+	return ok && cfg.Enabled
 }
 
 func (l *EnrichmentAdapter) Workers(binPath string) int {
-	cfg := l.Watcher.Current().ByFileName(helpers.BinaryBaseName(binPath))
-	if cfg == nil || cfg.MaxProcs() <= 0 {
+	cfg, ok := l.Watcher.Current().ByFileName(helpers.BinaryBaseName(binPath))
+	if !ok || cfg.MaxProcs <= 0 {
 		return 1
 	}
-	return cfg.MaxProcs()
+	return cfg.MaxProcs
 }
 
 type enrichmentLifecycle struct {

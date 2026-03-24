@@ -162,8 +162,8 @@ func (a *Alert) OutputDict() map[string]any {
 		"outputs":          a.Rule.Dispatchers(),
 		"formatters":       a.Rule.Formatters(),
 		"event":            a.Event,
-		"rule_description": a.Rule.Description(),
-		"rule_name":        a.Rule.Name(),
+		"rule_description": a.Rule.Description,
+		"rule_name":        a.Rule.Name,
 		"source_entity":    a.SourceEntity,
 		"source_service":   a.SourceService,
 		"staged":           a.Staged,
@@ -173,7 +173,7 @@ func (a *Alert) OutputDict() map[string]any {
 
 // Returns a simple representation of the alert
 func (a *Alert) String() string {
-	return fmt.Sprintf("<Alert %s triggered from %s>", a.AlertID, a.Rule.Name())
+	return fmt.Sprintf("<Alert %s triggered from %s>", a.AlertID, a.Rule.Name)
 }
 
 // Returns a detailed representation of the alert
@@ -230,7 +230,7 @@ func (a *Alert) MergePartitionKey() string {
 	sort.Strings(keys)
 	merged := a.Event.GetMergedKeys(keys)
 	parts := make([]string, 0, len(keys)+1)
-	parts = append(parts, a.Rule.Name())
+	parts = append(parts, a.Rule.Name)
 	for _, k := range keys {
 		parts = append(parts, fmt.Sprintf("%v", merged[k]))
 	}
@@ -249,7 +249,7 @@ func (a *Alert) RemainingOutputs(requiredOutputs []string) []string {
 
 func (a *Alert) RecordKey() map[string]string {
 	key := map[string]string{
-		"RuleName": a.Rule.Name(),
+		"RuleName": a.Rule.Name,
 		"AlertID":  a.AlertID,
 	}
 	return key

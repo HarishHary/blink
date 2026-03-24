@@ -33,7 +33,7 @@ func NewPool(watcher *config.Watcher, drainTimeout time.Duration) *Pool {
 func (p *Pool) Evaluate(ctx context.Context, ruleID string, evts []events.Event, canaryHashKey string) ([]rules.EvalResult, errors.Error) {
 	var results []rules.EvalResult
 	err := p.Call(ctx, ruleID, canaryHashKey, func(ctx context.Context, r rules.Rule) error {
-		if !r.RuleMetadata().Enabled() {
+		if !r.RuleMetadata().Enabled {
 			results = make([]rules.EvalResult, len(evts))
 			return nil
 		}
@@ -53,11 +53,7 @@ func (p *Pool) Evaluate(ctx context.Context, ruleID string, evts []events.Event,
 // string in the rule config - preventing silent same-key overwrites in the pool.
 func poolKey(r rules.Rule) internal.PoolKey {
 	cfg := r.RuleMetadata()
-	version := cfg.Version()
-	if cs := r.Checksum(); cs != "" {
-		version = version + "@" + cs
-	}
-	return internal.PoolKey{PluginID: cfg.Id(), Version: version}
+	return internal.PoolKey{Id: cfg.Id, Version: cfg.Version, Hash: r.Checksum()}
 }
 
 // Handles plugin lifecycle messages from the plugin manager bus, registering or deregistering rules in the pool.
@@ -68,8 +64,8 @@ func (p *Pool) Sync(msg messaging.Message) {
 	case plugin.UpdateMessage[rules.Rule]:
 		p.Register(poolKey(m.Items[0]), m.Items, m.MaxProcs, m.OnDrained)
 	case plugin.UnregisterMessage[rules.Rule]:
-		p.Unregister(m.ItemID)
+		p.Unregister(m.ItemKey)
 	case plugin.RemoveMessage[rules.Rule]:
-		p.Remove(m.ItemID)
+		p.Remove(m.ItemKey)
 	}
 }

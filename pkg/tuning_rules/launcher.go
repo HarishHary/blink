@@ -5,51 +5,80 @@ import (
 	"fmt"
 	"time"
 
-	plugin "github.com/hashicorp/go-plugin"
+	goplugin "github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
 
-	"github.com/harishhary/blink/internal/pluginmgr"
+	"github.com/harishhary/blink/internal/helpers"
+	"github.com/harishhary/blink/internal/plugin"
+	internal "github.com/harishhary/blink/internal/pools"
+	"github.com/harishhary/blink/pkg/tuning_rules/config"
 	"github.com/harishhary/blink/pkg/tuning_rules/rpc_tuning_rules"
 )
 
-type TuningRuleAdapter struct{}
+type TuningRuleAdapter struct {
+	Watcher *config.Watcher
+}
 
 func (l *TuningRuleAdapter) PluginKey() string         { return "tuning_rule" }
 func (l *TuningRuleAdapter) MagicValue() string        { return "tuning_rule_v1" }
-func (l *TuningRuleAdapter) GRPCPlugin() plugin.Plugin { return &tuningPlugin{} }
+func (l *TuningRuleAdapter) GRPCPlugin() goplugin.Plugin { return &tuningPlugin{} }
 
-func (l *TuningRuleAdapter) Handshake(ctx context.Context, raw interface{}, _ string, hash string) (TuningRule, pluginmgr.PluginLifecycle, string, string, error) {
+// Handshake connects to the tuning rule subprocess, calls Init, and returns a
+// ready rpcTuningRule. Identity comes from the YAML sidecar, not from a GetMetadata RPC.
+func (l *TuningRuleAdapter) Handshake(ctx context.Context, raw interface{}, binPath string, hash string) (TuningRule, plugin.PluginLifecycle, string, string, error) {
 	rpc, ok := raw.(rpc_tuning_rules.TuningRuleClient)
 	if !ok {
 		return nil, nil, "", "", fmt.Errorf("dispense: unexpected type %T", raw)
 	}
 
-	metaCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	meta, err := rpc.GetMetadata(metaCtx, &rpc_tuning_rules.Empty{})
-	cancel()
-	if err != nil {
-		return nil, nil, "", "", fmt.Errorf("metadata: %w", err)
-	}
+	fileName := helpers.BinaryBaseName(binPath)
 
 	initCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	_, err = rpc.Init(initCtx, &rpc_tuning_rules.Empty{})
+	_, err := rpc.Init(initCtx, &rpc_tuning_rules.Empty{})
 	cancel()
 	if err != nil {
 		return nil, nil, "", "", fmt.Errorf("init: %w", err)
 	}
 
-	tr := newRpcTuningRule(meta, rpc, hash)
-	return tr, &tuningLifecycle{rpc: rpc}, meta.GetId(), meta.GetName(), nil
+	tr := newRpcTuningRule(fileName, rpc, l.Watcher, hash)
+	cfg, ok := l.Watcher.Current().ByFileName(fileName)
+	id, name := fileName, fileName
+	if ok {
+		id = cfg.Id
+		name = cfg.Name
+	}
+	return tr, &tuningLifecycle{rpc: rpc}, id, name, nil
 }
 
-func (l *TuningRuleAdapter) IsReady(_ string) bool  { return true }
-func (l *TuningRuleAdapter) IsShadow(_ string) bool { return false }
+// IsReady reports whether this binary's YAML sidecar exists in the current registry.
+func (l *TuningRuleAdapter) IsReady(binPath string) bool {
+	_, ok := l.Watcher.Current().ByFileName(helpers.BinaryBaseName(binPath))
+	return ok
+}
 
-// IsEnabled always returns true - tuning rules have no YAML sidecar.
-func (l *TuningRuleAdapter) IsEnabled(_ *pluginmgr.PluginHandle) bool { return true }
+// IsShadow reports whether this binary's YAML declares it as a shadow or canary version.
+func (l *TuningRuleAdapter) IsShadow(binPath string) bool {
+	cfg, ok := l.Watcher.Current().ByFileName(helpers.BinaryBaseName(binPath))
+	if !ok {
+		return false
+	}
+	m := cfg.RolloutMode
+	return m == internal.RolloutModeCanary || m == internal.RolloutModeShadow
+}
 
-// Workers always returns 1 - no YAML sidecar to configure parallelism.
-func (l *TuningRuleAdapter) Workers(_ string) int { return 1 }
+// IsEnabled reports whether the tuning rule's YAML sidecar still exists and is enabled.
+func (l *TuningRuleAdapter) IsEnabled(h *plugin.PluginHandle) bool {
+	cfg, ok := l.Watcher.Current().ByFileName(helpers.BinaryBaseName(h.BinPath))
+	return ok && cfg.Enabled
+}
+
+func (l *TuningRuleAdapter) Workers(binPath string) int {
+	cfg, ok := l.Watcher.Current().ByFileName(helpers.BinaryBaseName(binPath))
+	if !ok || cfg.MaxProcs <= 0 {
+		return 1
+	}
+	return cfg.MaxProcs
+}
 
 type tuningLifecycle struct {
 	rpc rpc_tuning_rules.TuningRuleClient
@@ -65,9 +94,9 @@ func (l *tuningLifecycle) Shutdown(ctx context.Context) error {
 	return err
 }
 
-type tuningPlugin struct{ plugin.NetRPCUnsupportedPlugin }
+type tuningPlugin struct{ goplugin.NetRPCUnsupportedPlugin }
 
-func (p *tuningPlugin) GRPCServer(_ *plugin.GRPCBroker, _ *grpc.Server) error { return nil }
-func (p *tuningPlugin) GRPCClient(_ context.Context, _ *plugin.GRPCBroker, c *grpc.ClientConn) (interface{}, error) {
+func (p *tuningPlugin) GRPCServer(_ *goplugin.GRPCBroker, _ *grpc.Server) error { return nil }
+func (p *tuningPlugin) GRPCClient(_ context.Context, _ *goplugin.GRPCBroker, c *grpc.ClientConn) (interface{}, error) {
 	return rpc_tuning_rules.NewTuningRuleClient(c), nil
 }

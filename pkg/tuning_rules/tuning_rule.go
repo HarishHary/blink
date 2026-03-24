@@ -10,9 +10,8 @@ import (
 	"github.com/harishhary/blink/pkg/tuning_rules/config"
 )
 
-// PluginMetadata is re-exported from internal/plugin so plugin authors don't need to
-// import an internal package.
 type PluginMetadata = plugin.PluginMetadata
+type TuningMetadata = config.TuningMetadata
 
 type RuleType int
 
@@ -26,8 +25,8 @@ const (
 type TuningRule interface {
 	Tune(ctx context.Context, alerts []alerts.Alert) ([]bool, errors.Error)
 
-	TuningMetadata() *config.TuningMetadata
-	PluginMetadata() plugin.PluginMetadata // satisfies plugin.Syncable
+	TuningMetadata() *TuningMetadata
+	Metadata() PluginMetadata
 	Global() bool
 	RuleType() RuleType
 	Confidence() scoring.Confidence
