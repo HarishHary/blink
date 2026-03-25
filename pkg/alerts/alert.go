@@ -12,7 +12,7 @@ import (
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/helpers"
 	"github.com/harishhary/blink/pkg/events"
-	"github.com/harishhary/blink/pkg/rules/config"
+	"github.com/harishhary/blink/pkg/rules"
 	"github.com/harishhary/blink/pkg/scoring"
 )
 
@@ -37,7 +37,7 @@ type Alert struct {
 	Confidence scoring.Confidence // coming from base rule but changed by tuning rules
 	Severity   scoring.Severity   // coming from base rule but changed by asset tagging and AlertSeverity
 
-	Rule                *config.RuleMetadata
+	Rule                *rules.RuleMetadata
 	OverrideMergeByKeys []string // set by plugin's AlertMergeByKeys; overrides Rule.MergeByKeys() when non-nil
 }
 
@@ -51,7 +51,7 @@ func (a *Alert) MergeByKeys() []string {
 }
 
 // Creates a new Alert
-func NewAlert(rule *config.RuleMetadata, event events.Event, optFns ...AlertOptions) (*Alert, errors.Error) {
+func NewAlert(rule *rules.RuleMetadata, event events.Event, optFns ...AlertOptions) (*Alert, errors.Error) {
 	alert := &Alert{
 		AlertID:    uuid.NewString(),
 		Created:    time.Now().UTC(),

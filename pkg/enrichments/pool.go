@@ -1,4 +1,4 @@
-package pool
+package enrichments
 
 import (
 	"context"
@@ -10,16 +10,15 @@ import (
 	"github.com/harishhary/blink/internal/plugin"
 	internal "github.com/harishhary/blink/internal/pools"
 	"github.com/harishhary/blink/pkg/alerts"
-	"github.com/harishhary/blink/pkg/enrichments"
 )
 
 type Pool struct {
-	*internal.ProcessPool[enrichments.Enrichment]
+	*internal.ProcessPool[Enrichment]
 }
 
 func NewPool(routing *internal.RoutingTable, drainTimeout time.Duration) *Pool {
 	return &Pool{
-		ProcessPool: internal.NewProcessPool[enrichments.Enrichment](routing.Config(), internal.NewPoolMetrics("enrichments"), drainTimeout),
+		ProcessPool: internal.NewProcessPool[Enrichment](routing.Config(), internal.NewPoolMetrics("enrichments"), drainTimeout),
 	}
 }
 
@@ -27,7 +26,7 @@ func NewPool(routing *internal.RoutingTable, drainTimeout time.Duration) *Pool {
 // absent/removed refer to the plugin state. errs contains per-alert errors (nil on success).
 func (p *Pool) Enrich(ctx context.Context, enrichmentID string, alerts []*alerts.Alert, canaryHashKey string) (absent bool, removed bool, errs []errors.Error) {
 	errs = make([]errors.Error, len(alerts))
-	err := p.Call(ctx, enrichmentID, canaryHashKey, func(callCtx context.Context, e enrichments.Enrichment) error {
+	err := p.Call(ctx, enrichmentID, canaryHashKey, func(callCtx context.Context, e Enrichment) error {
 		if !e.EnrichmentMetadata().Enabled {
 			return nil
 		}
@@ -50,23 +49,23 @@ func (p *Pool) Enrich(ctx context.Context, enrichmentID string, alerts []*alerts
 	return false, false, errs
 }
 
-func poolKey(e enrichments.Enrichment) internal.PoolKey {
+func poolKey(e Enrichment) internal.PoolKey {
 	cfg := e.EnrichmentMetadata()
 	return internal.PoolKey{Id: cfg.Id, Version: cfg.Version, Hash: e.Checksum()}
 }
 
 func (p *Pool) Sync(msg messaging.Message) {
-	register := func(onDrained func(), items []enrichments.Enrichment, maxProcs int) {
+	register := func(onDrained func(), items []Enrichment, maxProcs int) {
 		p.Register(poolKey(items[0]), items, maxProcs, onDrained)
 	}
 	switch m := msg.(type) {
-	case plugin.RegisterMessage[enrichments.Enrichment]:
+	case plugin.RegisterMessage[Enrichment]:
 		register(nil, m.Items, m.MaxProcs)
-	case plugin.UpdateMessage[enrichments.Enrichment]:
+	case plugin.UpdateMessage[Enrichment]:
 		register(m.OnDrained, m.Items, m.MaxProcs)
-	case plugin.UnregisterMessage[enrichments.Enrichment]:
+	case plugin.UnregisterMessage[Enrichment]:
 		p.Unregister(m.ItemKey)
-	case plugin.RemoveMessage[enrichments.Enrichment]:
+	case plugin.RemoveMessage[Enrichment]:
 		p.Remove(m.ItemKey)
 	}
 }

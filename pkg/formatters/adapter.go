@@ -11,17 +11,16 @@ import (
 	"github.com/harishhary/blink/internal/helpers"
 	"github.com/harishhary/blink/internal/plugin"
 	internal "github.com/harishhary/blink/internal/pools"
-	"github.com/harishhary/blink/pkg/formatters/config"
 	"github.com/harishhary/blink/pkg/formatters/rpc_formatters"
 )
 
 // FormatterAdapter implements goplugin.PluginAdapter[Formatter].
 type FormatterAdapter struct {
-	Watcher *config.Watcher
+	Manager *FormatterConfigManager
 }
 
-func (l *FormatterAdapter) PluginKey() string         { return "formatter" }
-func (l *FormatterAdapter) MagicValue() string        { return "formatter_v1" }
+func (l *FormatterAdapter) PluginKey() string           { return "formatter" }
+func (l *FormatterAdapter) MagicValue() string          { return "formatter_v1" }
 func (l *FormatterAdapter) GRPCPlugin() goplugin.Plugin { return &formatterPlugin{} }
 
 // Handshake connects to the formatter subprocess, calls Init, and returns a
@@ -41,8 +40,8 @@ func (l *FormatterAdapter) Handshake(ctx context.Context, raw interface{}, binPa
 		return nil, nil, "", "", fmt.Errorf("init: %w", err)
 	}
 
-	f := newRpcFormatter(fileName, rpc, l.Watcher, hash)
-	cfg, ok := l.Watcher.Current().ByFileName(fileName)
+	f := newRpcFormatter(fileName, rpc, l.Manager, hash)
+	cfg, ok := l.Manager.Current().ByFileName(fileName)
 	id, name := fileName, fileName
 	if ok {
 		id = cfg.Id
@@ -53,13 +52,13 @@ func (l *FormatterAdapter) Handshake(ctx context.Context, raw interface{}, binPa
 
 // IsReady reports whether this binary's YAML sidecar exists in the current registry.
 func (l *FormatterAdapter) IsReady(binPath string) bool {
-	_, ok := l.Watcher.Current().ByFileName(helpers.BinaryBaseName(binPath))
+	_, ok := l.Manager.Current().ByFileName(helpers.BinaryBaseName(binPath))
 	return ok
 }
 
 // IsShadow reports whether this binary's YAML declares it as a shadow or canary version.
 func (l *FormatterAdapter) IsShadow(binPath string) bool {
-	cfg, ok := l.Watcher.Current().ByFileName(helpers.BinaryBaseName(binPath))
+	cfg, ok := l.Manager.Current().ByFileName(helpers.BinaryBaseName(binPath))
 	if !ok {
 		return false
 	}
@@ -69,12 +68,12 @@ func (l *FormatterAdapter) IsShadow(binPath string) bool {
 
 // IsEnabled reports whether the formatter's YAML sidecar still exists and is enabled.
 func (l *FormatterAdapter) IsEnabled(h *plugin.PluginHandle) bool {
-	cfg, ok := l.Watcher.Current().ByFileName(helpers.BinaryBaseName(h.BinPath))
+	cfg, ok := l.Manager.Current().ByFileName(helpers.BinaryBaseName(h.BinPath))
 	return ok && cfg.Enabled
 }
 
 func (l *FormatterAdapter) Workers(binPath string) int {
-	cfg, ok := l.Watcher.Current().ByFileName(helpers.BinaryBaseName(binPath))
+	cfg, ok := l.Manager.Current().ByFileName(helpers.BinaryBaseName(binPath))
 	if !ok || cfg.MaxProcs <= 0 {
 		return 1
 	}
@@ -95,7 +94,9 @@ func (l *formatterLifecycle) Shutdown(ctx context.Context) error {
 	return err
 }
 
-type formatterPlugin struct{ goplugin.NetRPCUnsupportedPlugin }
+type formatterPlugin struct {
+	goplugin.NetRPCUnsupportedPlugin
+}
 
 func (p *formatterPlugin) GRPCServer(_ *goplugin.GRPCBroker, _ *grpc.Server) error { return nil }
 func (p *formatterPlugin) GRPCClient(_ context.Context, _ *goplugin.GRPCBroker, c *grpc.ClientConn) (interface{}, error) {

@@ -6,7 +6,7 @@ import (
 	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/alerts/pb"
 	"github.com/harishhary/blink/pkg/events"
-	"github.com/harishhary/blink/pkg/rules/config"
+	"github.com/harishhary/blink/pkg/rules"
 	"github.com/harishhary/blink/pkg/scoring"
 	proto "google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -37,23 +37,23 @@ func AlertToProto(a *Alert) (*pb.Alert, error) {
 		return nil, err
 	}
 	p := &pb.Alert{
-		AlertId:            a.AlertID,
-		Attempts:           int32(a.Attempts),
-		Cluster:            a.Cluster,
-		CreatedNs:          a.Created.UnixNano(),
-		DispatchedNs:       a.Dispatched.UnixNano(),
-		Event:              eventStruct,
-		Staged:             a.Staged,
-		OutputsSent:        a.OutputsSent,
-		EnrichmentsApplied:    a.EnrichmentsApplied,
-		OverrideMergeByKeys:   a.OverrideMergeByKeys,
-		LogSource:          a.LogSource,
-		LogType:            a.LogType,
-		SourceEntity:       a.SourceEntity,
-		SourceService:      a.SourceService,
-		Confidence:         a.Confidence.String(),
-		Severity:           a.Severity.String(),
-		Rule:               ruleToProto(a.Rule),
+		AlertId:             a.AlertID,
+		Attempts:            int32(a.Attempts),
+		Cluster:             a.Cluster,
+		CreatedNs:           a.Created.UnixNano(),
+		DispatchedNs:        a.Dispatched.UnixNano(),
+		Event:               eventStruct,
+		Staged:              a.Staged,
+		OutputsSent:         a.OutputsSent,
+		EnrichmentsApplied:  a.EnrichmentsApplied,
+		OverrideMergeByKeys: a.OverrideMergeByKeys,
+		LogSource:           a.LogSource,
+		LogType:             a.LogType,
+		SourceEntity:        a.SourceEntity,
+		SourceService:       a.SourceService,
+		Confidence:          a.Confidence.String(),
+		Severity:            a.Severity.String(),
+		Rule:                ruleToProto(a.Rule),
 	}
 	return p, nil
 }
@@ -68,29 +68,29 @@ func ProtoToAlert(p *pb.Alert) (*Alert, error) {
 	sev, _ := scoring.ParseSeverity(p.GetSeverity())
 
 	a := &Alert{
-		AlertID:            p.GetAlertId(),
-		Attempts:           int(p.GetAttempts()),
-		Cluster:            p.GetCluster(),
-		Created:            time.Unix(0, p.GetCreatedNs()).UTC(),
-		Dispatched:         time.Unix(0, p.GetDispatchedNs()).UTC(),
-		Event:              event,
-		Staged:             p.GetStaged(),
-		OutputsSent:        p.GetOutputsSent(),
+		AlertID:             p.GetAlertId(),
+		Attempts:            int(p.GetAttempts()),
+		Cluster:             p.GetCluster(),
+		Created:             time.Unix(0, p.GetCreatedNs()).UTC(),
+		Dispatched:          time.Unix(0, p.GetDispatchedNs()).UTC(),
+		Event:               event,
+		Staged:              p.GetStaged(),
+		OutputsSent:         p.GetOutputsSent(),
 		EnrichmentsApplied:  p.GetEnrichmentsApplied(),
 		OverrideMergeByKeys: p.GetOverrideMergeByKeys(),
-		LogSource:          p.GetLogSource(),
-		LogType:            p.GetLogType(),
-		SourceEntity:       p.GetSourceEntity(),
-		SourceService:      p.GetSourceService(),
-		Confidence:         conf,
-		Severity:           sev,
-		Rule:               protoToRuleMetadata(p.GetRule()),
+		LogSource:           p.GetLogSource(),
+		LogType:             p.GetLogType(),
+		SourceEntity:        p.GetSourceEntity(),
+		SourceService:       p.GetSourceService(),
+		Confidence:          conf,
+		Severity:            sev,
+		Rule:                protoToRuleMetadata(p.GetRule()),
 	}
 	return a, nil
 }
 
 // Converts a *config.RuleMetadata to its protobuf representation for embedding in an alert payload.
-func ruleToProto(r *config.RuleMetadata) *pb.RuleMetadata {
+func ruleToProto(r *rules.RuleMetadata) *pb.RuleMetadata {
 	if r == nil {
 		return nil
 	}
@@ -114,18 +114,18 @@ func ruleToProto(r *config.RuleMetadata) *pb.RuleMetadata {
 		Enrichments:     r.Enrichments(),
 		TuningRules:     r.TuningRules(),
 		Version:         r.Version,
-		FileName:        r.FileName,
+		FileName:        r.Name,
 		DisplayName:     r.DisplayName,
 		References:      r.References(),
 	}
 }
 
 // Reconstructs a *config.RuleMetadata from the alert's embedded rule metadata.
-func protoToRuleMetadata(m *pb.RuleMetadata) *config.RuleMetadata {
+func protoToRuleMetadata(m *pb.RuleMetadata) *rules.RuleMetadata {
 	if m == nil {
-		return &config.RuleMetadata{}
+		return &rules.RuleMetadata{}
 	}
-	cfg, _ := config.New(config.RuleMetadata{
+	cfg, _ := rules.New(rules.RuleMetadata{
 		PluginMetadata: plugin.PluginMetadata{
 			Id:          m.GetId(),
 			Name:        m.GetName(),
@@ -133,7 +133,6 @@ func protoToRuleMetadata(m *pb.RuleMetadata) *config.RuleMetadata {
 			Description: m.GetDescription(),
 			Enabled:     m.GetEnabled(),
 			Version:     m.GetVersion(),
-			FileName:    m.GetFileName(),
 		},
 		SeverityStr:          m.GetSeverity(),
 		ConfidenceStr:        m.GetConfidence(),

@@ -11,21 +11,18 @@ import (
 	"github.com/harishhary/blink/internal/helpers"
 	"github.com/harishhary/blink/internal/plugin"
 	internal "github.com/harishhary/blink/internal/pools"
-	"github.com/harishhary/blink/pkg/enrichments/config"
 	"github.com/harishhary/blink/pkg/enrichments/rpc_enrichments"
 )
 
-type EnrichmentAdapter struct {
-	Watcher *config.Watcher
+type EnrichmentConfigAdapter struct {
+	Manager *EnrichmentConfigManager
 }
 
-func (l *EnrichmentAdapter) PluginKey() string           { return "enrichment" }
-func (l *EnrichmentAdapter) MagicValue() string          { return "enrichment_v1" }
-func (l *EnrichmentAdapter) GRPCPlugin() goplugin.Plugin { return &enrichmentPlugin{} }
+func (l *EnrichmentConfigAdapter) PluginKey() string           { return "enrichment" }
+func (l *EnrichmentConfigAdapter) MagicValue() string          { return "enrichment_v1" }
+func (l *EnrichmentConfigAdapter) GRPCPlugin() goplugin.Plugin { return &enrichmentPlugin{} }
 
-// Handshake connects to the enrichment subprocess, calls Init, and returns a
-// ready rpcEnrichment.
-func (l *EnrichmentAdapter) Handshake(ctx context.Context, raw interface{}, binPath string, hash string) (Enrichment, plugin.PluginLifecycle, string, string, error) {
+func (l *EnrichmentConfigAdapter) Handshake(ctx context.Context, raw interface{}, binPath string, hash string) (Enrichment, plugin.PluginLifecycle, string, string, error) {
 	rpc, ok := raw.(rpc_enrichments.EnrichmentClient)
 	if !ok {
 		return nil, nil, "", "", fmt.Errorf("dispense: unexpected type %T", raw)
@@ -40,8 +37,8 @@ func (l *EnrichmentAdapter) Handshake(ctx context.Context, raw interface{}, binP
 		return nil, nil, "", "", fmt.Errorf("init: %w", err)
 	}
 
-	e := newRpcEnrichment(fileName, rpc, l.Watcher, hash)
-	cfg, ok := l.Watcher.Current().ByFileName(fileName)
+	e := newRpcEnrichment(fileName, rpc, l.Manager, hash)
+	cfg, ok := l.Manager.Current().ByFileName(fileName)
 	id, name := fileName, fileName
 	if ok {
 		id = cfg.Id
@@ -51,14 +48,14 @@ func (l *EnrichmentAdapter) Handshake(ctx context.Context, raw interface{}, binP
 }
 
 // IsReady reports whether this binary's YAML sidecar exists in the current registry.
-func (l *EnrichmentAdapter) IsReady(binPath string) bool {
-	_, ok := l.Watcher.Current().ByFileName(helpers.BinaryBaseName(binPath))
+func (l *EnrichmentConfigAdapter) IsReady(binPath string) bool {
+	_, ok := l.Manager.Current().ByFileName(helpers.BinaryBaseName(binPath))
 	return ok
 }
 
 // IsShadow reports whether this binary's YAML declares it as a shadow or canary version.
-func (l *EnrichmentAdapter) IsShadow(binPath string) bool {
-	cfg, ok := l.Watcher.Current().ByFileName(helpers.BinaryBaseName(binPath))
+func (l *EnrichmentConfigAdapter) IsShadow(binPath string) bool {
+	cfg, ok := l.Manager.Current().ByFileName(helpers.BinaryBaseName(binPath))
 	if !ok {
 		return false
 	}
@@ -67,13 +64,13 @@ func (l *EnrichmentAdapter) IsShadow(binPath string) bool {
 }
 
 // IsEnabled reports whether the enrichment's YAML sidecar still exists and is enabled.
-func (l *EnrichmentAdapter) IsEnabled(h *plugin.PluginHandle) bool {
-	cfg, ok := l.Watcher.Current().ByFileName(helpers.BinaryBaseName(h.BinPath))
+func (l *EnrichmentConfigAdapter) IsEnabled(h *plugin.PluginHandle) bool {
+	cfg, ok := l.Manager.Current().ByFileName(helpers.BinaryBaseName(h.BinPath))
 	return ok && cfg.Enabled
 }
 
-func (l *EnrichmentAdapter) Workers(binPath string) int {
-	cfg, ok := l.Watcher.Current().ByFileName(helpers.BinaryBaseName(binPath))
+func (l *EnrichmentConfigAdapter) Workers(binPath string) int {
+	cfg, ok := l.Manager.Current().ByFileName(helpers.BinaryBaseName(binPath))
 	if !ok || cfg.MaxProcs <= 0 {
 		return 1
 	}

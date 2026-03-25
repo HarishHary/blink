@@ -11,16 +11,15 @@ import (
 	"github.com/harishhary/blink/internal/helpers"
 	"github.com/harishhary/blink/internal/plugin"
 	internal "github.com/harishhary/blink/internal/pools"
-	"github.com/harishhary/blink/pkg/tuning_rules/config"
 	"github.com/harishhary/blink/pkg/tuning_rules/rpc_tuning_rules"
 )
 
 type TuningRuleAdapter struct {
-	Watcher *config.Watcher
+	Manager *TuningRuleConfigManager
 }
 
-func (l *TuningRuleAdapter) PluginKey() string         { return "tuning_rule" }
-func (l *TuningRuleAdapter) MagicValue() string        { return "tuning_rule_v1" }
+func (l *TuningRuleAdapter) PluginKey() string           { return "tuning_rule" }
+func (l *TuningRuleAdapter) MagicValue() string          { return "tuning_rule_v1" }
 func (l *TuningRuleAdapter) GRPCPlugin() goplugin.Plugin { return &tuningPlugin{} }
 
 // Handshake connects to the tuning rule subprocess, calls Init, and returns a
@@ -40,8 +39,8 @@ func (l *TuningRuleAdapter) Handshake(ctx context.Context, raw interface{}, binP
 		return nil, nil, "", "", fmt.Errorf("init: %w", err)
 	}
 
-	tr := newRpcTuningRule(fileName, rpc, l.Watcher, hash)
-	cfg, ok := l.Watcher.Current().ByFileName(fileName)
+	tr := newRpcTuningRule(fileName, rpc, l.Manager, hash)
+	cfg, ok := l.Manager.Current().ByFileName(fileName)
 	id, name := fileName, fileName
 	if ok {
 		id = cfg.Id
@@ -52,13 +51,13 @@ func (l *TuningRuleAdapter) Handshake(ctx context.Context, raw interface{}, binP
 
 // IsReady reports whether this binary's YAML sidecar exists in the current registry.
 func (l *TuningRuleAdapter) IsReady(binPath string) bool {
-	_, ok := l.Watcher.Current().ByFileName(helpers.BinaryBaseName(binPath))
+	_, ok := l.Manager.Current().ByFileName(helpers.BinaryBaseName(binPath))
 	return ok
 }
 
 // IsShadow reports whether this binary's YAML declares it as a shadow or canary version.
 func (l *TuningRuleAdapter) IsShadow(binPath string) bool {
-	cfg, ok := l.Watcher.Current().ByFileName(helpers.BinaryBaseName(binPath))
+	cfg, ok := l.Manager.Current().ByFileName(helpers.BinaryBaseName(binPath))
 	if !ok {
 		return false
 	}
@@ -68,12 +67,12 @@ func (l *TuningRuleAdapter) IsShadow(binPath string) bool {
 
 // IsEnabled reports whether the tuning rule's YAML sidecar still exists and is enabled.
 func (l *TuningRuleAdapter) IsEnabled(h *plugin.PluginHandle) bool {
-	cfg, ok := l.Watcher.Current().ByFileName(helpers.BinaryBaseName(h.BinPath))
+	cfg, ok := l.Manager.Current().ByFileName(helpers.BinaryBaseName(h.BinPath))
 	return ok && cfg.Enabled
 }
 
 func (l *TuningRuleAdapter) Workers(binPath string) int {
-	cfg, ok := l.Watcher.Current().ByFileName(helpers.BinaryBaseName(binPath))
+	cfg, ok := l.Manager.Current().ByFileName(helpers.BinaryBaseName(binPath))
 	if !ok || cfg.MaxProcs <= 0 {
 		return 1
 	}
@@ -94,7 +93,9 @@ func (l *tuningLifecycle) Shutdown(ctx context.Context) error {
 	return err
 }
 
-type tuningPlugin struct{ goplugin.NetRPCUnsupportedPlugin }
+type tuningPlugin struct {
+	goplugin.NetRPCUnsupportedPlugin
+}
 
 func (p *tuningPlugin) GRPCServer(_ *goplugin.GRPCBroker, _ *grpc.Server) error { return nil }
 func (p *tuningPlugin) GRPCClient(_ context.Context, _ *goplugin.GRPCBroker, c *grpc.ClientConn) (interface{}, error) {

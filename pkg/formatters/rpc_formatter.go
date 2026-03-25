@@ -8,40 +8,39 @@ import (
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/alerts"
-	"github.com/harishhary/blink/pkg/formatters/config"
 	"github.com/harishhary/blink/pkg/formatters/rpc_formatters"
 )
 
 type rpcFormatter struct {
-	cfgWatcher *config.Watcher
+	cfgManager *FormatterConfigManager
 	fileName   string
 	checksum   string
 	client     rpc_formatters.FormatterClient
 }
 
-func newRpcFormatter(fileName string, client rpc_formatters.FormatterClient, watcher *config.Watcher, checksum string) *rpcFormatter {
+func newRpcFormatter(fileName string, client rpc_formatters.FormatterClient, manager *FormatterConfigManager, checksum string) *rpcFormatter {
 	return &rpcFormatter{
-		cfgWatcher: watcher,
+		cfgManager: manager,
 		fileName:   fileName,
 		checksum:   checksum,
 		client:     client,
 	}
 }
 
-func (f *rpcFormatter) cfg() *config.FormatterMetadata {
-	if f.cfgWatcher == nil {
+func (f *rpcFormatter) cfg() *FormatterMetadata {
+	if f.cfgManager == nil {
 		return nil
 	}
-	v, _ := f.cfgWatcher.Current().ByFileName(f.fileName)
+	v, _ := f.cfgManager.Current().ByFileName(f.fileName)
 	return v
 }
 
 // FormatterMetadata returns the live YAML-derived formatter configuration.
-func (f *rpcFormatter) FormatterMetadata() *config.FormatterMetadata {
+func (f *rpcFormatter) FormatterMetadata() *FormatterMetadata {
 	if c := f.cfg(); c != nil {
 		return c
 	}
-	return &config.FormatterMetadata{PluginMetadata: plugin.PluginMetadata{Id: f.fileName, Name: f.fileName, FileName: f.fileName}}
+	return &FormatterMetadata{PluginMetadata: plugin.PluginMetadata{Id: f.fileName, Name: f.fileName}}
 }
 
 func (f *rpcFormatter) Metadata() plugin.PluginMetadata {

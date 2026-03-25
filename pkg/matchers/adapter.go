@@ -11,16 +11,15 @@ import (
 	"github.com/harishhary/blink/internal/helpers"
 	"github.com/harishhary/blink/internal/plugin"
 	internal "github.com/harishhary/blink/internal/pools"
-	"github.com/harishhary/blink/pkg/matchers/config"
 	"github.com/harishhary/blink/pkg/matchers/rpc_matchers"
 )
 
 type MatcherAdapter struct {
-	Watcher *config.Watcher
+	Manager *MatcherConfigManager
 }
 
-func (l *MatcherAdapter) PluginKey() string         { return "matcher" }
-func (l *MatcherAdapter) MagicValue() string        { return "matcher_v1" }
+func (l *MatcherAdapter) PluginKey() string           { return "matcher" }
+func (l *MatcherAdapter) MagicValue() string          { return "matcher_v1" }
 func (l *MatcherAdapter) GRPCPlugin() goplugin.Plugin { return &matcherPlugin{} }
 
 // Handshake connects to the matcher subprocess, calls Init, and returns a
@@ -40,8 +39,8 @@ func (l *MatcherAdapter) Handshake(ctx context.Context, raw interface{}, binPath
 		return nil, nil, "", "", fmt.Errorf("init: %w", err)
 	}
 
-	m := newRpcMatcher(fileName, rpc, l.Watcher, 5*time.Second, hash)
-	cfg, ok := l.Watcher.Current().ByFileName(fileName)
+	m := newRpcMatcher(fileName, rpc, l.Manager, 5*time.Second, hash)
+	cfg, ok := l.Manager.Current().ByFileName(fileName)
 	id, name := fileName, fileName
 	if ok {
 		id = cfg.Id
@@ -52,13 +51,13 @@ func (l *MatcherAdapter) Handshake(ctx context.Context, raw interface{}, binPath
 
 // IsReady reports whether this binary's YAML sidecar exists in the current registry.
 func (l *MatcherAdapter) IsReady(binPath string) bool {
-	_, ok := l.Watcher.Current().ByFileName(helpers.BinaryBaseName(binPath))
+	_, ok := l.Manager.Current().ByFileName(helpers.BinaryBaseName(binPath))
 	return ok
 }
 
 // IsShadow reports whether this binary's YAML declares it as a shadow or canary version.
 func (l *MatcherAdapter) IsShadow(binPath string) bool {
-	cfg, ok := l.Watcher.Current().ByFileName(helpers.BinaryBaseName(binPath))
+	cfg, ok := l.Manager.Current().ByFileName(helpers.BinaryBaseName(binPath))
 	if !ok {
 		return false
 	}
@@ -68,12 +67,12 @@ func (l *MatcherAdapter) IsShadow(binPath string) bool {
 
 // IsEnabled reports whether the matcher's YAML sidecar still exists and is enabled.
 func (l *MatcherAdapter) IsEnabled(h *plugin.PluginHandle) bool {
-	cfg, ok := l.Watcher.Current().ByFileName(helpers.BinaryBaseName(h.BinPath))
+	cfg, ok := l.Manager.Current().ByFileName(helpers.BinaryBaseName(h.BinPath))
 	return ok && cfg.Enabled
 }
 
 func (l *MatcherAdapter) Workers(binPath string) int {
-	cfg, ok := l.Watcher.Current().ByFileName(helpers.BinaryBaseName(binPath))
+	cfg, ok := l.Manager.Current().ByFileName(helpers.BinaryBaseName(binPath))
 	if !ok || cfg.MaxProcs <= 0 {
 		return 1
 	}
@@ -92,7 +91,9 @@ func (l *matcherLifecycle) Shutdown(ctx context.Context) error {
 	return err
 }
 
-type matcherPlugin struct{ goplugin.NetRPCUnsupportedPlugin }
+type matcherPlugin struct {
+	goplugin.NetRPCUnsupportedPlugin
+}
 
 func (p *matcherPlugin) GRPCServer(_ *goplugin.GRPCBroker, _ *grpc.Server) error { return nil }
 func (p *matcherPlugin) GRPCClient(_ context.Context, _ *goplugin.GRPCBroker, c *grpc.ClientConn) (interface{}, error) {

@@ -6,11 +6,9 @@ import (
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/events"
-	"github.com/harishhary/blink/pkg/rules/config"
 )
 
 type PluginMetadata = plugin.PluginMetadata
-type RuleMetadata = config.RuleMetadata
 
 // EvalResult is the per-event outcome returned by Rule.Evaluate.
 // Fields beyond Matched are populated only when the plugin implements the

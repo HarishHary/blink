@@ -7,40 +7,39 @@ import (
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/alerts"
-	"github.com/harishhary/blink/pkg/enrichments/config"
 	"github.com/harishhary/blink/pkg/enrichments/rpc_enrichments"
 )
 
 type rpcEnrichment struct {
-	cfgWatcher *config.Watcher
+	cfgManager *EnrichmentConfigManager
 	fileName   string
 	checksum   string
 	client     rpc_enrichments.EnrichmentClient
 }
 
-func newRpcEnrichment(fileName string, client rpc_enrichments.EnrichmentClient, watcher *config.Watcher, checksum string) *rpcEnrichment {
+func newRpcEnrichment(fileName string, client rpc_enrichments.EnrichmentClient, manager *EnrichmentConfigManager, checksum string) *rpcEnrichment {
 	return &rpcEnrichment{
-		cfgWatcher: watcher,
+		cfgManager: manager,
 		fileName:   fileName,
 		checksum:   checksum,
 		client:     client,
 	}
 }
 
-func (r *rpcEnrichment) cfg() *config.EnrichmentMetadata {
-	if r.cfgWatcher == nil {
+func (r *rpcEnrichment) cfg() *EnrichmentMetadata {
+	if r.cfgManager == nil {
 		return nil
 	}
-	v, _ := r.cfgWatcher.Current().ByFileName(r.fileName)
+	v, _ := r.cfgManager.Current().ByFileName(r.fileName)
 	return v
 }
 
 // EnrichmentMetadata returns the live YAML-derived enrichment configuration.
-func (r *rpcEnrichment) EnrichmentMetadata() *config.EnrichmentMetadata {
+func (r *rpcEnrichment) EnrichmentMetadata() *EnrichmentMetadata {
 	if c := r.cfg(); c != nil {
 		return c
 	}
-	return &config.EnrichmentMetadata{PluginMetadata: plugin.PluginMetadata{Id: r.fileName, Name: r.fileName, FileName: r.fileName}}
+	return &EnrichmentMetadata{PluginMetadata: plugin.PluginMetadata{Id: r.fileName, Name: r.fileName}}
 }
 
 func (r *rpcEnrichment) Metadata() plugin.PluginMetadata {

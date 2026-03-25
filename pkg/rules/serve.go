@@ -1,4 +1,4 @@
-package sdk
+package rules
 
 import (
 	"context"
@@ -62,14 +62,14 @@ type RulePlugin interface {
 // Embed in your rule struct and override only what you need.
 type BaseRule struct{}
 
-func (BaseRule) Init() error                                  { return nil }
-func (BaseRule) Shutdown() error                              { return nil }
-func (BaseRule) AlertTitle(_ events.Event) string             { return "" }
-func (BaseRule) AlertDescription(_ events.Event) string       { return "" }
-func (BaseRule) AlertSeverity(_ events.Event) string          { return "" }
-func (BaseRule) AlertContext(_ events.Event) map[string]any   { return nil }
-func (BaseRule) AlertMergeByKeys(_ events.Event) []string     { return nil }
-func (BaseRule) AlertReqSubkeys(_ events.Event) bool          { return true }
+func (BaseRule) Init() error                                { return nil }
+func (BaseRule) Shutdown() error                            { return nil }
+func (BaseRule) AlertTitle(_ events.Event) string           { return "" }
+func (BaseRule) AlertDescription(_ events.Event) string     { return "" }
+func (BaseRule) AlertSeverity(_ events.Event) string        { return "" }
+func (BaseRule) AlertContext(_ events.Event) map[string]any { return nil }
+func (BaseRule) AlertMergeByKeys(_ events.Event) []string   { return nil }
+func (BaseRule) AlertReqSubkeys(_ events.Event) bool        { return true }
 
 // server wraps a RulePlugin and serves the gRPC RuleServer interface.
 type server struct {

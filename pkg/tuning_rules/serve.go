@@ -1,4 +1,4 @@
-package sdk
+package tuning_rules
 
 import (
 	"context"

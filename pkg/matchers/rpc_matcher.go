@@ -8,21 +8,20 @@ import (
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/events"
-	"github.com/harishhary/blink/pkg/matchers/config"
 	"github.com/harishhary/blink/pkg/matchers/rpc_matchers"
 )
 
 type rpcMatcher struct {
-	cfgWatcher *config.Watcher
+	cfgManager *MatcherConfigManager
 	fileName   string
 	checksum   string
 	client     rpc_matchers.MatcherClient
 	timeout    time.Duration
 }
 
-func newRpcMatcher(fileName string, client rpc_matchers.MatcherClient, watcher *config.Watcher, timeout time.Duration, checksum string) *rpcMatcher {
+func newRpcMatcher(fileName string, client rpc_matchers.MatcherClient, manager *MatcherConfigManager, timeout time.Duration, checksum string) *rpcMatcher {
 	return &rpcMatcher{
-		cfgWatcher: watcher,
+		cfgManager: manager,
 		fileName:   fileName,
 		checksum:   checksum,
 		client:     client,
@@ -30,20 +29,20 @@ func newRpcMatcher(fileName string, client rpc_matchers.MatcherClient, watcher *
 	}
 }
 
-func (r *rpcMatcher) cfg() *config.MatcherMetadata {
-	if r.cfgWatcher == nil {
+func (r *rpcMatcher) cfg() *MatcherMetadata {
+	if r.cfgManager == nil {
 		return nil
 	}
-	v, _ := r.cfgWatcher.Current().ByFileName(r.fileName)
+	v, _ := r.cfgManager.Current().ByFileName(r.fileName)
 	return v
 }
 
 // MatcherMetadata returns the live YAML-derived matcher configuration.
-func (r *rpcMatcher) MatcherMetadata() *config.MatcherMetadata {
+func (r *rpcMatcher) MatcherMetadata() *MatcherMetadata {
 	if c := r.cfg(); c != nil {
 		return c
 	}
-	return &config.MatcherMetadata{PluginMetadata: plugin.PluginMetadata{Id: r.fileName, Name: r.fileName, FileName: r.fileName}}
+	return &MatcherMetadata{PluginMetadata: plugin.PluginMetadata{Id: r.fileName, Name: r.fileName}}
 }
 
 func (r *rpcMatcher) Metadata() plugin.PluginMetadata {

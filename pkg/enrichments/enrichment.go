@@ -6,13 +6,17 @@ import (
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/alerts"
-	"github.com/harishhary/blink/pkg/enrichments/config"
 )
 
 // PluginMetadata is re-exported from internal/plugin so plugin authors don't need to
 // import an internal package.
 type PluginMetadata = plugin.PluginMetadata
-type EnrichmentMetadata = config.EnrichmentMetadata
+
+// EnrichmentMetadata is the in-memory representation of an enrichment YAML sidecar.
+type EnrichmentMetadata struct {
+	plugin.PluginMetadata `yaml:",inline"`
+	DependsOn             []string `yaml:"depends_on"`
+}
 
 type Enrichment interface {
 	Enrich(ctx context.Context, alerts []*alerts.Alert) errors.Error
