@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/harishhary/blink/pkg/alerts"
-	"github.com/harishhary/blink/pkg/rules/config"
+	"github.com/harishhary/blink/pkg/rules"
 )
 
 type Record map[string]any
@@ -26,7 +26,7 @@ type IAlertStore interface {
 // IRuleStore covers rule-level queries (distinct rule names + bulk rule fetch).
 type IRuleStore interface {
 	RuleNamesGenerator() <-chan string
-	FetchAllRules() (<-chan *config.RuleMetadata, error)
+	FetchAllRules() (<-chan *rules.RuleMetadata, error)
 }
 
 // IBackend is the full backend capability: alert store + rule store.

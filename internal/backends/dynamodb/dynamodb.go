@@ -16,7 +16,7 @@ import (
 	"github.com/harishhary/blink/internal/backends"
 	"github.com/harishhary/blink/internal/helpers"
 	"github.com/harishhary/blink/pkg/alerts"
-	rulesconfig "github.com/harishhary/blink/pkg/rules/config"
+	"github.com/harishhary/blink/pkg/rules"
 )
 
 type DynamoDBBackend struct {
@@ -327,7 +327,7 @@ func (at *DynamoDBBackend) ToAlert(record backends.Record) (*alerts.Alert, error
 func (at *DynamoDBBackend) ToRecord(alert *alerts.Alert) (backends.Record, error) {
 	item, err := attributevalue.MarshalMap(backends.Record{
 		"RuleName":        alert.Rule.Name, // Partition Key
-		"AlertID":         alert.AlertID,     // Sort/Range Key
+		"AlertID":         alert.AlertID,   // Sort/Range Key
 		"Attempts":        alert.Attempts,
 		"Cluster":         alert.Cluster,
 		"Created":         alert.Created.Format(helpers.DATETIME_FORMAT),
@@ -356,13 +356,13 @@ func (at *DynamoDBBackend) ToRecord(alert *alerts.Alert) (backends.Record, error
 	return result, nil
 }
 
-func (at *DynamoDBBackend) FetchAllRules() (<-chan *rulesconfig.RuleMetadata, error) {
+func (at *DynamoDBBackend) FetchAllRules() (<-chan *rules.RuleMetadata, error) {
 	input := &dynamodb.ScanInput{
 		TableName: aws.String(at.dbName),
 		Select:    types.SelectAllAttributes,
 	}
 
-	out := make(chan *rulesconfig.RuleMetadata)
+	out := make(chan *rules.RuleMetadata)
 	go func() {
 		defer close(out)
 		generator := at.paginateScan(at.db.Scan, input)
@@ -379,8 +379,8 @@ func (at *DynamoDBBackend) FetchAllRules() (<-chan *rulesconfig.RuleMetadata, er
 	return out, nil
 }
 
-func (at *DynamoDBBackend) unmarshalRule(item map[string]types.AttributeValue) (*rulesconfig.RuleMetadata, error) {
-	var rule rulesconfig.RuleMetadata
+func (at *DynamoDBBackend) unmarshalRule(item map[string]types.AttributeValue) (*rules.RuleMetadata, error) {
+	var rule rules.RuleMetadata
 	if err := attributevalue.UnmarshalMap(item, &rule); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal item to rule: %w", err)
 	}
