@@ -1,18 +1,10 @@
 syntax = "proto3";
-
 package tuning_rules;
-
-option go_package = "github.com/harishhary/blink/pkg/tuning_rules/rpc_tuning_rules";
+option go_package = "rpc_tuning_rules/;rpc_tuning_rules";
 
 message Empty {}
-
-message TuneBatchRequest {
-  repeated bytes alert_json = 1; // one JSON-encoded map[string]any per alert
-}
-
-message TuneBatchResponse {
-  repeated bool applies = 1; // one result per alert
-}
+message TuneBatchRequest  { repeated bytes alert_json = 1; } // one JSON-encoded map[string]any per alert
+message TuneBatchResponse { repeated bool  applies    = 1; } // one result per alert
 
 service TuningRule {
   rpc Init(Empty)                     returns (Empty);

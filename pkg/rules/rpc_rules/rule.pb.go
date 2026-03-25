@@ -101,94 +101,6 @@ func (x *Event) GetJson() []byte {
 	return nil
 }
 
-type EvaluateRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Event         *Event                 `protobuf:"bytes,1,opt,name=event,proto3" json:"event,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *EvaluateRequest) Reset() {
-	*x = EvaluateRequest{}
-	mi := &file_pkg_rules_rpc_rules_rule_proto_msgTypes[2]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *EvaluateRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*EvaluateRequest) ProtoMessage() {}
-
-func (x *EvaluateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_rules_rpc_rules_rule_proto_msgTypes[2]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use EvaluateRequest.ProtoReflect.Descriptor instead.
-func (*EvaluateRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_rules_rpc_rules_rule_proto_rawDescGZIP(), []int{2}
-}
-
-func (x *EvaluateRequest) GetEvent() *Event {
-	if x != nil {
-		return x.Event
-	}
-	return nil
-}
-
-type EvaluateResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Matched       bool                   `protobuf:"varint,1,opt,name=matched,proto3" json:"matched,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *EvaluateResponse) Reset() {
-	*x = EvaluateResponse{}
-	mi := &file_pkg_rules_rpc_rules_rule_proto_msgTypes[3]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *EvaluateResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*EvaluateResponse) ProtoMessage() {}
-
-func (x *EvaluateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_rules_rpc_rules_rule_proto_msgTypes[3]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use EvaluateResponse.ProtoReflect.Descriptor instead.
-func (*EvaluateResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_rules_rpc_rules_rule_proto_rawDescGZIP(), []int{3}
-}
-
-func (x *EvaluateResponse) GetMatched() bool {
-	if x != nil {
-		return x.Matched
-	}
-	return false
-}
-
 type EvaluateBatchRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Events        []*Event               `protobuf:"bytes,1,rep,name=events,proto3" json:"events,omitempty"`
@@ -198,7 +110,7 @@ type EvaluateBatchRequest struct {
 
 func (x *EvaluateBatchRequest) Reset() {
 	*x = EvaluateBatchRequest{}
-	mi := &file_pkg_rules_rpc_rules_rule_proto_msgTypes[4]
+	mi := &file_pkg_rules_rpc_rules_rule_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -210,7 +122,7 @@ func (x *EvaluateBatchRequest) String() string {
 func (*EvaluateBatchRequest) ProtoMessage() {}
 
 func (x *EvaluateBatchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_rules_rpc_rules_rule_proto_msgTypes[4]
+	mi := &file_pkg_rules_rpc_rules_rule_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -223,7 +135,7 @@ func (x *EvaluateBatchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvaluateBatchRequest.ProtoReflect.Descriptor instead.
 func (*EvaluateBatchRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_rules_rpc_rules_rule_proto_rawDescGZIP(), []int{4}
+	return file_pkg_rules_rpc_rules_rule_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *EvaluateBatchRequest) GetEvents() []*Event {
@@ -249,7 +161,7 @@ type EventResult struct {
 
 func (x *EventResult) Reset() {
 	*x = EventResult{}
-	mi := &file_pkg_rules_rpc_rules_rule_proto_msgTypes[5]
+	mi := &file_pkg_rules_rpc_rules_rule_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -261,7 +173,7 @@ func (x *EventResult) String() string {
 func (*EventResult) ProtoMessage() {}
 
 func (x *EventResult) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_rules_rpc_rules_rule_proto_msgTypes[5]
+	mi := &file_pkg_rules_rpc_rules_rule_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -274,7 +186,7 @@ func (x *EventResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EventResult.ProtoReflect.Descriptor instead.
 func (*EventResult) Descriptor() ([]byte, []int) {
-	return file_pkg_rules_rpc_rules_rule_proto_rawDescGZIP(), []int{5}
+	return file_pkg_rules_rpc_rules_rule_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *EventResult) GetMatched() bool {
@@ -328,7 +240,7 @@ type EvaluateBatchResponse struct {
 
 func (x *EvaluateBatchResponse) Reset() {
 	*x = EvaluateBatchResponse{}
-	mi := &file_pkg_rules_rpc_rules_rule_proto_msgTypes[6]
+	mi := &file_pkg_rules_rpc_rules_rule_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -340,7 +252,7 @@ func (x *EvaluateBatchResponse) String() string {
 func (*EvaluateBatchResponse) ProtoMessage() {}
 
 func (x *EvaluateBatchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_rules_rpc_rules_rule_proto_msgTypes[6]
+	mi := &file_pkg_rules_rpc_rules_rule_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -353,7 +265,7 @@ func (x *EvaluateBatchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvaluateBatchResponse.ProtoReflect.Descriptor instead.
 func (*EvaluateBatchResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_rules_rpc_rules_rule_proto_rawDescGZIP(), []int{6}
+	return file_pkg_rules_rpc_rules_rule_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *EvaluateBatchResponse) GetResults() []*EventResult {
@@ -370,11 +282,7 @@ const file_pkg_rules_rpc_rules_rule_proto_rawDesc = "" +
 	"\x1epkg/rules/rpc_rules/rule.proto\x12\x05rules\"\a\n" +
 	"\x05Empty\"\x1b\n" +
 	"\x05Event\x12\x12\n" +
-	"\x04json\x18\x01 \x01(\fR\x04json\"5\n" +
-	"\x0fEvaluateRequest\x12\"\n" +
-	"\x05event\x18\x01 \x01(\v2\f.rules.EventR\x05event\",\n" +
-	"\x10EvaluateResponse\x12\x18\n" +
-	"\amatched\x18\x01 \x01(\bR\amatched\"<\n" +
+	"\x04json\x18\x01 \x01(\fR\x04json\"<\n" +
 	"\x14EvaluateBatchRequest\x12$\n" +
 	"\x06events\x18\x01 \x03(\v2\f.rules.EventR\x06events\"\xc2\x01\n" +
 	"\vEventResult\x12\x18\n" +
@@ -385,10 +293,9 @@ const file_pkg_rules_rpc_rules_rule_proto_rawDesc = "" +
 	"\fcontext_json\x18\x05 \x01(\fR\vcontextJson\x12\"\n" +
 	"\rmerge_by_keys\x18\x06 \x03(\tR\vmergeByKeys\"E\n" +
 	"\x15EvaluateBatchResponse\x12,\n" +
-	"\aresults\x18\x02 \x03(\v2\x12.rules.EventResultR\aresults2\xff\x01\n" +
+	"\aresults\x18\x02 \x03(\v2\x12.rules.EventResultR\aresults2\xc2\x01\n" +
 	"\x04Rule\x12\"\n" +
-	"\x04Init\x12\f.rules.Empty\x1a\f.rules.Empty\x12;\n" +
-	"\bEvaluate\x12\x16.rules.EvaluateRequest\x1a\x17.rules.EvaluateResponse\x12J\n" +
+	"\x04Init\x12\f.rules.Empty\x1a\f.rules.Empty\x12J\n" +
 	"\rEvaluateBatch\x12\x1b.rules.EvaluateBatchRequest\x1a\x1c.rules.EvaluateBatchResponse\x12&\n" +
 	"\bShutdown\x12\f.rules.Empty\x1a\f.rules.Empty\x12\"\n" +
 	"\x04Ping\x12\f.rules.Empty\x1a\f.rules.EmptyB\x16Z\x14rpc_rules/;rpc_rulesb\x06proto3"
@@ -405,35 +312,30 @@ func file_pkg_rules_rpc_rules_rule_proto_rawDescGZIP() []byte {
 	return file_pkg_rules_rpc_rules_rule_proto_rawDescData
 }
 
-var file_pkg_rules_rpc_rules_rule_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_pkg_rules_rpc_rules_rule_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_pkg_rules_rpc_rules_rule_proto_goTypes = []any{
 	(*Empty)(nil),                 // 0: rules.Empty
 	(*Event)(nil),                 // 1: rules.Event
-	(*EvaluateRequest)(nil),       // 2: rules.EvaluateRequest
-	(*EvaluateResponse)(nil),      // 3: rules.EvaluateResponse
-	(*EvaluateBatchRequest)(nil),  // 4: rules.EvaluateBatchRequest
-	(*EventResult)(nil),           // 5: rules.EventResult
-	(*EvaluateBatchResponse)(nil), // 6: rules.EvaluateBatchResponse
+	(*EvaluateBatchRequest)(nil),  // 2: rules.EvaluateBatchRequest
+	(*EventResult)(nil),           // 3: rules.EventResult
+	(*EvaluateBatchResponse)(nil), // 4: rules.EvaluateBatchResponse
 }
 var file_pkg_rules_rpc_rules_rule_proto_depIdxs = []int32{
-	1, // 0: rules.EvaluateRequest.event:type_name -> rules.Event
-	1, // 1: rules.EvaluateBatchRequest.events:type_name -> rules.Event
-	5, // 2: rules.EvaluateBatchResponse.results:type_name -> rules.EventResult
-	0, // 3: rules.Rule.Init:input_type -> rules.Empty
-	2, // 4: rules.Rule.Evaluate:input_type -> rules.EvaluateRequest
-	4, // 5: rules.Rule.EvaluateBatch:input_type -> rules.EvaluateBatchRequest
-	0, // 6: rules.Rule.Shutdown:input_type -> rules.Empty
-	0, // 7: rules.Rule.Ping:input_type -> rules.Empty
-	0, // 8: rules.Rule.Init:output_type -> rules.Empty
-	3, // 9: rules.Rule.Evaluate:output_type -> rules.EvaluateResponse
-	6, // 10: rules.Rule.EvaluateBatch:output_type -> rules.EvaluateBatchResponse
-	0, // 11: rules.Rule.Shutdown:output_type -> rules.Empty
-	0, // 12: rules.Rule.Ping:output_type -> rules.Empty
-	8, // [8:13] is the sub-list for method output_type
-	3, // [3:8] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	1, // 0: rules.EvaluateBatchRequest.events:type_name -> rules.Event
+	3, // 1: rules.EvaluateBatchResponse.results:type_name -> rules.EventResult
+	0, // 2: rules.Rule.Init:input_type -> rules.Empty
+	2, // 3: rules.Rule.EvaluateBatch:input_type -> rules.EvaluateBatchRequest
+	0, // 4: rules.Rule.Shutdown:input_type -> rules.Empty
+	0, // 5: rules.Rule.Ping:input_type -> rules.Empty
+	0, // 6: rules.Rule.Init:output_type -> rules.Empty
+	4, // 7: rules.Rule.EvaluateBatch:output_type -> rules.EvaluateBatchResponse
+	0, // 8: rules.Rule.Shutdown:output_type -> rules.Empty
+	0, // 9: rules.Rule.Ping:output_type -> rules.Empty
+	6, // [6:10] is the sub-list for method output_type
+	2, // [2:6] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_pkg_rules_rpc_rules_rule_proto_init() }
@@ -447,7 +349,7 @@ func file_pkg_rules_rpc_rules_rule_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_rules_rpc_rules_rule_proto_rawDesc), len(file_pkg_rules_rpc_rules_rule_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

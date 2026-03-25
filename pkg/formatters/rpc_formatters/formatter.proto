@@ -1,39 +1,15 @@
 syntax = "proto3";
-
 package formatters;
-
-option go_package = "github.com/harishhary/blink/pkg/formatters/rpc_formatters";
+option go_package = "rpc_formatters/;rpc_formatters";
 
 message Empty {}
 
-message FormatterMetadata {
-  string id          = 1;
-  string name        = 2;
-  string description = 3;
-  bool   enabled     = 4;
-  string version     = 5;
-}
+message FormatBatchRequest  { repeated bytes alert_json  = 1; } // one JSON-encoded alerts.Alert per alert
 
-message FormatRequest {
-  bytes alert_json = 1; // JSON-encoded alerts.Alert
-}
-
-message FormatResponse {
-  bytes result_json = 1; // JSON-encoded map[string]any
-}
-
-message FormatBatchRequest {
-  repeated bytes alert_json = 1; // one JSON-encoded alerts.Alert per alert
-}
-
-message FormatBatchResponse {
-  repeated bytes result_json = 1; // one JSON-encoded map[string]any per alert
-}
+message FormatBatchResponse { repeated bytes result_json = 1; } // one JSON-encoded map[string]any per alert
 
 service Formatter {
-  rpc GetMetadata(Empty)              returns (FormatterMetadata);
   rpc Init(Empty)                     returns (Empty);
-  rpc Format(FormatRequest)           returns (FormatResponse);
   rpc FormatBatch(FormatBatchRequest) returns (FormatBatchResponse);
   rpc Shutdown(Empty)                 returns (Empty);
   rpc Ping(Empty)                     returns (Empty);

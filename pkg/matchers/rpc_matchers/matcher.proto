@@ -3,25 +3,16 @@ package matchers;
 option go_package = "rpc_matchers/;rpc_matchers";
 
 message Empty {}
-message MatcherMetadata {
-  string id = 1;
-  string name = 2;
-  string description = 3;
-  bool enabled = 4;
-  bool global = 5;
-  string version = 6;
-}
-message Event { bytes json = 1; }
-message MatchRequest  { Event event = 1; }
-message MatchResponse { bool matched = 1; }
+
+message Event              { bytes json = 1; }
+
 message MatchBatchRequest  { repeated Event events = 1; }
-message MatchBatchResponse { repeated bool matched = 1; }
+
+message MatchBatchResponse { repeated bool  matched = 1; }
 
 service Matcher {
-  rpc GetMetadata(Empty)                  returns (MatcherMetadata);
-  rpc Init(Empty)                         returns (Empty);
-  rpc Match(MatchRequest)                 returns (MatchResponse);
-  rpc MatchBatch(MatchBatchRequest)       returns (MatchBatchResponse);
-  rpc Shutdown(Empty)                     returns (Empty);
-  rpc Ping(Empty)                         returns (Empty);
+  rpc Init(Empty)                     returns (Empty);
+  rpc MatchBatch(MatchBatchRequest)   returns (MatchBatchResponse);
+  rpc Shutdown(Empty)                 returns (Empty);
+  rpc Ping(Empty)                     returns (Empty);
 }

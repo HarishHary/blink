@@ -6,52 +6,51 @@ import "google/protobuf/struct.proto";
 option go_package = "pb/;pb";
 
 // RuleMetadata carries rule configuration in the alert wire format.
-// Mirrors pkg/rules/rule.proto Metadata with additions for file_name,
-// display_name, references, and risk_score.
+// Mirrors pkg/rules.RuleMetadata with additions for display_name, references, and risk_score.
 message RuleMetadata {
-  string id               = 1;
-  string name             = 2;
-  string description      = 3;
-  bool   enabled          = 4;
-  string severity         = 5;              // "info|low|medium|high|critical"
-  string confidence       = 6;              // "very_low|low|medium|high|very_high"
-  repeated string merge_by_keys   = 7;
+  string          id                = 1;
+  string          name              = 2;
+  string          description       = 3;
+  bool            enabled           = 4;
+  string          severity          = 5; // "info|low|medium|high|critical"
+  string          confidence        = 6; // "very_low|low|medium|high|very_high"
+  repeated string merge_by_keys     = 7;
   uint32          merge_window_mins = 8;
-  repeated string req_subkeys     = 9;
-  bool   signal           = 10;
-  string signal_threshold = 11;
-  repeated string tags        = 12;
-  repeated string dispatchers = 13;
-  repeated string log_types   = 14;
-  repeated string matchers    = 15;
-  repeated string formatters  = 16;
-  repeated string enrichments = 17;
-  repeated string tuning_rules = 18;
-  string version          = 19;
-  string file_name        = 20;
-  string display_name     = 21;
-  repeated string references = 22;
-  string risk_score       = 23;
+  repeated string req_subkeys       = 9;
+  bool            signal            = 10;
+  string          signal_threshold  = 11;
+  repeated string tags              = 12;
+  repeated string dispatchers       = 13;
+  repeated string log_types         = 14;
+  repeated string matchers          = 15;
+  repeated string formatters        = 16;
+  repeated string enrichments       = 17;
+  repeated string tuning_rules      = 18;
+  string          version           = 19;
+  string          file_name         = 20;
+  string          display_name      = 21;
+  repeated string references        = 22;
+  string          risk_score        = 23;
 }
 
 // Alert is the Kafka wire format for a single alert travelling through the
 // tuner → enricher → formatter → dispatcher pipeline.
 message Alert {
-  string alert_id       = 1;
-  int32  attempts       = 2;
-  string cluster        = 3;
-  int64  created_ns     = 4;   // time.Time as Unix nanoseconds
-  int64  dispatched_ns  = 5;   // time.Time as Unix nanoseconds (0 = not yet dispatched)
-  google.protobuf.Struct event = 6;  // events.Event as structured protobuf
-  bool   staged         = 7;
-  repeated string outputs_sent  = 8;
-  string log_source     = 9;
-  string log_type       = 10;
-  string source_entity  = 11;
-  string source_service = 12;
-  string confidence     = 13;
-  string severity       = 14;
-  RuleMetadata rule     = 15;
-  repeated string enrichments_applied      = 16;
-  repeated string override_merge_by_keys   = 17; // set by plugin's AlertMergeByKeys; overrides rule.merge_by_keys when non-empty
+  string                 alert_id               = 1;
+  int32                  attempts               = 2;
+  string                 cluster                = 3;
+  int64                  created_ns             = 4; // time.Time as Unix nanoseconds
+  int64                  dispatched_ns          = 5; // time.Time as Unix nanoseconds (0 = not yet dispatched)
+  google.protobuf.Struct event                  = 6; // events.Event as structured protobuf
+  bool                   staged                 = 7;
+  repeated string        outputs_sent           = 8;
+  string                 log_source             = 9;
+  string                 log_type               = 10;
+  string                 source_entity          = 11;
+  string                 source_service         = 12;
+  string                 confidence             = 13;
+  string                 severity               = 14;
+  RuleMetadata           rule                   = 15;
+  repeated string        enrichments_applied    = 16;
+  repeated string        override_merge_by_keys = 17; // set by plugin's AlertMergeByKeys; overrides rule.merge_by_keys when non-empty
 }

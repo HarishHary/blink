@@ -13,7 +13,6 @@ import (
 
 type Pool struct {
 	*internal.ProcessPool[Rule]
-	manager *RuleConfigManager
 }
 
 func NewPool(manager *RuleConfigManager, drainTimeout time.Duration) *Pool {
@@ -23,7 +22,6 @@ func NewPool(manager *RuleConfigManager, drainTimeout time.Duration) *Pool {
 	}
 	return &Pool{
 		ProcessPool: internal.NewProcessPool[Rule](routing, internal.NewPoolMetrics("rules"), drainTimeout),
-		manager:     manager,
 	}
 }
 

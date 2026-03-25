@@ -59,7 +59,7 @@ func (*Empty) Descriptor() ([]byte, []int) {
 
 type TuneBatchRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	AlertJson     [][]byte               `protobuf:"bytes,1,rep,name=alert_json,json=alertJson,proto3" json:"alert_json,omitempty"` // one JSON-encoded map[string]any per alert
+	AlertJson     [][]byte               `protobuf:"bytes,1,rep,name=alert_json,json=alertJson,proto3" json:"alert_json,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -103,7 +103,7 @@ func (x *TuneBatchRequest) GetAlertJson() [][]byte {
 
 type TuneBatchResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Applies       []bool                 `protobuf:"varint,1,rep,packed,name=applies,proto3" json:"applies,omitempty"` // one result per alert
+	Applies       []bool                 `protobuf:"varint,1,rep,packed,name=applies,proto3" json:"applies,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -161,7 +161,7 @@ const file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_rawDesc = "" +
 	"\x04Init\x12\x13.tuning_rules.Empty\x1a\x13.tuning_rules.Empty\x12L\n" +
 	"\tTuneBatch\x12\x1e.tuning_rules.TuneBatchRequest\x1a\x1f.tuning_rules.TuneBatchResponse\x124\n" +
 	"\bShutdown\x12\x13.tuning_rules.Empty\x1a\x13.tuning_rules.Empty\x120\n" +
-	"\x04Ping\x12\x13.tuning_rules.Empty\x1a\x13.tuning_rules.EmptyB?Z=github.com/harishhary/blink/pkg/tuning_rules/rpc_tuning_rulesb\x06proto3"
+	"\x04Ping\x12\x13.tuning_rules.Empty\x1a\x13.tuning_rules.EmptyB$Z\"rpc_tuning_rules/;rpc_tuning_rulesb\x06proto3"
 
 var (
 	file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_rawDescOnce sync.Once

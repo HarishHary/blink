@@ -19,9 +19,7 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Formatter_GetMetadata_FullMethodName = "/formatters.Formatter/GetMetadata"
 	Formatter_Init_FullMethodName        = "/formatters.Formatter/Init"
-	Formatter_Format_FullMethodName      = "/formatters.Formatter/Format"
 	Formatter_FormatBatch_FullMethodName = "/formatters.Formatter/FormatBatch"
 	Formatter_Shutdown_FullMethodName    = "/formatters.Formatter/Shutdown"
 	Formatter_Ping_FullMethodName        = "/formatters.Formatter/Ping"
@@ -31,9 +29,7 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type FormatterClient interface {
-	GetMetadata(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*FormatterMetadata, error)
 	Init(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
-	Format(ctx context.Context, in *FormatRequest, opts ...grpc.CallOption) (*FormatResponse, error)
 	FormatBatch(ctx context.Context, in *FormatBatchRequest, opts ...grpc.CallOption) (*FormatBatchResponse, error)
 	Shutdown(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
 	Ping(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
@@ -47,30 +43,10 @@ func NewFormatterClient(cc grpc.ClientConnInterface) FormatterClient {
 	return &formatterClient{cc}
 }
 
-func (c *formatterClient) GetMetadata(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*FormatterMetadata, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(FormatterMetadata)
-	err := c.cc.Invoke(ctx, Formatter_GetMetadata_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *formatterClient) Init(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Empty)
 	err := c.cc.Invoke(ctx, Formatter_Init_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *formatterClient) Format(ctx context.Context, in *FormatRequest, opts ...grpc.CallOption) (*FormatResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(FormatResponse)
-	err := c.cc.Invoke(ctx, Formatter_Format_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -111,9 +87,7 @@ func (c *formatterClient) Ping(ctx context.Context, in *Empty, opts ...grpc.Call
 // All implementations must embed UnimplementedFormatterServer
 // for forward compatibility.
 type FormatterServer interface {
-	GetMetadata(context.Context, *Empty) (*FormatterMetadata, error)
 	Init(context.Context, *Empty) (*Empty, error)
-	Format(context.Context, *FormatRequest) (*FormatResponse, error)
 	FormatBatch(context.Context, *FormatBatchRequest) (*FormatBatchResponse, error)
 	Shutdown(context.Context, *Empty) (*Empty, error)
 	Ping(context.Context, *Empty) (*Empty, error)
@@ -127,14 +101,8 @@ type FormatterServer interface {
 // pointer dereference when methods are called.
 type UnimplementedFormatterServer struct{}
 
-func (UnimplementedFormatterServer) GetMetadata(context.Context, *Empty) (*FormatterMetadata, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetMetadata not implemented")
-}
 func (UnimplementedFormatterServer) Init(context.Context, *Empty) (*Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Init not implemented")
-}
-func (UnimplementedFormatterServer) Format(context.Context, *FormatRequest) (*FormatResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Format not implemented")
 }
 func (UnimplementedFormatterServer) FormatBatch(context.Context, *FormatBatchRequest) (*FormatBatchResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method FormatBatch not implemented")
@@ -166,24 +134,6 @@ func RegisterFormatterServer(s grpc.ServiceRegistrar, srv FormatterServer) {
 	s.RegisterService(&Formatter_ServiceDesc, srv)
 }
 
-func _Formatter_GetMetadata_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Empty)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(FormatterServer).GetMetadata(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Formatter_GetMetadata_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(FormatterServer).GetMetadata(ctx, req.(*Empty))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _Formatter_Init_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(Empty)
 	if err := dec(in); err != nil {
@@ -198,24 +148,6 @@ func _Formatter_Init_Handler(srv interface{}, ctx context.Context, dec func(inte
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(FormatterServer).Init(ctx, req.(*Empty))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Formatter_Format_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(FormatRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(FormatterServer).Format(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Formatter_Format_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(FormatterServer).Format(ctx, req.(*FormatRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -282,16 +214,8 @@ var Formatter_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*FormatterServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "GetMetadata",
-			Handler:    _Formatter_GetMetadata_Handler,
-		},
-		{
 			MethodName: "Init",
 			Handler:    _Formatter_Init_Handler,
-		},
-		{
-			MethodName: "Format",
-			Handler:    _Formatter_Format_Handler,
 		},
 		{
 			MethodName: "FormatBatch",
