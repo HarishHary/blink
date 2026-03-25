@@ -7,10 +7,10 @@ import (
 
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/pkg/events"
-	"github.com/harishhary/blink/pkg/rules/sdk"
+	"github.com/harishhary/blink/pkg/rules"
 )
 
-type crashingRule struct{ sdk.BaseRule }
+type crashingRule struct{ rules.BaseRule }
 
 func (crashingRule) Evaluate(_ context.Context, _ events.Event) (bool, errors.Error) {
 	return false, nil
@@ -23,5 +23,5 @@ func main() {
 		time.Sleep(300 * time.Millisecond)
 		os.Exit(1)
 	}()
-	sdk.Serve(crashingRule{})
+	rules.Serve(crashingRule{})
 }

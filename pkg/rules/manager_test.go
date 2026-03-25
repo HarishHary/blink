@@ -13,7 +13,6 @@ import (
 	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/internal/services"
 	"github.com/harishhary/blink/pkg/rules"
-	"github.com/harishhary/blink/pkg/rules/config"
 )
 
 const (
@@ -122,7 +121,7 @@ func TestManagerHotReload(t *testing.T) {
 	// available when the binary appears.
 	writeSidecar(t, dir)
 
-	cfgMgr := config.NewRuleConfigManager(logger.New("test-config", "dev"), dir)
+	cfgMgr := rules.NewRuleConfigManager(logger.New("test-config", "dev"), dir)
 	cfgSvc := services.NewConfigSyncService("test-config", "test-config", cfgMgr)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
