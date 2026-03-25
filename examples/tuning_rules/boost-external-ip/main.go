@@ -5,7 +5,7 @@ import (
 	"net"
 
 	"github.com/harishhary/blink/internal/errors"
-	sdk "github.com/harishhary/blink/pkg/tuning_rules/sdk"
+	"github.com/harishhary/blink/pkg/tuning_rules"
 )
 
 // boostExternalIP raises alert confidence when the source_ip is not in
@@ -13,7 +13,7 @@ import (
 //
 // All static metadata (name, id, enabled, global, rule_type, confidence, etc.)
 // is declared in the companion boost-external-ip.yaml sidecar file.
-type boostExternalIP struct{ sdk.BaseTuningRule }
+type boostExternalIP struct{ tuning_rules.BaseTuningRule }
 
 var privateNets = mustParseCIDRs([]string{
 	"10.0.0.0/8",
@@ -57,5 +57,5 @@ func (boostExternalIP) Tune(_ context.Context, alert map[string]any) (bool, erro
 }
 
 func main() {
-	sdk.Serve(boostExternalIP{})
+	tuning_rules.Serve(boostExternalIP{})
 }

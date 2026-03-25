@@ -7,7 +7,7 @@ import (
 
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/pkg/events"
-	"github.com/harishhary/blink/pkg/rules/sdk"
+	"github.com/harishhary/blink/pkg/rules"
 )
 
 // failedLogin fires when a login attempt is recorded as failed.
@@ -15,7 +15,7 @@ import (
 //
 // It overrides AlertTitle, AlertContext, and AlertSeverity to produce
 // richer alerts. All other sdk.BaseRule methods use their default (no-op) values.
-type failedLogin struct{ sdk.BaseRule }
+type failedLogin struct{ rules.BaseRule }
 
 func (failedLogin) Evaluate(_ context.Context, event events.Event) (bool, errors.Error) {
 	action, _ := event["action"].(string)
@@ -50,5 +50,5 @@ func (failedLogin) AlertSeverity(event events.Event) string {
 }
 
 func main() {
-	sdk.Serve(failedLogin{})
+	rules.Serve(failedLogin{})
 }

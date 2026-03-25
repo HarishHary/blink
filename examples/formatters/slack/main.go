@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/harishhary/blink/internal/errors"
-	sdk "github.com/harishhary/blink/pkg/formatters/sdk"
+	"github.com/harishhary/blink/pkg/formatters"
 )
 
 // slackFormatter converts an alert dict into a Slack Block Kit payload.
@@ -14,7 +14,7 @@ import (
 //
 // All static metadata (name, id, enabled, etc.) is declared in
 // the companion slack.yaml sidecar file.
-type slackFormatter struct{ sdk.BaseFormatter }
+type slackFormatter struct{ formatters.BaseFormatter }
 
 // Format receives the full alerts.Alert struct serialised to JSON.
 // alerts.Alert has no JSON struct tags, so all field names are PascalCase.
@@ -47,5 +47,5 @@ func (slackFormatter) Format(_ context.Context, alert map[string]any) (map[strin
 }
 
 func main() {
-	sdk.Serve(slackFormatter{})
+	formatters.Serve(slackFormatter{})
 }

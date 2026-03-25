@@ -5,7 +5,7 @@ import (
 	"net"
 
 	"github.com/harishhary/blink/internal/errors"
-	sdk "github.com/harishhary/blink/pkg/enrichments/sdk"
+	"github.com/harishhary/blink/pkg/enrichments"
 )
 
 // addGeo annotates each alert with geo_country and geo_is_internal derived
@@ -14,7 +14,7 @@ import (
 //
 // All static metadata (name, id, enabled, depends_on, etc.) is declared in
 // the companion add-geo.yaml sidecar file.
-type addGeo struct{ sdk.BaseEnrichment }
+type addGeo struct{ enrichments.BaseEnrichment }
 
 var privateNets = mustParseCIDRs([]string{
 	"10.0.0.0/8",
@@ -69,5 +69,5 @@ func (addGeo) Enrich(_ context.Context, alert map[string]any) (map[string]any, e
 }
 
 func main() {
-	sdk.Serve(addGeo{})
+	enrichments.Serve(addGeo{})
 }

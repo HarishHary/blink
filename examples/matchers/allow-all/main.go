@@ -5,18 +5,18 @@ import (
 
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/pkg/events"
-	"github.com/harishhary/blink/pkg/matchers/sdk"
+	"github.com/harishhary/blink/pkg/matchers"
 )
 
 // allowAll matches every event. Use for testing only.
 // All static metadata (name, id, enabled, global, etc.) is declared in
 // the companion allow-all.yaml sidecar file.
-type allowAll struct{ sdk.BaseMatcher }
+type allowAll struct{ matchers.BaseMatcher }
 
 func (allowAll) Match(_ context.Context, _ events.Event) (bool, errors.Error) {
 	return true, nil
 }
 
 func main() {
-	sdk.Serve(allowAll{})
+	matchers.Serve(allowAll{})
 }
