@@ -20,6 +20,16 @@ data:
     rule_files:
       - /etc/prometheus/rules/*.yml
 
+    # Write all scraped metrics directly into InfluxDB.
+    # InfluxDB 1.x exposes the Prometheus remote_write endpoint at
+    # /api/v1/prom/write natively — no Telegraf bridge required.
+    remote_write:
+      - url: "http://influxdb.{{ .Values.namespace }}.svc.cluster.local:{{ .Values.influxdb.service.port }}/api/v1/prom/write?db={{ .Values.influxdb.config.database }}&rp={{ .Values.influxdb.config.retentionPolicy }}"
+        queue_config:
+          max_samples_per_send: 5000
+          max_shards: 10
+          capacity: 10000
+
     scrape_configs:
       ###########################################################################
       # Blink services — all expose /metrics on port 8080

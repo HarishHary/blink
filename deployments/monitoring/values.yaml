@@ -56,7 +56,7 @@ prometheus:
     kafkaConsumerLagThreshold: 1000
 
 telegraf:
-  enabled: true
+  enabled: false  # Replaced by Prometheus remote_write → InfluxDB
   image:
     repository: telegraf
     tag: "1.32"
