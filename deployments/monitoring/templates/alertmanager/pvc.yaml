@@ -1,0 +1,19 @@
+{{- if and .Values.alertmanager.enabled .Values.alertmanager.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: alertmanager-data
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: alertmanager
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.alertmanager.persistence.storageClass }}
+  storageClassName: {{ .Values.alertmanager.persistence.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.alertmanager.persistence.size }}
+{{- end }}

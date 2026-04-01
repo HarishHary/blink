@@ -1,0 +1,224 @@
+{{- if .Values.grafana.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-provisioning
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: grafana
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
+data:
+  datasources.yml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        uid: prometheus
+        access: proxy
+        url: http://prometheus.{{ .Values.namespace }}.svc.cluster.local:{{ .Values.prometheus.service.port }}
+        isDefault: true
+        editable: false
+        jsonData:
+          timeInterval: {{ .Values.prometheus.scrapeInterval }}
+          httpMethod: POST
+
+  dashboards.yml: |
+    apiVersion: 1
+    providers:
+      - name: blink
+        type: file
+        disableDeletion: true
+        updateIntervalSeconds: 30
+        options:
+          path: /var/lib/grafana/dashboards
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: grafana
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+data:
+  blink-overview.json: |
+    {
+      "title": "Blink Overview",
+      "uid": "blink-overview",
+      "tags": ["blink"],
+      "refresh": "15s",
+      "time": {"from": "now-1h", "to": "now"},
+      "panels": [
+        {
+          "id": 1, "gridPos": {"x": 0, "y": 0, "w": 8, "h": 4},
+          "title": "Alert Rate (per minute)",
+          "type": "timeseries",
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {
+              "expr": "rate(blink_alert_formatter_alerts_out_total[1m]) * 60",
+              "legendFormat": "{{ "{{" }}service{{ "}}" }}"
+            }
+          ],
+          "fieldConfig": {"defaults": {"unit": "short", "custom": {"lineWidth": 2}}}
+        },
+        {
+          "id": 2, "gridPos": {"x": 8, "y": 0, "w": 8, "h": 4},
+          "title": "DLQ Rate",
+          "type": "timeseries",
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {
+              "expr": "rate(blink_alert_formatter_alerts_dlq_total[1m]) * 60",
+              "legendFormat": "formatter DLQ"
+            },
+            {
+              "expr": "rate(blink_alert_enricher_alerts_dlq_total[1m]) * 60",
+              "legendFormat": "enricher DLQ"
+            }
+          ],
+          "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "red"}}}
+        },
+        {
+          "id": 3, "gridPos": {"x": 16, "y": 0, "w": 8, "h": 4},
+          "title": "Error Rate",
+          "type": "timeseries",
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {
+              "expr": "rate(blink_alert_formatter_formatter_errors_total[1m]) * 60",
+              "legendFormat": "errors/min"
+            }
+          ],
+          "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "orange"}}}
+        },
+        {
+          "id": 4, "gridPos": {"x": 0, "y": 4, "w": 12, "h": 6},
+          "title": "Pipeline Throughput — Alerts In vs Out",
+          "type": "timeseries",
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {
+              "expr": "rate(blink_alert_merger_alerts_in_total[1m]) * 60",
+              "legendFormat": "merger in/min"
+            },
+            {
+              "expr": "rate(blink_alert_merger_alerts_out_total[1m]) * 60",
+              "legendFormat": "merger out/min"
+            },
+            {
+              "expr": "rate(blink_alert_formatter_alerts_in_total[1m]) * 60",
+              "legendFormat": "formatter in/min"
+            },
+            {
+              "expr": "rate(blink_alert_formatter_alerts_out_total[1m]) * 60",
+              "legendFormat": "formatter out/min"
+            }
+          ],
+          "fieldConfig": {"defaults": {"unit": "short", "custom": {"lineWidth": 2}}}
+        },
+        {
+          "id": 5, "gridPos": {"x": 12, "y": 4, "w": 12, "h": 6},
+          "title": "Pool Inflight Tasks",
+          "type": "timeseries",
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {
+              "expr": "blink_pool_inflight",
+              "legendFormat": "{{ "{{" }}service{{ "}}" }}"
+            }
+          ],
+          "fieldConfig": {"defaults": {"unit": "short"}}
+        },
+        {
+          "id": 6, "gridPos": {"x": 0, "y": 10, "w": 12, "h": 6},
+          "title": "Pool Drain Latency — p50 / p95 / p99",
+          "type": "timeseries",
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, rate(blink_pool_drain_duration_milliseconds_bucket[5m]))",
+              "legendFormat": "p50 {{ "{{" }}service{{ "}}" }}"
+            },
+            {
+              "expr": "histogram_quantile(0.95, rate(blink_pool_drain_duration_milliseconds_bucket[5m]))",
+              "legendFormat": "p95 {{ "{{" }}service{{ "}}" }}"
+            },
+            {
+              "expr": "histogram_quantile(0.99, rate(blink_pool_drain_duration_milliseconds_bucket[5m]))",
+              "legendFormat": "p99 {{ "{{" }}service{{ "}}" }}"
+            }
+          ],
+          "fieldConfig": {"defaults": {"unit": "ms"}}
+        },
+        {
+          "id": 7, "gridPos": {"x": 12, "y": 10, "w": 12, "h": 6},
+          "title": "Shadow Rule Diffs",
+          "type": "timeseries",
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {
+              "expr": "rate(blink_pool_shadow_diffs_total[1m]) * 60",
+              "legendFormat": "diffs/min"
+            }
+          ],
+          "fieldConfig": {"defaults": {"unit": "short"}}
+        }
+      ],
+      "schemaVersion": 39,
+      "version": 1
+    }
+
+  kafka-pipeline.json: |
+    {
+      "title": "Kafka Pipeline",
+      "uid": "kafka-pipeline",
+      "tags": ["blink", "kafka"],
+      "refresh": "15s",
+      "time": {"from": "now-1h", "to": "now"},
+      "panels": [
+        {
+          "id": 1, "gridPos": {"x": 0, "y": 0, "w": 24, "h": 8},
+          "title": "Consumer Lag by Topic",
+          "type": "timeseries",
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {
+              "expr": "kafka_consumergroup_lag",
+              "legendFormat": "{{ "{{" }}consumergroup{{ "}}" }} / {{ "{{" }}topic{{ "}}" }}"
+            }
+          ],
+          "fieldConfig": {"defaults": {"unit": "short", "custom": {"lineWidth": 2}}}
+        },
+        {
+          "id": 2, "gridPos": {"x": 0, "y": 8, "w": 12, "h": 6},
+          "title": "DLQ Topic Offsets",
+          "type": "timeseries",
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {
+              "expr": "kafka_topic_partition_current_offset{topic=~\".*dlq.*\"}",
+              "legendFormat": "{{ "{{" }}topic{{ "}}" }}"
+            }
+          ],
+          "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "red"}}}
+        },
+        {
+          "id": 3, "gridPos": {"x": 12, "y": 8, "w": 12, "h": 6},
+          "title": "Topic Throughput (non-DLQ)",
+          "type": "timeseries",
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {
+              "expr": "rate(kafka_topic_partition_current_offset{topic!~\".*dlq.*\"}[1m]) * 60",
+              "legendFormat": "{{ "{{" }}topic{{ "}}" }}"
+            }
+          ],
+          "fieldConfig": {"defaults": {"unit": "short"}}
+        }
+      ],
+      "schemaVersion": 39,
+      "version": 1
+    }
+{{- end }}

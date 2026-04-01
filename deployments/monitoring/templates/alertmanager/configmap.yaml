@@ -1,0 +1,68 @@
+{{- if .Values.alertmanager.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-config
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: alertmanager
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
+data:
+  alertmanager.yml: |
+    global:
+      resolve_timeout: 5m
+      {{- if .Values.alertmanager.slack.enabled }}
+      slack_api_url: {{ .Values.alertmanager.slack.apiUrl | quote }}
+      {{- end }}
+
+    route:
+      receiver: default
+      group_by: [alertname, service, team]
+      group_wait: {{ .Values.alertmanager.groupWait }}
+      group_interval: {{ .Values.alertmanager.groupInterval }}
+      repeat_interval: {{ .Values.alertmanager.repeatInterval }}
+      routes:
+        - matchers: [severity="critical"]
+          receiver: critical
+          continue: true
+        - matchers: [team="blink"]
+          receiver: blink-team
+
+    receivers:
+      - name: default
+
+      - name: blink-team
+        {{- if .Values.alertmanager.slack.enabled }}
+        slack_configs:
+          - channel: {{ .Values.alertmanager.slack.channel | quote }}
+            title: '[{{ "{{" }} .Status | toUpper {{ "}}" }}] {{ "{{" }} .CommonLabels.alertname {{ "}}" }}'
+            text: |
+              {{ "{{" }} range .Alerts {{ "}}" }}
+              *Alert:* {{ "{{" }} .Annotations.summary {{ "}}" }}
+              *Details:* {{ "{{" }} .Annotations.description {{ "}}" }}
+              *Severity:* {{ "{{" }} .Labels.severity {{ "}}" }}
+              *Service:* {{ "{{" }} .Labels.service {{ "}}" }}
+              {{ "{{" }} end {{ "}}" }}
+            send_resolved: true
+        {{- else }}
+        webhook_configs: []
+        {{- end }}
+
+      - name: critical
+        {{- if .Values.alertmanager.email.enabled }}
+        email_configs:
+          - smarthost: {{ .Values.alertmanager.email.smarthost | quote }}
+            from: {{ .Values.alertmanager.email.from | quote }}
+            to: {{ .Values.alertmanager.email.to | quote }}
+            send_resolved: true
+        {{- else }}
+        webhook_configs: []
+        {{- end }}
+
+    inhibit_rules:
+      # Suppress warnings when a critical is already firing for the same service
+      - source_matchers: [severity="critical"]
+        target_matchers: [severity="warning"]
+        equal: [alertname, service]
+{{- end }}

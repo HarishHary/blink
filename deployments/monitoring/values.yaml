@@ -1,29 +1,5 @@
 namespace: monitoring
 
-influxdb:
-  enabled: true
-  image:
-    repository: influxdb
-    tag: "1.8"
-    pullPolicy: IfNotPresent
-  service:
-    port: 8086
-  persistence:
-    enabled: true
-    storageClass: ""
-    size: 10Gi
-  config:
-    database: blink
-    retentionPolicy: autogen
-    retentionDuration: 30d
-  resources:
-    requests:
-      cpu: 100m
-      memory: 256Mi
-    limits:
-      cpu: 500m
-      memory: 1Gi
-
 prometheus:
   enabled: true
   image:
@@ -40,7 +16,6 @@ prometheus:
     enabled: true
     storageClass: ""
     size: 20Gi
-  # Set to true if kafka-exporter is deployed in the kafka namespace
   kafkaExporterEnabled: false
   resources:
     requests:
@@ -50,25 +25,20 @@ prometheus:
       cpu: 1000m
       memory: 2Gi
   alerts:
-    dlqRateThreshold: 1          # msg/s
-    errorRateThreshold: 0.1      # err/s
+    dlqRateThreshold: 1
+    errorRateThreshold: 0.1
     drainLatencyThresholdMs: 5000
     kafkaConsumerLagThreshold: 1000
 
-
-chronograf:
+alertmanager:
   enabled: true
   image:
-    repository: chronograf
-    tag: "1.10"
+    repository: prom/alertmanager
+    tag: "v0.27.0"
     pullPolicy: IfNotPresent
   service:
     type: ClusterIP
-    port: 8888
-  ingress:
-    enabled: false
-    host: chronograf.blink.local
-    annotations: {}
+    port: 9093
   persistence:
     enabled: true
     storageClass: ""
@@ -78,24 +48,41 @@ chronograf:
       cpu: 50m
       memory: 64Mi
     limits:
-      cpu: 200m
-      memory: 256Mi
-  # Pre-load dashboards via ConfigMap
-  dashboards:
-    enabled: true
+      cpu: 100m
+      memory: 128Mi
+  # Receiver configuration
+  slack:
+    enabled: false
+    apiUrl: ""
+    channel: "#blink-alerts"
+  email:
+    enabled: false
+    smarthost: ""
+    from: ""
+    to: ""
+  # Group alerts before firing
+  groupWait: "30s"
+  groupInterval: "5m"
+  repeatInterval: "4h"
 
-kapacitor:
+grafana:
   enabled: true
   image:
-    repository: kapacitor
-    tag: "1.7"
+    repository: grafana/grafana
+    tag: "11.1.0"
     pullPolicy: IfNotPresent
   service:
-    port: 9092
+    type: ClusterIP
+    port: 3000
+  ingress:
+    enabled: false
+    host: grafana.blink.local
+    annotations: {}
   persistence:
     enabled: true
     storageClass: ""
     size: 2Gi
+  adminPassword: "changeme"
   resources:
     requests:
       cpu: 100m
@@ -103,13 +90,3 @@ kapacitor:
     limits:
       cpu: 500m
       memory: 512Mi
-  # Alert channels
-  slack:
-    enabled: false
-    url: ""
-    channel: "#alerts"
-  # TICKscript alerts
-  alerts:
-    dlqGrowthThreshold: 100
-    errorRateThreshold: 0.05
-    latencyThresholdMs: 5000

@@ -1,43 +1,43 @@
-{{- if .Values.chronograf.enabled }}
+{{- if .Values.grafana.enabled }}
 apiVersion: v1
 kind: Service
 metadata:
-  name: chronograf
+  name: grafana
   namespace: {{ .Values.namespace }}
   labels:
-    app: chronograf
+    app: grafana
     app.kubernetes.io/managed-by: {{ .Release.Service }}
 spec:
-  type: {{ .Values.chronograf.service.type }}
+  type: {{ .Values.grafana.service.type }}
   ports:
     - name: http
-      port: {{ .Values.chronograf.service.port }}
+      port: {{ .Values.grafana.service.port }}
       targetPort: http
       protocol: TCP
   selector:
-    app: chronograf
+    app: grafana
 ---
-{{- if .Values.chronograf.ingress.enabled }}
+{{- if .Values.grafana.ingress.enabled }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: chronograf
+  name: grafana
   namespace: {{ .Values.namespace }}
   labels:
-    app: chronograf
+    app: grafana
     app.kubernetes.io/managed-by: {{ .Release.Service }}
   annotations:
-    {{- toYaml .Values.chronograf.ingress.annotations | nindent 4 }}
+    {{- toYaml .Values.grafana.ingress.annotations | nindent 4 }}
 spec:
   rules:
-    - host: {{ .Values.chronograf.ingress.host }}
+    - host: {{ .Values.grafana.ingress.host }}
       http:
         paths:
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: chronograf
+                name: grafana
                 port:
                   name: http
 {{- end }}
