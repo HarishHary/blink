@@ -55,22 +55,6 @@ prometheus:
     drainLatencyThresholdMs: 5000
     kafkaConsumerLagThreshold: 1000
 
-telegraf:
-  enabled: false  # Replaced by Prometheus remote_write → InfluxDB
-  image:
-    repository: telegraf
-    tag: "1.32"
-    pullPolicy: IfNotPresent
-  resources:
-    requests:
-      cpu: 50m
-      memory: 64Mi
-    limits:
-      cpu: 200m
-      memory: 256Mi
-  # Collection interval
-  interval: "15s"
-  flushInterval: "15s"
 
 chronograf:
   enabled: true
