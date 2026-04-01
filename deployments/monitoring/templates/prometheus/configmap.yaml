@@ -1,0 +1,228 @@
+{{- if .Values.prometheus.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: prometheus
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: {{ .Values.prometheus.scrapeInterval }}
+      evaluation_interval: {{ .Values.prometheus.evaluationInterval }}
+      external_labels:
+        cluster: blink
+        environment: production
+
+    rule_files:
+      - /etc/prometheus/rules/*.yml
+
+    scrape_configs:
+      ###########################################################################
+      # Blink services — all expose /metrics on port 8080
+      ###########################################################################
+      - job_name: blink-alert-formatter
+        static_configs:
+          - targets:
+              - alert-formatter.blink.svc.cluster.local:8080
+        relabel_configs:
+          - target_label: service
+            replacement: alert-formatter
+
+      - job_name: blink-alert-merger
+        static_configs:
+          - targets:
+              - alert-merger.blink.svc.cluster.local:8080
+        relabel_configs:
+          - target_label: service
+            replacement: alert-merger
+
+      - job_name: blink-alert-enricher
+        static_configs:
+          - targets:
+              - alert-enricher.blink.svc.cluster.local:8080
+        relabel_configs:
+          - target_label: service
+            replacement: alert-enricher
+
+      - job_name: blink-alert-dispatcher
+        static_configs:
+          - targets:
+              - alert-dispatcher.blink.svc.cluster.local:8080
+        relabel_configs:
+          - target_label: service
+            replacement: alert-dispatcher
+
+      - job_name: blink-event-matcher-application
+        static_configs:
+          - targets:
+              - event-matcher-application.blink.svc.cluster.local:8080
+        relabel_configs:
+          - target_label: service
+            replacement: event-matcher-application
+
+      - job_name: blink-event-matcher-auth
+        static_configs:
+          - targets:
+              - event-matcher-auth.blink.svc.cluster.local:8080
+        relabel_configs:
+          - target_label: service
+            replacement: event-matcher-auth
+
+      - job_name: blink-rule-executor-application
+        static_configs:
+          - targets:
+              - rule-executor-application.blink.svc.cluster.local:8080
+        relabel_configs:
+          - target_label: service
+            replacement: rule-executor-application
+
+      - job_name: blink-rule-executor-auth
+        static_configs:
+          - targets:
+              - rule-executor-auth.blink.svc.cluster.local:8080
+        relabel_configs:
+          - target_label: service
+            replacement: rule-executor-auth
+
+      - job_name: blink-rule-tuner
+        static_configs:
+          - targets:
+              - rule-tuner.blink.svc.cluster.local:8080
+        relabel_configs:
+          - target_label: service
+            replacement: rule-tuner
+
+      ###########################################################################
+      # Kubernetes node metrics via cAdvisor
+      ###########################################################################
+      - job_name: kubernetes-nodes-cadvisor
+        scheme: https
+        tls_config:
+          insecure_skip_verify: true
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        kubernetes_sd_configs:
+          - role: node
+        relabel_configs:
+          - action: labelmap
+            regex: __meta_kubernetes_node_label_(.+)
+          - target_label: __address__
+            replacement: kubernetes.default.svc.cluster.local:443
+          - source_labels: [__meta_kubernetes_node_name]
+            regex: (.+)
+            target_label: __metrics_path__
+            replacement: /api/v1/nodes/$1/proxy/metrics/cadvisor
+
+      ###########################################################################
+      # Kubernetes pod discovery — scrape any pod with annotation
+      # prometheus.io/scrape: "true"
+      ###########################################################################
+      - job_name: kubernetes-pods
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: [blink, kafka]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: "true"
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: (.+):(?:\d+);(\d+)
+            replacement: $1:$2
+            target_label: __address__
+          - action: labelmap
+            regex: __meta_kubernetes_pod_label_(.+)
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+
+      {{- if .Values.prometheus.kafkaExporterEnabled }}
+      ###########################################################################
+      # Kafka JMX exporter (assumes kafka-exporter sidecar or deployment)
+      ###########################################################################
+      - job_name: kafka
+        static_configs:
+          - targets:
+              - kafka-exporter.kafka.svc.cluster.local:9308
+        relabel_configs:
+          - target_label: component
+            replacement: kafka
+      {{- end }}
+
+  rules/blink-alerts.yml: |
+    groups:
+      - name: blink.pipeline
+        interval: 30s
+        rules:
+          # DLQ growth alert
+          - alert: BlinkDLQGrowing
+            expr: |
+              rate(blink_alert_formatter_alerts_dlq_total[5m]) > {{ .Values.prometheus.alerts.dlqRateThreshold }}
+            for: 2m
+            labels:
+              severity: warning
+              team: blink
+            annotations:
+              summary: "DLQ is growing for {{ "{{" }} $labels.service {{ "}}" }}"
+              description: "DLQ rate is {{ "{{" }} $value | humanize {{ "}}" }} msg/s over the last 5 minutes."
+
+          # High formatter error rate
+          - alert: BlinkFormatterErrorRate
+            expr: |
+              rate(blink_alert_formatter_formatter_errors_total[5m]) > {{ .Values.prometheus.alerts.errorRateThreshold }}
+            for: 2m
+            labels:
+              severity: warning
+              team: blink
+            annotations:
+              summary: "High formatter error rate"
+              description: "Error rate is {{ "{{" }} $value | humanize {{ "}}" }} err/s."
+
+          # No alerts flowing through pipeline
+          - alert: BlinkPipelineSilent
+            expr: |
+              rate(blink_alert_formatter_alerts_out_total[10m]) == 0
+            for: 15m
+            labels:
+              severity: info
+              team: blink
+            annotations:
+              summary: "Blink pipeline has produced no alerts in 15 minutes"
+              description: "This may be expected during low-activity periods or indicate a blockage."
+
+          # Pool drain latency p99 too high
+          - alert: BlinkHighDrainLatency
+            expr: |
+              histogram_quantile(0.99, rate(blink_pool_drain_duration_milliseconds_bucket[5m])) > {{ .Values.prometheus.alerts.drainLatencyThresholdMs }}
+            for: 2m
+            labels:
+              severity: warning
+              team: blink
+            annotations:
+              summary: "High pool drain latency (p99) for {{ "{{" }} $labels.service {{ "}}" }}"
+              description: "p99 drain latency is {{ "{{" }} $value | humanize {{ "}}" }}ms."
+
+      - name: blink.kafka
+        interval: 30s
+        rules:
+          # Consumer lag alert
+          - alert: BlinkKafkaConsumerLagHigh
+            expr: |
+              kafka_consumergroup_lag > {{ .Values.prometheus.alerts.kafkaConsumerLagThreshold }}
+            for: 5m
+            labels:
+              severity: warning
+              team: blink
+            annotations:
+              summary: "Kafka consumer lag high for {{ "{{" }} $labels.consumergroup {{ "}}" }} on {{ "{{" }} $labels.topic {{ "}}" }}"
+              description: "Consumer lag is {{ "{{" }} $value {{ "}}" }} messages."
+{{- end }}

@@ -37,57 +37,23 @@ data:
       timeout = "5s"
 
     ###############################################################################
-    # INPUT: Prometheus scrape - Blink services
+    # INPUT: Prometheus federation endpoint
+    # Pull all blink_* and kafka_* metrics from the Prometheus server so
+    # Telegraf bridges them into InfluxDB for Chronograf / Kapacitor.
     ###############################################################################
-    {{- range .Values.telegraf.prometheusTargets }}
     [[inputs.prometheus]]
-      urls = ["http://{{ .name }}.{{ .namespace }}.svc.cluster.local:{{ .port }}/metrics"]
+      urls = ["http://prometheus.{{ .Values.namespace }}.svc.cluster.local:{{ .Values.prometheus.service.port }}/federate"]
       metric_version = 2
+      # Only federate the metric families we care about to avoid noise
+      [inputs.prometheus.http_headers]
+        match[] = "{job=~\"blink-.*\"}"
+        match[] = "{job=\"kafka\"}"
       [inputs.prometheus.tags]
-        service = "{{ .name }}"
-    {{- end }}
-
-    ###############################################################################
-    # INPUT: Kubernetes pod metrics (via kubelet)
-    ###############################################################################
-    [[inputs.kubernetes]]
-      url = "https://$HOSTIP:10250"
-      bearer_token_string = ""
-      insecure_skip_verify = true
-      [inputs.kubernetes.tags]
-        cluster = "blink"
+        source = "prometheus-federation"
 
     ###############################################################################
     # INPUT: Internal telegraf stats
     ###############################################################################
     [[inputs.internal]]
       collect_memstats = false
-
-    {{- if .Values.telegraf.kafkaEnabled }}
-    ###############################################################################
-    # INPUT: Kafka consumer group lag (via jolokia or kminion)
-    ###############################################################################
-    [[inputs.kafka_consumer]]
-      brokers = ["{{ .Values.telegraf.kafkaBroker }}"]
-      topics = [
-        "blink-matcher-application",
-        "blink-matcher-auth",
-        "blink-exec",
-        "blink-merger",
-        "blink-tuner",
-        "blink-enricher",
-        "blink-formatter",
-        "blink-dispatcher",
-        "blink-tuner-dlq",
-        "blink-enricher-dlq",
-        "blink-formatter-dlq"
-      ]
-      max_message_len = 1000000
-      consumer_group = "telegraf-monitoring"
-      offset = "newest"
-      data_format = "value"
-      data_type = "string"
-      [inputs.kafka_consumer.tags]
-        component = "kafka"
-    {{- end }}
 {{- end }}
