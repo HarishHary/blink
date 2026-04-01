@@ -1,0 +1,19 @@
+{{- if and .Values.chronograf.enabled .Values.chronograf.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: chronograf-data
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: chronograf
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.chronograf.persistence.storageClass }}
+  storageClassName: {{ .Values.chronograf.persistence.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.chronograf.persistence.size }}
+{{- end }}

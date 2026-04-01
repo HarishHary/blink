@@ -1,0 +1,16 @@
+apiVersion: v2
+name: tick-stack
+description: TICK Stack (Telegraf, InfluxDB, Chronograf, Kapacitor) for Blink monitoring
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - monitoring
+  - metrics
+  - tick
+  - telegraf
+  - influxdb
+  - chronograf
+  - kapacitor
+maintainers:
+  - name: blink

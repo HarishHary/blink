@@ -1,0 +1,40 @@
+{{- if .Values.telegraf.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: telegraf
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: telegraf
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: telegraf
+  template:
+    metadata:
+      labels:
+        app: telegraf
+    spec:
+      serviceAccountName: telegraf
+      containers:
+        - name: telegraf
+          image: {{ .Values.telegraf.image.repository }}:{{ .Values.telegraf.image.tag }}
+          imagePullPolicy: {{ .Values.telegraf.image.pullPolicy }}
+          env:
+            - name: HOSTIP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+          volumeMounts:
+            - name: config
+              mountPath: /etc/telegraf
+          resources:
+            {{- toYaml .Values.telegraf.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: telegraf-config
+{{- end }}

@@ -1,0 +1,93 @@
+{{- if .Values.telegraf.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: telegraf-config
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: telegraf
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
+data:
+  telegraf.conf: |
+    [global_tags]
+      environment = "production"
+      cluster = "blink"
+
+    [agent]
+      interval = "{{ .Values.telegraf.interval }}"
+      round_interval = true
+      metric_batch_size = 1000
+      metric_buffer_limit = 10000
+      collection_jitter = "0s"
+      flush_interval = "{{ .Values.telegraf.flushInterval }}"
+      flush_jitter = "0s"
+      precision = ""
+      hostname = ""
+      omit_hostname = false
+
+    ###############################################################################
+    # OUTPUT: InfluxDB
+    ###############################################################################
+    [[outputs.influxdb]]
+      urls = ["http://influxdb.{{ .Values.namespace }}.svc.cluster.local:{{ .Values.influxdb.service.port }}"]
+      database = "{{ .Values.influxdb.config.database }}"
+      retention_policy = ""
+      write_consistency = "any"
+      timeout = "5s"
+
+    ###############################################################################
+    # INPUT: Prometheus scrape - Blink services
+    ###############################################################################
+    {{- range .Values.telegraf.prometheusTargets }}
+    [[inputs.prometheus]]
+      urls = ["http://{{ .name }}.{{ .namespace }}.svc.cluster.local:{{ .port }}/metrics"]
+      metric_version = 2
+      [inputs.prometheus.tags]
+        service = "{{ .name }}"
+    {{- end }}
+
+    ###############################################################################
+    # INPUT: Kubernetes pod metrics (via kubelet)
+    ###############################################################################
+    [[inputs.kubernetes]]
+      url = "https://$HOSTIP:10250"
+      bearer_token_string = ""
+      insecure_skip_verify = true
+      [inputs.kubernetes.tags]
+        cluster = "blink"
+
+    ###############################################################################
+    # INPUT: Internal telegraf stats
+    ###############################################################################
+    [[inputs.internal]]
+      collect_memstats = false
+
+    {{- if .Values.telegraf.kafkaEnabled }}
+    ###############################################################################
+    # INPUT: Kafka consumer group lag (via jolokia or kminion)
+    ###############################################################################
+    [[inputs.kafka_consumer]]
+      brokers = ["{{ .Values.telegraf.kafkaBroker }}"]
+      topics = [
+        "blink-matcher-application",
+        "blink-matcher-auth",
+        "blink-exec",
+        "blink-merger",
+        "blink-tuner",
+        "blink-enricher",
+        "blink-formatter",
+        "blink-dispatcher",
+        "blink-tuner-dlq",
+        "blink-enricher-dlq",
+        "blink-formatter-dlq"
+      ]
+      max_message_len = 1000000
+      consumer_group = "telegraf-monitoring"
+      offset = "newest"
+      data_format = "value"
+      data_type = "string"
+      [inputs.kafka_consumer.tags]
+        component = "kafka"
+    {{- end }}
+{{- end }}

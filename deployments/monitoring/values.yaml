@@ -1,0 +1,117 @@
+namespace: monitoring
+
+influxdb:
+  enabled: true
+  image:
+    repository: influxdb
+    tag: "1.8"
+    pullPolicy: IfNotPresent
+  service:
+    port: 8086
+  persistence:
+    enabled: true
+    storageClass: ""
+    size: 10Gi
+  config:
+    database: blink
+    retentionPolicy: autogen
+    retentionDuration: 30d
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+telegraf:
+  enabled: true
+  image:
+    repository: telegraf
+    tag: "1.32"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+  # Scrape Blink Prometheus metrics endpoints
+  prometheusTargets:
+    - name: alert-formatter
+      namespace: blink
+      port: 8080
+    - name: alert-merger
+      namespace: blink
+      port: 8080
+    - name: event-matcher-application
+      namespace: blink
+      port: 8080
+    - name: rule-executor-application
+      namespace: blink
+      port: 8080
+  # Kafka JMX metrics via jolokia or prometheus endpoint
+  kafkaEnabled: true
+  kafkaBroker: "my-cluster-kafka-bootstrap.kafka.svc.cluster.local:9092"
+  # Collection interval
+  interval: "10s"
+  flushInterval: "10s"
+
+chronograf:
+  enabled: true
+  image:
+    repository: chronograf
+    tag: "1.10"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8888
+  ingress:
+    enabled: false
+    host: chronograf.blink.local
+    annotations: {}
+  persistence:
+    enabled: true
+    storageClass: ""
+    size: 1Gi
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+  # Pre-load dashboards via ConfigMap
+  dashboards:
+    enabled: true
+
+kapacitor:
+  enabled: true
+  image:
+    repository: kapacitor
+    tag: "1.7"
+    pullPolicy: IfNotPresent
+  service:
+    port: 9092
+  persistence:
+    enabled: true
+    storageClass: ""
+    size: 2Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  # Alert channels
+  slack:
+    enabled: false
+    url: ""
+    channel: "#alerts"
+  # TICKscript alerts
+  alerts:
+    dlqGrowthThreshold: 100
+    errorRateThreshold: 0.05
+    latencyThresholdMs: 5000

@@ -1,0 +1,44 @@
+{{- if .Values.chronograf.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: chronograf
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: chronograf
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  type: {{ .Values.chronograf.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.chronograf.service.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    app: chronograf
+---
+{{- if .Values.chronograf.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: chronograf
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: chronograf
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+  annotations:
+    {{- toYaml .Values.chronograf.ingress.annotations | nindent 4 }}
+spec:
+  rules:
+    - host: {{ .Values.chronograf.ingress.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: chronograf
+                port:
+                  name: http
+{{- end }}
+{{- end }}

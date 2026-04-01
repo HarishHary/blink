@@ -1,0 +1,269 @@
+{
+  "id": "blink-overview",
+  "meta": {
+    "defaultGroupBy": "10s",
+    "measurementField": "measurement"
+  },
+  "data": {
+    "cells": [
+      {
+        "i": "cell-alert-rate",
+        "x": 0,
+        "y": 0,
+        "w": 4,
+        "h": 4,
+        "name": "Alert Rate (per minute)",
+        "queries": [
+          {
+            "query": "SELECT non_negative_derivative(max(\"value\"), 1m) AS \"alerts/min\" FROM \"blink\".\"autogen\".\"blink_alert_formatter_alerts_out_total\" WHERE time > :dashboardTime: AND service =~ /:service:/ GROUP BY time(:interval:) FILL(0)",
+            "label": "alerts/min",
+            "range": {
+              "upper": null,
+              "lower": "0"
+            }
+          }
+        ],
+        "axes": {
+          "x": { "bounds": ["", ""], "label": "", "prefix": "", "suffix": "", "base": "10", "scale": "linear" },
+          "y": { "bounds": ["0", ""], "label": "Alerts/min", "prefix": "", "suffix": "", "base": "10", "scale": "linear" },
+          "y2": { "bounds": ["", ""], "label": "", "prefix": "", "suffix": "", "base": "10", "scale": "linear" }
+        },
+        "type": "line",
+        "colors": [
+          { "id": "c1", "type": "scale", "hex": "#31C0F6", "name": "Nineteen Eighty Four", "value": "0" },
+          { "id": "c2", "type": "scale", "hex": "#A500A5", "name": "Nineteen Eighty Four", "value": "0" }
+        ],
+        "legend": { "type": "static", "orientation": "bottom" },
+        "tableOptions": { "verticalTimeAxis": true, "sortBy": { "internalName": "time", "displayName": "", "visible": true }, "wrapping": "truncate", "fixFirstColumn": true },
+        "fieldOptions": [],
+        "timeFormat": "MM/DD/YYYY HH:mm:ss",
+        "decimalPlaces": { "isEnforced": true, "digits": 2 },
+        "note": "",
+        "noteVisibility": "default"
+      },
+      {
+        "i": "cell-dlq-size",
+        "x": 4,
+        "y": 0,
+        "w": 4,
+        "h": 4,
+        "name": "Dead Letter Queue Growth",
+        "queries": [
+          {
+            "query": "SELECT non_negative_derivative(max(\"value\"), 1m) AS \"dlq/min\" FROM \"blink\".\"autogen\".\"blink_alert_formatter_alerts_dlq_total\" WHERE time > :dashboardTime: GROUP BY time(:interval:), service FILL(0)",
+            "label": "DLQ/min"
+          },
+          {
+            "query": "SELECT non_negative_derivative(max(\"value\"), 1m) AS \"dlq/min\" FROM \"blink\".\"autogen\".\"blink_alert_enricher_alerts_dlq_total\" WHERE time > :dashboardTime: GROUP BY time(:interval:), service FILL(0)",
+            "label": "Enricher DLQ/min"
+          }
+        ],
+        "axes": {
+          "x": { "bounds": ["", ""], "label": "", "prefix": "", "suffix": "", "base": "10", "scale": "linear" },
+          "y": { "bounds": ["0", ""], "label": "DLQ Messages/min", "prefix": "", "suffix": "", "base": "10", "scale": "linear" },
+          "y2": { "bounds": ["", ""], "label": "", "prefix": "", "suffix": "", "base": "10", "scale": "linear" }
+        },
+        "type": "line",
+        "colors": [
+          { "id": "c1", "type": "scale", "hex": "#FF5373", "name": "Ruby", "value": "0" },
+          { "id": "c2", "type": "scale", "hex": "#FF7E27", "name": "Ruby", "value": "0" }
+        ],
+        "legend": { "type": "static", "orientation": "bottom" },
+        "tableOptions": { "verticalTimeAxis": true, "sortBy": { "internalName": "time", "displayName": "", "visible": true }, "wrapping": "truncate", "fixFirstColumn": true },
+        "fieldOptions": [],
+        "timeFormat": "MM/DD/YYYY HH:mm:ss",
+        "decimalPlaces": { "isEnforced": true, "digits": 2 },
+        "note": "Rising DLQ indicates processing errors in the pipeline",
+        "noteVisibility": "showWhenNoData"
+      },
+      {
+        "i": "cell-error-rate",
+        "x": 8,
+        "y": 0,
+        "w": 4,
+        "h": 4,
+        "name": "Error Rate",
+        "queries": [
+          {
+            "query": "SELECT non_negative_derivative(max(\"value\"), 1m) AS \"errors/min\" FROM \"blink\".\"autogen\".\"blink_alert_formatter_formatter_errors_total\" WHERE time > :dashboardTime: GROUP BY time(:interval:) FILL(0)",
+            "label": "Formatter Errors/min"
+          }
+        ],
+        "axes": {
+          "x": { "bounds": ["", ""], "label": "", "prefix": "", "suffix": "", "base": "10", "scale": "linear" },
+          "y": { "bounds": ["0", ""], "label": "Errors/min", "prefix": "", "suffix": "", "base": "10", "scale": "linear" },
+          "y2": { "bounds": ["", ""], "label": "", "prefix": "", "suffix": "", "base": "10", "scale": "linear" }
+        },
+        "type": "line",
+        "colors": [
+          { "id": "c1", "type": "scale", "hex": "#FF5373", "name": "Ruby", "value": "0" }
+        ],
+        "legend": { "type": "static", "orientation": "bottom" },
+        "tableOptions": { "verticalTimeAxis": true, "sortBy": { "internalName": "time", "displayName": "", "visible": true }, "wrapping": "truncate", "fixFirstColumn": true },
+        "fieldOptions": [],
+        "timeFormat": "MM/DD/YYYY HH:mm:ss",
+        "decimalPlaces": { "isEnforced": true, "digits": 2 },
+        "note": "",
+        "noteVisibility": "default"
+      },
+      {
+        "i": "cell-pipeline-throughput",
+        "x": 0,
+        "y": 4,
+        "w": 6,
+        "h": 4,
+        "name": "Pipeline Throughput (alerts in vs out)",
+        "queries": [
+          {
+            "query": "SELECT non_negative_derivative(max(\"value\"), 1m) AS \"in/min\" FROM \"blink\".\"autogen\".\"blink_alert_merger_alerts_in_total\" WHERE time > :dashboardTime: GROUP BY time(:interval:) FILL(0)",
+            "label": "Merger In/min"
+          },
+          {
+            "query": "SELECT non_negative_derivative(max(\"value\"), 1m) AS \"out/min\" FROM \"blink\".\"autogen\".\"blink_alert_merger_alerts_out_total\" WHERE time > :dashboardTime: GROUP BY time(:interval:) FILL(0)",
+            "label": "Merger Out/min"
+          },
+          {
+            "query": "SELECT non_negative_derivative(max(\"value\"), 1m) AS \"in/min\" FROM \"blink\".\"autogen\".\"blink_alert_formatter_alerts_in_total\" WHERE time > :dashboardTime: GROUP BY time(:interval:) FILL(0)",
+            "label": "Formatter In/min"
+          },
+          {
+            "query": "SELECT non_negative_derivative(max(\"value\"), 1m) AS \"out/min\" FROM \"blink\".\"autogen\".\"blink_alert_formatter_alerts_out_total\" WHERE time > :dashboardTime: GROUP BY time(:interval:) FILL(0)",
+            "label": "Formatter Out/min"
+          }
+        ],
+        "axes": {
+          "x": { "bounds": ["", ""], "label": "", "prefix": "", "suffix": "", "base": "10", "scale": "linear" },
+          "y": { "bounds": ["0", ""], "label": "Alerts/min", "prefix": "", "suffix": "", "base": "10", "scale": "linear" },
+          "y2": { "bounds": ["", ""], "label": "", "prefix": "", "suffix": "", "base": "10", "scale": "linear" }
+        },
+        "type": "line",
+        "colors": [
+          { "id": "c1", "type": "scale", "hex": "#31C0F6", "name": "Nineteen Eighty Four", "value": "0" },
+          { "id": "c2", "type": "scale", "hex": "#A500A5", "name": "Nineteen Eighty Four", "value": "0" },
+          { "id": "c3", "type": "scale", "hex": "#FF7E27", "name": "Nineteen Eighty Four", "value": "0" },
+          { "id": "c4", "type": "scale", "hex": "#85F7FF", "name": "Nineteen Eighty Four", "value": "0" }
+        ],
+        "legend": { "type": "static", "orientation": "bottom" },
+        "tableOptions": { "verticalTimeAxis": true, "sortBy": { "internalName": "time", "displayName": "", "visible": true }, "wrapping": "truncate", "fixFirstColumn": true },
+        "fieldOptions": [],
+        "timeFormat": "MM/DD/YYYY HH:mm:ss",
+        "decimalPlaces": { "isEnforced": true, "digits": 2 },
+        "note": "",
+        "noteVisibility": "default"
+      },
+      {
+        "i": "cell-pool-inflight",
+        "x": 6,
+        "y": 4,
+        "w": 6,
+        "h": 4,
+        "name": "Pool Inflight Tasks",
+        "queries": [
+          {
+            "query": "SELECT mean(\"gauge\") AS \"inflight\" FROM \"blink\".\"autogen\".\"blink_pool_inflight\" WHERE time > :dashboardTime: GROUP BY time(:interval:), service FILL(previous)",
+            "label": "Inflight Tasks"
+          }
+        ],
+        "axes": {
+          "x": { "bounds": ["", ""], "label": "", "prefix": "", "suffix": "", "base": "10", "scale": "linear" },
+          "y": { "bounds": ["0", ""], "label": "Tasks", "prefix": "", "suffix": "", "base": "10", "scale": "linear" },
+          "y2": { "bounds": ["", ""], "label": "", "prefix": "", "suffix": "", "base": "10", "scale": "linear" }
+        },
+        "type": "line",
+        "colors": [
+          { "id": "c1", "type": "scale", "hex": "#4ED8A0", "name": "Color Zero", "value": "0" }
+        ],
+        "legend": { "type": "static", "orientation": "bottom" },
+        "tableOptions": { "verticalTimeAxis": true, "sortBy": { "internalName": "time", "displayName": "", "visible": true }, "wrapping": "truncate", "fixFirstColumn": true },
+        "fieldOptions": [],
+        "timeFormat": "MM/DD/YYYY HH:mm:ss",
+        "decimalPlaces": { "isEnforced": true, "digits": 2 },
+        "note": "",
+        "noteVisibility": "default"
+      },
+      {
+        "i": "cell-drain-duration",
+        "x": 0,
+        "y": 8,
+        "w": 6,
+        "h": 4,
+        "name": "Pool Drain Duration (p99)",
+        "queries": [
+          {
+            "query": "SELECT percentile(\"value\", 99) AS \"p99_ms\" FROM \"blink\".\"autogen\".\"blink_pool_drain_duration_milliseconds\" WHERE time > :dashboardTime: GROUP BY time(:interval:), service FILL(previous)",
+            "label": "p99 Drain ms"
+          }
+        ],
+        "axes": {
+          "x": { "bounds": ["", ""], "label": "", "prefix": "", "suffix": "", "base": "10", "scale": "linear" },
+          "y": { "bounds": ["0", ""], "label": "Milliseconds", "prefix": "", "suffix": "ms", "base": "10", "scale": "linear" },
+          "y2": { "bounds": ["", ""], "label": "", "prefix": "", "suffix": "", "base": "10", "scale": "linear" }
+        },
+        "type": "line",
+        "colors": [
+          { "id": "c1", "type": "scale", "hex": "#FFD255", "name": "Cthulhu", "value": "0" }
+        ],
+        "legend": { "type": "static", "orientation": "bottom" },
+        "tableOptions": { "verticalTimeAxis": true, "sortBy": { "internalName": "time", "displayName": "", "visible": true }, "wrapping": "truncate", "fixFirstColumn": true },
+        "fieldOptions": [],
+        "timeFormat": "MM/DD/YYYY HH:mm:ss",
+        "decimalPlaces": { "isEnforced": true, "digits": 2 },
+        "note": "p99 latency for pool draining operations",
+        "noteVisibility": "showWhenNoData"
+      },
+      {
+        "i": "cell-shadow-diff",
+        "x": 6,
+        "y": 8,
+        "w": 6,
+        "h": 4,
+        "name": "Shadow Rule Diffs",
+        "queries": [
+          {
+            "query": "SELECT non_negative_derivative(max(\"counter\"), 1m) AS \"diffs/min\" FROM \"blink\".\"autogen\".\"blink_pool_shadow_diffs_total\" WHERE time > :dashboardTime: GROUP BY time(:interval:) FILL(0)",
+            "label": "Shadow Diffs/min"
+          }
+        ],
+        "axes": {
+          "x": { "bounds": ["", ""], "label": "", "prefix": "", "suffix": "", "base": "10", "scale": "linear" },
+          "y": { "bounds": ["0", ""], "label": "Diffs/min", "prefix": "", "suffix": "", "base": "10", "scale": "linear" },
+          "y2": { "bounds": ["", ""], "label": "", "prefix": "", "suffix": "", "base": "10", "scale": "linear" }
+        },
+        "type": "bar",
+        "colors": [
+          { "id": "c1", "type": "scale", "hex": "#A500A5", "name": "Ectoplasm", "value": "0" }
+        ],
+        "legend": { "type": "static", "orientation": "bottom" },
+        "tableOptions": { "verticalTimeAxis": true, "sortBy": { "internalName": "time", "displayName": "", "visible": true }, "wrapping": "truncate", "fixFirstColumn": true },
+        "fieldOptions": [],
+        "timeFormat": "MM/DD/YYYY HH:mm:ss",
+        "decimalPlaces": { "isEnforced": true, "digits": 2 },
+        "note": "Rule shadow diffs indicate rule hot-reload activity",
+        "noteVisibility": "showWhenNoData"
+      }
+    ],
+    "templates": [
+      {
+        "tempVar": ":service:",
+        "id": "tpl-service",
+        "type": "tagValues",
+        "label": "service",
+        "values": [],
+        "query": {
+          "influxql": "SHOW TAG VALUES ON \"blink\" FROM /blink_.*/ WITH KEY = \"service\"",
+          "db": "blink",
+          "measurement": "",
+          "tagKey": "service",
+          "fieldKey": ""
+        }
+      }
+    ],
+    "name": "Blink Overview",
+    "refreshRate": "15s",
+    "timeRange": {
+      "upper": null,
+      "lower": "now() - 1h"
+    },
+    "labels": ["blink", "monitoring"]
+  }
+}
