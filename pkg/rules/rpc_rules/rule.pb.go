@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.9
 // 	protoc        v7.34.0
-// source: rule.proto
+// source: pkg/rules/rpc_rules/rule.proto
 
 package rpc_rules
 
@@ -29,7 +29,7 @@ type Empty struct {
 
 func (x *Empty) Reset() {
 	*x = Empty{}
-	mi := &file_rule_proto_msgTypes[0]
+	mi := &file_pkg_rules_rpc_rules_rule_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -41,7 +41,7 @@ func (x *Empty) String() string {
 func (*Empty) ProtoMessage() {}
 
 func (x *Empty) ProtoReflect() protoreflect.Message {
-	mi := &file_rule_proto_msgTypes[0]
+	mi := &file_pkg_rules_rpc_rules_rule_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -54,195 +54,7 @@ func (x *Empty) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Empty.ProtoReflect.Descriptor instead.
 func (*Empty) Descriptor() ([]byte, []int) {
-	return file_rule_proto_rawDescGZIP(), []int{0}
-}
-
-type Metadata struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	Id              string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"` // stable rule id (or host fills if empty)
-	Name            string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Description     string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
-	Enabled         bool                   `protobuf:"varint,4,opt,name=enabled,proto3" json:"enabled,omitempty"`
-	Severity        string                 `protobuf:"bytes,5,opt,name=severity,proto3" json:"severity,omitempty"`     // "info|low|medium|high|critical"
-	Confidence      string                 `protobuf:"bytes,6,opt,name=confidence,proto3" json:"confidence,omitempty"` // "very_low|low|..."
-	MergeByKeys     []string               `protobuf:"bytes,7,rep,name=merge_by_keys,json=mergeByKeys,proto3" json:"merge_by_keys,omitempty"`
-	MergeWindowMins uint32                 `protobuf:"varint,8,opt,name=merge_window_mins,json=mergeWindowMins,proto3" json:"merge_window_mins,omitempty"`
-	ReqSubkeys      []string               `protobuf:"bytes,9,rep,name=req_subkeys,json=reqSubkeys,proto3" json:"req_subkeys,omitempty"`
-	Signal          bool                   `protobuf:"varint,10,opt,name=signal,proto3" json:"signal,omitempty"`
-	SignalThreshold string                 `protobuf:"bytes,11,opt,name=signal_threshold,json=signalThreshold,proto3" json:"signal_threshold,omitempty"` // same enum as confidence
-	Tags            []string               `protobuf:"bytes,12,rep,name=tags,proto3" json:"tags,omitempty"`
-	Dispatchers     []string               `protobuf:"bytes,13,rep,name=dispatchers,proto3" json:"dispatchers,omitempty"`
-	LogTypes        []string               `protobuf:"bytes,14,rep,name=log_types,json=logTypes,proto3" json:"log_types,omitempty"`
-	Matchers        []string               `protobuf:"bytes,15,rep,name=matchers,proto3" json:"matchers,omitempty"`
-	Formatters      []string               `protobuf:"bytes,16,rep,name=formatters,proto3" json:"formatters,omitempty"`
-	Enrichments     []string               `protobuf:"bytes,17,rep,name=enrichments,proto3" json:"enrichments,omitempty"`
-	TuningRules     []string               `protobuf:"bytes,18,rep,name=tuning_rules,json=tuningRules,proto3" json:"tuning_rules,omitempty"`
-	Version         string                 `protobuf:"bytes,19,opt,name=version,proto3" json:"version,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
-}
-
-func (x *Metadata) Reset() {
-	*x = Metadata{}
-	mi := &file_rule_proto_msgTypes[1]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *Metadata) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*Metadata) ProtoMessage() {}
-
-func (x *Metadata) ProtoReflect() protoreflect.Message {
-	mi := &file_rule_proto_msgTypes[1]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use Metadata.ProtoReflect.Descriptor instead.
-func (*Metadata) Descriptor() ([]byte, []int) {
-	return file_rule_proto_rawDescGZIP(), []int{1}
-}
-
-func (x *Metadata) GetId() string {
-	if x != nil {
-		return x.Id
-	}
-	return ""
-}
-
-func (x *Metadata) GetName() string {
-	if x != nil {
-		return x.Name
-	}
-	return ""
-}
-
-func (x *Metadata) GetDescription() string {
-	if x != nil {
-		return x.Description
-	}
-	return ""
-}
-
-func (x *Metadata) GetEnabled() bool {
-	if x != nil {
-		return x.Enabled
-	}
-	return false
-}
-
-func (x *Metadata) GetSeverity() string {
-	if x != nil {
-		return x.Severity
-	}
-	return ""
-}
-
-func (x *Metadata) GetConfidence() string {
-	if x != nil {
-		return x.Confidence
-	}
-	return ""
-}
-
-func (x *Metadata) GetMergeByKeys() []string {
-	if x != nil {
-		return x.MergeByKeys
-	}
-	return nil
-}
-
-func (x *Metadata) GetMergeWindowMins() uint32 {
-	if x != nil {
-		return x.MergeWindowMins
-	}
-	return 0
-}
-
-func (x *Metadata) GetReqSubkeys() []string {
-	if x != nil {
-		return x.ReqSubkeys
-	}
-	return nil
-}
-
-func (x *Metadata) GetSignal() bool {
-	if x != nil {
-		return x.Signal
-	}
-	return false
-}
-
-func (x *Metadata) GetSignalThreshold() string {
-	if x != nil {
-		return x.SignalThreshold
-	}
-	return ""
-}
-
-func (x *Metadata) GetTags() []string {
-	if x != nil {
-		return x.Tags
-	}
-	return nil
-}
-
-func (x *Metadata) GetDispatchers() []string {
-	if x != nil {
-		return x.Dispatchers
-	}
-	return nil
-}
-
-func (x *Metadata) GetLogTypes() []string {
-	if x != nil {
-		return x.LogTypes
-	}
-	return nil
-}
-
-func (x *Metadata) GetMatchers() []string {
-	if x != nil {
-		return x.Matchers
-	}
-	return nil
-}
-
-func (x *Metadata) GetFormatters() []string {
-	if x != nil {
-		return x.Formatters
-	}
-	return nil
-}
-
-func (x *Metadata) GetEnrichments() []string {
-	if x != nil {
-		return x.Enrichments
-	}
-	return nil
-}
-
-func (x *Metadata) GetTuningRules() []string {
-	if x != nil {
-		return x.TuningRules
-	}
-	return nil
-}
-
-func (x *Metadata) GetVersion() string {
-	if x != nil {
-		return x.Version
-	}
-	return ""
+	return file_pkg_rules_rpc_rules_rule_proto_rawDescGZIP(), []int{0}
 }
 
 type Event struct {
@@ -254,7 +66,7 @@ type Event struct {
 
 func (x *Event) Reset() {
 	*x = Event{}
-	mi := &file_rule_proto_msgTypes[2]
+	mi := &file_pkg_rules_rpc_rules_rule_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -266,7 +78,7 @@ func (x *Event) String() string {
 func (*Event) ProtoMessage() {}
 
 func (x *Event) ProtoReflect() protoreflect.Message {
-	mi := &file_rule_proto_msgTypes[2]
+	mi := &file_pkg_rules_rpc_rules_rule_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -279,7 +91,7 @@ func (x *Event) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Event.ProtoReflect.Descriptor instead.
 func (*Event) Descriptor() ([]byte, []int) {
-	return file_rule_proto_rawDescGZIP(), []int{2}
+	return file_pkg_rules_rpc_rules_rule_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *Event) GetJson() []byte {
@@ -287,94 +99,6 @@ func (x *Event) GetJson() []byte {
 		return x.Json
 	}
 	return nil
-}
-
-type EvaluateRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Event         *Event                 `protobuf:"bytes,1,opt,name=event,proto3" json:"event,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *EvaluateRequest) Reset() {
-	*x = EvaluateRequest{}
-	mi := &file_rule_proto_msgTypes[3]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *EvaluateRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*EvaluateRequest) ProtoMessage() {}
-
-func (x *EvaluateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_rule_proto_msgTypes[3]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use EvaluateRequest.ProtoReflect.Descriptor instead.
-func (*EvaluateRequest) Descriptor() ([]byte, []int) {
-	return file_rule_proto_rawDescGZIP(), []int{3}
-}
-
-func (x *EvaluateRequest) GetEvent() *Event {
-	if x != nil {
-		return x.Event
-	}
-	return nil
-}
-
-type EvaluateResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Matched       bool                   `protobuf:"varint,1,opt,name=matched,proto3" json:"matched,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *EvaluateResponse) Reset() {
-	*x = EvaluateResponse{}
-	mi := &file_rule_proto_msgTypes[4]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *EvaluateResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*EvaluateResponse) ProtoMessage() {}
-
-func (x *EvaluateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_rule_proto_msgTypes[4]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use EvaluateResponse.ProtoReflect.Descriptor instead.
-func (*EvaluateResponse) Descriptor() ([]byte, []int) {
-	return file_rule_proto_rawDescGZIP(), []int{4}
-}
-
-func (x *EvaluateResponse) GetMatched() bool {
-	if x != nil {
-		return x.Matched
-	}
-	return false
 }
 
 type EvaluateBatchRequest struct {
@@ -386,7 +110,7 @@ type EvaluateBatchRequest struct {
 
 func (x *EvaluateBatchRequest) Reset() {
 	*x = EvaluateBatchRequest{}
-	mi := &file_rule_proto_msgTypes[5]
+	mi := &file_pkg_rules_rpc_rules_rule_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -398,7 +122,7 @@ func (x *EvaluateBatchRequest) String() string {
 func (*EvaluateBatchRequest) ProtoMessage() {}
 
 func (x *EvaluateBatchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_rule_proto_msgTypes[5]
+	mi := &file_pkg_rules_rpc_rules_rule_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -411,7 +135,7 @@ func (x *EvaluateBatchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvaluateBatchRequest.ProtoReflect.Descriptor instead.
 func (*EvaluateBatchRequest) Descriptor() ([]byte, []int) {
-	return file_rule_proto_rawDescGZIP(), []int{5}
+	return file_pkg_rules_rpc_rules_rule_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *EvaluateBatchRequest) GetEvents() []*Event {
@@ -421,16 +145,102 @@ func (x *EvaluateBatchRequest) GetEvents() []*Event {
 	return nil
 }
 
+// EventResult carries the match outcome and any optional per-event overrides.
+// Empty string / nil fields mean "use YAML default".
+type EventResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Matched       bool                   `protobuf:"varint,1,opt,name=matched,proto3" json:"matched,omitempty"`
+	Title         string                 `protobuf:"bytes,2,opt,name=title,proto3" json:"title,omitempty"`
+	Description   string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
+	Severity      string                 `protobuf:"bytes,4,opt,name=severity,proto3" json:"severity,omitempty"`                            // "info|low|medium|high|critical"; "" = YAML default
+	ContextJson   []byte                 `protobuf:"bytes,5,opt,name=context_json,json=contextJson,proto3" json:"context_json,omitempty"`   // JSON-encoded map[string]any; empty = nil
+	MergeByKeys   []string               `protobuf:"bytes,6,rep,name=merge_by_keys,json=mergeByKeys,proto3" json:"merge_by_keys,omitempty"` // empty = use YAML merge_by_keys
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EventResult) Reset() {
+	*x = EventResult{}
+	mi := &file_pkg_rules_rpc_rules_rule_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EventResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EventResult) ProtoMessage() {}
+
+func (x *EventResult) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_rules_rpc_rules_rule_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EventResult.ProtoReflect.Descriptor instead.
+func (*EventResult) Descriptor() ([]byte, []int) {
+	return file_pkg_rules_rpc_rules_rule_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *EventResult) GetMatched() bool {
+	if x != nil {
+		return x.Matched
+	}
+	return false
+}
+
+func (x *EventResult) GetTitle() string {
+	if x != nil {
+		return x.Title
+	}
+	return ""
+}
+
+func (x *EventResult) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *EventResult) GetSeverity() string {
+	if x != nil {
+		return x.Severity
+	}
+	return ""
+}
+
+func (x *EventResult) GetContextJson() []byte {
+	if x != nil {
+		return x.ContextJson
+	}
+	return nil
+}
+
+func (x *EventResult) GetMergeByKeys() []string {
+	if x != nil {
+		return x.MergeByKeys
+	}
+	return nil
+}
+
 type EvaluateBatchResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Matched       []bool                 `protobuf:"varint,1,rep,packed,name=matched,proto3" json:"matched,omitempty"`
+	Results       []*EventResult         `protobuf:"bytes,2,rep,name=results,proto3" json:"results,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *EvaluateBatchResponse) Reset() {
 	*x = EvaluateBatchResponse{}
-	mi := &file_rule_proto_msgTypes[6]
+	mi := &file_pkg_rules_rpc_rules_rule_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -442,7 +252,7 @@ func (x *EvaluateBatchResponse) String() string {
 func (*EvaluateBatchResponse) ProtoMessage() {}
 
 func (x *EvaluateBatchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_rule_proto_msgTypes[6]
+	mi := &file_pkg_rules_rpc_rules_rule_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -455,131 +265,99 @@ func (x *EvaluateBatchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvaluateBatchResponse.ProtoReflect.Descriptor instead.
 func (*EvaluateBatchResponse) Descriptor() ([]byte, []int) {
-	return file_rule_proto_rawDescGZIP(), []int{6}
+	return file_pkg_rules_rpc_rules_rule_proto_rawDescGZIP(), []int{4}
 }
 
-func (x *EvaluateBatchResponse) GetMatched() []bool {
+func (x *EvaluateBatchResponse) GetResults() []*EventResult {
 	if x != nil {
-		return x.Matched
+		return x.Results
 	}
 	return nil
 }
 
-var File_rule_proto protoreflect.FileDescriptor
+var File_pkg_rules_rpc_rules_rule_proto protoreflect.FileDescriptor
 
-const file_rule_proto_rawDesc = "" +
+const file_pkg_rules_rpc_rules_rule_proto_rawDesc = "" +
 	"\n" +
-	"\n" +
-	"rule.proto\x12\x05rules\"\a\n" +
-	"\x05Empty\"\xc8\x04\n" +
-	"\bMetadata\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\x12 \n" +
-	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\x18\n" +
-	"\aenabled\x18\x04 \x01(\bR\aenabled\x12\x1a\n" +
-	"\bseverity\x18\x05 \x01(\tR\bseverity\x12\x1e\n" +
-	"\n" +
-	"confidence\x18\x06 \x01(\tR\n" +
-	"confidence\x12\"\n" +
-	"\rmerge_by_keys\x18\a \x03(\tR\vmergeByKeys\x12*\n" +
-	"\x11merge_window_mins\x18\b \x01(\rR\x0fmergeWindowMins\x12\x1f\n" +
-	"\vreq_subkeys\x18\t \x03(\tR\n" +
-	"reqSubkeys\x12\x16\n" +
-	"\x06signal\x18\n" +
-	" \x01(\bR\x06signal\x12)\n" +
-	"\x10signal_threshold\x18\v \x01(\tR\x0fsignalThreshold\x12\x12\n" +
-	"\x04tags\x18\f \x03(\tR\x04tags\x12 \n" +
-	"\vdispatchers\x18\r \x03(\tR\vdispatchers\x12\x1b\n" +
-	"\tlog_types\x18\x0e \x03(\tR\blogTypes\x12\x1a\n" +
-	"\bmatchers\x18\x0f \x03(\tR\bmatchers\x12\x1e\n" +
-	"\n" +
-	"formatters\x18\x10 \x03(\tR\n" +
-	"formatters\x12 \n" +
-	"\venrichments\x18\x11 \x03(\tR\venrichments\x12!\n" +
-	"\ftuning_rules\x18\x12 \x03(\tR\vtuningRules\x12\x18\n" +
-	"\aversion\x18\x13 \x01(\tR\aversion\"\x1b\n" +
+	"\x1epkg/rules/rpc_rules/rule.proto\x12\x05rules\"\a\n" +
+	"\x05Empty\"\x1b\n" +
 	"\x05Event\x12\x12\n" +
-	"\x04json\x18\x01 \x01(\fR\x04json\"5\n" +
-	"\x0fEvaluateRequest\x12\"\n" +
-	"\x05event\x18\x01 \x01(\v2\f.rules.EventR\x05event\",\n" +
-	"\x10EvaluateResponse\x12\x18\n" +
-	"\amatched\x18\x01 \x01(\bR\amatched\"<\n" +
+	"\x04json\x18\x01 \x01(\fR\x04json\"<\n" +
 	"\x14EvaluateBatchRequest\x12$\n" +
-	"\x06events\x18\x01 \x03(\v2\f.rules.EventR\x06events\"1\n" +
-	"\x15EvaluateBatchResponse\x12\x18\n" +
-	"\amatched\x18\x01 \x03(\bR\amatched2\xad\x02\n" +
-	"\x04Rule\x12,\n" +
-	"\vGetMetadata\x12\f.rules.Empty\x1a\x0f.rules.Metadata\x12\"\n" +
-	"\x04Init\x12\f.rules.Empty\x1a\f.rules.Empty\x12;\n" +
-	"\bEvaluate\x12\x16.rules.EvaluateRequest\x1a\x17.rules.EvaluateResponse\x12J\n" +
+	"\x06events\x18\x01 \x03(\v2\f.rules.EventR\x06events\"\xc2\x01\n" +
+	"\vEventResult\x12\x18\n" +
+	"\amatched\x18\x01 \x01(\bR\amatched\x12\x14\n" +
+	"\x05title\x18\x02 \x01(\tR\x05title\x12 \n" +
+	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\x1a\n" +
+	"\bseverity\x18\x04 \x01(\tR\bseverity\x12!\n" +
+	"\fcontext_json\x18\x05 \x01(\fR\vcontextJson\x12\"\n" +
+	"\rmerge_by_keys\x18\x06 \x03(\tR\vmergeByKeys\"E\n" +
+	"\x15EvaluateBatchResponse\x12,\n" +
+	"\aresults\x18\x02 \x03(\v2\x12.rules.EventResultR\aresults2\xc2\x01\n" +
+	"\x04Rule\x12\"\n" +
+	"\x04Init\x12\f.rules.Empty\x1a\f.rules.Empty\x12J\n" +
 	"\rEvaluateBatch\x12\x1b.rules.EvaluateBatchRequest\x1a\x1c.rules.EvaluateBatchResponse\x12&\n" +
 	"\bShutdown\x12\f.rules.Empty\x1a\f.rules.Empty\x12\"\n" +
 	"\x04Ping\x12\f.rules.Empty\x1a\f.rules.EmptyB\x16Z\x14rpc_rules/;rpc_rulesb\x06proto3"
 
 var (
-	file_rule_proto_rawDescOnce sync.Once
-	file_rule_proto_rawDescData []byte
+	file_pkg_rules_rpc_rules_rule_proto_rawDescOnce sync.Once
+	file_pkg_rules_rpc_rules_rule_proto_rawDescData []byte
 )
 
-func file_rule_proto_rawDescGZIP() []byte {
-	file_rule_proto_rawDescOnce.Do(func() {
-		file_rule_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_rule_proto_rawDesc), len(file_rule_proto_rawDesc)))
+func file_pkg_rules_rpc_rules_rule_proto_rawDescGZIP() []byte {
+	file_pkg_rules_rpc_rules_rule_proto_rawDescOnce.Do(func() {
+		file_pkg_rules_rpc_rules_rule_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_pkg_rules_rpc_rules_rule_proto_rawDesc), len(file_pkg_rules_rpc_rules_rule_proto_rawDesc)))
 	})
-	return file_rule_proto_rawDescData
+	return file_pkg_rules_rpc_rules_rule_proto_rawDescData
 }
 
-var file_rule_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
-var file_rule_proto_goTypes = []any{
+var file_pkg_rules_rpc_rules_rule_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_pkg_rules_rpc_rules_rule_proto_goTypes = []any{
 	(*Empty)(nil),                 // 0: rules.Empty
-	(*Metadata)(nil),              // 1: rules.Metadata
-	(*Event)(nil),                 // 2: rules.Event
-	(*EvaluateRequest)(nil),       // 3: rules.EvaluateRequest
-	(*EvaluateResponse)(nil),      // 4: rules.EvaluateResponse
-	(*EvaluateBatchRequest)(nil),  // 5: rules.EvaluateBatchRequest
-	(*EvaluateBatchResponse)(nil), // 6: rules.EvaluateBatchResponse
+	(*Event)(nil),                 // 1: rules.Event
+	(*EvaluateBatchRequest)(nil),  // 2: rules.EvaluateBatchRequest
+	(*EventResult)(nil),           // 3: rules.EventResult
+	(*EvaluateBatchResponse)(nil), // 4: rules.EvaluateBatchResponse
 }
-var file_rule_proto_depIdxs = []int32{
-	2, // 0: rules.EvaluateRequest.event:type_name -> rules.Event
-	2, // 1: rules.EvaluateBatchRequest.events:type_name -> rules.Event
-	0, // 2: rules.Rule.GetMetadata:input_type -> rules.Empty
-	0, // 3: rules.Rule.Init:input_type -> rules.Empty
-	3, // 4: rules.Rule.Evaluate:input_type -> rules.EvaluateRequest
-	5, // 5: rules.Rule.EvaluateBatch:input_type -> rules.EvaluateBatchRequest
-	0, // 6: rules.Rule.Shutdown:input_type -> rules.Empty
-	0, // 7: rules.Rule.Ping:input_type -> rules.Empty
-	1, // 8: rules.Rule.GetMetadata:output_type -> rules.Metadata
-	0, // 9: rules.Rule.Init:output_type -> rules.Empty
-	4, // 10: rules.Rule.Evaluate:output_type -> rules.EvaluateResponse
-	6, // 11: rules.Rule.EvaluateBatch:output_type -> rules.EvaluateBatchResponse
-	0, // 12: rules.Rule.Shutdown:output_type -> rules.Empty
-	0, // 13: rules.Rule.Ping:output_type -> rules.Empty
-	8, // [8:14] is the sub-list for method output_type
-	2, // [2:8] is the sub-list for method input_type
+var file_pkg_rules_rpc_rules_rule_proto_depIdxs = []int32{
+	1, // 0: rules.EvaluateBatchRequest.events:type_name -> rules.Event
+	3, // 1: rules.EvaluateBatchResponse.results:type_name -> rules.EventResult
+	0, // 2: rules.Rule.Init:input_type -> rules.Empty
+	2, // 3: rules.Rule.EvaluateBatch:input_type -> rules.EvaluateBatchRequest
+	0, // 4: rules.Rule.Shutdown:input_type -> rules.Empty
+	0, // 5: rules.Rule.Ping:input_type -> rules.Empty
+	0, // 6: rules.Rule.Init:output_type -> rules.Empty
+	4, // 7: rules.Rule.EvaluateBatch:output_type -> rules.EvaluateBatchResponse
+	0, // 8: rules.Rule.Shutdown:output_type -> rules.Empty
+	0, // 9: rules.Rule.Ping:output_type -> rules.Empty
+	6, // [6:10] is the sub-list for method output_type
+	2, // [2:6] is the sub-list for method input_type
 	2, // [2:2] is the sub-list for extension type_name
 	2, // [2:2] is the sub-list for extension extendee
 	0, // [0:2] is the sub-list for field type_name
 }
 
-func init() { file_rule_proto_init() }
-func file_rule_proto_init() {
-	if File_rule_proto != nil {
+func init() { file_pkg_rules_rpc_rules_rule_proto_init() }
+func file_pkg_rules_rpc_rules_rule_proto_init() {
+	if File_pkg_rules_rpc_rules_rule_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_rule_proto_rawDesc), len(file_rule_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_rules_rpc_rules_rule_proto_rawDesc), len(file_pkg_rules_rpc_rules_rule_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_rule_proto_goTypes,
-		DependencyIndexes: file_rule_proto_depIdxs,
-		MessageInfos:      file_rule_proto_msgTypes,
+		GoTypes:           file_pkg_rules_rpc_rules_rule_proto_goTypes,
+		DependencyIndexes: file_pkg_rules_rpc_rules_rule_proto_depIdxs,
+		MessageInfos:      file_pkg_rules_rpc_rules_rule_proto_msgTypes,
 	}.Build()
-	File_rule_proto = out.File
-	file_rule_proto_goTypes = nil
-	file_rule_proto_depIdxs = nil
+	File_pkg_rules_rpc_rules_rule_proto = out.File
+	file_pkg_rules_rpc_rules_rule_proto_goTypes = nil
+	file_pkg_rules_rpc_rules_rule_proto_depIdxs = nil
 }

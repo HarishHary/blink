@@ -326,8 +326,8 @@ func (at *DynamoDBBackend) ToAlert(record backends.Record) (*alerts.Alert, error
 
 func (at *DynamoDBBackend) ToRecord(alert *alerts.Alert) (backends.Record, error) {
 	item, err := attributevalue.MarshalMap(backends.Record{
-		"RuleName":        alert.Rule.Name(), // Partition Key
-		"AlertID":         alert.AlertID,     // Sort/Range Key
+		"RuleName":        alert.Rule.Name, // Partition Key
+		"AlertID":         alert.AlertID,   // Sort/Range Key
 		"Attempts":        alert.Attempts,
 		"Cluster":         alert.Cluster,
 		"Created":         alert.Created.Format(helpers.DATETIME_FORMAT),
@@ -340,7 +340,7 @@ func (at *DynamoDBBackend) ToRecord(alert *alerts.Alert) (backends.Record, error
 		"OutputsSent":     alert.OutputsSent,
 		"Formatters":      alert.Rule.Formatters(),
 		"Event":           helpers.JsonCompact(alert.Event),
-		"RuleDescription": alert.Rule.Description(),
+		"RuleDescription": alert.Rule.Description,
 		"SourceEntity":    alert.SourceEntity,
 		"SourceService":   alert.SourceService,
 		"Staged":          alert.Staged,
@@ -356,13 +356,13 @@ func (at *DynamoDBBackend) ToRecord(alert *alerts.Alert) (backends.Record, error
 	return result, nil
 }
 
-func (at *DynamoDBBackend) FetchAllRules() (<-chan rules.Metadata, error) {
+func (at *DynamoDBBackend) FetchAllRules() (<-chan *rules.RuleMetadata, error) {
 	input := &dynamodb.ScanInput{
 		TableName: aws.String(at.dbName),
 		Select:    types.SelectAllAttributes,
 	}
 
-	out := make(chan rules.Metadata)
+	out := make(chan *rules.RuleMetadata)
 	go func() {
 		defer close(out)
 		generator := at.paginateScan(at.db.Scan, input)
@@ -379,11 +379,10 @@ func (at *DynamoDBBackend) FetchAllRules() (<-chan rules.Metadata, error) {
 	return out, nil
 }
 
-func (at *DynamoDBBackend) unmarshalRule(item map[string]types.AttributeValue) (rules.Metadata, error) {
-	var rule rules.Metadata
-	err := attributevalue.UnmarshalMap(item, &rule)
-	if err != nil {
+func (at *DynamoDBBackend) unmarshalRule(item map[string]types.AttributeValue) (*rules.RuleMetadata, error) {
+	var rule rules.RuleMetadata
+	if err := attributevalue.UnmarshalMap(item, &rule); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal item to rule: %w", err)
 	}
-	return rule, nil
+	return &rule, nil
 }

@@ -6,68 +6,88 @@ import (
 	"fmt"
 
 	"github.com/harishhary/blink/internal/errors"
+	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/alerts"
 	"github.com/harishhary/blink/pkg/scoring"
 	"github.com/harishhary/blink/pkg/tuning_rules/rpc_tuning_rules"
 )
 
 type rpcTuningRule struct {
-	meta     *rpc_tuning_rules.TuningMetadata
-	checksum string
-	client   rpc_tuning_rules.TuningRuleClient
+	cfgManager *TuningRuleConfigManager
+	fileName   string
+	checksum   string
+	client     rpc_tuning_rules.TuningRuleClient
 }
 
-func newRpcTuningRule(meta *rpc_tuning_rules.TuningMetadata, client rpc_tuning_rules.TuningRuleClient, checksum string) *rpcTuningRule {
-	return &rpcTuningRule{meta: meta, checksum: checksum, client: client}
-}
-
-func (r *rpcTuningRule) Id() string {
-	if id := r.meta.GetId(); id != "" {
-		return id
+func newRpcTuningRule(fileName string, client rpc_tuning_rules.TuningRuleClient, manager *TuningRuleConfigManager, checksum string) *rpcTuningRule {
+	return &rpcTuningRule{
+		cfgManager: manager,
+		fileName:   fileName,
+		checksum:   checksum,
+		client:     client,
 	}
-	return r.meta.GetName()
-}
-func (r *rpcTuningRule) Name() string {
-	return r.meta.GetName()
 }
 
-func (r *rpcTuningRule) Description() string {
-	return r.meta.GetDescription()
+func (r *rpcTuningRule) cfg() *TuningRuleMetadata {
+	if r.cfgManager == nil {
+		return nil
+	}
+	v, _ := r.cfgManager.Current().ByFileName(r.fileName)
+	return v
 }
 
-func (r *rpcTuningRule) Enabled() bool {
-	return r.meta.GetEnabled()
+// TuningMetadata returns the live YAML-derived tuning rule configuration.
+func (r *rpcTuningRule) TuningRuleMetadata() *TuningRuleMetadata {
+	if c := r.cfg(); c != nil {
+		return c
+	}
+	return &TuningRuleMetadata{PluginMetadata: plugin.PluginMetadata{Id: r.fileName, Name: r.fileName}}
 }
 
-func (r *rpcTuningRule) Checksum() string {
-	return r.checksum
+func (r *rpcTuningRule) Metadata() plugin.PluginMetadata {
+	return r.TuningRuleMetadata().Metadata()
 }
 
+func (r *rpcTuningRule) Checksum() string { return r.checksum }
 func (r *rpcTuningRule) String() string {
-	return fmt.Sprintf("TuningRule '%s' (id:%s, enabled:%t)", r.meta.GetName(), r.meta.GetId(), r.meta.GetEnabled())
+	m := r.TuningRuleMetadata().Metadata()
+	return fmt.Sprintf("TuningRule '%s' (id:%s, enabled:%t)", m.Name, m.Id, m.Enabled)
 }
 
-func (r *rpcTuningRule) Global() bool {
-	return r.meta.GetGlobal()
-}
+func (r *rpcTuningRule) Global() bool { return r.TuningRuleMetadata().Global }
 
+// RuleType parses the YAML rule_type string into a typed RuleType constant.
 func (r *rpcTuningRule) RuleType() RuleType {
-	return RuleType(r.meta.GetRuleType())
+	switch r.TuningRuleMetadata().RuleType {
+	case "set_confidence":
+		return SetConfidence
+	case "increase_confidence":
+		return IncreaseConfidence
+	case "decrease_confidence":
+		return DecreaseConfidence
+	default:
+		return Ignore
+	}
 }
 
+// Confidence parses the YAML confidence string into a scoring.Confidence value.
 func (r *rpcTuningRule) Confidence() scoring.Confidence {
-	conf, _ := scoring.ParseConfidence(r.meta.GetConfidence())
+	conf, _ := scoring.ParseConfidence(r.TuningRuleMetadata().Confidence)
 	return conf
 }
 
-func (r *rpcTuningRule) Tune(ctx context.Context, alert alerts.Alert) (bool, errors.Error) {
-	b, err := json.Marshal(alert)
-	if err != nil {
-		return false, errors.NewE(err)
+func (r *rpcTuningRule) Tune(ctx context.Context, alerts []alerts.Alert) ([]bool, errors.Error) {
+	alertJSONs := make([][]byte, 0, len(alerts))
+	for _, alrt := range alerts {
+		b, err := json.Marshal(alrt)
+		if err != nil {
+			return nil, errors.NewE(err)
+		}
+		alertJSONs = append(alertJSONs, b)
 	}
-	resp, err := r.client.Tune(ctx, &rpc_tuning_rules.TuneRequest{AlertJson: b})
+	resp, err := r.client.TuneBatch(ctx, &rpc_tuning_rules.TuneBatchRequest{AlertJson: alertJSONs})
 	if err != nil {
-		return false, errors.NewE(err)
+		return nil, errors.NewE(err)
 	}
 	return resp.GetApplies(), nil
 }

@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             v7.34.0
-// source: rule.proto
+// source: pkg/rules/rpc_rules/rule.proto
 
 package rpc_rules
 
@@ -19,9 +19,7 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Rule_GetMetadata_FullMethodName   = "/rules.Rule/GetMetadata"
 	Rule_Init_FullMethodName          = "/rules.Rule/Init"
-	Rule_Evaluate_FullMethodName      = "/rules.Rule/Evaluate"
 	Rule_EvaluateBatch_FullMethodName = "/rules.Rule/EvaluateBatch"
 	Rule_Shutdown_FullMethodName      = "/rules.Rule/Shutdown"
 	Rule_Ping_FullMethodName          = "/rules.Rule/Ping"
@@ -31,9 +29,7 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type RuleClient interface {
-	GetMetadata(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Metadata, error)
 	Init(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
-	Evaluate(ctx context.Context, in *EvaluateRequest, opts ...grpc.CallOption) (*EvaluateResponse, error)
 	EvaluateBatch(ctx context.Context, in *EvaluateBatchRequest, opts ...grpc.CallOption) (*EvaluateBatchResponse, error)
 	Shutdown(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
 	Ping(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
@@ -47,30 +43,10 @@ func NewRuleClient(cc grpc.ClientConnInterface) RuleClient {
 	return &ruleClient{cc}
 }
 
-func (c *ruleClient) GetMetadata(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Metadata, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(Metadata)
-	err := c.cc.Invoke(ctx, Rule_GetMetadata_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *ruleClient) Init(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Empty)
 	err := c.cc.Invoke(ctx, Rule_Init_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *ruleClient) Evaluate(ctx context.Context, in *EvaluateRequest, opts ...grpc.CallOption) (*EvaluateResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(EvaluateResponse)
-	err := c.cc.Invoke(ctx, Rule_Evaluate_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -111,9 +87,7 @@ func (c *ruleClient) Ping(ctx context.Context, in *Empty, opts ...grpc.CallOptio
 // All implementations must embed UnimplementedRuleServer
 // for forward compatibility.
 type RuleServer interface {
-	GetMetadata(context.Context, *Empty) (*Metadata, error)
 	Init(context.Context, *Empty) (*Empty, error)
-	Evaluate(context.Context, *EvaluateRequest) (*EvaluateResponse, error)
 	EvaluateBatch(context.Context, *EvaluateBatchRequest) (*EvaluateBatchResponse, error)
 	Shutdown(context.Context, *Empty) (*Empty, error)
 	Ping(context.Context, *Empty) (*Empty, error)
@@ -127,14 +101,8 @@ type RuleServer interface {
 // pointer dereference when methods are called.
 type UnimplementedRuleServer struct{}
 
-func (UnimplementedRuleServer) GetMetadata(context.Context, *Empty) (*Metadata, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetMetadata not implemented")
-}
 func (UnimplementedRuleServer) Init(context.Context, *Empty) (*Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Init not implemented")
-}
-func (UnimplementedRuleServer) Evaluate(context.Context, *EvaluateRequest) (*EvaluateResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Evaluate not implemented")
 }
 func (UnimplementedRuleServer) EvaluateBatch(context.Context, *EvaluateBatchRequest) (*EvaluateBatchResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method EvaluateBatch not implemented")
@@ -166,24 +134,6 @@ func RegisterRuleServer(s grpc.ServiceRegistrar, srv RuleServer) {
 	s.RegisterService(&Rule_ServiceDesc, srv)
 }
 
-func _Rule_GetMetadata_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Empty)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(RuleServer).GetMetadata(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Rule_GetMetadata_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(RuleServer).GetMetadata(ctx, req.(*Empty))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _Rule_Init_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(Empty)
 	if err := dec(in); err != nil {
@@ -198,24 +148,6 @@ func _Rule_Init_Handler(srv interface{}, ctx context.Context, dec func(interface
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(RuleServer).Init(ctx, req.(*Empty))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Rule_Evaluate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(EvaluateRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(RuleServer).Evaluate(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Rule_Evaluate_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(RuleServer).Evaluate(ctx, req.(*EvaluateRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -282,16 +214,8 @@ var Rule_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*RuleServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "GetMetadata",
-			Handler:    _Rule_GetMetadata_Handler,
-		},
-		{
 			MethodName: "Init",
 			Handler:    _Rule_Init_Handler,
-		},
-		{
-			MethodName: "Evaluate",
-			Handler:    _Rule_Evaluate_Handler,
 		},
 		{
 			MethodName: "EvaluateBatch",
@@ -307,5 +231,5 @@ var Rule_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "rule.proto",
+	Metadata: "pkg/rules/rpc_rules/rule.proto",
 }

@@ -4,16 +4,22 @@ import (
 	"context"
 
 	"github.com/harishhary/blink/internal/errors"
+	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/alerts"
 )
 
-type IFormatter interface {
-	Format(ctx context.Context, alert *alerts.Alert) (map[string]any, errors.Error)
+type PluginMetadata = plugin.PluginMetadata
 
-	Id() string
-	Name() string
-	Description() string
-	Enabled() bool
+// FormatterMetadata is the in-memory representation of a formatter YAML sidecar.
+type FormatterMetadata struct {
+	plugin.PluginMetadata `yaml:",inline"`
+}
+
+type Formatter interface {
+	Format(ctx context.Context, alerts []*alerts.Alert) ([]map[string]any, errors.Error)
+
+	FormatterMetadata() *FormatterMetadata
+	Metadata() PluginMetadata
 	Checksum() string
 	String() string
 }

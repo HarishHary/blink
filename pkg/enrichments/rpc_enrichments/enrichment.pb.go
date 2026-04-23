@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.9
 // 	protoc        v7.34.0
-// source: enrichment.proto
+// source: pkg/enrichments/rpc_enrichments/enrichment.proto
 
 package rpc_enrichments
 
@@ -29,7 +29,7 @@ type Empty struct {
 
 func (x *Empty) Reset() {
 	*x = Empty{}
-	mi := &file_enrichment_proto_msgTypes[0]
+	mi := &file_pkg_enrichments_rpc_enrichments_enrichment_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -41,7 +41,7 @@ func (x *Empty) String() string {
 func (*Empty) ProtoMessage() {}
 
 func (x *Empty) ProtoReflect() protoreflect.Message {
-	mi := &file_enrichment_proto_msgTypes[0]
+	mi := &file_pkg_enrichments_rpc_enrichments_enrichment_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -54,91 +54,7 @@ func (x *Empty) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Empty.ProtoReflect.Descriptor instead.
 func (*Empty) Descriptor() ([]byte, []int) {
-	return file_enrichment_proto_rawDescGZIP(), []int{0}
-}
-
-type EnrichmentMetadata struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Description   string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
-	Enabled       bool                   `protobuf:"varint,4,opt,name=enabled,proto3" json:"enabled,omitempty"`
-	DependsOn     []string               `protobuf:"bytes,5,rep,name=depends_on,json=dependsOn,proto3" json:"depends_on,omitempty"`
-	Version       string                 `protobuf:"bytes,6,opt,name=version,proto3" json:"version,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *EnrichmentMetadata) Reset() {
-	*x = EnrichmentMetadata{}
-	mi := &file_enrichment_proto_msgTypes[1]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *EnrichmentMetadata) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*EnrichmentMetadata) ProtoMessage() {}
-
-func (x *EnrichmentMetadata) ProtoReflect() protoreflect.Message {
-	mi := &file_enrichment_proto_msgTypes[1]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use EnrichmentMetadata.ProtoReflect.Descriptor instead.
-func (*EnrichmentMetadata) Descriptor() ([]byte, []int) {
-	return file_enrichment_proto_rawDescGZIP(), []int{1}
-}
-
-func (x *EnrichmentMetadata) GetId() string {
-	if x != nil {
-		return x.Id
-	}
-	return ""
-}
-
-func (x *EnrichmentMetadata) GetName() string {
-	if x != nil {
-		return x.Name
-	}
-	return ""
-}
-
-func (x *EnrichmentMetadata) GetDescription() string {
-	if x != nil {
-		return x.Description
-	}
-	return ""
-}
-
-func (x *EnrichmentMetadata) GetEnabled() bool {
-	if x != nil {
-		return x.Enabled
-	}
-	return false
-}
-
-func (x *EnrichmentMetadata) GetDependsOn() []string {
-	if x != nil {
-		return x.DependsOn
-	}
-	return nil
-}
-
-func (x *EnrichmentMetadata) GetVersion() string {
-	if x != nil {
-		return x.Version
-	}
-	return ""
+	return file_pkg_enrichments_rpc_enrichments_enrichment_proto_rawDescGZIP(), []int{0}
 }
 
 type Alert struct {
@@ -150,7 +66,7 @@ type Alert struct {
 
 func (x *Alert) Reset() {
 	*x = Alert{}
-	mi := &file_enrichment_proto_msgTypes[2]
+	mi := &file_pkg_enrichments_rpc_enrichments_enrichment_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -162,7 +78,7 @@ func (x *Alert) String() string {
 func (*Alert) ProtoMessage() {}
 
 func (x *Alert) ProtoReflect() protoreflect.Message {
-	mi := &file_enrichment_proto_msgTypes[2]
+	mi := &file_pkg_enrichments_rpc_enrichments_enrichment_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -175,7 +91,7 @@ func (x *Alert) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Alert.ProtoReflect.Descriptor instead.
 func (*Alert) Descriptor() ([]byte, []int) {
-	return file_enrichment_proto_rawDescGZIP(), []int{2}
+	return file_pkg_enrichments_rpc_enrichments_enrichment_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *Alert) GetJson() []byte {
@@ -185,28 +101,28 @@ func (x *Alert) GetJson() []byte {
 	return nil
 }
 
-type EnrichRequest struct {
+type EnrichBatchRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Alert         *Alert                 `protobuf:"bytes,1,opt,name=alert,proto3" json:"alert,omitempty"`
+	Alerts        []*Alert               `protobuf:"bytes,1,rep,name=alerts,proto3" json:"alerts,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *EnrichRequest) Reset() {
-	*x = EnrichRequest{}
-	mi := &file_enrichment_proto_msgTypes[3]
+func (x *EnrichBatchRequest) Reset() {
+	*x = EnrichBatchRequest{}
+	mi := &file_pkg_enrichments_rpc_enrichments_enrichment_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *EnrichRequest) String() string {
+func (x *EnrichBatchRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*EnrichRequest) ProtoMessage() {}
+func (*EnrichBatchRequest) ProtoMessage() {}
 
-func (x *EnrichRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_enrichment_proto_msgTypes[3]
+func (x *EnrichBatchRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_enrichments_rpc_enrichments_enrichment_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -217,40 +133,40 @@ func (x *EnrichRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use EnrichRequest.ProtoReflect.Descriptor instead.
-func (*EnrichRequest) Descriptor() ([]byte, []int) {
-	return file_enrichment_proto_rawDescGZIP(), []int{3}
+// Deprecated: Use EnrichBatchRequest.ProtoReflect.Descriptor instead.
+func (*EnrichBatchRequest) Descriptor() ([]byte, []int) {
+	return file_pkg_enrichments_rpc_enrichments_enrichment_proto_rawDescGZIP(), []int{2}
 }
 
-func (x *EnrichRequest) GetAlert() *Alert {
+func (x *EnrichBatchRequest) GetAlerts() []*Alert {
 	if x != nil {
-		return x.Alert
+		return x.Alerts
 	}
 	return nil
 }
 
-type EnrichResponse struct {
+type EnrichBatchResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Alert         *Alert                 `protobuf:"bytes,1,opt,name=alert,proto3" json:"alert,omitempty"`
+	Alerts        []*Alert               `protobuf:"bytes,1,rep,name=alerts,proto3" json:"alerts,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *EnrichResponse) Reset() {
-	*x = EnrichResponse{}
-	mi := &file_enrichment_proto_msgTypes[4]
+func (x *EnrichBatchResponse) Reset() {
+	*x = EnrichBatchResponse{}
+	mi := &file_pkg_enrichments_rpc_enrichments_enrichment_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *EnrichResponse) String() string {
+func (x *EnrichBatchResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*EnrichResponse) ProtoMessage() {}
+func (*EnrichBatchResponse) ProtoMessage() {}
 
-func (x *EnrichResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_enrichment_proto_msgTypes[4]
+func (x *EnrichBatchResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_enrichments_rpc_enrichments_enrichment_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -261,106 +177,94 @@ func (x *EnrichResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use EnrichResponse.ProtoReflect.Descriptor instead.
-func (*EnrichResponse) Descriptor() ([]byte, []int) {
-	return file_enrichment_proto_rawDescGZIP(), []int{4}
+// Deprecated: Use EnrichBatchResponse.ProtoReflect.Descriptor instead.
+func (*EnrichBatchResponse) Descriptor() ([]byte, []int) {
+	return file_pkg_enrichments_rpc_enrichments_enrichment_proto_rawDescGZIP(), []int{3}
 }
 
-func (x *EnrichResponse) GetAlert() *Alert {
+func (x *EnrichBatchResponse) GetAlerts() []*Alert {
 	if x != nil {
-		return x.Alert
+		return x.Alerts
 	}
 	return nil
 }
 
-var File_enrichment_proto protoreflect.FileDescriptor
+var File_pkg_enrichments_rpc_enrichments_enrichment_proto protoreflect.FileDescriptor
 
-const file_enrichment_proto_rawDesc = "" +
+const file_pkg_enrichments_rpc_enrichments_enrichment_proto_rawDesc = "" +
 	"\n" +
-	"\x10enrichment.proto\x12\venrichments\"\a\n" +
-	"\x05Empty\"\xad\x01\n" +
-	"\x12EnrichmentMetadata\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\x12 \n" +
-	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\x18\n" +
-	"\aenabled\x18\x04 \x01(\bR\aenabled\x12\x1d\n" +
-	"\n" +
-	"depends_on\x18\x05 \x03(\tR\tdependsOn\x12\x18\n" +
-	"\aversion\x18\x06 \x01(\tR\aversion\"\x1b\n" +
+	"0pkg/enrichments/rpc_enrichments/enrichment.proto\x12\venrichments\"\a\n" +
+	"\x05Empty\"\x1b\n" +
 	"\x05Alert\x12\x12\n" +
-	"\x04json\x18\x01 \x01(\fR\x04json\"9\n" +
-	"\rEnrichRequest\x12(\n" +
-	"\x05alert\x18\x01 \x01(\v2\x12.enrichments.AlertR\x05alert\":\n" +
-	"\x0eEnrichResponse\x12(\n" +
-	"\x05alert\x18\x01 \x01(\v2\x12.enrichments.AlertR\x05alert2\xa7\x02\n" +
+	"\x04json\x18\x01 \x01(\fR\x04json\"@\n" +
+	"\x12EnrichBatchRequest\x12*\n" +
+	"\x06alerts\x18\x01 \x03(\v2\x12.enrichments.AlertR\x06alerts\"A\n" +
+	"\x13EnrichBatchResponse\x12*\n" +
+	"\x06alerts\x18\x01 \x03(\v2\x12.enrichments.AlertR\x06alerts2\xf2\x01\n" +
 	"\n" +
-	"Enrichment\x12B\n" +
-	"\vGetMetadata\x12\x12.enrichments.Empty\x1a\x1f.enrichments.EnrichmentMetadata\x12.\n" +
-	"\x04Init\x12\x12.enrichments.Empty\x1a\x12.enrichments.Empty\x12A\n" +
-	"\x06Enrich\x12\x1a.enrichments.EnrichRequest\x1a\x1b.enrichments.EnrichResponse\x122\n" +
+	"Enrichment\x12.\n" +
+	"\x04Init\x12\x12.enrichments.Empty\x1a\x12.enrichments.Empty\x12P\n" +
+	"\vEnrichBatch\x12\x1f.enrichments.EnrichBatchRequest\x1a .enrichments.EnrichBatchResponse\x122\n" +
 	"\bShutdown\x12\x12.enrichments.Empty\x1a\x12.enrichments.Empty\x12.\n" +
 	"\x04Ping\x12\x12.enrichments.Empty\x1a\x12.enrichments.EmptyB\"Z rpc_enrichments/;rpc_enrichmentsb\x06proto3"
 
 var (
-	file_enrichment_proto_rawDescOnce sync.Once
-	file_enrichment_proto_rawDescData []byte
+	file_pkg_enrichments_rpc_enrichments_enrichment_proto_rawDescOnce sync.Once
+	file_pkg_enrichments_rpc_enrichments_enrichment_proto_rawDescData []byte
 )
 
-func file_enrichment_proto_rawDescGZIP() []byte {
-	file_enrichment_proto_rawDescOnce.Do(func() {
-		file_enrichment_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_enrichment_proto_rawDesc), len(file_enrichment_proto_rawDesc)))
+func file_pkg_enrichments_rpc_enrichments_enrichment_proto_rawDescGZIP() []byte {
+	file_pkg_enrichments_rpc_enrichments_enrichment_proto_rawDescOnce.Do(func() {
+		file_pkg_enrichments_rpc_enrichments_enrichment_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_pkg_enrichments_rpc_enrichments_enrichment_proto_rawDesc), len(file_pkg_enrichments_rpc_enrichments_enrichment_proto_rawDesc)))
 	})
-	return file_enrichment_proto_rawDescData
+	return file_pkg_enrichments_rpc_enrichments_enrichment_proto_rawDescData
 }
 
-var file_enrichment_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
-var file_enrichment_proto_goTypes = []any{
-	(*Empty)(nil),              // 0: enrichments.Empty
-	(*EnrichmentMetadata)(nil), // 1: enrichments.EnrichmentMetadata
-	(*Alert)(nil),              // 2: enrichments.Alert
-	(*EnrichRequest)(nil),      // 3: enrichments.EnrichRequest
-	(*EnrichResponse)(nil),     // 4: enrichments.EnrichResponse
+var file_pkg_enrichments_rpc_enrichments_enrichment_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_pkg_enrichments_rpc_enrichments_enrichment_proto_goTypes = []any{
+	(*Empty)(nil),               // 0: enrichments.Empty
+	(*Alert)(nil),               // 1: enrichments.Alert
+	(*EnrichBatchRequest)(nil),  // 2: enrichments.EnrichBatchRequest
+	(*EnrichBatchResponse)(nil), // 3: enrichments.EnrichBatchResponse
 }
-var file_enrichment_proto_depIdxs = []int32{
-	2, // 0: enrichments.EnrichRequest.alert:type_name -> enrichments.Alert
-	2, // 1: enrichments.EnrichResponse.alert:type_name -> enrichments.Alert
-	0, // 2: enrichments.Enrichment.GetMetadata:input_type -> enrichments.Empty
-	0, // 3: enrichments.Enrichment.Init:input_type -> enrichments.Empty
-	3, // 4: enrichments.Enrichment.Enrich:input_type -> enrichments.EnrichRequest
-	0, // 5: enrichments.Enrichment.Shutdown:input_type -> enrichments.Empty
-	0, // 6: enrichments.Enrichment.Ping:input_type -> enrichments.Empty
-	1, // 7: enrichments.Enrichment.GetMetadata:output_type -> enrichments.EnrichmentMetadata
-	0, // 8: enrichments.Enrichment.Init:output_type -> enrichments.Empty
-	4, // 9: enrichments.Enrichment.Enrich:output_type -> enrichments.EnrichResponse
-	0, // 10: enrichments.Enrichment.Shutdown:output_type -> enrichments.Empty
-	0, // 11: enrichments.Enrichment.Ping:output_type -> enrichments.Empty
-	7, // [7:12] is the sub-list for method output_type
-	2, // [2:7] is the sub-list for method input_type
+var file_pkg_enrichments_rpc_enrichments_enrichment_proto_depIdxs = []int32{
+	1, // 0: enrichments.EnrichBatchRequest.alerts:type_name -> enrichments.Alert
+	1, // 1: enrichments.EnrichBatchResponse.alerts:type_name -> enrichments.Alert
+	0, // 2: enrichments.Enrichment.Init:input_type -> enrichments.Empty
+	2, // 3: enrichments.Enrichment.EnrichBatch:input_type -> enrichments.EnrichBatchRequest
+	0, // 4: enrichments.Enrichment.Shutdown:input_type -> enrichments.Empty
+	0, // 5: enrichments.Enrichment.Ping:input_type -> enrichments.Empty
+	0, // 6: enrichments.Enrichment.Init:output_type -> enrichments.Empty
+	3, // 7: enrichments.Enrichment.EnrichBatch:output_type -> enrichments.EnrichBatchResponse
+	0, // 8: enrichments.Enrichment.Shutdown:output_type -> enrichments.Empty
+	0, // 9: enrichments.Enrichment.Ping:output_type -> enrichments.Empty
+	6, // [6:10] is the sub-list for method output_type
+	2, // [2:6] is the sub-list for method input_type
 	2, // [2:2] is the sub-list for extension type_name
 	2, // [2:2] is the sub-list for extension extendee
 	0, // [0:2] is the sub-list for field type_name
 }
 
-func init() { file_enrichment_proto_init() }
-func file_enrichment_proto_init() {
-	if File_enrichment_proto != nil {
+func init() { file_pkg_enrichments_rpc_enrichments_enrichment_proto_init() }
+func file_pkg_enrichments_rpc_enrichments_enrichment_proto_init() {
+	if File_pkg_enrichments_rpc_enrichments_enrichment_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_enrichment_proto_rawDesc), len(file_enrichment_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_enrichments_rpc_enrichments_enrichment_proto_rawDesc), len(file_pkg_enrichments_rpc_enrichments_enrichment_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   5,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_enrichment_proto_goTypes,
-		DependencyIndexes: file_enrichment_proto_depIdxs,
-		MessageInfos:      file_enrichment_proto_msgTypes,
+		GoTypes:           file_pkg_enrichments_rpc_enrichments_enrichment_proto_goTypes,
+		DependencyIndexes: file_pkg_enrichments_rpc_enrichments_enrichment_proto_depIdxs,
+		MessageInfos:      file_pkg_enrichments_rpc_enrichments_enrichment_proto_msgTypes,
 	}.Build()
-	File_enrichment_proto = out.File
-	file_enrichment_proto_goTypes = nil
-	file_enrichment_proto_depIdxs = nil
+	File_pkg_enrichments_rpc_enrichments_enrichment_proto = out.File
+	file_pkg_enrichments_rpc_enrichments_enrichment_proto_goTypes = nil
+	file_pkg_enrichments_rpc_enrichments_enrichment_proto_depIdxs = nil
 }

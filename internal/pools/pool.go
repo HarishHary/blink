@@ -6,12 +6,10 @@ import (
 	"fmt"
 	"hash/fnv"
 	"log"
+	"sync"
 	"sync/atomic"
 	"time"
 )
-
-// Returned by the pool when a plugin's KillSwitch is true.
-var ErrKillSwitched = errors.New("plugin kill-switched")
 
 // Returned by Call when no active pool exists for the requested
 var ErrPluginNotFound = errors.New("plugin not found")
@@ -63,17 +61,21 @@ func (m *RolloutMode) UnmarshalText(b []byte) error {
 }
 
 // func stub that returns per-plugin routing parameters.
-// Return zero values for default blue-green behaviour (no kill switch, no canary).
-type RoutingConfig func(pluginID string) (killSwitch bool, mode RolloutMode, rolloutPct float64)
+// Return zero values for default blue-green behaviour.
+type RoutingConfig func(pluginID string) (mode RolloutMode, rolloutPct float64)
 
 // PoolKey uniquely identifies a versioned plugin subprocess pool.
 type PoolKey struct {
-	PluginID string
-	Version  string
+	Id      string
+	Version string
+	Hash    string // SHA-256 of the binary; empty when not yet known
 }
 
 func (k PoolKey) String() string {
-	return k.PluginID + "@" + k.Version
+	if k.Hash != "" {
+		return k.Id + "@" + k.Version + "@" + k.Hash
+	}
+	return k.Id + "@" + k.Version
 }
 
 // VersionedPool manages a fixed-size pool of plugin subprocess handles of type T.
@@ -141,8 +143,9 @@ type pendingPromotion struct {
 	onDrained func()
 }
 
-// Manages VersionedPools keyed by (PluginID, Version).
+// Manages VersionedPools keyed by (Id, Version).
 type ProcessPool[T any] struct {
+	mu           sync.RWMutex
 	pools        map[PoolKey]*VersionedPool[T]
 	active       map[string]PoolKey
 	pending      map[string]pendingPromotion
@@ -180,39 +183,45 @@ func NewProcessPool[T any](routing RoutingConfig, metrics *PoolMetrics, drainTim
 // percentage as found by callCanary/callShadow. Call Promote(pluginID) to graduate the
 // new pool to production and drain the old one.
 func (pp *ProcessPool[T]) Register(key PoolKey, plugins []T, maxProcs int, onDrained func()) {
+	pp.mu.Lock()
+	defer pp.mu.Unlock()
+
 	pool := newVersionedPool(key, plugins, maxProcs)
 	pp.pools[key] = pool
 	if pp.metrics != nil {
-		pp.metrics.poolSize.WithLabelValues(key.PluginID, key.Version).Set(float64(pool.Size()))
+		pp.metrics.poolSize.WithLabelValues(key.Id, key.Version).Set(float64(pool.Size()))
 	}
 
 	// Clear tombstone: plugin has come back (re-deployed after deletion).
-	delete(pp.removed, key.PluginID)
+	delete(pp.removed, key.Id)
 
-	_, mode, _ := pp.routing(key.PluginID)
+	mode, _ := pp.routing(key.Id)
 
 	if mode == RolloutModeCanary || mode == RolloutModeShadow {
 		// Stage the new pool without promoting - preserve active as production.
 		// First registration for this pluginID still needs an active entry.
-		if _, hasActive := pp.active[key.PluginID]; !hasActive {
-			pp.active[key.PluginID] = key
+		if _, hasActive := pp.active[key.Id]; !hasActive {
+			pp.active[key.Id] = key
 		} else {
 			// Drain the previous pending pool before replacing it so its subprocess
 			// is killed and its onDrained callback fires. Without this, rapid deploys
 			// in canary mode would orphan intermediate pools in pp.pools indefinitely.
-			if prev, ok := pp.pending[key.PluginID]; ok {
+			if prev, ok := pp.pending[key.Id]; ok {
 				if prevPool, ok := pp.pools[prev.key]; ok {
 					go pp.drain(prev.key, prevPool, prev.onDrained)
 				}
 			}
-			pp.pending[key.PluginID] = pendingPromotion{key: key, onDrained: onDrained}
+			pp.pending[key.Id] = pendingPromotion{key: key, onDrained: onDrained}
 		}
 		return
 	}
 
 	// Blue-green: promote immediately and drain old.
-	oldKey, hasOld := pp.active[key.PluginID]
-	pp.active[key.PluginID] = key
+	// Two co-existing blue-green binaries for the same plugin ID are prevented from ever
+	// reaching this point: IsReady() calls HasBlockingError() which runs Validate() fresh,
+	// and Validate() emits a blocking error for any plugin ID with multiple blue-green versions.
+	oldKey, hasOld := pp.active[key.Id]
+	pp.active[key.Id] = key
 
 	if hasOld && oldKey != key {
 		if oldPool, ok := pp.pools[oldKey]; ok {
@@ -225,8 +234,11 @@ func (pp *ProcessPool[T]) Register(key PoolKey, plugins []T, maxProcs int, onDra
 // draining the old pool asynchronously. If no pending pool exists, this is a no-op.
 // Typically called by an operator API or a health-check once canary metrics are green.
 func (pp *ProcessPool[T]) Promote(pluginID string) {
+	pp.mu.Lock()
+
 	p, ok := pp.pending[pluginID]
 	if !ok {
+		pp.mu.Unlock()
 		return
 	}
 	delete(pp.pending, pluginID)
@@ -234,60 +246,94 @@ func (pp *ProcessPool[T]) Promote(pluginID string) {
 	oldKey, hasOld := pp.active[pluginID]
 	pp.active[pluginID] = p.key
 
+	var drainPool *VersionedPool[T]
+	var drainKey PoolKey
+	noOldPool := false
 	if hasOld && oldKey != p.key {
-		if oldPool, ok := pp.pools[oldKey]; ok {
-			go pp.drain(oldKey, oldPool, p.onDrained)
+		drainPool = pp.pools[oldKey]
+		drainKey = oldKey
+		noOldPool = drainPool == nil
+	}
+	pp.mu.Unlock()
+
+	// Call onDrained outside the lock - it may run kill() which blocks for up to 3s
+	// on gRPC Shutdown. Holding the lock that long would stall all Call() invocations.
+	switch {
+	case drainPool != nil:
+		go pp.drain(drainKey, drainPool, p.onDrained)
+	case !hasOld || oldKey == p.key:
+		// No old pool to drain (first registration or same key promoted) - fire callback directly.
+		if p.onDrained != nil {
+			p.onDrained()
 		}
-	} else if p.onDrained != nil {
-		p.onDrained()
+	case noOldPool:
+		// Old key existed in active but pool was already removed - skip onDrained.
 	}
 }
 
-// Unregister removes the active pool for pluginID and drains it asynchronously. Any pending canary/shadow pool for the same pluginID is also drained.
-// Used for transient stops (crash restarts, config disables) - no tombstone is set. Subsequent Call invocations return ErrPluginNotFound until the plugin re-registers.
-func (pp *ProcessPool[T]) Unregister(pluginID string) {
-	if p, ok := pp.pending[pluginID]; ok {
-		delete(pp.pending, pluginID)
+// Unregister drains the specific versioned pool identified by key.
+// Used for transient stops (crash restarts, config disables) — no tombstone is set.
+// Only the pool that crashed is torn down; other versions of the same plugin are unaffected.
+func (pp *ProcessPool[T]) Unregister(key PoolKey) {
+	pp.mu.Lock()
+	defer pp.mu.Unlock()
+
+	// If it's the pending (canary/shadow) pool, drain it only.
+	if p, ok := pp.pending[key.Id]; ok && p.key == key {
+		delete(pp.pending, key.Id)
 		if pool, ok := pp.pools[p.key]; ok {
 			go pp.drain(p.key, pool, p.onDrained)
 		}
-	}
-	key, ok := pp.active[pluginID]
-	if !ok {
 		return
 	}
-	delete(pp.active, pluginID)
-	if pool, ok := pp.pools[key]; ok {
-		go pp.drain(key, pool, nil)
+
+	// If it's the active pool, drain it only.
+	activeKey, ok := pp.active[key.Id]
+	if !ok || activeKey != key {
+		return
+	}
+	delete(pp.active, key.Id)
+	if pool, ok := pp.pools[activeKey]; ok {
+		go pp.drain(activeKey, pool, nil)
 	}
 }
 
-// Remove removes the active pool for pluginID, drains it asynchronously, and tombstones the plugin ID. Any pending canary/shadow pool is also drained.
-// Used when a binary is permanently deleted from disk. Subsequent Call invocations return ErrPluginRemoved.
-func (pp *ProcessPool[T]) Remove(pluginID string) {
-	if p, ok := pp.pending[pluginID]; ok {
-		delete(pp.pending, pluginID)
+// Remove drains the specific versioned pool identified by key and tombstones the plugin ID
+// only when no other pools for that plugin remain.
+// Used when a binary is permanently deleted from disk.
+func (pp *ProcessPool[T]) Remove(key PoolKey) {
+	pp.mu.Lock()
+	defer pp.mu.Unlock()
+
+	if p, ok := pp.pending[key.Id]; ok && p.key == key {
+		delete(pp.pending, key.Id)
 		if pool, ok := pp.pools[p.key]; ok {
 			go pp.drain(p.key, pool, p.onDrained)
 		}
-	}
-	key, ok := pp.active[pluginID]
-	if !ok {
-		pp.removed[pluginID] = struct{}{}
+	} else if activeKey, ok := pp.active[key.Id]; ok && activeKey == key {
+		delete(pp.active, key.Id)
+		if pool, ok := pp.pools[activeKey]; ok {
+			go pp.drain(activeKey, pool, nil)
+		}
+	} else {
+		// Key not currently tracked — tombstone so callers don't wait forever.
+		pp.removed[key.Id] = struct{}{}
 		return
 	}
-	delete(pp.active, pluginID)
-	pp.removed[pluginID] = struct{}{}
-	if pool, ok := pp.pools[key]; ok {
-		go pp.drain(key, pool, nil)
+
+	// Tombstone only if no pools remain for this plugin.
+	_, hasActive := pp.active[key.Id]
+	_, hasPending := pp.pending[key.Id]
+	if !hasActive && !hasPending {
+		pp.removed[key.Id] = struct{}{}
 	}
 }
 
 // DefaultCanaryHashKey is the call-site key used for consistent-hash canary routing.
 var DefaultCanaryHashKey = "tenant_id"
 
-// Acquires a handle from the appropriate pool (respecting kill-switch and
-// canary/blue-green routing), invokes fn on it, and releases the handle.
+// Acquires a handle from the appropriate pool (respecting canary/blue-green routing),
+// invokes fn on it, and releases the handle.
 //
 // For shadow mode, only the production pool is called. Use CallWithShadow to also evaluate a shadow pool concurrently with a separate, independent closure.
 func (pp *ProcessPool[T]) Call(ctx context.Context, id, hashKey string, fn func(context.Context, T) error) error {
@@ -299,47 +345,48 @@ func (pp *ProcessPool[T]) Call(ctx context.Context, id, hashKey string, fn func(
 // state (e.g. a cloned input, a separate result variable) to avoid data races with prodFn.
 // Shadow errors are logged and counted but do not affect the return value.
 func (pp *ProcessPool[T]) CallWithShadow(ctx context.Context, id, hashKey string, prodFn, shadowFn func(context.Context, T) error) error {
-	if err := pp.checkKillSwitch(id); err != nil {
-		return err
-	}
-
+	// Snapshot everything we need under a short read lock.
+	// User code (prodFn/shadowFn) is called after the lock is released.
+	pp.mu.RLock()
 	key, ok := pp.active[id]
 	if !ok {
-		if _, removed := pp.removed[id]; removed {
+		_, removed := pp.removed[id]
+		pp.mu.RUnlock()
+		if removed {
 			return fmt.Errorf("%w: %s", ErrPluginRemoved, id)
 		}
 		return fmt.Errorf("%w: %s", ErrPluginNotFound, id)
 	}
-
-	_, mode, rolloutPct := pp.routing(id)
-	switch mode {
-	case RolloutModeCanary:
-		return pp.callCanary(ctx, key, id, hashKey, rolloutPct, prodFn)
-	case RolloutModeShadow:
-		return pp.callShadow(ctx, key, id, prodFn, shadowFn)
+	mode, rolloutPct := pp.routing(id)
+	prodPool := pp.pools[key]
+	// For canary/shadow: find any registered non-active pool for the same pluginID.
+	var altPool *VersionedPool[T]
+	if mode == RolloutModeCanary || mode == RolloutModeShadow {
+		for k, p := range pp.pools {
+			if k.Id == id && k != key {
+				altPool = p
+				break
+			}
+		}
 	}
+	pp.mu.RUnlock()
 
-	pool, ok := pp.pools[key]
-	if !ok {
+	if prodPool == nil {
 		return fmt.Errorf("processpool: pool %s not found", key)
 	}
-	return pp.callPool(ctx, pool, prodFn)
-}
 
-func (pp *ProcessPool[T]) checkKillSwitch(id string) error {
-	killSwitch, _, _ := pp.routing(id)
-	if killSwitch {
-		if pp.metrics != nil {
-			pp.metrics.killSwitches.WithLabelValues(id).Inc()
-		}
-		return fmt.Errorf("%w: %s", ErrKillSwitched, id)
+	switch mode {
+	case RolloutModeCanary:
+		return pp.callCanary(ctx, id, hashKey, rolloutPct, prodPool, altPool, prodFn)
+	case RolloutModeShadow:
+		return pp.callShadow(ctx, id, prodPool, altPool, prodFn, shadowFn)
 	}
-	return nil
+	return pp.callPool(ctx, prodPool, prodFn)
 }
 
-// callCanary routes rolloutPct% of calls (via consistent hash on hashKey) to any
-// non-active pool for the same pluginID. Remaining calls go to the production (active) pool.
-func (pp *ProcessPool[T]) callCanary(ctx context.Context, prodKey PoolKey, id, hashKey string, rolloutPct float64, fn func(context.Context, T) error) error {
+// callCanary routes rolloutPct% of calls (via consistent hash on hashKey) to altPool
+// when one exists. Pool pointers are pre-snapshotted by the caller under RLock.
+func (pp *ProcessPool[T]) callCanary(ctx context.Context, id string, hashKey string, rolloutPct float64, prodPool, altPool *VersionedPool[T], fn func(context.Context, T) error) error {
 	if hashKey == "" {
 		hashKey = DefaultCanaryHashKey
 	}
@@ -347,54 +394,37 @@ func (pp *ProcessPool[T]) callCanary(ctx context.Context, prodKey PoolKey, id, h
 	h.Write([]byte(hashKey))
 	pct := float64(h.Sum32()%100) + 1 // 1–100
 
-	if pct <= rolloutPct {
-		// Find a registered non-active pool for the same pluginID.
-		for k, pool := range pp.pools {
-			if k.PluginID == id && k != prodKey {
-				return pp.callPool(ctx, pool, fn)
-			}
-		}
-	}
-
-	prodPool, ok := pp.pools[prodKey]
-	if !ok {
-		return fmt.Errorf("processpool: production pool %s not found", prodKey)
+	if pct <= rolloutPct && altPool != nil {
+		return pp.callPool(ctx, altPool, fn)
 	}
 	return pp.callPool(ctx, prodPool, fn)
 }
 
-// callShadow calls prodFn on the production pool, then fires shadowFn on any
-// non-active pool for the same pluginID in a background goroutine.
-func (pp *ProcessPool[T]) callShadow(ctx context.Context, prodKey PoolKey, id string, prodFn, shadowFn func(context.Context, T) error) error {
-	prodPool, ok := pp.pools[prodKey]
-	if !ok {
-		return fmt.Errorf("processpool: production pool %s not found", prodKey)
-	}
-
+// callShadow calls prodFn on the production pool, then fires shadowFn on altPool
+// in a background goroutine. Pool pointers are pre-snapshotted by the caller under RLock.
+func (pp *ProcessPool[T]) callShadow(ctx context.Context, id string, prodPool, altPool *VersionedPool[T], prodFn, shadowFn func(context.Context, T) error) error {
 	prodErr := pp.callPool(ctx, prodPool, prodFn)
 
-	if shadowFn != nil {
-		// Find a registered non-active pool for the same pluginID.
-		for k, sp := range pp.pools {
-			if k.PluginID == id && k != prodKey {
-				shadowPool := sp
-				go func() {
-					plugin, err := shadowPool.Acquire(ctx)
-					if err != nil {
-						log.Printf("processpool: shadow acquire failed for %s: %v", id, err)
-						return
-					}
-					defer shadowPool.Release(plugin)
-					if err := shadowFn(ctx, plugin); err != nil {
-						log.Printf("processpool: shadow error for %s: %v", id, err)
-						if pp.metrics != nil {
-							pp.metrics.shadowDiffs.WithLabelValues(id).Inc()
-						}
-					}
-				}()
-				break
+	if shadowFn != nil && altPool != nil {
+		// Detach from the caller's context: the production call has already returned,
+		// so the caller's deadline may have expired or the ctx may be cancelled before
+		// the shadow goroutine gets CPU time. Shadow evaluation must be independent.
+		shadowCtx := context.WithoutCancel(ctx)
+		shadowPool := altPool
+		go func() {
+			plugin, err := shadowPool.Acquire(shadowCtx)
+			if err != nil {
+				log.Printf("processpool: shadow acquire failed for %s: %v", id, err)
+				return
 			}
-		}
+			defer shadowPool.Release(plugin)
+			if err := shadowFn(shadowCtx, plugin); err != nil {
+				log.Printf("processpool: shadow error for %s: %v", id, err)
+				if pp.metrics != nil {
+					pp.metrics.shadowDiffs.WithLabelValues(id).Inc()
+				}
+			}
+		}()
 	}
 
 	return prodErr
@@ -427,9 +457,9 @@ func (pp *ProcessPool[T]) drain(key PoolKey, pool *VersionedPool[T], onDrained f
 
 	elapsed := time.Since(start).Seconds()
 	if pp.metrics != nil {
-		pp.metrics.drainDuration.WithLabelValues(key.PluginID, key.Version).Observe(elapsed)
-		pp.metrics.poolSize.WithLabelValues(key.PluginID, key.Version).Set(0)
-		pp.metrics.poolInflight.WithLabelValues(key.PluginID, key.Version).Set(0)
+		pp.metrics.drainDuration.WithLabelValues(key.Id, key.Version).Observe(elapsed)
+		pp.metrics.poolSize.WithLabelValues(key.Id, key.Version).Set(0)
+		pp.metrics.poolInflight.WithLabelValues(key.Id, key.Version).Set(0)
 	}
 
 	if pool.Inflight() > 0 {
@@ -437,7 +467,14 @@ func (pp *ProcessPool[T]) drain(key PoolKey, pool *VersionedPool[T], onDrained f
 	} else {
 		log.Printf("processpool: drained pool %s in %.2fs", key, elapsed)
 	}
-	delete(pp.pools, key)
+
+	// Only delete if this exact pool is still registered at this key.
+	// A concurrent Register() may have replaced it while we were waiting.
+	pp.mu.Lock()
+	if pp.pools[key] == pool {
+		delete(pp.pools, key)
+	}
+	pp.mu.Unlock()
 
 	if onDrained != nil {
 		onDrained()

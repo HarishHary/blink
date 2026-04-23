@@ -1,0 +1,23 @@
+id: "550e8400-e29b-41d4-a716-446655440013"
+name: "boost_external_ip"
+display_name: "Boost External IP"
+description: "Raises alert confidence when source_ip is not in RFC 1918 address space."
+enabled: true
+version: "1.0.0"
+
+# global: true applies this tuning rule to every alert, not just those whose
+# rule lists it explicitly.
+global: false
+
+# rule_type controls what the tuning rule does when Tune() returns true.
+#   ignore              — suppress the alert entirely
+#   set_confidence      — set confidence to the value in `confidence`
+#   increase_confidence — add `confidence` to the current score
+#   decrease_confidence — subtract `confidence` from the current score
+rule_type: "increase_confidence"
+confidence: "medium"
+
+# Rollout control (optional — defaults to blue-green).
+# mode: "blue-green"  # blue-green | canary | shadow
+# min_procs: 1
+# max_procs: 2

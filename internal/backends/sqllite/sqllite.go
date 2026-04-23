@@ -229,7 +229,7 @@ func (s *SQLiteBackend) DeleteAlerts(alerts []*alerts.Alert) error {
 	defer stmt.Close()
 
 	for _, alert := range alerts {
-		_, err := stmt.ExecContext(s.Ctx, alert.Rule.Name(), alert.AlertID)
+		_, err := stmt.ExecContext(s.Ctx, alert.Rule.Name, alert.AlertID)
 		if err != nil {
 			tx.Rollback()
 			return fmt.Errorf("error executing delete: %w", err)
@@ -245,7 +245,7 @@ func (s *SQLiteBackend) DeleteAlerts(alerts []*alerts.Alert) error {
 
 func (s *SQLiteBackend) UpdateSentOutputs(alert *alerts.Alert) error {
 	query := `UPDATE alerts SET OutputsSent = ? WHERE RuleName = ? AND AlertID = ?`
-	_, err := s.Db.ExecContext(s.Ctx, query, alert.OutputsSent, alert.Rule.Name(), alert.AlertID)
+	_, err := s.Db.ExecContext(s.Ctx, query, alert.OutputsSent, alert.Rule.Name, alert.AlertID)
 	if err != nil {
 		return fmt.Errorf("error updating item: %w", err)
 	}
@@ -254,7 +254,7 @@ func (s *SQLiteBackend) UpdateSentOutputs(alert *alerts.Alert) error {
 
 func (s *SQLiteBackend) MarkAsDispatched(alert *alerts.Alert) error {
 	query := `UPDATE alerts SET Attempts = ?, Dispatched = ? WHERE RuleName = ? AND AlertID = ?`
-	_, err := s.Db.ExecContext(s.Ctx, query, alert.Attempts, alert.Dispatched.Format(helpers.DATETIME_FORMAT), alert.Rule.Name(), alert.AlertID)
+	_, err := s.Db.ExecContext(s.Ctx, query, alert.Attempts, alert.Dispatched.Format(helpers.DATETIME_FORMAT), alert.Rule.Name, alert.AlertID)
 	if err != nil {
 		return fmt.Errorf("error updating item: %w", err)
 	}
@@ -298,7 +298,7 @@ func (s *SQLiteBackend) ToAlert(record backends.Record) (*alerts.Alert, error) {
 
 func (s *SQLiteBackend) ToRecord(alert *alerts.Alert) (backends.Record, error) {
 	record := backends.Record{
-		"RuleName":        alert.Rule.Name(),
+		"RuleName":        alert.Rule.Name,
 		"AlertID":         alert.AlertID,
 		"Attempts":        alert.Attempts,
 		"Cluster":         alert.Cluster,
@@ -312,7 +312,7 @@ func (s *SQLiteBackend) ToRecord(alert *alerts.Alert) (backends.Record, error) {
 		"OutputsSent":     alert.OutputsSent,
 		"Formatters":      alert.Rule.Formatters(),
 		"Event":           helpers.JsonCompact(alert.Event),
-		"RuleDescription": alert.Rule.Description(),
+		"RuleDescription": alert.Rule.Description,
 		"SourceEntity":    alert.SourceEntity,
 		"SourceService":   alert.SourceService,
 		"Staged":          alert.Staged,

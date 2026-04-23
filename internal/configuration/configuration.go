@@ -17,6 +17,7 @@ type ServiceConfiguration struct {
 	Kafka      KafkaConfig
 	Topics     KafkaTopicsGroups
 	Executor   ExecutorConfig
+	Merger     MergerConfig
 }
 
 // ServiceRole returns the role used by the service to perform operations
@@ -76,4 +77,12 @@ type ExecutorConfig struct {
 	Concurrency int `env:"EXECUTOR_CONCURRENCY,optional"`
 	// TimeoutSec is the per-event evaluation timeout in seconds.
 	TimeoutSec int `env:"EXECUTOR_TIMEOUT_SEC,optional"`
+}
+
+type MergerConfig struct {
+	// MaxGroups caps the number of live merge groups held in memory per replica.
+	// When the cap is exceeded the oldest group (earliest expiry) is flushed
+	// immediately rather than waiting for its window to close.
+	// 0 means unlimited - only safe when merge_by_keys have low cardinality.
+	MaxGroups int `env:"MERGER_MAX_GROUPS,optional"`
 }

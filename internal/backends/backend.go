@@ -26,7 +26,7 @@ type IAlertStore interface {
 // IRuleStore covers rule-level queries (distinct rule names + bulk rule fetch).
 type IRuleStore interface {
 	RuleNamesGenerator() <-chan string
-	FetchAllRules() (<-chan rules.Metadata, error)
+	FetchAllRules() (<-chan *rules.RuleMetadata, error)
 }
 
 // IBackend is the full backend capability: alert store + rule store.

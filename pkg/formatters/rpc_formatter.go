@@ -6,46 +6,73 @@ import (
 	"fmt"
 
 	"github.com/harishhary/blink/internal/errors"
+	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/alerts"
 	"github.com/harishhary/blink/pkg/formatters/rpc_formatters"
 )
 
 type rpcFormatter struct {
-	meta     *rpc_formatters.FormatterMetadata
-	checksum string
-	client   rpc_formatters.FormatterClient
+	cfgManager *FormatterConfigManager
+	fileName   string
+	checksum   string
+	client     rpc_formatters.FormatterClient
 }
 
-func newRpcFormatter(meta *rpc_formatters.FormatterMetadata, client rpc_formatters.FormatterClient, checksum string) *rpcFormatter {
-	return &rpcFormatter{meta: meta, checksum: checksum, client: client}
-}
-
-func (f *rpcFormatter) Id() string {
-	if id := f.meta.GetId(); id != "" {
-		return id
+func newRpcFormatter(fileName string, client rpc_formatters.FormatterClient, manager *FormatterConfigManager, checksum string) *rpcFormatter {
+	return &rpcFormatter{
+		cfgManager: manager,
+		fileName:   fileName,
+		checksum:   checksum,
+		client:     client,
 	}
-	return f.meta.GetName()
 }
-func (f *rpcFormatter) Name() string        { return f.meta.GetName() }
-func (f *rpcFormatter) Description() string { return f.meta.GetDescription() }
-func (f *rpcFormatter) Enabled() bool       { return f.meta.GetEnabled() }
-func (f *rpcFormatter) Checksum() string    { return f.checksum }
+
+func (f *rpcFormatter) cfg() *FormatterMetadata {
+	if f.cfgManager == nil {
+		return nil
+	}
+	v, _ := f.cfgManager.Current().ByFileName(f.fileName)
+	return v
+}
+
+// FormatterMetadata returns the live YAML-derived formatter configuration.
+func (f *rpcFormatter) FormatterMetadata() *FormatterMetadata {
+	if c := f.cfg(); c != nil {
+		return c
+	}
+	return &FormatterMetadata{PluginMetadata: plugin.PluginMetadata{Id: f.fileName, Name: f.fileName}}
+}
+
+func (f *rpcFormatter) Metadata() plugin.PluginMetadata {
+	return f.FormatterMetadata().Metadata()
+}
+
+func (f *rpcFormatter) Checksum() string { return f.checksum }
 func (f *rpcFormatter) String() string {
-	return fmt.Sprintf("Formatter '%s' (id:%s, enabled:%t)", f.meta.GetName(), f.meta.GetId(), f.meta.GetEnabled())
+	m := f.FormatterMetadata().Metadata()
+	return fmt.Sprintf("Formatter '%s' (id:%s)", m.Name, m.Id)
 }
 
-func (f *rpcFormatter) Format(ctx context.Context, alert *alerts.Alert) (map[string]any, errors.Error) {
-	b, err := json.Marshal(alert)
+func (f *rpcFormatter) Format(ctx context.Context, alerts []*alerts.Alert) ([]map[string]any, errors.Error) {
+	alertJSONs := make([][]byte, 0, len(alerts))
+	for _, alrt := range alerts {
+		b, err := json.Marshal(alrt)
+		if err != nil {
+			return nil, errors.NewE(err)
+		}
+		alertJSONs = append(alertJSONs, b)
+	}
+	resp, err := f.client.FormatBatch(ctx, &rpc_formatters.FormatBatchRequest{AlertJson: alertJSONs})
 	if err != nil {
 		return nil, errors.NewE(err)
 	}
-	resp, err := f.client.Format(ctx, &rpc_formatters.FormatRequest{AlertJson: b})
-	if err != nil {
-		return nil, errors.NewE(err)
+	results := make([]map[string]any, len(resp.GetResultJson()))
+	for i, raw := range resp.GetResultJson() {
+		var result map[string]any
+		if err := json.Unmarshal(raw, &result); err != nil {
+			return nil, errors.NewE(err)
+		}
+		results[i] = result
 	}
-	var result map[string]any
-	if err := json.Unmarshal(resp.GetResultJson(), &result); err != nil {
-		return nil, errors.NewE(err)
-	}
-	return result, nil
+	return results, nil
 }

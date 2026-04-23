@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.9
 // 	protoc        v7.34.0
-// source: matcher.proto
+// source: pkg/matchers/rpc_matchers/matcher.proto
 
 package rpc_matchers
 
@@ -29,7 +29,7 @@ type Empty struct {
 
 func (x *Empty) Reset() {
 	*x = Empty{}
-	mi := &file_matcher_proto_msgTypes[0]
+	mi := &file_pkg_matchers_rpc_matchers_matcher_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -41,7 +41,7 @@ func (x *Empty) String() string {
 func (*Empty) ProtoMessage() {}
 
 func (x *Empty) ProtoReflect() protoreflect.Message {
-	mi := &file_matcher_proto_msgTypes[0]
+	mi := &file_pkg_matchers_rpc_matchers_matcher_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -54,91 +54,7 @@ func (x *Empty) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Empty.ProtoReflect.Descriptor instead.
 func (*Empty) Descriptor() ([]byte, []int) {
-	return file_matcher_proto_rawDescGZIP(), []int{0}
-}
-
-type MatcherMetadata struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Description   string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
-	Enabled       bool                   `protobuf:"varint,4,opt,name=enabled,proto3" json:"enabled,omitempty"`
-	Global        bool                   `protobuf:"varint,5,opt,name=global,proto3" json:"global,omitempty"`
-	Version       string                 `protobuf:"bytes,6,opt,name=version,proto3" json:"version,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *MatcherMetadata) Reset() {
-	*x = MatcherMetadata{}
-	mi := &file_matcher_proto_msgTypes[1]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *MatcherMetadata) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*MatcherMetadata) ProtoMessage() {}
-
-func (x *MatcherMetadata) ProtoReflect() protoreflect.Message {
-	mi := &file_matcher_proto_msgTypes[1]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use MatcherMetadata.ProtoReflect.Descriptor instead.
-func (*MatcherMetadata) Descriptor() ([]byte, []int) {
-	return file_matcher_proto_rawDescGZIP(), []int{1}
-}
-
-func (x *MatcherMetadata) GetId() string {
-	if x != nil {
-		return x.Id
-	}
-	return ""
-}
-
-func (x *MatcherMetadata) GetName() string {
-	if x != nil {
-		return x.Name
-	}
-	return ""
-}
-
-func (x *MatcherMetadata) GetDescription() string {
-	if x != nil {
-		return x.Description
-	}
-	return ""
-}
-
-func (x *MatcherMetadata) GetEnabled() bool {
-	if x != nil {
-		return x.Enabled
-	}
-	return false
-}
-
-func (x *MatcherMetadata) GetGlobal() bool {
-	if x != nil {
-		return x.Global
-	}
-	return false
-}
-
-func (x *MatcherMetadata) GetVersion() string {
-	if x != nil {
-		return x.Version
-	}
-	return ""
+	return file_pkg_matchers_rpc_matchers_matcher_proto_rawDescGZIP(), []int{0}
 }
 
 type Event struct {
@@ -150,7 +66,7 @@ type Event struct {
 
 func (x *Event) Reset() {
 	*x = Event{}
-	mi := &file_matcher_proto_msgTypes[2]
+	mi := &file_pkg_matchers_rpc_matchers_matcher_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -162,7 +78,7 @@ func (x *Event) String() string {
 func (*Event) ProtoMessage() {}
 
 func (x *Event) ProtoReflect() protoreflect.Message {
-	mi := &file_matcher_proto_msgTypes[2]
+	mi := &file_pkg_matchers_rpc_matchers_matcher_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -175,7 +91,7 @@ func (x *Event) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Event.ProtoReflect.Descriptor instead.
 func (*Event) Descriptor() ([]byte, []int) {
-	return file_matcher_proto_rawDescGZIP(), []int{2}
+	return file_pkg_matchers_rpc_matchers_matcher_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *Event) GetJson() []byte {
@@ -185,28 +101,28 @@ func (x *Event) GetJson() []byte {
 	return nil
 }
 
-type MatchRequest struct {
+type MatchBatchRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Event         *Event                 `protobuf:"bytes,1,opt,name=event,proto3" json:"event,omitempty"`
+	Events        []*Event               `protobuf:"bytes,1,rep,name=events,proto3" json:"events,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *MatchRequest) Reset() {
-	*x = MatchRequest{}
-	mi := &file_matcher_proto_msgTypes[3]
+func (x *MatchBatchRequest) Reset() {
+	*x = MatchBatchRequest{}
+	mi := &file_pkg_matchers_rpc_matchers_matcher_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *MatchRequest) String() string {
+func (x *MatchBatchRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*MatchRequest) ProtoMessage() {}
+func (*MatchBatchRequest) ProtoMessage() {}
 
-func (x *MatchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_matcher_proto_msgTypes[3]
+func (x *MatchBatchRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_matchers_rpc_matchers_matcher_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -217,40 +133,40 @@ func (x *MatchRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use MatchRequest.ProtoReflect.Descriptor instead.
-func (*MatchRequest) Descriptor() ([]byte, []int) {
-	return file_matcher_proto_rawDescGZIP(), []int{3}
+// Deprecated: Use MatchBatchRequest.ProtoReflect.Descriptor instead.
+func (*MatchBatchRequest) Descriptor() ([]byte, []int) {
+	return file_pkg_matchers_rpc_matchers_matcher_proto_rawDescGZIP(), []int{2}
 }
 
-func (x *MatchRequest) GetEvent() *Event {
+func (x *MatchBatchRequest) GetEvents() []*Event {
 	if x != nil {
-		return x.Event
+		return x.Events
 	}
 	return nil
 }
 
-type MatchResponse struct {
+type MatchBatchResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Matched       bool                   `protobuf:"varint,1,opt,name=matched,proto3" json:"matched,omitempty"`
+	Matched       []bool                 `protobuf:"varint,1,rep,packed,name=matched,proto3" json:"matched,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *MatchResponse) Reset() {
-	*x = MatchResponse{}
-	mi := &file_matcher_proto_msgTypes[4]
+func (x *MatchBatchResponse) Reset() {
+	*x = MatchBatchResponse{}
+	mi := &file_pkg_matchers_rpc_matchers_matcher_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *MatchResponse) String() string {
+func (x *MatchBatchResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*MatchResponse) ProtoMessage() {}
+func (*MatchBatchResponse) ProtoMessage() {}
 
-func (x *MatchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_matcher_proto_msgTypes[4]
+func (x *MatchBatchResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_matchers_rpc_matchers_matcher_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -261,103 +177,93 @@ func (x *MatchResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use MatchResponse.ProtoReflect.Descriptor instead.
-func (*MatchResponse) Descriptor() ([]byte, []int) {
-	return file_matcher_proto_rawDescGZIP(), []int{4}
+// Deprecated: Use MatchBatchResponse.ProtoReflect.Descriptor instead.
+func (*MatchBatchResponse) Descriptor() ([]byte, []int) {
+	return file_pkg_matchers_rpc_matchers_matcher_proto_rawDescGZIP(), []int{3}
 }
 
-func (x *MatchResponse) GetMatched() bool {
+func (x *MatchBatchResponse) GetMatched() []bool {
 	if x != nil {
 		return x.Matched
 	}
-	return false
+	return nil
 }
 
-var File_matcher_proto protoreflect.FileDescriptor
+var File_pkg_matchers_rpc_matchers_matcher_proto protoreflect.FileDescriptor
 
-const file_matcher_proto_rawDesc = "" +
+const file_pkg_matchers_rpc_matchers_matcher_proto_rawDesc = "" +
 	"\n" +
-	"\rmatcher.proto\x12\bmatchers\"\a\n" +
-	"\x05Empty\"\xa3\x01\n" +
-	"\x0fMatcherMetadata\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\x12 \n" +
-	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\x18\n" +
-	"\aenabled\x18\x04 \x01(\bR\aenabled\x12\x16\n" +
-	"\x06global\x18\x05 \x01(\bR\x06global\x12\x18\n" +
-	"\aversion\x18\x06 \x01(\tR\aversion\"\x1b\n" +
+	"'pkg/matchers/rpc_matchers/matcher.proto\x12\bmatchers\"\a\n" +
+	"\x05Empty\"\x1b\n" +
 	"\x05Event\x12\x12\n" +
-	"\x04json\x18\x01 \x01(\fR\x04json\"5\n" +
-	"\fMatchRequest\x12%\n" +
-	"\x05event\x18\x01 \x01(\v2\x0f.matchers.EventR\x05event\")\n" +
-	"\rMatchResponse\x12\x18\n" +
-	"\amatched\x18\x01 \x01(\bR\amatched2\x80\x02\n" +
-	"\aMatcher\x129\n" +
-	"\vGetMetadata\x12\x0f.matchers.Empty\x1a\x19.matchers.MatcherMetadata\x12(\n" +
-	"\x04Init\x12\x0f.matchers.Empty\x1a\x0f.matchers.Empty\x128\n" +
-	"\x05Match\x12\x16.matchers.MatchRequest\x1a\x17.matchers.MatchResponse\x12,\n" +
+	"\x04json\x18\x01 \x01(\fR\x04json\"<\n" +
+	"\x11MatchBatchRequest\x12'\n" +
+	"\x06events\x18\x01 \x03(\v2\x0f.matchers.EventR\x06events\".\n" +
+	"\x12MatchBatchResponse\x12\x18\n" +
+	"\amatched\x18\x01 \x03(\bR\amatched2\xd4\x01\n" +
+	"\aMatcher\x12(\n" +
+	"\x04Init\x12\x0f.matchers.Empty\x1a\x0f.matchers.Empty\x12G\n" +
+	"\n" +
+	"MatchBatch\x12\x1b.matchers.MatchBatchRequest\x1a\x1c.matchers.MatchBatchResponse\x12,\n" +
 	"\bShutdown\x12\x0f.matchers.Empty\x1a\x0f.matchers.Empty\x12(\n" +
 	"\x04Ping\x12\x0f.matchers.Empty\x1a\x0f.matchers.EmptyB\x1cZ\x1arpc_matchers/;rpc_matchersb\x06proto3"
 
 var (
-	file_matcher_proto_rawDescOnce sync.Once
-	file_matcher_proto_rawDescData []byte
+	file_pkg_matchers_rpc_matchers_matcher_proto_rawDescOnce sync.Once
+	file_pkg_matchers_rpc_matchers_matcher_proto_rawDescData []byte
 )
 
-func file_matcher_proto_rawDescGZIP() []byte {
-	file_matcher_proto_rawDescOnce.Do(func() {
-		file_matcher_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_matcher_proto_rawDesc), len(file_matcher_proto_rawDesc)))
+func file_pkg_matchers_rpc_matchers_matcher_proto_rawDescGZIP() []byte {
+	file_pkg_matchers_rpc_matchers_matcher_proto_rawDescOnce.Do(func() {
+		file_pkg_matchers_rpc_matchers_matcher_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_pkg_matchers_rpc_matchers_matcher_proto_rawDesc), len(file_pkg_matchers_rpc_matchers_matcher_proto_rawDesc)))
 	})
-	return file_matcher_proto_rawDescData
+	return file_pkg_matchers_rpc_matchers_matcher_proto_rawDescData
 }
 
-var file_matcher_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
-var file_matcher_proto_goTypes = []any{
-	(*Empty)(nil),           // 0: matchers.Empty
-	(*MatcherMetadata)(nil), // 1: matchers.MatcherMetadata
-	(*Event)(nil),           // 2: matchers.Event
-	(*MatchRequest)(nil),    // 3: matchers.MatchRequest
-	(*MatchResponse)(nil),   // 4: matchers.MatchResponse
+var file_pkg_matchers_rpc_matchers_matcher_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_pkg_matchers_rpc_matchers_matcher_proto_goTypes = []any{
+	(*Empty)(nil),              // 0: matchers.Empty
+	(*Event)(nil),              // 1: matchers.Event
+	(*MatchBatchRequest)(nil),  // 2: matchers.MatchBatchRequest
+	(*MatchBatchResponse)(nil), // 3: matchers.MatchBatchResponse
 }
-var file_matcher_proto_depIdxs = []int32{
-	2, // 0: matchers.MatchRequest.event:type_name -> matchers.Event
-	0, // 1: matchers.Matcher.GetMetadata:input_type -> matchers.Empty
-	0, // 2: matchers.Matcher.Init:input_type -> matchers.Empty
-	3, // 3: matchers.Matcher.Match:input_type -> matchers.MatchRequest
-	0, // 4: matchers.Matcher.Shutdown:input_type -> matchers.Empty
-	0, // 5: matchers.Matcher.Ping:input_type -> matchers.Empty
-	1, // 6: matchers.Matcher.GetMetadata:output_type -> matchers.MatcherMetadata
-	0, // 7: matchers.Matcher.Init:output_type -> matchers.Empty
-	4, // 8: matchers.Matcher.Match:output_type -> matchers.MatchResponse
-	0, // 9: matchers.Matcher.Shutdown:output_type -> matchers.Empty
-	0, // 10: matchers.Matcher.Ping:output_type -> matchers.Empty
-	6, // [6:11] is the sub-list for method output_type
-	1, // [1:6] is the sub-list for method input_type
+var file_pkg_matchers_rpc_matchers_matcher_proto_depIdxs = []int32{
+	1, // 0: matchers.MatchBatchRequest.events:type_name -> matchers.Event
+	0, // 1: matchers.Matcher.Init:input_type -> matchers.Empty
+	2, // 2: matchers.Matcher.MatchBatch:input_type -> matchers.MatchBatchRequest
+	0, // 3: matchers.Matcher.Shutdown:input_type -> matchers.Empty
+	0, // 4: matchers.Matcher.Ping:input_type -> matchers.Empty
+	0, // 5: matchers.Matcher.Init:output_type -> matchers.Empty
+	3, // 6: matchers.Matcher.MatchBatch:output_type -> matchers.MatchBatchResponse
+	0, // 7: matchers.Matcher.Shutdown:output_type -> matchers.Empty
+	0, // 8: matchers.Matcher.Ping:output_type -> matchers.Empty
+	5, // [5:9] is the sub-list for method output_type
+	1, // [1:5] is the sub-list for method input_type
 	1, // [1:1] is the sub-list for extension type_name
 	1, // [1:1] is the sub-list for extension extendee
 	0, // [0:1] is the sub-list for field type_name
 }
 
-func init() { file_matcher_proto_init() }
-func file_matcher_proto_init() {
-	if File_matcher_proto != nil {
+func init() { file_pkg_matchers_rpc_matchers_matcher_proto_init() }
+func file_pkg_matchers_rpc_matchers_matcher_proto_init() {
+	if File_pkg_matchers_rpc_matchers_matcher_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_matcher_proto_rawDesc), len(file_matcher_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_matchers_rpc_matchers_matcher_proto_rawDesc), len(file_pkg_matchers_rpc_matchers_matcher_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   5,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_matcher_proto_goTypes,
-		DependencyIndexes: file_matcher_proto_depIdxs,
-		MessageInfos:      file_matcher_proto_msgTypes,
+		GoTypes:           file_pkg_matchers_rpc_matchers_matcher_proto_goTypes,
+		DependencyIndexes: file_pkg_matchers_rpc_matchers_matcher_proto_depIdxs,
+		MessageInfos:      file_pkg_matchers_rpc_matchers_matcher_proto_msgTypes,
 	}.Build()
-	File_matcher_proto = out.File
-	file_matcher_proto_goTypes = nil
-	file_matcher_proto_depIdxs = nil
+	File_pkg_matchers_rpc_matchers_matcher_proto = out.File
+	file_pkg_matchers_rpc_matchers_matcher_proto_goTypes = nil
+	file_pkg_matchers_rpc_matchers_matcher_proto_depIdxs = nil
 }

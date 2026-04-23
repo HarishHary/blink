@@ -1,0 +1,11 @@
+id: "550e8400-e29b-41d4-a716-446655440011"
+name: "slack"
+display_name: "Slack Formatter"
+description: "Converts an alert into a Slack Block Kit payload."
+enabled: true
+version: "1.0.0"
+
+# Rollout control (optional — defaults to blue-green).
+# mode: "blue-green"  # blue-green | canary | shadow
+# min_procs: 1
+# max_procs: 2

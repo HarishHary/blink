@@ -10,9 +10,9 @@ import (
 
 	"github.com/harishhary/blink/internal/logger"
 	"github.com/harishhary/blink/internal/messaging"
-	"github.com/harishhary/blink/internal/pluginmgr"
+	"github.com/harishhary/blink/internal/plugin"
+	"github.com/harishhary/blink/internal/services"
 	"github.com/harishhary/blink/pkg/rules"
-	"github.com/harishhary/blink/pkg/rules/config"
 )
 
 const (
@@ -22,13 +22,14 @@ const (
 )
 
 // testSidecarYAML is the YAML sidecar for the simple_rule test plugin binary.
-// The file_name must match the binary base name ("simple_rule").
+// The name field must match the binary base name ("simple_rule").
 const testSidecarYAML = `
 id: "test-simple-rule-id"
-name: "simple-rule"
-file_name: "simple_rule"
+name: "simple_rule"
+display_name: "simple-rule"
 description: "always matches - used for integration tests"
 enabled: true
+version: "1.0.0"
 severity: "info"
 confidence: "low"
 log_types: ["test"]
@@ -64,8 +65,8 @@ func waitForRegister(t *testing.T, ch <-chan messaging.Message, name string, tim
 	for {
 		select {
 		case msg := <-ch:
-			if rm, ok := msg.(pluginmgr.RegisterMessage[rules.Rule]); ok {
-				if len(rm.Items) > 0 && rm.Items[0].Name() == name {
+			if rm, ok := msg.(plugin.RegisterMessage[rules.Rule]); ok {
+				if len(rm.Items) > 0 && rm.Items[0].RuleMetadata().Name == name {
 					return true
 				}
 			}
@@ -81,8 +82,8 @@ func waitForUnregister(t *testing.T, ch <-chan messaging.Message, name string, t
 	for {
 		select {
 		case msg := <-ch:
-			if um, ok := msg.(pluginmgr.UnregisterMessage[rules.Rule]); ok {
-				if um.ItemID == name {
+			if um, ok := msg.(plugin.UnregisterMessage[rules.Rule]); ok {
+				if um.ItemKey.Id == name {
 					return true
 				}
 			}
@@ -98,8 +99,8 @@ func waitForRemove(t *testing.T, ch <-chan messaging.Message, id string, timeout
 	for {
 		select {
 		case msg := <-ch:
-			if rm, ok := msg.(pluginmgr.RemoveMessage[rules.Rule]); ok {
-				if rm.ItemID == id {
+			if rm, ok := msg.(plugin.RemoveMessage[rules.Rule]); ok {
+				if rm.ItemKey.Id == id {
 					return true
 				}
 			}
@@ -120,20 +121,18 @@ func TestManagerHotReload(t *testing.T) {
 	// available when the binary appears.
 	writeSidecar(t, dir)
 
-	cfgWatcher, err := config.NewWatcher(dir)
-	if err != nil {
-		t.Fatalf("config watcher: %v", err)
-	}
+	cfgMgr := rules.NewRuleConfigManager(logger.New("test-config", "dev"), dir)
+	cfgSvc := services.NewConfigSyncService("test-config", "test-config", cfgMgr)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go cfgWatcher.Run(ctx) //nolint:errcheck
+	go cfgSvc.Run(ctx) //nolint:errcheck
 
 	// Use a buffered channel as the notify sink - replaces the old message bus.
 	events := make(chan messaging.Message, 64)
 	notify := func(msg messaging.Message) { events <- msg }
 
 	log := logger.New("rules-manager-test", "dev")
-	mgr := rules.NewManager(log, notify, dir, cfgWatcher)
+	mgr := rules.NewRulePluginManager(log, notify, dir, cfgMgr)
 	if err := mgr.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -141,7 +140,7 @@ func TestManagerHotReload(t *testing.T) {
 	// Build and drop the plugin binary - manager should pick it up.
 	binPath := buildPlugin(t, dir)
 
-	if !waitForRegister(t, events, "simple-rule", registerTimeout) {
+	if !waitForRegister(t, events, "simple_rule", registerTimeout) {
 		t.Fatal("timed out waiting for RegisterMessage after binary appears")
 	}
 

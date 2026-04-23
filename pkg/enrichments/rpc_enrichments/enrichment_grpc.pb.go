@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             v7.34.0
-// source: enrichment.proto
+// source: pkg/enrichments/rpc_enrichments/enrichment.proto
 
 package rpc_enrichments
 
@@ -19,9 +19,8 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Enrichment_GetMetadata_FullMethodName = "/enrichments.Enrichment/GetMetadata"
 	Enrichment_Init_FullMethodName        = "/enrichments.Enrichment/Init"
-	Enrichment_Enrich_FullMethodName      = "/enrichments.Enrichment/Enrich"
+	Enrichment_EnrichBatch_FullMethodName = "/enrichments.Enrichment/EnrichBatch"
 	Enrichment_Shutdown_FullMethodName    = "/enrichments.Enrichment/Shutdown"
 	Enrichment_Ping_FullMethodName        = "/enrichments.Enrichment/Ping"
 )
@@ -30,9 +29,8 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type EnrichmentClient interface {
-	GetMetadata(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*EnrichmentMetadata, error)
 	Init(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
-	Enrich(ctx context.Context, in *EnrichRequest, opts ...grpc.CallOption) (*EnrichResponse, error)
+	EnrichBatch(ctx context.Context, in *EnrichBatchRequest, opts ...grpc.CallOption) (*EnrichBatchResponse, error)
 	Shutdown(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
 	Ping(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
 }
@@ -45,16 +43,6 @@ func NewEnrichmentClient(cc grpc.ClientConnInterface) EnrichmentClient {
 	return &enrichmentClient{cc}
 }
 
-func (c *enrichmentClient) GetMetadata(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*EnrichmentMetadata, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(EnrichmentMetadata)
-	err := c.cc.Invoke(ctx, Enrichment_GetMetadata_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *enrichmentClient) Init(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Empty)
@@ -65,10 +53,10 @@ func (c *enrichmentClient) Init(ctx context.Context, in *Empty, opts ...grpc.Cal
 	return out, nil
 }
 
-func (c *enrichmentClient) Enrich(ctx context.Context, in *EnrichRequest, opts ...grpc.CallOption) (*EnrichResponse, error) {
+func (c *enrichmentClient) EnrichBatch(ctx context.Context, in *EnrichBatchRequest, opts ...grpc.CallOption) (*EnrichBatchResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(EnrichResponse)
-	err := c.cc.Invoke(ctx, Enrichment_Enrich_FullMethodName, in, out, cOpts...)
+	out := new(EnrichBatchResponse)
+	err := c.cc.Invoke(ctx, Enrichment_EnrichBatch_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -99,9 +87,8 @@ func (c *enrichmentClient) Ping(ctx context.Context, in *Empty, opts ...grpc.Cal
 // All implementations must embed UnimplementedEnrichmentServer
 // for forward compatibility.
 type EnrichmentServer interface {
-	GetMetadata(context.Context, *Empty) (*EnrichmentMetadata, error)
 	Init(context.Context, *Empty) (*Empty, error)
-	Enrich(context.Context, *EnrichRequest) (*EnrichResponse, error)
+	EnrichBatch(context.Context, *EnrichBatchRequest) (*EnrichBatchResponse, error)
 	Shutdown(context.Context, *Empty) (*Empty, error)
 	Ping(context.Context, *Empty) (*Empty, error)
 	mustEmbedUnimplementedEnrichmentServer()
@@ -114,14 +101,11 @@ type EnrichmentServer interface {
 // pointer dereference when methods are called.
 type UnimplementedEnrichmentServer struct{}
 
-func (UnimplementedEnrichmentServer) GetMetadata(context.Context, *Empty) (*EnrichmentMetadata, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetMetadata not implemented")
-}
 func (UnimplementedEnrichmentServer) Init(context.Context, *Empty) (*Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Init not implemented")
 }
-func (UnimplementedEnrichmentServer) Enrich(context.Context, *EnrichRequest) (*EnrichResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Enrich not implemented")
+func (UnimplementedEnrichmentServer) EnrichBatch(context.Context, *EnrichBatchRequest) (*EnrichBatchResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method EnrichBatch not implemented")
 }
 func (UnimplementedEnrichmentServer) Shutdown(context.Context, *Empty) (*Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Shutdown not implemented")
@@ -150,24 +134,6 @@ func RegisterEnrichmentServer(s grpc.ServiceRegistrar, srv EnrichmentServer) {
 	s.RegisterService(&Enrichment_ServiceDesc, srv)
 }
 
-func _Enrichment_GetMetadata_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Empty)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(EnrichmentServer).GetMetadata(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Enrichment_GetMetadata_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(EnrichmentServer).GetMetadata(ctx, req.(*Empty))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _Enrichment_Init_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(Empty)
 	if err := dec(in); err != nil {
@@ -186,20 +152,20 @@ func _Enrichment_Init_Handler(srv interface{}, ctx context.Context, dec func(int
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Enrichment_Enrich_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(EnrichRequest)
+func _Enrichment_EnrichBatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EnrichBatchRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(EnrichmentServer).Enrich(ctx, in)
+		return srv.(EnrichmentServer).EnrichBatch(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: Enrichment_Enrich_FullMethodName,
+		FullMethod: Enrichment_EnrichBatch_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(EnrichmentServer).Enrich(ctx, req.(*EnrichRequest))
+		return srv.(EnrichmentServer).EnrichBatch(ctx, req.(*EnrichBatchRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -248,16 +214,12 @@ var Enrichment_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*EnrichmentServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "GetMetadata",
-			Handler:    _Enrichment_GetMetadata_Handler,
-		},
-		{
 			MethodName: "Init",
 			Handler:    _Enrichment_Init_Handler,
 		},
 		{
-			MethodName: "Enrich",
-			Handler:    _Enrichment_Enrich_Handler,
+			MethodName: "EnrichBatch",
+			Handler:    _Enrichment_EnrichBatch_Handler,
 		},
 		{
 			MethodName: "Shutdown",
@@ -269,5 +231,5 @@ var Enrichment_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "enrichment.proto",
+	Metadata: "pkg/enrichments/rpc_enrichments/enrichment.proto",
 }
