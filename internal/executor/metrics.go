@@ -1,4 +1,4 @@
-package plugin
+package executor
 
 import (
 	"github.com/prometheus/client_golang/prometheus"

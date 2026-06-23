@@ -1,4 +1,4 @@
-package plugin
+package executor
 
 import (
 	"github.com/harishhary/blink/internal/messaging"
