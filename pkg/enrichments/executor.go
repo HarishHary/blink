@@ -5,7 +5,7 @@ import (
 	"github.com/harishhary/blink/internal/plugin"
 )
 
-var enrichmentExecutorMetrics = plugin.NewPluginManagerMetrics("enrichmentsvc")
+var enrichmentExecutorMetrics = plugin.NewPluginExecutorMetrics("enrichmentsvc")
 
 type EnrichmentPluginExecutor = plugin.PluginExecutor[Enrichment]
 

@@ -6,7 +6,7 @@ import (
 )
 
 // Holds the Prometheus metrics shared by all plugin managers.
-type PluginManagerMetrics struct {
+type PluginExecutorMetrics struct {
 	Starts             prometheus.Counter
 	Crashes            prometheus.Counter
 	Restarts           prometheus.Counter
@@ -16,31 +16,31 @@ type PluginManagerMetrics struct {
 }
 
 // Registers and returns a metric set for the given subsystem.
-func NewPluginManagerMetrics(subsystem string) *PluginManagerMetrics {
-	return &PluginManagerMetrics{
+func NewPluginExecutorMetrics(subsystem string) *PluginExecutorMetrics {
+	return &PluginExecutorMetrics{
 		Starts: promauto.NewCounter(prometheus.CounterOpts{
-			Namespace: "blink", Subsystem: "plugin_manager" + subsystem, Name: "plugin_starts_total",
+			Namespace: "blink", Subsystem: "plugin_executor" + subsystem, Name: "plugin_starts_total",
 			Help: "Total plugin subprocess starts.",
 		}),
 		Crashes: promauto.NewCounter(prometheus.CounterOpts{
-			Namespace: "blink", Subsystem: "plugin_manager" + subsystem, Name: "plugin_crashes_total",
+			Namespace: "blink", Subsystem: "plugin_executor" + subsystem, Name: "plugin_crashes_total",
 			Help: "Total plugin subprocess crashes detected by ping loop.",
 		}),
 		Restarts: promauto.NewCounter(prometheus.CounterOpts{
-			Namespace: "blink", Subsystem: "plugin_manager" + subsystem, Name: "plugin_restarts_total",
+			Namespace: "blink", Subsystem: "plugin_executor" + subsystem, Name: "plugin_restarts_total",
 			Help: "Total plugin subprocess restarts after crash.",
 		}),
 		Updates: promauto.NewCounter(prometheus.CounterOpts{
-			Namespace: "blink", Subsystem: "plugin_manager" + subsystem, Name: "plugin_updates_total",
+			Namespace: "blink", Subsystem: "plugin_executor" + subsystem, Name: "plugin_updates_total",
 			Help: "Total plugin subprocess hot-updates (binary replacement).",
 		}),
 		StartLatency: promauto.NewHistogram(prometheus.HistogramOpts{
-			Namespace: "blink", Subsystem: "plugin_manager" + subsystem, Name: "plugin_start_latency_seconds",
+			Namespace: "blink", Subsystem: "plugin_executor" + subsystem, Name: "plugin_start_latency_seconds",
 			Help:    "Time from plugin launch start to first bus publish.",
 			Buckets: prometheus.DefBuckets,
 		}),
 		ActiveSubprocesses: promauto.NewGaugeVec(prometheus.GaugeOpts{
-			Namespace: "blink", Subsystem: "plugin_manager" + subsystem, Name: "plugin_active_subprocesses",
+			Namespace: "blink", Subsystem: "plugin_executor" + subsystem, Name: "plugin_active_subprocesses",
 			Help: "Number of currently active plugin subprocesses.",
 		}, []string{"type"}),
 	}

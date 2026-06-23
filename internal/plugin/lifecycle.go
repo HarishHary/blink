@@ -78,7 +78,7 @@ func (m *PluginExecutor[T]) spawn(path, hash string) (T, *PluginHandle, error) {
 	m.metrics.StartLatency.Observe(time.Since(startedAt).Seconds())
 	m.metrics.ActiveSubprocesses.WithLabelValues(m.adapter.PluginKey()).Inc()
 	m.metrics.Starts.Inc()
-	m.log.Info("%s started: %s [%s] (%s)", m.adapter.PluginKey(), name, id, path)
+	m.logger.Info("%s started: %s [%s] (%s)", m.adapter.PluginKey(), name, id, path)
 
 	return wrapped, handle, nil
 }
@@ -126,7 +126,7 @@ func (m *PluginExecutor[T]) startWithBackoff(path, hash string) error {
 			f = nil
 		} else if time.Now().Before(f.nextRetry) {
 			m.mu.Unlock()
-			m.log.Info("%s %s start deferred (backoff, retry in %v)", m.adapter.PluginKey(), path, time.Until(f.nextRetry).Round(time.Second))
+			m.logger.Info("%s %s start deferred (backoff, retry in %v)", m.adapter.PluginKey(), path, time.Until(f.nextRetry).Round(time.Second))
 			return nil
 		}
 	}
@@ -147,7 +147,7 @@ func (m *PluginExecutor[T]) startWithBackoff(path, hash string) error {
 		}
 		f.nextRetry = time.Now().Add(backoff)
 		m.mu.Unlock()
-		m.log.ErrorF("%s %s start failed (attempt %d), next retry in %v", m.adapter.PluginKey(), path, f.count, backoff)
+		m.logger.ErrorF("%s %s start failed (attempt %d), next retry in %v", m.adapter.PluginKey(), path, f.count, backoff)
 		return err
 	}
 
@@ -184,7 +184,7 @@ func (m *PluginExecutor[T]) update(path string, oldHandles []*PluginHandle, newH
 		}
 	}))
 	m.metrics.Updates.Inc()
-	m.log.Info("%s updated: %s (%d worker(s))", m.adapter.PluginKey(), path, len(newHandles))
+	m.logger.Info("%s updated: %s (%d worker(s))", m.adapter.PluginKey(), path, len(newHandles))
 	return nil
 }
 
@@ -195,7 +195,7 @@ func (m *PluginExecutor[T]) kill(handle *PluginHandle) {
 		close(handle.stopped)
 		defer func() {
 			if r := recover(); r != nil {
-				m.log.ErrorF("panic during shutdown of %s [%s]: %v", handle.Name, handle.Key.Id, r)
+				m.logger.ErrorF("panic during shutdown of %s [%s]: %v", handle.Name, handle.Key.Id, r)
 			}
 		}()
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -227,7 +227,7 @@ func (m *PluginExecutor[T]) evict(key string, handles []*PluginHandle) {
 func (m *PluginExecutor[T]) stop(key string, handles []*PluginHandle) {
 	m.evict(key, handles)
 	m.notify(NewUnregisterMessage[T](handles[0].Key))
-	m.log.Info("%s stopped: %s [%s]", m.adapter.PluginKey(), handles[0].Name, handles[0].Key.Id)
+	m.logger.Info("%s stopped: %s [%s]", m.adapter.PluginKey(), handles[0].Name, handles[0].Key.Id)
 }
 
 // evicts the subprocesses permanently (binary deleted from disk) and
@@ -235,7 +235,7 @@ func (m *PluginExecutor[T]) stop(key string, handles []*PluginHandle) {
 func (m *PluginExecutor[T]) remove(key string, handles []*PluginHandle) {
 	m.evict(key, handles)
 	m.notify(NewRemoveMessage[T](handles[0].Key))
-	m.log.Info("%s removed: %s [%s]", m.adapter.PluginKey(), handles[0].Name, handles[0].Key.Id)
+	m.logger.Info("%s removed: %s [%s]", m.adapter.PluginKey(), handles[0].Name, handles[0].Key.Id)
 }
 
 // stops the subprocesses and restarts them with backoff.
@@ -299,7 +299,7 @@ func (m *PluginExecutor[T]) pingLoop(handle *PluginHandle) {
 			cancel()
 			if err != nil {
 				m.metrics.Crashes.Inc()
-				m.log.ErrorF("%s crash/health fail %s: %v - restarting", m.adapter.PluginKey(), handle.Name, err)
+				m.logger.ErrorF("%s crash/health fail %s: %v - restarting", m.adapter.PluginKey(), handle.Name, err)
 				// Fetch the full current group so restart kills all workers, not just this one.
 				m.mu.RLock()
 				group := m.plugin_handles[handle.BinPath]
@@ -317,7 +317,7 @@ func (m *PluginExecutor[T]) pingLoop(handle *PluginHandle) {
 					return
 				}
 				if restartErr := m.restart(handle.BinPath, group); restartErr != nil {
-					m.log.Error(errors.NewF("restart failed for %s: %v", handle.BinPath, restartErr))
+					m.logger.Error(errors.NewF("restart failed for %s: %v", handle.BinPath, restartErr))
 				}
 				m.metrics.Restarts.Inc()
 				return

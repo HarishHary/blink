@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/harishhary/blink/internal/broker"
-	"github.com/harishhary/blink/internal/broker/kafka"
+	"github.com/harishhary/blink/internal/brokers"
+	"github.com/harishhary/blink/internal/brokers/kafka"
 	"github.com/harishhary/blink/internal/configuration"
 	ctx "github.com/harishhary/blink/internal/context"
 	"github.com/harishhary/blink/internal/errors"
@@ -58,8 +58,8 @@ type ruleEntry struct {
 // Reads ExecMessages from blink-exec, applies the routed rules, and writes alerts to blink-merger.
 type ExecutorService struct {
 	ctx.ServiceContext
-	reader     broker.Reader
-	writer     broker.Writer
+	reader     brokers.Reader
+	writer     brokers.Writer
 	pool       *rules.Pool
 	cfgWatcher *rules.RuleConfigManager
 	sem        *semaphore.Weighted
@@ -150,7 +150,7 @@ func (service *ExecutorService) Run(ctx context.Context) errors.Error {
 //
 // gRPC calls = len(distinct eligible rules), regardless of batch size.
 // Previously: gRPC calls = len(msgs) × len(rules per event).
-func (service *ExecutorService) processBatch(ctx context.Context, msgs []broker.Message, snapshot *rules.RuleRegistry) {
+func (service *ExecutorService) processBatch(ctx context.Context, msgs []brokers.Message, snapshot *rules.RuleRegistry) {
 	// Step 1: decode messages and index events by rule.
 	byRule := make(map[string]*ruleEntry)
 	decodedAny := false
@@ -267,7 +267,7 @@ func (service *ExecutorService) evaluateRule(ctx context.Context, entry *ruleEnt
 
 		payload, _ := alerts.Marshal(alert)
 		startWrite := time.Now()
-		if err := service.writer.WriteMessages(ctx, broker.Message{
+		if err := service.writer.WriteMessages(ctx, brokers.Message{
 			Key:   []byte(alert.MergePartitionKey()),
 			Value: payload,
 		}); err != nil {

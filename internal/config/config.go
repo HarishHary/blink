@@ -26,24 +26,24 @@ const debounce = 400 * time.Millisecond
 // ConfigManager[T] is the generic engine for watching a directory of YAML sidecars.
 // Start(ctx) performs an initial reconcile then watches the directory for changes.
 // Current() returns the live Registry at any time.
-// ConfigManager implements plugin.Manager so it can be wrapped by ConfigSyncService.
+// ConfigManager implements manager.Manager so it can be wrapped by ConfigSyncService.
 type ConfigManager[T plugin.Syncable] struct {
-	log     *logger.Logger
+	logger  *logger.Logger
 	name    string // plugin type label (e.g. "rule"); used in log/error messages
 	dir     string
 	loader  Loader[T]
 	current atomic.Pointer[Registry[T]]
 
-	mu       sync.Mutex           // serialises reconcile calls
+	mu       sync.Mutex           // serialises concurrent reconcile calls
 	cache    map[string]T         // path → last successfully loaded item
 	modTimes map[string]time.Time // path → mtime at last successful load
 }
 
 // NewConfigManager creates a ConfigManager for the given plugin type.
 // name is the short plugin type label (e.g. "rule", "enrichment").
-func NewConfigManager[T plugin.Syncable](log *logger.Logger, name, dir string, loader Loader[T]) *ConfigManager[T] {
+func NewConfigManager[T plugin.Syncable](logger *logger.Logger, name, dir string, loader Loader[T]) *ConfigManager[T] {
 	m := &ConfigManager[T]{
-		log:      log,
+		logger:   logger,
 		name:     name,
 		dir:      dir,
 		loader:   loader,
@@ -80,7 +80,7 @@ func (m *ConfigManager[T]) Start(ctx context.Context) error {
 
 		trigger := func(reason string) {
 			if err := m.reconcile(reason); err != nil {
-				m.log.ErrorF("reconcile error: %v", err)
+				m.logger.ErrorF("reconcile error: %v", err)
 			}
 		}
 
@@ -97,7 +97,7 @@ func (m *ConfigManager[T]) Start(ctx context.Context) error {
 			case <-poll.C:
 				trigger("poll")
 			case err := <-fsw.Errors:
-				m.log.ErrorF("fsnotify error: %v", err)
+				m.logger.ErrorF("fsnotify error: %v", err)
 				trigger("overflow")
 			case <-ctx.Done():
 				return
@@ -116,7 +116,7 @@ func (m *ConfigManager[T]) reconcile(reason string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.log.Info("reconciling %s configs (%s)...", m.name, reason)
+	m.logger.Info("reconciling %s configs (%s)...", m.name, reason)
 
 	entries, err := os.ReadDir(m.dir)
 	if err != nil {
@@ -158,7 +158,7 @@ func (m *ConfigManager[T]) reconcile(reason string) error {
 		}
 		item, err := m.loader.Parse(path)
 		if err != nil {
-			m.log.ErrorF("reconcile load %s: %v", path, err)
+			m.logger.ErrorF("reconcile load %s: %v", path, err)
 			continue
 		}
 		candidate[path] = item
@@ -183,18 +183,18 @@ func (m *ConfigManager[T]) reconcile(reason string) error {
 	}
 
 	for _, ve := range m.loader.Validate(items, binaries) {
-		m.log.ErrorF("reconcile validate: %v", ve)
+		m.logger.ErrorF("reconcile validate: %v", ve)
 	}
 
 	if err := m.loader.CrossValidate(items); err != nil {
-		m.log.ErrorF("reconcile cross-validate: %v", err)
+		m.logger.ErrorF("reconcile cross-validate: %v", err)
 		return nil // candidate discarded; cache and current unchanged
 	}
 
 	m.cache = candidate
 	m.modTimes = candidateMod
 	m.current.Store(buildRegistry(items))
-	m.log.Info("reconciled %d %s configs", len(items), m.name)
+	m.logger.Info("reconciled %d %s configs", len(items), m.name)
 	return nil
 }
 
@@ -231,17 +231,15 @@ func (m *ConfigManager[T]) liveItemsAndBinaries() ([]T, []string) {
 	return items, binaries
 }
 
-// DesiredForBinary returns the DesiredBinaryState for the binary with the given
+// DesiredBinaryState returns the BinaryState for the binary with the given
 // filename stem (no extension). Returns false when no YAML sidecar is registered.
-// This method makes *ConfigManager[T] satisfy plugin.PluginController directly,
-// so per-type LocalController wrappers are not needed.
-func (m *ConfigManager[T]) DesiredForBinary(name string) (plugin.DesiredBinaryState, bool) {
+func (m *ConfigManager[T]) DesiredBinaryState(name string) (plugin.BinaryState, bool) {
 	item, ok := m.Current().ByFileName(name)
 	if !ok {
-		return plugin.DesiredBinaryState{}, false
+		return plugin.BinaryState{}, false
 	}
 	md := item.Metadata()
-	return plugin.DesiredBinaryState{
+	return plugin.BinaryState{
 		ID:       md.Id,
 		Name:     md.Name,
 		Enabled:  md.Enabled,
@@ -252,9 +250,8 @@ func (m *ConfigManager[T]) DesiredForBinary(name string) (plugin.DesiredBinarySt
 
 // HasBlockingErrorFor reports whether there is a blocking validation error matching
 // the given plugin ID or YAML file name.
-func (m *ConfigManager[T]) HasBlockingErrorFor(id, yamlFile string) bool {
+func (m *ConfigManager[T]) HasBlockingErrorFor(id string, yamlFile string) bool {
 	items, binaries := m.liveItemsAndBinaries()
-
 	for _, e := range m.loader.Validate(items, binaries) {
 		if !e.Blocking {
 			continue

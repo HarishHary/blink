@@ -4,8 +4,8 @@ import (
 	"context"
 	"sync"
 
-	"github.com/harishhary/blink/internal/broker"
-	"github.com/harishhary/blink/internal/broker/kafka"
+	"github.com/harishhary/blink/internal/brokers"
+	"github.com/harishhary/blink/internal/brokers/kafka"
 	"github.com/harishhary/blink/internal/configuration"
 	svcctx "github.com/harishhary/blink/internal/context"
 	"github.com/harishhary/blink/internal/errors"
@@ -37,9 +37,9 @@ type alertState struct {
 
 type FormatterService struct {
 	svcctx.ServiceContext
-	reader broker.Reader
-	writer broker.Writer
-	dlq    broker.Writer
+	reader brokers.Reader
+	writer brokers.Writer
+	dlq    brokers.Writer
 	pool   *formatters.Pool
 }
 
@@ -55,7 +55,7 @@ func NewFormatterService(pool *formatters.Pool) (*FormatterService, error) {
 	reader := b.NewReader(cfg.Topics.FormatterTopic, cfg.Topics.FormatterGroup)
 	writer := b.NewWriter(cfg.Topics.DispatcherTopic)
 
-	var dlq broker.Writer
+	var dlq brokers.Writer
 	if cfg.Topics.FormatterDLQTopic != "" {
 		dlq = b.NewWriter(cfg.Topics.FormatterDLQTopic)
 	}
@@ -93,7 +93,7 @@ func (service *FormatterService) Run(ctx context.Context) errors.Error {
 	}
 }
 
-func (service *FormatterService) processBatch(ctx context.Context, msgs []broker.Message) {
+func (service *FormatterService) processBatch(ctx context.Context, msgs []brokers.Message) {
 	// Decode all alerts.
 	states := make([]*alertState, 0, len(msgs))
 	for _, m := range msgs {
@@ -221,7 +221,7 @@ func (service *FormatterService) processBatch(ctx context.Context, msgs []broker
 				service.Error(errors.NewE(err))
 				continue
 			}
-			if err := service.dlq.WriteMessages(ctx, broker.Message{Key: s.key, Value: payload}); err != nil {
+			if err := service.dlq.WriteMessages(ctx, brokers.Message{Key: s.key, Value: payload}); err != nil {
 				writeErrors.Inc()
 				service.Error(errors.NewE(err))
 			} else {
@@ -236,7 +236,7 @@ func (service *FormatterService) processBatch(ctx context.Context, msgs []broker
 			service.Error(errors.NewE(merr))
 			continue
 		}
-		if err := service.writer.WriteMessages(ctx, broker.Message{Key: s.key, Value: payload}); err != nil {
+		if err := service.writer.WriteMessages(ctx, brokers.Message{Key: s.key, Value: payload}); err != nil {
 			writeErrors.Inc()
 			service.Error(errors.NewE(err))
 			continue

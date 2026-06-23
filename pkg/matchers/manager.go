@@ -5,7 +5,7 @@ import (
 	"github.com/harishhary/blink/internal/plugin"
 )
 
-var matcherExecutorMetrics = plugin.NewPluginManagerMetrics("matchersvc")
+var matcherExecutorMetrics = plugin.NewPluginExecutorMetrics("matchersvc")
 
 type MatcherPluginExecutor = plugin.PluginExecutor[Matcher]
 

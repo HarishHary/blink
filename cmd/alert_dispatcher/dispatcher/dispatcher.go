@@ -5,8 +5,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/harishhary/blink/internal/broker"
-	"github.com/harishhary/blink/internal/broker/kafka"
+	"github.com/harishhary/blink/internal/brokers"
+	"github.com/harishhary/blink/internal/brokers/kafka"
 	"github.com/harishhary/blink/internal/configuration"
 	svcctx "github.com/harishhary/blink/internal/context"
 	"github.com/harishhary/blink/internal/dispatchers"
@@ -28,7 +28,7 @@ var (
 
 type DispatcherService struct {
 	svcctx.ServiceContext
-	reader         broker.Reader
+	reader         brokers.Reader
 	dispatcherRepo *dispatchers.DispatcherRepository
 }
 

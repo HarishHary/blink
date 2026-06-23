@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/harishhary/blink/internal/broker"
-	"github.com/harishhary/blink/internal/broker/kafka"
+	"github.com/harishhary/blink/internal/brokers"
+	"github.com/harishhary/blink/internal/brokers/kafka"
 	"github.com/harishhary/blink/internal/configuration"
 	svcctx "github.com/harishhary/blink/internal/context"
 	"github.com/harishhary/blink/internal/errors"
@@ -36,8 +36,8 @@ type mergeGroup struct {
 // MergerService reads alerts from Kafka, merges related alerts within their time window, and writes merged (or pass-through) alerts to the tuner topic.
 type MergerService struct {
 	svcctx.ServiceContext
-	reader    broker.Reader
-	writer    broker.Writer
+	reader    brokers.Reader
+	writer    brokers.Writer
 	mu        sync.Mutex
 	groups    map[string]*mergeGroup // key: rule_name|merge_by_values
 	maxGroups int                    // 0 = unlimited
@@ -244,7 +244,7 @@ func (s *MergerService) writeAlert(ctx context.Context, alert *alerts.Alert) {
 		s.Error(errors.NewE(err))
 		return
 	}
-	if err := s.writer.WriteMessages(ctx, broker.Message{Value: payload}); err != nil {
+	if err := s.writer.WriteMessages(ctx, brokers.Message{Value: payload}); err != nil {
 		writeErrors.Inc()
 		s.Error(errors.NewE(err))
 		return

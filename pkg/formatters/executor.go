@@ -5,7 +5,7 @@ import (
 	"github.com/harishhary/blink/internal/plugin"
 )
 
-var formatterExecutorMetrics = plugin.NewPluginManagerMetrics("formatters")
+var formatterExecutorMetrics = plugin.NewPluginExecutorMetrics("formatters")
 
 type FormatterPluginExecutor = plugin.PluginExecutor[Formatter]
 

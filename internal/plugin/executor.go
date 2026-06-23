@@ -11,17 +11,17 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/harishhary/blink/internal/helpers"
 	"github.com/harishhary/blink/internal/logger"
-	internal "github.com/harishhary/blink/internal/pools"
+	"github.com/harishhary/blink/internal/pools"
 )
 
 // PluginExecutor[T] is the generic plugin subprocess manager.
 // It watches a directory for executable binaries, manages their subprocess lifecycle, and calls notify for Register/Update/Unregister events so the caller can update pools.
 type PluginExecutor[T Syncable] struct {
-	log            *logger.Logger
+	logger         *logger.Logger
 	notify         Notify
 	dir            string
 	adapter        *PluginAdapter[T]
-	metrics        *PluginManagerMetrics
+	metrics        *PluginExecutorMetrics
 	mu             sync.RWMutex
 	reconcileMu    sync.Mutex // serialises concurrent reconcile calls
 	plugin_handles map[string][]*PluginHandle
@@ -38,9 +38,9 @@ func (m *PluginExecutor[T]) WithPingInterval(d time.Duration) *PluginExecutor[T]
 	return m
 }
 
-func NewPluginExecutor[T Syncable](log *logger.Logger, notify Notify, dir string, adapter *PluginAdapter[T], metrics *PluginManagerMetrics) *PluginExecutor[T] {
+func NewPluginExecutor[T Syncable](logger *logger.Logger, notify Notify, dir string, adapter *PluginAdapter[T], metrics *PluginExecutorMetrics) *PluginExecutor[T] {
 	return &PluginExecutor[T]{
-		log:            log,
+		logger:         logger,
 		notify:         notify,
 		dir:            dir,
 		adapter:        adapter,
@@ -78,7 +78,7 @@ func (m *PluginExecutor[T]) Start(ctx context.Context) error {
 
 		trigger := func(reason string) {
 			if err := m.reconcile(reason); err != nil {
-				m.log.ErrorF("reconcile error: %v", err)
+				m.logger.ErrorF("reconcile error: %v", err)
 			}
 		}
 
@@ -99,7 +99,7 @@ func (m *PluginExecutor[T]) Start(ctx context.Context) error {
 			case <-poll.C:
 				trigger("poll")
 			case err := <-w.Errors:
-				m.log.ErrorF("fsnotify error: %v", err)
+				m.logger.ErrorF("fsnotify error: %v", err)
 				trigger("overflow")
 			case <-ctx.Done():
 				return
@@ -114,7 +114,7 @@ func (m *PluginExecutor[T]) reconcile(reason string) error {
 	m.reconcileMu.Lock()
 	defer m.reconcileMu.Unlock()
 
-	m.log.Info("reconciling %s plugins (%s)...", m.adapter.PluginKey(), reason)
+	m.logger.Info("reconciling %s plugins (%s)...", m.adapter.PluginKey(), reason)
 
 	entries, err := os.ReadDir(m.dir)
 	if err != nil {
@@ -146,7 +146,7 @@ func (m *PluginExecutor[T]) reconcile(reason string) error {
 		}
 		h, err := helpers.BinaryChecksum(path)
 		if err != nil {
-			m.log.ErrorF("hash %s: %v", path, err)
+			m.logger.ErrorF("hash %s: %v", path, err)
 			continue
 		}
 		seen[path] = struct{}{}
@@ -172,10 +172,10 @@ func (m *PluginExecutor[T]) reconcile(reason string) error {
 					// while another BG binary already holds active). Kill the process
 					// now — no tombstone, so it restarts automatically once the YAML
 					// is fixed (e.g. the stable binary is demoted simultaneously).
-					m.log.Info("%s %s: mode change creates invalid config, stopping until YAML is fixed", m.adapter.PluginKey(), path)
+					m.logger.Info("%s %s: mode change creates invalid config, stopping until YAML is fixed", m.adapter.PluginKey(), path)
 					m.stop(path, handles)
 				} else {
-					m.log.Info("%s %s: change detected but prerequisites not ready, deferring update", m.adapter.PluginKey(), path)
+					m.logger.Info("%s %s: change detected but prerequisites not ready, deferring update", m.adapter.PluginKey(), path)
 				}
 				continue
 			}
@@ -191,13 +191,13 @@ func (m *PluginExecutor[T]) reconcile(reason string) error {
 				continue
 			}
 			if err := m.update(path, handles, h); err != nil {
-				m.log.ErrorF("update %s %s: %v", m.adapter.PluginKey(), path, err)
+				m.logger.ErrorF("update %s %s: %v", m.adapter.PluginKey(), path, err)
 			}
 			continue
 		}
 
 		if !m.adapter.IsReady(path) {
-			m.log.Info("%s %s: prerequisites not ready, deferring start", m.adapter.PluginKey(), path)
+			m.logger.Info("%s %s: prerequisites not ready, deferring start", m.adapter.PluginKey(), path)
 			continue
 		}
 		toStart = append(toStart, newBinary{path: path, hash: h, shadow: m.adapter.IsShadow(path)})
@@ -209,7 +209,7 @@ func (m *PluginExecutor[T]) reconcile(reason string) error {
 	})
 	for _, nb := range toStart {
 		if err := m.startWithBackoff(nb.path, nb.hash); err != nil {
-			m.log.ErrorF("start %s %s: %v", m.adapter.PluginKey(), nb.path, err)
+			m.logger.ErrorF("start %s %s: %v", m.adapter.PluginKey(), nb.path, err)
 		}
 	}
 
@@ -247,7 +247,7 @@ func (m *PluginExecutor[T]) reconcile(reason string) error {
 type modeOnlyChange struct {
 	path    string
 	handles []*PluginHandle
-	newMode internal.RolloutMode
+	newMode pools.RolloutMode
 }
 
 // applyModeChanges handles pure YAML mode changes (hash unchanged) without killing
@@ -272,7 +272,7 @@ func (m *PluginExecutor[T]) applyModeChanges(changes []modeOnlyChange) {
 			// Detect a swap: one binary becoming BG, the other CN/SH.
 			var bgC, altC *modeOnlyChange
 			for i := range group {
-				if group[i].newMode == internal.RolloutModeBlueGreen {
+				if group[i].newMode == pools.RolloutModeBlueGreen {
 					bgC = &group[i]
 				} else {
 					altC = &group[i]
@@ -281,7 +281,7 @@ func (m *PluginExecutor[T]) applyModeChanges(changes []modeOnlyChange) {
 			if bgC != nil && altC != nil {
 				// Atomically reassign slots — no kill, no spawn.
 				m.notify(NewMigrateMessage[T](bgC.handles[0].Key, altC.handles[0].Key))
-				m.log.Info("%s: slot swap — %s (BG) → active, %s (%s) → pending",
+				m.logger.Info("%s: slot swap — %s (BG) → active, %s (%s) → pending",
 					m.adapter.PluginKey(), bgC.path, altC.path, altC.newMode)
 				m.mu.Lock()
 				for _, h := range bgC.handles {
@@ -297,7 +297,7 @@ func (m *PluginExecutor[T]) applyModeChanges(changes []modeOnlyChange) {
 		// Single binary or both moving to same category: slot stays unchanged.
 		// Just update the mode snapshot so the next reconcile does not re-trigger.
 		for _, c := range group {
-			m.log.Info("%s %s: mode updated to %s (slot unchanged)", m.adapter.PluginKey(), c.path, c.newMode)
+			m.logger.Info("%s %s: mode updated to %s (slot unchanged)", m.adapter.PluginKey(), c.path, c.newMode)
 			m.mu.Lock()
 			for _, h := range c.handles {
 				h.Mode = c.newMode

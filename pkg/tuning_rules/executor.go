@@ -5,7 +5,7 @@ import (
 	"github.com/harishhary/blink/internal/plugin"
 )
 
-var tuningExecutorMetrics = plugin.NewPluginManagerMetrics("tuning_rules")
+var tuningExecutorMetrics = plugin.NewPluginExecutorMetrics("tuning_rules")
 
 type TuningRulePluginExecutor = plugin.PluginExecutor[TuningRule]
 

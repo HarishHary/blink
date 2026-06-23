@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/harishhary/blink/internal/broker"
-	"github.com/harishhary/blink/internal/broker/kafka"
+	"github.com/harishhary/blink/internal/brokers"
+	"github.com/harishhary/blink/internal/brokers/kafka"
 	"github.com/harishhary/blink/internal/configuration"
 	ctx "github.com/harishhary/blink/internal/context"
 	"github.com/harishhary/blink/internal/errors"
@@ -40,8 +40,8 @@ var (
 //  3. Emits one ExecMessage per event with the eligible rule IDs from step 2.
 type MatcherService struct {
 	ctx.ServiceContext
-	reader     broker.Reader
-	writer     broker.Writer
+	reader     brokers.Reader
+	writer     brokers.Writer
 	cfgWatcher *rules.RuleConfigManager
 	pool       *matchers.Pool
 }
@@ -103,7 +103,7 @@ type eventState struct {
 	eligible   map[string]bool
 }
 
-func (service *MatcherService) processBatch(batchCtx context.Context, msgs []broker.Message) {
+func (service *MatcherService) processBatch(batchCtx context.Context, msgs []brokers.Message) {
 	reg := service.cfgWatcher.Current()
 
 	// Decode events and find candidate rules.
@@ -238,7 +238,7 @@ func (service *MatcherService) processBatch(batchCtx context.Context, msgs []bro
 				Event:   eventStruct,
 				RuleIds: ruleIDs,
 			})
-			if err := service.writer.WriteMessages(batchCtx, broker.Message{Key: s.key, Value: payload}); err != nil {
+			if err := service.writer.WriteMessages(batchCtx, brokers.Message{Key: s.key, Value: payload}); err != nil {
 				writeErrors.Inc()
 				service.Error(errors.NewE(err))
 			} else {

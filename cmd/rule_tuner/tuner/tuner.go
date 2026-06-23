@@ -5,8 +5,8 @@ import (
 	stderrors "errors"
 	"sync"
 
-	"github.com/harishhary/blink/internal/broker"
-	"github.com/harishhary/blink/internal/broker/kafka"
+	"github.com/harishhary/blink/internal/brokers"
+	"github.com/harishhary/blink/internal/brokers/kafka"
 	"github.com/harishhary/blink/internal/configuration"
 	svcctx "github.com/harishhary/blink/internal/context"
 	"github.com/harishhary/blink/internal/errors"
@@ -49,9 +49,9 @@ type alertState struct {
 // TunerService reads alerts from Kafka, applies tuning rules, and writes to the enricher topic.
 type TunerService struct {
 	svcctx.ServiceContext
-	reader broker.Reader
-	writer broker.Writer
-	dlq    broker.Writer
+	reader brokers.Reader
+	writer brokers.Writer
+	dlq    brokers.Writer
 	pool   *tuning_rules.Pool
 }
 
@@ -67,7 +67,7 @@ func NewTunerService(pool *tuning_rules.Pool) (*TunerService, error) {
 	reader := b.NewReader(cfg.Topics.TunerTopic, cfg.Topics.TunerGroup)
 	writer := b.NewWriter(cfg.Topics.EnricherTopic)
 
-	var dlq broker.Writer
+	var dlq brokers.Writer
 	if cfg.Topics.TunerDLQTopic != "" {
 		dlq = b.NewWriter(cfg.Topics.TunerDLQTopic)
 	}
@@ -105,7 +105,7 @@ func (service *TunerService) Run(ctx context.Context) errors.Error {
 	}
 }
 
-func (service *TunerService) processBatch(ctx context.Context, msgs []broker.Message) {
+func (service *TunerService) processBatch(ctx context.Context, msgs []brokers.Message) {
 	// Decode all alerts.
 	states := make([]*alertState, 0, len(msgs))
 	for _, m := range msgs {
@@ -190,7 +190,7 @@ func (service *TunerService) processBatch(ctx context.Context, msgs []broker.Mes
 					service.Error(errors.NewE(err))
 					continue
 				}
-				err = service.dlq.WriteMessages(ctx, broker.Message{Key: s.key, Value: payload})
+				err = service.dlq.WriteMessages(ctx, brokers.Message{Key: s.key, Value: payload})
 				if err != nil {
 					service.Error(errors.NewE(err))
 				} else {
@@ -218,7 +218,7 @@ func (service *TunerService) processBatch(ctx context.Context, msgs []broker.Mes
 			service.Error(errors.NewE(err))
 			continue
 		}
-		err = service.writer.WriteMessages(ctx, broker.Message{Key: s.key, Value: payload})
+		err = service.writer.WriteMessages(ctx, brokers.Message{Key: s.key, Value: payload})
 		if err != nil {
 			writeErrors.Inc()
 			service.Error(errors.NewE(err))

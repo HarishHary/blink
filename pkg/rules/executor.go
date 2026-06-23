@@ -5,7 +5,7 @@ import (
 	"github.com/harishhary/blink/internal/plugin"
 )
 
-var ruleExecutorMetrics = plugin.NewPluginManagerMetrics("rulesvc")
+var ruleExecutorMetrics = plugin.NewPluginExecutorMetrics("rulesvc")
 
 type RulePluginExecutor = plugin.PluginExecutor[Rule]
 
