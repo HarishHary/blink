@@ -20,16 +20,16 @@ package tuning_rules
 
 import (
 	cfg "github.com/harishhary/blink/internal/config"
+	"github.com/harishhary/blink/internal/executor"
 	"github.com/harishhary/blink/internal/logger"
-	"github.com/harishhary/blink/internal/plugin"
 )
 
 // TuningRuleMetadata is the in-memory representation of a tuning rule YAML sidecar.
 type TuningRuleMetadata struct {
-	plugin.PluginMetadata `yaml:",inline"`
-	Global                bool   `yaml:"global"`
-	RuleType              string `yaml:"rule_type"`  // "ignore", "set_confidence", "increase_confidence", "decrease_confidence"
-	Confidence            string `yaml:"confidence"` // meaningful only for *_confidence rule types
+	executor.PluginMetadata `yaml:",inline"`
+	Global                  bool   `yaml:"global"`
+	RuleType                string `yaml:"rule_type"`  // "ignore", "set_confidence", "increase_confidence", "decrease_confidence"
+	Confidence              string `yaml:"confidence"` // meaningful only for *_confidence rule types
 }
 
 type TuningRuleConfigManager = cfg.ConfigManager[*TuningRuleMetadata]

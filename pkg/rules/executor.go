@@ -1,14 +1,14 @@
 package rules
 
 import (
+	"github.com/harishhary/blink/internal/executor"
 	"github.com/harishhary/blink/internal/logger"
-	"github.com/harishhary/blink/internal/plugin"
 )
 
-var ruleExecutorMetrics = plugin.NewPluginExecutorMetrics("rulesvc")
+var ruleExecutorMetrics = executor.NewPluginExecutorMetrics("rulesvc")
 
-type RulePluginExecutor = plugin.PluginExecutor[Rule]
+type RulePluginExecutor = executor.PluginExecutor[Rule]
 
-func NewRulePluginExecutor(log *logger.Logger, notify plugin.Notify, dir string, manager *RuleConfigManager) *RulePluginExecutor {
-	return plugin.NewPluginExecutor[Rule](log, notify, dir, NewRuleAdapter(manager), ruleExecutorMetrics)
+func NewRulePluginExecutor(log *logger.Logger, notify executor.Notify, dir string, manager *RuleConfigManager) *RulePluginExecutor {
+	return executor.NewPluginExecutor[Rule](log, notify, dir, NewRuleAdapter(manager), ruleExecutorMetrics)
 }

@@ -8,20 +8,20 @@ import (
 	goplugin "github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
 
+	"github.com/harishhary/blink/internal/executor"
 	"github.com/harishhary/blink/internal/helpers"
-	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/rules/rpc_rules"
 )
 
 // NewRuleAdapter builds the PluginAdapter for the rules plugin type.
 // manager is used both as the DesiredConfig and for rpcRule construction.
-func NewRuleAdapter(manager *RuleConfigManager) *plugin.PluginAdapter[Rule] {
-	return &plugin.PluginAdapter[Rule]{
+func NewRuleAdapter(manager *RuleConfigManager) *executor.PluginAdapter[Rule] {
+	return &executor.PluginAdapter[Rule]{
 		Key:           "rule",
 		Magic:         "rule_v1",
 		Plugin:        &rulePlugin{},
 		DesiredConfig: manager,
-		DoHandshake: func(ctx context.Context, raw any, binPath, hash string) (Rule, plugin.PluginLifecycle, string, string, error) {
+		DoHandshake: func(ctx context.Context, raw any, binPath, hash string) (Rule, executor.PluginLifecycle, string, string, error) {
 			rpc, ok := raw.(rpc_rules.RuleClient)
 			if !ok {
 				return nil, nil, "", "", fmt.Errorf("dispense: unexpected type %T", raw)

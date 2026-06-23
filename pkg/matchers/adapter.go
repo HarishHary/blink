@@ -8,19 +8,19 @@ import (
 	goplugin "github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
 
+	"github.com/harishhary/blink/internal/executor"
 	"github.com/harishhary/blink/internal/helpers"
-	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/matchers/rpc_matchers"
 )
 
 // NewMatcherAdapter builds the PluginAdapter for the matchers plugin type.
-func NewMatcherAdapter(manager *MatcherConfigManager) *plugin.PluginAdapter[Matcher] {
-	return &plugin.PluginAdapter[Matcher]{
+func NewMatcherAdapter(manager *MatcherConfigManager) *executor.PluginAdapter[Matcher] {
+	return &executor.PluginAdapter[Matcher]{
 		Key:           "matcher",
 		Magic:         "matcher_v1",
 		Plugin:        &matcherPlugin{},
 		DesiredConfig: manager,
-		DoHandshake: func(ctx context.Context, raw any, binPath, hash string) (Matcher, plugin.PluginLifecycle, string, string, error) {
+		DoHandshake: func(ctx context.Context, raw any, binPath, hash string) (Matcher, executor.PluginLifecycle, string, string, error) {
 			rpc, ok := raw.(rpc_matchers.MatcherClient)
 			if !ok {
 				return nil, nil, "", "", fmt.Errorf("dispense: unexpected type %T", raw)

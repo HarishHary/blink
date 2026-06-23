@@ -1,14 +1,14 @@
 package formatters
 
 import (
+	"github.com/harishhary/blink/internal/executor"
 	"github.com/harishhary/blink/internal/logger"
-	"github.com/harishhary/blink/internal/plugin"
 )
 
-var formatterExecutorMetrics = plugin.NewPluginExecutorMetrics("formatters")
+var formatterExecutorMetrics = executor.NewPluginExecutorMetrics("formatters")
 
-type FormatterPluginExecutor = plugin.PluginExecutor[Formatter]
+type FormatterPluginExecutor = executor.PluginExecutor[Formatter]
 
-func NewFormatterPluginExecutor(log *logger.Logger, notify plugin.Notify, dir string, manager *FormatterConfigManager) *FormatterPluginExecutor {
-	return plugin.NewPluginExecutor[Formatter](log, notify, dir, NewFormatterAdapter(manager), formatterExecutorMetrics)
+func NewFormatterPluginExecutor(log *logger.Logger, notify executor.Notify, dir string, manager *FormatterConfigManager) *FormatterPluginExecutor {
+	return executor.NewPluginExecutor[Formatter](log, notify, dir, NewFormatterAdapter(manager), formatterExecutorMetrics)
 }

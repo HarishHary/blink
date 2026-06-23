@@ -4,12 +4,12 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/harishhary/blink/internal/plugin"
+	"github.com/harishhary/blink/internal/executor"
 	"github.com/harishhary/blink/internal/pools"
 )
 
 // Registry indexes all YAML sidecars of a single plugin type in a directory.
-type Registry[T plugin.Syncable] struct {
+type Registry[T executor.Syncable] struct {
 	byFileName map[string]T
 	byID       map[string]T
 	routing    map[string]pools.RoutingEntry
@@ -24,7 +24,7 @@ func (r *Registry[T]) Len() int                                 { return len(r.a
 
 // buildRegistry indexes a slice of already-loaded items. No file I/O.
 // Items are sorted by name so Registry.All() returns a stable order.
-func buildRegistry[T plugin.Syncable](items []T) *Registry[T] {
+func buildRegistry[T executor.Syncable](items []T) *Registry[T] {
 	reg := &Registry[T]{
 		byFileName: make(map[string]T, len(items)),
 		byID:       make(map[string]T, len(items)),

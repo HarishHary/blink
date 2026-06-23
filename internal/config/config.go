@@ -17,8 +17,8 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/harishhary/blink/internal/executor"
 	"github.com/harishhary/blink/internal/logger"
-	"github.com/harishhary/blink/internal/plugin"
 )
 
 const debounce = 400 * time.Millisecond
@@ -27,7 +27,7 @@ const debounce = 400 * time.Millisecond
 // Start(ctx) performs an initial reconcile then watches the directory for changes.
 // Current() returns the live Registry at any time.
 // ConfigManager implements manager.Manager so it can be wrapped by ConfigSyncService.
-type ConfigManager[T plugin.Syncable] struct {
+type ConfigManager[T executor.Syncable] struct {
 	logger  *logger.Logger
 	name    string // plugin type label (e.g. "rule"); used in log/error messages
 	dir     string
@@ -41,7 +41,7 @@ type ConfigManager[T plugin.Syncable] struct {
 
 // NewConfigManager creates a ConfigManager for the given plugin type.
 // name is the short plugin type label (e.g. "rule", "enrichment").
-func NewConfigManager[T plugin.Syncable](logger *logger.Logger, name, dir string, loader Loader[T]) *ConfigManager[T] {
+func NewConfigManager[T executor.Syncable](logger *logger.Logger, name, dir string, loader Loader[T]) *ConfigManager[T] {
 	m := &ConfigManager[T]{
 		logger:   logger,
 		name:     name,
@@ -233,13 +233,13 @@ func (m *ConfigManager[T]) liveItemsAndBinaries() ([]T, []string) {
 
 // DesiredBinaryState returns the BinaryState for the binary with the given
 // filename stem (no extension). Returns false when no YAML sidecar is registered.
-func (m *ConfigManager[T]) DesiredBinaryState(name string) (plugin.BinaryState, bool) {
+func (m *ConfigManager[T]) DesiredBinaryState(name string) (executor.BinaryState, bool) {
 	item, ok := m.Current().ByFileName(name)
 	if !ok {
-		return plugin.BinaryState{}, false
+		return executor.BinaryState{}, false
 	}
 	md := item.Metadata()
-	return plugin.BinaryState{
+	return executor.BinaryState{
 		ID:       md.Id,
 		Name:     md.Name,
 		Enabled:  md.Enabled,

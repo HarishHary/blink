@@ -1,14 +1,14 @@
 package enrichments
 
 import (
+	"github.com/harishhary/blink/internal/executor"
 	"github.com/harishhary/blink/internal/logger"
-	"github.com/harishhary/blink/internal/plugin"
 )
 
-var enrichmentExecutorMetrics = plugin.NewPluginExecutorMetrics("enrichmentsvc")
+var enrichmentExecutorMetrics = executor.NewPluginExecutorMetrics("enrichmentsvc")
 
-type EnrichmentPluginExecutor = plugin.PluginExecutor[Enrichment]
+type EnrichmentPluginExecutor = executor.PluginExecutor[Enrichment]
 
-func NewEnrichmentPluginExecutor(logger *logger.Logger, notify plugin.Notify, dir string, manager *EnrichmentConfigManager) *EnrichmentPluginExecutor {
-	return plugin.NewPluginExecutor[Enrichment](logger, notify, dir, NewEnrichmentAdapter(manager), enrichmentExecutorMetrics)
+func NewEnrichmentPluginExecutor(logger *logger.Logger, notify executor.Notify, dir string, manager *EnrichmentConfigManager) *EnrichmentPluginExecutor {
+	return executor.NewPluginExecutor[Enrichment](logger, notify, dir, NewEnrichmentAdapter(manager), enrichmentExecutorMetrics)
 }

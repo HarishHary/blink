@@ -3,7 +3,7 @@ package alerts
 import (
 	"time"
 
-	"github.com/harishhary/blink/internal/plugin"
+	"github.com/harishhary/blink/internal/executor"
 	"github.com/harishhary/blink/pkg/alerts/pb"
 	"github.com/harishhary/blink/pkg/events"
 	"github.com/harishhary/blink/pkg/rules"
@@ -126,7 +126,7 @@ func protoToRuleMetadata(m *pb.RuleMetadata) *rules.RuleMetadata {
 		return &rules.RuleMetadata{}
 	}
 	cfg, _ := rules.New(rules.RuleMetadata{
-		PluginMetadata: plugin.PluginMetadata{
+		PluginMetadata: executor.PluginMetadata{
 			Id:          m.GetId(),
 			Name:        m.GetName(),
 			DisplayName: m.GetDisplayName(),

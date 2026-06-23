@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 
 	"github.com/harishhary/blink/internal/errors"
-	"github.com/harishhary/blink/internal/plugin"
+	"github.com/harishhary/blink/internal/executor"
 	"github.com/harishhary/blink/pkg/events"
 	"github.com/harishhary/blink/pkg/rules/rpc_rules"
 )
@@ -38,22 +38,22 @@ func (r *rpcRule) cfg() *RuleMetadata {
 	return v
 }
 
-// RuleMetadata returns the live YAML-derived rule configuration for this plugin.
+// RuleMetadata returns the live YAML-derived rule configuration for this executor.
 func (r *rpcRule) RuleMetadata() *RuleMetadata {
 	if c := r.cfg(); c != nil {
 		return c
 	}
 	// Return a minimal stub so callers don't need to nil-check.
-	return &RuleMetadata{PluginMetadata: plugin.PluginMetadata{Name: r.fileName, Id: r.fileName}}
+	return &RuleMetadata{PluginMetadata: executor.PluginMetadata{Name: r.fileName, Id: r.fileName}}
 }
 
 func (r *rpcRule) Checksum() string { return r.checksum }
 
-func (r *rpcRule) Metadata() plugin.PluginMetadata {
+func (r *rpcRule) Metadata() executor.PluginMetadata {
 	if c := r.cfg(); c != nil {
 		return c.Metadata()
 	}
-	return plugin.PluginMetadata{Name: r.fileName}
+	return executor.PluginMetadata{Name: r.fileName}
 }
 
 // ctx carries the caller's deadline (e.g. the executor's per-event timeout).

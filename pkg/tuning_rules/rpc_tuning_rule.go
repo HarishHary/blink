@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/harishhary/blink/internal/errors"
-	"github.com/harishhary/blink/internal/plugin"
+	"github.com/harishhary/blink/internal/executor"
 	"github.com/harishhary/blink/pkg/alerts"
 	"github.com/harishhary/blink/pkg/scoring"
 	"github.com/harishhary/blink/pkg/tuning_rules/rpc_tuning_rules"
@@ -41,10 +41,10 @@ func (r *rpcTuningRule) TuningRuleMetadata() *TuningRuleMetadata {
 	if c := r.cfg(); c != nil {
 		return c
 	}
-	return &TuningRuleMetadata{PluginMetadata: plugin.PluginMetadata{Id: r.fileName, Name: r.fileName}}
+	return &TuningRuleMetadata{PluginMetadata: executor.PluginMetadata{Id: r.fileName, Name: r.fileName}}
 }
 
-func (r *rpcTuningRule) Metadata() plugin.PluginMetadata {
+func (r *rpcTuningRule) Metadata() executor.PluginMetadata {
 	return r.TuningRuleMetadata().Metadata()
 }
 

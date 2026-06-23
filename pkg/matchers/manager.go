@@ -1,14 +1,14 @@
 package matchers
 
 import (
+	"github.com/harishhary/blink/internal/executor"
 	"github.com/harishhary/blink/internal/logger"
-	"github.com/harishhary/blink/internal/plugin"
 )
 
-var matcherExecutorMetrics = plugin.NewPluginExecutorMetrics("matchersvc")
+var matcherExecutorMetrics = executor.NewPluginExecutorMetrics("matchersvc")
 
-type MatcherPluginExecutor = plugin.PluginExecutor[Matcher]
+type MatcherPluginExecutor = executor.PluginExecutor[Matcher]
 
-func NewMatcherPluginExecutor(log *logger.Logger, notify plugin.Notify, dir string, manager *MatcherConfigManager) *MatcherPluginExecutor {
-	return plugin.NewPluginExecutor[Matcher](log, notify, dir, NewMatcherAdapter(manager), matcherExecutorMetrics)
+func NewMatcherPluginExecutor(log *logger.Logger, notify executor.Notify, dir string, manager *MatcherConfigManager) *MatcherPluginExecutor {
+	return executor.NewPluginExecutor[Matcher](log, notify, dir, NewMatcherAdapter(manager), matcherExecutorMetrics)
 }

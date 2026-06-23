@@ -4,18 +4,18 @@ import (
 	"context"
 
 	"github.com/harishhary/blink/internal/errors"
-	"github.com/harishhary/blink/internal/plugin"
+	"github.com/harishhary/blink/internal/executor"
 	"github.com/harishhary/blink/pkg/alerts"
 )
 
 // PluginMetadata is re-exported from internal/plugin so plugin authors don't need to
 // import an internal package.
-type PluginMetadata = plugin.PluginMetadata
+type PluginMetadata = executor.PluginMetadata
 
 // EnrichmentMetadata is the in-memory representation of an enrichment YAML sidecar.
 type EnrichmentMetadata struct {
-	plugin.PluginMetadata `yaml:",inline"`
-	DependsOn             []string `yaml:"depends_on"`
+	executor.PluginMetadata `yaml:",inline"`
+	DependsOn               []string `yaml:"depends_on"`
 }
 
 type Enrichment interface {
@@ -25,7 +25,7 @@ type Enrichment interface {
 	DependsOn() []string
 
 	EnrichmentMetadata() *EnrichmentMetadata
-	Metadata() PluginMetadata // satisfies plugin.Syncable
+	Metadata() PluginMetadata // satisfies executor.Syncable
 	Checksum() string
 	String() string
 }

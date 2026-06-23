@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/harishhary/blink/internal/errors"
-	"github.com/harishhary/blink/internal/plugin"
+	"github.com/harishhary/blink/internal/executor"
 	"github.com/harishhary/blink/pkg/events"
 	"github.com/harishhary/blink/pkg/matchers/rpc_matchers"
 )
@@ -42,10 +42,10 @@ func (r *rpcMatcher) MatcherMetadata() *MatcherMetadata {
 	if c := r.cfg(); c != nil {
 		return c
 	}
-	return &MatcherMetadata{PluginMetadata: plugin.PluginMetadata{Id: r.fileName, Name: r.fileName}}
+	return &MatcherMetadata{PluginMetadata: executor.PluginMetadata{Id: r.fileName, Name: r.fileName}}
 }
 
-func (r *rpcMatcher) Metadata() plugin.PluginMetadata {
+func (r *rpcMatcher) Metadata() executor.PluginMetadata {
 	return r.MatcherMetadata().Metadata()
 }
 

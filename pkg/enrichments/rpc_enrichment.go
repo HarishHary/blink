@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 
 	"github.com/harishhary/blink/internal/errors"
-	"github.com/harishhary/blink/internal/plugin"
+	"github.com/harishhary/blink/internal/executor"
 	"github.com/harishhary/blink/pkg/alerts"
 	"github.com/harishhary/blink/pkg/enrichments/rpc_enrichments"
 )
@@ -39,10 +39,10 @@ func (r *rpcEnrichment) EnrichmentMetadata() *EnrichmentMetadata {
 	if c := r.cfg(); c != nil {
 		return c
 	}
-	return &EnrichmentMetadata{PluginMetadata: plugin.PluginMetadata{Id: r.fileName, Name: r.fileName}}
+	return &EnrichmentMetadata{PluginMetadata: executor.PluginMetadata{Id: r.fileName, Name: r.fileName}}
 }
 
-func (r *rpcEnrichment) Metadata() plugin.PluginMetadata {
+func (r *rpcEnrichment) Metadata() executor.PluginMetadata {
 	return r.EnrichmentMetadata().Metadata()
 }
 

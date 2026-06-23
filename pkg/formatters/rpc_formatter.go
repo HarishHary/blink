@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/harishhary/blink/internal/errors"
-	"github.com/harishhary/blink/internal/plugin"
+	"github.com/harishhary/blink/internal/executor"
 	"github.com/harishhary/blink/pkg/alerts"
 	"github.com/harishhary/blink/pkg/formatters/rpc_formatters"
 )
@@ -40,10 +40,10 @@ func (f *rpcFormatter) FormatterMetadata() *FormatterMetadata {
 	if c := f.cfg(); c != nil {
 		return c
 	}
-	return &FormatterMetadata{PluginMetadata: plugin.PluginMetadata{Id: f.fileName, Name: f.fileName}}
+	return &FormatterMetadata{PluginMetadata: executor.PluginMetadata{Id: f.fileName, Name: f.fileName}}
 }
 
-func (f *rpcFormatter) Metadata() plugin.PluginMetadata {
+func (f *rpcFormatter) Metadata() executor.PluginMetadata {
 	return f.FormatterMetadata().Metadata()
 }
 
