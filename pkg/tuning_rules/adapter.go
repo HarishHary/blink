@@ -10,73 +10,40 @@ import (
 
 	"github.com/harishhary/blink/internal/helpers"
 	"github.com/harishhary/blink/internal/plugin"
-	internal "github.com/harishhary/blink/internal/pools"
 	"github.com/harishhary/blink/pkg/tuning_rules/rpc_tuning_rules"
 )
 
-type TuningRuleAdapter struct {
-	Manager *TuningRuleConfigManager
-}
+// NewTuningRuleAdapter builds the PluginAdapter for the tuning_rules plugin type.
+func NewTuningRuleAdapter(manager *TuningRuleConfigManager) *plugin.PluginAdapter[TuningRule] {
+	return &plugin.PluginAdapter[TuningRule]{
+		Key:        "tuning_rule",
+		Magic:      "tuning_rule_v1",
+		Plugin:     &tuningPlugin{},
+		Controller: manager,
+		DoHandshake: func(ctx context.Context, raw any, binPath, hash string) (TuningRule, plugin.PluginLifecycle, string, string, error) {
+			rpc, ok := raw.(rpc_tuning_rules.TuningRuleClient)
+			if !ok {
+				return nil, nil, "", "", fmt.Errorf("dispense: unexpected type %T", raw)
+			}
 
-func (l *TuningRuleAdapter) PluginKey() string           { return "tuning_rule" }
-func (l *TuningRuleAdapter) MagicValue() string          { return "tuning_rule_v1" }
-func (l *TuningRuleAdapter) GRPCPlugin() goplugin.Plugin { return &tuningPlugin{} }
+			fileName := helpers.BinaryBaseName(binPath)
 
-// Handshake connects to the tuning rule subprocess, calls Init, and returns a
-// ready rpcTuningRule. Identity comes from the YAML sidecar, not from a GetMetadata RPC.
-func (l *TuningRuleAdapter) Handshake(ctx context.Context, raw interface{}, binPath string, hash string) (TuningRule, plugin.PluginLifecycle, string, string, error) {
-	rpc, ok := raw.(rpc_tuning_rules.TuningRuleClient)
-	if !ok {
-		return nil, nil, "", "", fmt.Errorf("dispense: unexpected type %T", raw)
+			initCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			_, err := rpc.Init(initCtx, &rpc_tuning_rules.Empty{})
+			cancel()
+			if err != nil {
+				return nil, nil, "", "", fmt.Errorf("init: %w", err)
+			}
+
+			tr := newRpcTuningRule(fileName, rpc, manager, hash)
+			id, name := fileName, fileName
+			if desired, ok := manager.DesiredForBinary(fileName); ok {
+				id = desired.ID
+				name = desired.Name
+			}
+			return tr, &tuningLifecycle{rpc: rpc}, id, name, nil
+		},
 	}
-
-	fileName := helpers.BinaryBaseName(binPath)
-
-	initCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	_, err := rpc.Init(initCtx, &rpc_tuning_rules.Empty{})
-	cancel()
-	if err != nil {
-		return nil, nil, "", "", fmt.Errorf("init: %w", err)
-	}
-
-	tr := newRpcTuningRule(fileName, rpc, l.Manager, hash)
-	cfg, ok := l.Manager.Current().ByFileName(fileName)
-	id, name := fileName, fileName
-	if ok {
-		id = cfg.Id
-		name = cfg.Name
-	}
-	return tr, &tuningLifecycle{rpc: rpc}, id, name, nil
-}
-
-// IsReady reports whether this binary's YAML sidecar exists in the current registry.
-func (l *TuningRuleAdapter) IsReady(binPath string) bool {
-	_, ok := l.Manager.Current().ByFileName(helpers.BinaryBaseName(binPath))
-	return ok
-}
-
-// IsShadow reports whether this binary's YAML declares it as a shadow or canary version.
-func (l *TuningRuleAdapter) IsShadow(binPath string) bool {
-	cfg, ok := l.Manager.Current().ByFileName(helpers.BinaryBaseName(binPath))
-	if !ok {
-		return false
-	}
-	m := cfg.RolloutMode
-	return m == internal.RolloutModeCanary || m == internal.RolloutModeShadow
-}
-
-// IsEnabled reports whether the tuning rule's YAML sidecar still exists and is enabled.
-func (l *TuningRuleAdapter) IsEnabled(h *plugin.PluginHandle) bool {
-	cfg, ok := l.Manager.Current().ByFileName(helpers.BinaryBaseName(h.BinPath))
-	return ok && cfg.Enabled
-}
-
-func (l *TuningRuleAdapter) Workers(binPath string) int {
-	cfg, ok := l.Manager.Current().ByFileName(helpers.BinaryBaseName(binPath))
-	if !ok || cfg.MaxProcs <= 0 {
-		return 1
-	}
-	return cfg.MaxProcs
 }
 
 type tuningLifecycle struct {

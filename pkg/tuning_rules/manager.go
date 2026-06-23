@@ -5,10 +5,10 @@ import (
 	"github.com/harishhary/blink/internal/plugin"
 )
 
-var tuningManagerMetrics = plugin.NewPluginManagerMetrics("tuning_rules")
+var tuningExecutorMetrics = plugin.NewPluginManagerMetrics("tuning_rules")
 
-type TuningRulePluginManager = plugin.PluginManager[TuningRule]
+type TuningRulePluginExecutor = plugin.PluginExecutor[TuningRule]
 
-func NewTuningRulePluginManager(log *logger.Logger, notify plugin.Notify, dir string, manager *TuningRuleConfigManager) *TuningRulePluginManager {
-	return plugin.NewPluginManager[TuningRule](log, notify, dir, &TuningRuleAdapter{Manager: manager}, tuningManagerMetrics)
+func NewTuningRulePluginExecutor(log *logger.Logger, notify plugin.Notify, dir string, manager *TuningRuleConfigManager) *TuningRulePluginExecutor {
+	return plugin.NewPluginExecutor[TuningRule](log, notify, dir, NewTuningRuleAdapter(manager), tuningExecutorMetrics)
 }

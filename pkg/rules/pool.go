@@ -16,7 +16,14 @@ type Pool struct {
 }
 
 func NewPool(manager *RuleConfigManager, drainTimeout time.Duration) *Pool {
-	routing := func(id string) (internal.RolloutMode, float64) {
+	routing := func(id, name string) (internal.RolloutMode, float64) {
+		if name != "" {
+			// Register time: use per-binary YAML so a stable update isn't misrouted
+			// to the pending slot because a running shadow inflates the merged mode.
+			if cfg, ok := manager.Current().ByFileName(name); ok {
+				return cfg.RolloutMode, cfg.RolloutPct
+			}
+		}
 		re := manager.Current().RoutingByID(id)
 		return re.Mode, re.RolloutPct
 	}
@@ -44,12 +51,12 @@ func (p *Pool) Evaluate(ctx context.Context, ruleID string, evts []events.Event,
 }
 
 // poolKey builds a PoolKey that is unique per binary deployment.
-// Combining the YAML version with the binary checksum means a binary change
-// always produces a distinct key even if the operator forgot to bump the version
+// Combining the rule name with the binary checksum means a binary change
+// always produces a distinct key even if the operator forgot to update the name
 // string in the rule config - preventing silent same-key overwrites in the pool.
 func poolKey(r Rule) internal.PoolKey {
 	cfg := r.RuleMetadata()
-	return internal.PoolKey{Id: cfg.Id, Version: cfg.Version, Hash: r.Checksum()}
+	return internal.PoolKey{Id: cfg.Id, Name: cfg.Name, Hash: r.Checksum()}
 }
 
 // Handles plugin lifecycle messages from the plugin manager bus, registering or deregistering rules in the pool.
@@ -63,5 +70,7 @@ func (p *Pool) Sync(msg messaging.Message) {
 		p.Unregister(m.ItemKey)
 	case plugin.RemoveMessage[Rule]:
 		p.Remove(m.ItemKey)
+	case plugin.MigrateMessage[Rule]:
+		p.MigrateSlots(m.ActiveKey.Id, m.ActiveKey, m.PendingKey)
 	}
 }

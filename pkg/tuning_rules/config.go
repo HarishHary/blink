@@ -24,7 +24,7 @@ import (
 	"github.com/harishhary/blink/internal/plugin"
 )
 
-// TuningMetadata is the in-memory representation of a tuning rule YAML sidecar.
+// TuningRuleMetadata is the in-memory representation of a tuning rule YAML sidecar.
 type TuningRuleMetadata struct {
 	plugin.PluginMetadata `yaml:",inline"`
 	Global                bool   `yaml:"global"`
@@ -34,7 +34,7 @@ type TuningRuleMetadata struct {
 
 type TuningRuleConfigManager = cfg.ConfigManager[*TuningRuleMetadata]
 
-// Loader implements cfg.Loader[*TuningMetadata] for tuning rules.
+// Loader implements cfg.Loader[*TuningRuleMetadata] for tuning rules.
 // Embed cfg.BaseLoader to inherit default Parse, Validate, and CrossValidate.
 type Loader struct {
 	cfg.BaseLoader[TuningRuleMetadata, *TuningRuleMetadata]

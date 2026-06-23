@@ -67,7 +67,7 @@ func (r *Runner) Run(ctx context.Context) {
 		go func() {
 			defer wg.Done()
 			r.logger.Printf("init service %s started\n", svc.Name())
-			if err := svc.Run(ctx); err != nil { //nolint:staticcheck
+			if err := svc.Run(ctx); err != nil {
 				r.logger.Printf("init service %s terminated with error: %s\n", svc.Name(), err)
 			} else {
 				r.logger.Printf("init service %s completed\n", svc.Name())

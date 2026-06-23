@@ -51,7 +51,7 @@ func (p *Pool) Enrich(ctx context.Context, enrichmentID string, alerts []*alerts
 
 func poolKey(e Enrichment) internal.PoolKey {
 	cfg := e.EnrichmentMetadata()
-	return internal.PoolKey{Id: cfg.Id, Version: cfg.Version, Hash: e.Checksum()}
+	return internal.PoolKey{Id: cfg.Id, Name: cfg.Name, Hash: e.Checksum()}
 }
 
 func (p *Pool) Sync(msg messaging.Message) {
@@ -67,5 +67,7 @@ func (p *Pool) Sync(msg messaging.Message) {
 		p.Unregister(m.ItemKey)
 	case plugin.RemoveMessage[Enrichment]:
 		p.Remove(m.ItemKey)
+	case plugin.MigrateMessage[Enrichment]:
+		p.MigrateSlots(m.ActiveKey.Id, m.ActiveKey, m.PendingKey)
 	}
 }

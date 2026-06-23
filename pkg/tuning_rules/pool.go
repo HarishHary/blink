@@ -47,7 +47,7 @@ func (p *Pool) Tune(ctx context.Context, tuningRuleID string, alerts []alerts.Al
 // Handles plugin lifecycle messages from the plugin manager bus, registering or deregistering tuning rules in the pool.
 func poolKey(t TuningRule) internal.PoolKey {
 	cfg := t.TuningRuleMetadata()
-	return internal.PoolKey{Id: cfg.Id, Version: cfg.Version, Hash: t.Checksum()}
+	return internal.PoolKey{Id: cfg.Id, Name: cfg.Name, Hash: t.Checksum()}
 }
 
 func (p *Pool) Sync(msg messaging.Message) {
@@ -63,5 +63,7 @@ func (p *Pool) Sync(msg messaging.Message) {
 		p.Unregister(m.ItemKey)
 	case plugin.RemoveMessage[TuningRule]:
 		p.Remove(m.ItemKey)
+	case plugin.MigrateMessage[TuningRule]:
+		p.MigrateSlots(m.ActiveKey.Id, m.ActiveKey, m.PendingKey)
 	}
 }

@@ -5,10 +5,10 @@ import (
 	"github.com/harishhary/blink/internal/plugin"
 )
 
-var formatterManagerMetrics = plugin.NewPluginManagerMetrics("formatters")
+var formatterExecutorMetrics = plugin.NewPluginManagerMetrics("formatters")
 
-type FormaterPluginManager = plugin.PluginManager[Formatter]
+type FormatterPluginExecutor = plugin.PluginExecutor[Formatter]
 
-func NewFormatterPluginManager(log *logger.Logger, notify plugin.Notify, dir string, manager *FormatterConfigManager) *FormaterPluginManager {
-	return plugin.NewPluginManager[Formatter](log, notify, dir, &FormatterAdapter{Manager: manager}, formatterManagerMetrics)
+func NewFormatterPluginExecutor(log *logger.Logger, notify plugin.Notify, dir string, manager *FormatterConfigManager) *FormatterPluginExecutor {
+	return plugin.NewPluginExecutor[Formatter](log, notify, dir, NewFormatterAdapter(manager), formatterExecutorMetrics)
 }

@@ -5,10 +5,10 @@ import (
 	"github.com/harishhary/blink/internal/plugin"
 )
 
-var enrichmentManagerMetrics = plugin.NewPluginManagerMetrics("enrichmentsvc")
+var enrichmentExecutorMetrics = plugin.NewPluginManagerMetrics("enrichmentsvc")
 
-type EnrichmentPluginManager = plugin.PluginManager[Enrichment]
+type EnrichmentPluginExecutor = plugin.PluginExecutor[Enrichment]
 
-func NewEnrichmentPluginManager(log *logger.Logger, notify plugin.Notify, dir string, manager *EnrichmentConfigManager) *EnrichmentPluginManager {
-	return plugin.NewPluginManager[Enrichment](log, notify, dir, &EnrichmentConfigAdapter{Manager: manager}, enrichmentManagerMetrics)
+func NewEnrichmentPluginExecutor(log *logger.Logger, notify plugin.Notify, dir string, manager *EnrichmentConfigManager) *EnrichmentPluginExecutor {
+	return plugin.NewPluginExecutor[Enrichment](log, notify, dir, NewEnrichmentAdapter(manager), enrichmentExecutorMetrics)
 }

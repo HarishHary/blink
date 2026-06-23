@@ -57,7 +57,7 @@ func (p *Pool) Format(ctx context.Context, formatterID string, alerts []*alerts.
 
 func poolKey(f Formatter) internal.PoolKey {
 	cfg := f.FormatterMetadata()
-	return internal.PoolKey{Id: cfg.Id, Version: cfg.Version, Hash: f.Checksum()}
+	return internal.PoolKey{Id: cfg.Id, Name: cfg.Name, Hash: f.Checksum()}
 }
 
 func (p *Pool) Sync(msg messaging.Message) {
@@ -73,5 +73,7 @@ func (p *Pool) Sync(msg messaging.Message) {
 		p.Unregister(m.ItemKey)
 	case plugin.RemoveMessage[Formatter]:
 		p.Remove(m.ItemKey)
+	case plugin.MigrateMessage[Formatter]:
+		p.MigrateSlots(m.ActiveKey.Id, m.ActiveKey, m.PendingKey)
 	}
 }
