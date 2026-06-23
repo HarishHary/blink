@@ -10,13 +10,10 @@ import (
 
 	"github.com/harishhary/blink/cmd/event_matcher/matcher"
 	"github.com/harishhary/blink/internal/logger"
-	"github.com/harishhary/blink/internal/plugin"
+	pools "github.com/harishhary/blink/internal/pools"
 	"github.com/harishhary/blink/internal/services"
 	"github.com/harishhary/blink/pkg/matchers"
-	matcherconfig "github.com/harishhary/blink/pkg/matchers/config"
-	pools "github.com/harishhary/blink/internal/pools"
-	matchcatalog "github.com/harishhary/blink/pkg/matchers/pool"
-	"github.com/harishhary/blink/pkg/rules/config"
+	"github.com/harishhary/blink/pkg/rules"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -31,46 +28,36 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Rule config watcher (used by the matcher service to look up rules).
+	// Rule config manager (used by the matcher service to look up rules).
 	ruleConfigDir := os.Getenv("RULE_CONFIG_DIR")
 	if ruleConfigDir == "" {
 		log.Fatal("RULE_CONFIG_DIR is required")
 	}
-	cfgWatcherSvc, err := config.NewWatcher(ruleConfigDir)
-	if err != nil {
-		log.Fatalf("config watcher: %v", err)
-	}
+	ruleCfgMgr := rules.NewRuleConfigManager(logger.New("rule-config", "dev"), ruleConfigDir)
+	ruleCfgSvc := services.NewConfigSyncService("rule-config-sync", "BLINK-EVENT-MATCHER - RULE-CONFIG", ruleCfgMgr)
 
-	// Matcher plugin config watcher (YAML sidecars for matcher binaries).
+	// Matcher plugin config manager (YAML sidecars for matcher binaries).
 	matcherPluginDir := os.Getenv("MATCHER_PLUGIN_DIR")
-	matcherCfgWatcher, err := matcherconfig.NewWatcher(matcherPluginDir)
-	if err != nil {
-		log.Fatalf("matcher config watcher: %v", err)
-	}
+	matcherCfgMgr := matchers.NewMatcherConfigManager(logger.New("matcher-config", "dev"), matcherPluginDir)
+	matcherCfgSvc := services.NewConfigSyncService("matcher-config-sync", "BLINK-EVENT-MATCHER - MATCHER-CONFIG", matcherCfgMgr)
 
 	routingTable := pools.NewRoutingTable()
-	matcherPool := matchcatalog.NewPool(routingTable, 0)
+	matcherPool := matchers.NewPool(routingTable, 0)
 
-	syncSvc, err := services.NewPluginSyncService(
-		"event-matcher-sync",
-		"BLINK-EVENT-MATCHER - SYNC",
-		"MATCHER_PLUGIN_DIR",
-		func(log *logger.Logger, dir string) plugin.Plugin {
-			return matchers.NewManager(log, matcherPool.Sync, dir, matcherCfgWatcher)
-		},
-	)
+	pluginMgr := matchers.NewMatcherPluginExecutor(logger.New("event-matcher", "dev"), matcherPool.Sync, matcherPluginDir, matcherCfgMgr)
+	syncSvc, err := services.NewPluginSyncService("event-matcher-sync", "BLINK-EVENT-MATCHER - SYNC", pluginMgr)
 	if err != nil {
 		log.Fatalf("sync service: %v", err)
 	}
-	matcherSvc, err := matcher.NewMatcherService(matcherPool, cfgWatcherSvc)
+	matcherSvc, err := matcher.NewMatcherService(matcherPool, ruleCfgMgr)
 	if err != nil {
 		log.Fatalf("matcher service: %v", err)
 	}
 
 	runner := services.New()
 	runner.Register(
-		cfgWatcherSvc,
-		matcherCfgWatcher,
+		ruleCfgSvc,
+		matcherCfgSvc,
 		syncSvc,
 		matcherSvc,
 	)

@@ -10,11 +10,8 @@ import (
 
 	"github.com/harishhary/blink/cmd/rule_executor/executor"
 	"github.com/harishhary/blink/internal/logger"
-	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/internal/services"
 	"github.com/harishhary/blink/pkg/rules"
-	"github.com/harishhary/blink/pkg/rules/config"
-	rulecatalog "github.com/harishhary/blink/pkg/rules/pool"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -30,39 +27,31 @@ func main() {
 	defer stop()
 
 	// RULE_PLUGIN_DIR contains both the rule binaries and their .yaml sidecars.
-	// The config watcher must start before the rule manager so YAML configs are
+	// The config manager must start before the rule manager so YAML configs are
 	// available when binaries are first discovered.
 	rulePluginDir := os.Getenv("RULE_PLUGIN_DIR")
 	if rulePluginDir == "" {
 		log.Fatal("RULE_PLUGIN_DIR is required")
 	}
-	cfgWatcher, err := config.NewWatcher(rulePluginDir)
-	if err != nil {
-		log.Fatalf("config watcher: %v", err)
-	}
+	cfgMgr := rules.NewRuleConfigManager(logger.New("rule-config", "dev"), rulePluginDir)
+	cfgSvc := services.NewConfigSyncService("rule-config-sync", "BLINK-RULE-EXECUTOR - CONFIG", cfgMgr)
 
-	rulePool := rulecatalog.NewPool(cfgWatcher, 0)
+	rulePool := rules.NewPool(cfgMgr, 0)
 
-	syncSvc, err := services.NewPluginSyncService(
-		"rule-executor-sync",
-		"BLINK-RULE-EXECUTOR - SYNC",
-		"RULE_PLUGIN_DIR",
-		func(log *logger.Logger, dir string) plugin.Plugin {
-			return rules.NewManager(log, rulePool.Sync, dir, cfgWatcher)
-		},
-	)
+	pluginMgr := rules.NewRulePluginExecutor(logger.New("rule-executor", "dev"), rulePool.Sync, rulePluginDir, cfgMgr)
+	syncSvc, err := services.NewPluginSyncService("rule-executor-sync", "BLINK-RULE-EXECUTOR - SYNC", pluginMgr)
 	if err != nil {
 		log.Fatalf("sync service: %v", err)
 	}
 
-	executorSvc, err := executor.NewExecutorService(rulePool, cfgWatcher)
+	executorSvc, err := executor.NewExecutorService(rulePool, cfgMgr)
 	if err != nil {
 		log.Fatalf("executor service: %v", err)
 	}
 
 	runner := services.New()
 	runner.Register(
-		cfgWatcher,
+		cfgSvc,
 		syncSvc,
 		executorSvc,
 	)
