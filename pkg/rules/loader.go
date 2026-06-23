@@ -4,7 +4,6 @@
 // YAML schema example:
 //
 //	id: "550e8400-e29b-41d4-a716-446655440000"
-//	name: "brute_force_login"
 //	display_name: "Brute Force Login Attempt"
 //	description: "Detects repeated failed login attempts from a single source."
 //	enabled: true
@@ -30,7 +29,9 @@ package rules
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	cfg "github.com/harishhary/blink/internal/config"
@@ -173,6 +174,7 @@ func (Loader) Parse(path string) (*RuleMetadata, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
+	cfg.SetName(strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)))
 	if err := cfg.resolveScoring(); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}

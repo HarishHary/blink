@@ -9,14 +9,13 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/harishhary/blink/internal/errors"
+	"github.com/harishhary/blink/internal/handshake"
 	"github.com/harishhary/blink/pkg/tuning_rules/rpc_tuning_rules"
 )
 
-const (
-	ProtocolVersion = 1
-	MagicKey        = "BLINK_PLUGIN"
-	MagicValue      = "tuning_rule_v1"
-)
+// MagicValue is this plugin type's cookie value; the shared cookie key and
+// protocol version live in internal/handshake.
+const MagicValue = "tuning_rule_v1"
 
 // TuningRulePlugin is the interface that all tuning rule plugin binaries must implement.
 // Embed sdk.BaseTuningRule to get no-op defaults for Init and Shutdown.
@@ -87,8 +86,8 @@ func Serve(r TuningRulePlugin) {
 	os.Setenv("GODEBUG", "madvdontneed=1")
 	plugin.Serve(&plugin.ServeConfig{
 		HandshakeConfig: plugin.HandshakeConfig{
-			ProtocolVersion:  ProtocolVersion,
-			MagicCookieKey:   MagicKey,
+			ProtocolVersion:  handshake.ProtocolVersion,
+			MagicCookieKey:   handshake.CookieKey,
 			MagicCookieValue: MagicValue,
 		},
 		GRPCServer: plugin.DefaultGRPCServer,

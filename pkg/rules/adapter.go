@@ -14,20 +14,20 @@ import (
 )
 
 // NewRuleAdapter builds the PluginAdapter for the rules plugin type.
-// manager is used both as the PluginController and for rpcRule construction.
+// manager is used both as the DesiredConfig and for rpcRule construction.
 func NewRuleAdapter(manager *RuleConfigManager) *plugin.PluginAdapter[Rule] {
 	return &plugin.PluginAdapter[Rule]{
-		Key:        "rule",
-		Magic:      "rule_v1",
-		Plugin:     &rulePlugin{},
-		Controller: manager,
+		Key:           "rule",
+		Magic:         "rule_v1",
+		Plugin:        &rulePlugin{},
+		DesiredConfig: manager,
 		DoHandshake: func(ctx context.Context, raw any, binPath, hash string) (Rule, plugin.PluginLifecycle, string, string, error) {
 			rpc, ok := raw.(rpc_rules.RuleClient)
 			if !ok {
 				return nil, nil, "", "", fmt.Errorf("dispense: unexpected type %T", raw)
 			}
 
-			desired, ok := manager.DesiredForBinary(helpers.BinaryBaseName(binPath))
+			desired, ok := manager.DesiredBinaryState(helpers.BinaryBaseName(binPath))
 			if !ok {
 				return nil, nil, "", "", fmt.Errorf("rule launcher: no YAML sidecar found for binary %q", binPath)
 			}

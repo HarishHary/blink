@@ -16,10 +16,10 @@ import (
 // NewMatcherAdapter builds the PluginAdapter for the matchers plugin type.
 func NewMatcherAdapter(manager *MatcherConfigManager) *plugin.PluginAdapter[Matcher] {
 	return &plugin.PluginAdapter[Matcher]{
-		Key:        "matcher",
-		Magic:      "matcher_v1",
-		Plugin:     &matcherPlugin{},
-		Controller: manager,
+		Key:           "matcher",
+		Magic:         "matcher_v1",
+		Plugin:        &matcherPlugin{},
+		DesiredConfig: manager,
 		DoHandshake: func(ctx context.Context, raw any, binPath, hash string) (Matcher, plugin.PluginLifecycle, string, string, error) {
 			rpc, ok := raw.(rpc_matchers.MatcherClient)
 			if !ok {
@@ -37,7 +37,7 @@ func NewMatcherAdapter(manager *MatcherConfigManager) *plugin.PluginAdapter[Matc
 
 			m := newRpcMatcher(fileName, rpc, manager, 5*time.Second, hash)
 			id, name := fileName, fileName
-			if desired, ok := manager.DesiredForBinary(fileName); ok {
+			if desired, ok := manager.DesiredBinaryState(fileName); ok {
 				id = desired.ID
 				name = desired.Name
 			}

@@ -16,10 +16,10 @@ import (
 // NewTuningRuleAdapter builds the PluginAdapter for the tuning_rules plugin type.
 func NewTuningRuleAdapter(manager *TuningRuleConfigManager) *plugin.PluginAdapter[TuningRule] {
 	return &plugin.PluginAdapter[TuningRule]{
-		Key:        "tuning_rule",
-		Magic:      "tuning_rule_v1",
-		Plugin:     &tuningPlugin{},
-		Controller: manager,
+		Key:           "tuning_rule",
+		Magic:         "tuning_rule_v1",
+		Plugin:        &tuningPlugin{},
+		DesiredConfig: manager,
 		DoHandshake: func(ctx context.Context, raw any, binPath, hash string) (TuningRule, plugin.PluginLifecycle, string, string, error) {
 			rpc, ok := raw.(rpc_tuning_rules.TuningRuleClient)
 			if !ok {
@@ -37,7 +37,7 @@ func NewTuningRuleAdapter(manager *TuningRuleConfigManager) *plugin.PluginAdapte
 
 			tr := newRpcTuningRule(fileName, rpc, manager, hash)
 			id, name := fileName, fileName
-			if desired, ok := manager.DesiredForBinary(fileName); ok {
+			if desired, ok := manager.DesiredBinaryState(fileName); ok {
 				id = desired.ID
 				name = desired.Name
 			}

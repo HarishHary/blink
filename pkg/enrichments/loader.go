@@ -72,6 +72,6 @@ func (Loader) CrossValidate(all []*EnrichmentMetadata) error {
 	return nil
 }
 
-func NewEnrichmentConfigManager(log *logger.Logger, dir string) *EnrichmentConfigManager {
-	return cfg.NewConfigManager[*EnrichmentMetadata](log, "enrichment", dir, Loader{})
+func NewEnrichmentConfigManager(logger *logger.Logger, dir string) *EnrichmentConfigManager {
+	return cfg.NewConfigManager[*EnrichmentMetadata](logger, "enrichment", dir, Loader{})
 }

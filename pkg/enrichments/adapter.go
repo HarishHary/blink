@@ -16,10 +16,10 @@ import (
 // NewEnrichmentAdapter builds the PluginAdapter for the enrichments plugin type.
 func NewEnrichmentAdapter(manager *EnrichmentConfigManager) *plugin.PluginAdapter[Enrichment] {
 	return &plugin.PluginAdapter[Enrichment]{
-		Key:        "enrichment",
-		Magic:      "enrichment_v1",
-		Plugin:     &enrichmentPlugin{},
-		Controller: manager,
+		Key:           "enrichment",
+		Magic:         "enrichment_v1",
+		Plugin:        &enrichmentPlugin{},
+		DesiredConfig: manager,
 		DoHandshake: func(ctx context.Context, raw any, binPath, hash string) (Enrichment, plugin.PluginLifecycle, string, string, error) {
 			rpc, ok := raw.(rpc_enrichments.EnrichmentClient)
 			if !ok {
@@ -37,7 +37,7 @@ func NewEnrichmentAdapter(manager *EnrichmentConfigManager) *plugin.PluginAdapte
 
 			e := newRpcEnrichment(fileName, rpc, manager, hash)
 			id, name := fileName, fileName
-			if desired, ok := manager.DesiredForBinary(fileName); ok {
+			if desired, ok := manager.DesiredBinaryState(fileName); ok {
 				id = desired.ID
 				name = desired.Name
 			}

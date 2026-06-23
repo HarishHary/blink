@@ -16,10 +16,10 @@ import (
 // NewFormatterAdapter builds the PluginAdapter for the formatters plugin type.
 func NewFormatterAdapter(manager *FormatterConfigManager) *plugin.PluginAdapter[Formatter] {
 	return &plugin.PluginAdapter[Formatter]{
-		Key:        "formatter",
-		Magic:      "formatter_v1",
-		Plugin:     &formatterPlugin{},
-		Controller: manager,
+		Key:           "formatter",
+		Magic:         "formatter_v1",
+		Plugin:        &formatterPlugin{},
+		DesiredConfig: manager,
 		DoHandshake: func(ctx context.Context, raw any, binPath, hash string) (Formatter, plugin.PluginLifecycle, string, string, error) {
 			rpc, ok := raw.(rpc_formatters.FormatterClient)
 			if !ok {
@@ -37,7 +37,7 @@ func NewFormatterAdapter(manager *FormatterConfigManager) *plugin.PluginAdapter[
 
 			f := newRpcFormatter(fileName, rpc, manager, hash)
 			id, name := fileName, fileName
-			if desired, ok := manager.DesiredForBinary(fileName); ok {
+			if desired, ok := manager.DesiredBinaryState(fileName); ok {
 				id = desired.ID
 				name = desired.Name
 			}

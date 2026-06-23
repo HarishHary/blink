@@ -4,22 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"time"
 
 	"github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
 
 	"github.com/harishhary/blink/internal/errors"
+	"github.com/harishhary/blink/internal/handshake"
 	"github.com/harishhary/blink/pkg/events"
 	"github.com/harishhary/blink/pkg/matchers/rpc_matchers"
 )
 
-const (
-	ProtocolVersion = 1
-	MagicKey        = "BLINK_PLUGIN"
-	MagicValue      = "matcher_v1"
-	DefaultTimeout  = 5 * time.Second
-)
+// MagicValue is this plugin type's cookie value; the shared cookie key and
+// protocol version live in internal/handshake.
+const MagicValue = "matcher_v1"
 
 // MatcherPlugin is the interface that all matcher plugin binaries must implement.
 // Embed sdk.BaseMatcher to get no-op defaults for Init and Shutdown.
@@ -91,8 +88,8 @@ func Serve(m MatcherPlugin) {
 	os.Setenv("GODEBUG", "madvdontneed=1")
 	plugin.Serve(&plugin.ServeConfig{
 		HandshakeConfig: plugin.HandshakeConfig{
-			ProtocolVersion:  ProtocolVersion,
-			MagicCookieKey:   MagicKey,
+			ProtocolVersion:  handshake.ProtocolVersion,
+			MagicCookieKey:   handshake.CookieKey,
 			MagicCookieValue: MagicValue,
 		},
 		GRPCServer: plugin.DefaultGRPCServer,

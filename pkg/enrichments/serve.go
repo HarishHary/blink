@@ -4,21 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"time"
 
 	"github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
 
 	"github.com/harishhary/blink/internal/errors"
+	"github.com/harishhary/blink/internal/handshake"
 	"github.com/harishhary/blink/pkg/enrichments/rpc_enrichments"
 )
 
-const (
-	ProtocolVersion = 1
-	MagicKey        = "BLINK_PLUGIN"
-	MagicValue      = "enrichment_v1"
-	DefaultTimeout  = 5 * time.Second
-)
+// MagicValue is this plugin type's cookie value; the shared cookie key and
+// protocol version live in internal/handshake.
+const MagicValue = "enrichment_v1"
 
 // EnrichmentPlugin is the interface that all enrichment plugin binaries must implement.
 // Embed sdk.BaseEnrichment to get no-op defaults for Init and Shutdown.
@@ -96,8 +93,8 @@ func Serve(e EnrichmentPlugin) {
 	os.Setenv("GODEBUG", "madvdontneed=1")
 	plugin.Serve(&plugin.ServeConfig{
 		HandshakeConfig: plugin.HandshakeConfig{
-			ProtocolVersion:  ProtocolVersion,
-			MagicCookieKey:   MagicKey,
+			ProtocolVersion:  handshake.ProtocolVersion,
+			MagicCookieKey:   handshake.CookieKey,
 			MagicCookieValue: MagicValue,
 		},
 		GRPCServer: plugin.DefaultGRPCServer,

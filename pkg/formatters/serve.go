@@ -9,14 +9,13 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/harishhary/blink/internal/errors"
+	"github.com/harishhary/blink/internal/handshake"
 	"github.com/harishhary/blink/pkg/formatters/rpc_formatters"
 )
 
-const (
-	ProtocolVersion = 1
-	MagicKey        = "BLINK_PLUGIN"
-	MagicValue      = "formatter_v1"
-)
+// MagicValue is this plugin type's cookie value; the shared cookie key and
+// protocol version live in internal/handshake.
+const MagicValue = "formatter_v1"
 
 // FormatterPlugin is the interface that all formatter plugin binaries must implement.
 // Embed sdk.BaseFormatter to get no-op defaults for Init and Shutdown.
@@ -90,8 +89,8 @@ func Serve(f FormatterPlugin) {
 	os.Setenv("GODEBUG", "madvdontneed=1")
 	plugin.Serve(&plugin.ServeConfig{
 		HandshakeConfig: plugin.HandshakeConfig{
-			ProtocolVersion:  ProtocolVersion,
-			MagicCookieKey:   MagicKey,
+			ProtocolVersion:  handshake.ProtocolVersion,
+			MagicCookieKey:   handshake.CookieKey,
 			MagicCookieValue: MagicValue,
 		},
 		GRPCServer: plugin.DefaultGRPCServer,

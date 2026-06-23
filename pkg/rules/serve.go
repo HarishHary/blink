@@ -4,22 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"time"
 
 	"github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
 
 	"github.com/harishhary/blink/internal/errors"
+	"github.com/harishhary/blink/internal/handshake"
 	"github.com/harishhary/blink/pkg/events"
 	"github.com/harishhary/blink/pkg/rules/rpc_rules"
 )
 
-const (
-	ProtocolVersion = 1
-	MagicKey        = "BLINK_PLUGIN"
-	MagicValue      = "rule_v1"
-	DefaultTimeout  = 5 * time.Second
-)
+// MagicValue is this plugin type's cookie value; the shared cookie key and
+// protocol version live in internal/handshake.
+const MagicValue = "rule_v1"
 
 // RulePlugin is the interface that all rule plugin binaries must implement.
 // Embed sdk.BaseRule to get default no-op / pass-through implementations for
@@ -142,8 +139,8 @@ func Serve(r RulePlugin) {
 	os.Setenv("GODEBUG", "madvdontneed=1")
 	plugin.Serve(&plugin.ServeConfig{
 		HandshakeConfig: plugin.HandshakeConfig{
-			ProtocolVersion:  ProtocolVersion,
-			MagicCookieKey:   MagicKey,
+			ProtocolVersion:  handshake.ProtocolVersion,
+			MagicCookieKey:   handshake.CookieKey,
 			MagicCookieValue: MagicValue,
 		},
 		GRPCServer: plugin.DefaultGRPCServer,
