@@ -10,12 +10,9 @@ import (
 
 	"github.com/harishhary/blink/cmd/alert_enricher/enricher"
 	"github.com/harishhary/blink/internal/logger"
-	"github.com/harishhary/blink/internal/plugin"
+	pools "github.com/harishhary/blink/internal/pools"
 	"github.com/harishhary/blink/internal/services"
 	"github.com/harishhary/blink/pkg/enrichments"
-	enrichmentconfig "github.com/harishhary/blink/pkg/enrichments/config"
-	pools "github.com/harishhary/blink/internal/pools"
-	enrichcatalog "github.com/harishhary/blink/pkg/enrichments/pool"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -31,25 +28,18 @@ func main() {
 	defer stop()
 
 	pluginDir := os.Getenv("ENRICHER_PLUGIN_DIR")
-	cfgWatcher, err := enrichmentconfig.NewWatcher(pluginDir)
-	if err != nil {
-		log.Fatalf("enrichment config watcher: %v", err)
-	}
+	cfgMgr := enrichments.NewEnrichmentConfigManager(logger.New("enrichment-config", "dev"), pluginDir)
+	cfgSvc := services.NewConfigSyncService("enrichment-config-sync", "BLINK-ALERT-ENRICHER - CONFIG", cfgMgr)
 
 	routingTable := pools.NewRoutingTable()
-	enricherPool := enrichcatalog.NewPool(routingTable, 0)
+	enricherPool := enrichments.NewPool(routingTable, 0)
 
-	syncSvc, err := services.NewPluginSyncService(
-		"alert-enricher-sync",
-		"BLINK-ALERT-ENRICHER - SYNC",
-		"ENRICHER_PLUGIN_DIR",
-		func(log *logger.Logger, dir string) plugin.Plugin {
-			return enrichments.NewManager(log, enricherPool.Sync, dir, cfgWatcher)
-		},
-	)
+	pluginMgr := enrichments.NewEnrichmentPluginExecutor(logger.New("enricher", "dev"), enricherPool.Sync, pluginDir, cfgMgr)
+	syncSvc, err := services.NewPluginSyncService("alert-enricher-sync", "BLINK-ALERT-ENRICHER - SYNC", pluginMgr)
 	if err != nil {
 		log.Fatalf("sync service: %v", err)
 	}
+
 	enricherSvc, err := enricher.NewEnricherService(enricherPool)
 	if err != nil {
 		log.Fatalf("enricher service: %v", err)
@@ -57,7 +47,7 @@ func main() {
 
 	runner := services.New()
 	runner.Register(
-		cfgWatcher,
+		cfgSvc,
 		syncSvc,
 		enricherSvc,
 	)

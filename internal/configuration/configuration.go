@@ -68,6 +68,11 @@ type KafkaTopicsGroups struct {
 	FormatterDLQTopic string `env:"KAFKA_TOPIC_FORMATTER_DLQ,optional"`
 	DispatcherTopic   string `env:"KAFKA_TOPIC_DISPATCHER"`
 	DispatcherGroup   string `env:"KAFKA_GROUP_DISPATCHER"`
+
+	// ControllerSnapshotTopic is written by rule_controller (write mode) and consumed
+	// by read replicas to keep their atomic.Pointer[Snapshot] cache up to date.
+	ControllerSnapshotTopic string `env:"KAFKA_TOPIC_CONTROLLER_SNAPSHOT,optional"`
+	ControllerSnapshotGroup string `env:"KAFKA_GROUP_CONTROLLER_SNAPSHOT,optional"`
 }
 
 type ExecutorConfig struct {

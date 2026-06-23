@@ -12,7 +12,7 @@ import (
 	"github.com/harishhary/blink/internal/logger"
 	"github.com/harishhary/blink/internal/services"
 	"github.com/harishhary/blink/pkg/alerts"
-	fmtcatalog "github.com/harishhary/blink/pkg/formatters/pool"
+	"github.com/harishhary/blink/pkg/formatters"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -40,10 +40,10 @@ type FormatterService struct {
 	reader broker.Reader
 	writer broker.Writer
 	dlq    broker.Writer
-	pool   *fmtcatalog.Pool
+	pool   *formatters.Pool
 }
 
-func NewFormatterService(pool *fmtcatalog.Pool) (*FormatterService, error) {
+func NewFormatterService(pool *formatters.Pool) (*FormatterService, error) {
 	serviceContext := svcctx.New("BLINK-ALERT-FORMATTER - FORMAT")
 	if err := configuration.LoadFromEnvironment(&serviceContext); err != nil {
 		return nil, err

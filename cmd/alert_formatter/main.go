@@ -10,12 +10,9 @@ import (
 
 	"github.com/harishhary/blink/cmd/alert_formatter/formatter"
 	"github.com/harishhary/blink/internal/logger"
-	"github.com/harishhary/blink/internal/plugin"
+	pools "github.com/harishhary/blink/internal/pools"
 	"github.com/harishhary/blink/internal/services"
 	"github.com/harishhary/blink/pkg/formatters"
-	formatterconfig "github.com/harishhary/blink/pkg/formatters/config"
-	pools "github.com/harishhary/blink/internal/pools"
-	fmtcatalog "github.com/harishhary/blink/pkg/formatters/pool"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -31,22 +28,14 @@ func main() {
 	defer stop()
 
 	pluginDir := os.Getenv("FORMATTER_PLUGIN_DIR")
-	cfgWatcher, err := formatterconfig.NewWatcher(pluginDir)
-	if err != nil {
-		log.Fatalf("formatter config watcher: %v", err)
-	}
+	cfgMgr := formatters.NewFormatterConfigManager(logger.New("formatter-config", "dev"), pluginDir)
+	cfgSvc := services.NewConfigSyncService("formatter-config-sync", "BLINK-ALERT-FORMATTER - CONFIG", cfgMgr)
 
 	routingTable := pools.NewRoutingTable()
-	formatterPool := fmtcatalog.NewPool(routingTable, 0)
+	formatterPool := formatters.NewPool(routingTable, 0)
 
-	syncSvc, err := services.NewPluginSyncService(
-		"alert-formatter-sync",
-		"BLINK-ALERT-FORMATTER - SYNC",
-		"FORMATTER_PLUGIN_DIR",
-		func(log *logger.Logger, dir string) plugin.Plugin {
-			return formatters.NewManager(log, formatterPool.Sync, dir, cfgWatcher)
-		},
-	)
+	pluginMgr := formatters.NewFormatterPluginExecutor(logger.New("alert-formatter", "dev"), formatterPool.Sync, pluginDir, cfgMgr)
+	syncSvc, err := services.NewPluginSyncService("alert-formatter-sync", "BLINK-ALERT-FORMATTER - SYNC", pluginMgr)
 	if err != nil {
 		log.Fatalf("sync service: %v", err)
 	}
@@ -57,7 +46,7 @@ func main() {
 
 	runner := services.New()
 	runner.Register(
-		cfgWatcher,
+		cfgSvc,
 		syncSvc,
 		formatterSvc,
 	)

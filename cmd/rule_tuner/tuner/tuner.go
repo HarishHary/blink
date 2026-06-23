@@ -16,7 +16,6 @@ import (
 	"github.com/harishhary/blink/pkg/alerts"
 	"github.com/harishhary/blink/pkg/scoring"
 	"github.com/harishhary/blink/pkg/tuning_rules"
-	tuningcatalog "github.com/harishhary/blink/pkg/tuning_rules/pool"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -53,10 +52,10 @@ type TunerService struct {
 	reader broker.Reader
 	writer broker.Writer
 	dlq    broker.Writer
-	pool   *tuningcatalog.Pool
+	pool   *tuning_rules.Pool
 }
 
-func NewTunerService(pool *tuningcatalog.Pool) (*TunerService, error) {
+func NewTunerService(pool *tuning_rules.Pool) (*TunerService, error) {
 	serviceContext := svcctx.New("BLINK-RULE-TUNER - TUNER")
 	if err := configuration.LoadFromEnvironment(&serviceContext); err != nil {
 		return nil, err

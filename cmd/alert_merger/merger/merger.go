@@ -223,7 +223,7 @@ func (s *MergerService) flushGroup(ctx context.Context, g *mergeGroup) {
 		return
 	}
 
-	s.Info("merging %d alerts for rule %s", len(g.alerts), g.alerts[0].Rule.Name())
+	s.Info("merging %d alerts for rule %s", len(g.alerts), g.alerts[0].Rule.Name)
 	merged, err := alerts.Merge(g.alerts)
 	if err != nil {
 		s.Error(err)

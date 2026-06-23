@@ -10,12 +10,9 @@ import (
 
 	"github.com/harishhary/blink/cmd/rule_tuner/tuner"
 	"github.com/harishhary/blink/internal/logger"
-	"github.com/harishhary/blink/internal/plugin"
+	pools "github.com/harishhary/blink/internal/pools"
 	"github.com/harishhary/blink/internal/services"
 	"github.com/harishhary/blink/pkg/tuning_rules"
-	tuningconfig "github.com/harishhary/blink/pkg/tuning_rules/config"
-	pools "github.com/harishhary/blink/internal/pools"
-	tuningcatalog "github.com/harishhary/blink/pkg/tuning_rules/pool"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -31,22 +28,14 @@ func main() {
 	defer stop()
 
 	pluginDir := os.Getenv("TUNER_PLUGIN_DIR")
-	cfgWatcher, err := tuningconfig.NewWatcher(pluginDir)
-	if err != nil {
-		log.Fatalf("tuning config watcher: %v", err)
-	}
+	cfgMgr := tuning_rules.NewTuningRuleConfigManager(logger.New("tuning-config", "dev"), pluginDir)
+	cfgSvc := services.NewConfigSyncService("tuning-config-sync", "BLINK-RULE-TUNER - CONFIG", cfgMgr)
 
 	routingTable := pools.NewRoutingTable()
-	tuningPool := tuningcatalog.NewPool(routingTable, 0)
+	tuningPool := tuning_rules.NewPool(routingTable, 0)
 
-	syncSvc, err := services.NewPluginSyncService(
-		"rule-tuner-sync",
-		"BLINK-RULE-TUNER - SYNC",
-		"TUNER_PLUGIN_DIR",
-		func(log *logger.Logger, dir string) plugin.Plugin {
-			return tuning_rules.NewManager(log, tuningPool.Sync, dir, cfgWatcher)
-		},
-	)
+	pluginMgr := tuning_rules.NewTuningRulePluginExecutor(logger.New("rule-tuner", "dev"), tuningPool.Sync, pluginDir, cfgMgr)
+	syncSvc, err := services.NewPluginSyncService("rule-tuner-sync", "BLINK-RULE-TUNER - SYNC", pluginMgr)
 	if err != nil {
 		log.Fatalf("sync service: %v", err)
 	}
@@ -57,7 +46,7 @@ func main() {
 
 	runner := services.New()
 	runner.Register(
-		cfgWatcher,
+		cfgSvc,
 		syncSvc,
 		tunerSvc,
 	)

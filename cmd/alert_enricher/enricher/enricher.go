@@ -13,7 +13,7 @@ import (
 	"github.com/harishhary/blink/internal/logger"
 	"github.com/harishhary/blink/internal/services"
 	"github.com/harishhary/blink/pkg/alerts"
-	enrichcatalog "github.com/harishhary/blink/pkg/enrichments/pool"
+	"github.com/harishhary/blink/pkg/enrichments"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -44,10 +44,10 @@ type EnricherService struct {
 	reader broker.Reader
 	writer broker.Writer
 	dlq    broker.Writer
-	pool   *enrichcatalog.Pool
+	pool   *enrichments.Pool
 }
 
-func NewEnricherService(pool *enrichcatalog.Pool) (*EnricherService, error) {
+func NewEnricherService(pool *enrichments.Pool) (*EnricherService, error) {
 	serviceContext := svcctx.New("BLINK-ALERT-ENRICHER - ENRICH")
 	if err := configuration.LoadFromEnvironment(&serviceContext); err != nil {
 		return nil, err
