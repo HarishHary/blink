@@ -38,7 +38,7 @@ func (t *RoutingTable) Delete(pluginID string) {
 // Returns a RoutingConfig closure that reads live from the table.
 // Pass this to NewProcessPool.
 func (t *RoutingTable) Config() RoutingConfig {
-	return func(pluginID string) (RolloutMode, float64) {
+	return func(pluginID string, name string) (RolloutMode, float64) {
 		t.mu.RLock()
 		r, ok := t.entries[pluginID]
 		t.mu.RUnlock()

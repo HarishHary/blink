@@ -1,13 +1,9 @@
 package pools
 
 import (
-	"context"
 	"errors"
-	"fmt"
-	"hash/fnv"
 	"log"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -16,125 +12,6 @@ var ErrPluginNotFound = errors.New("plugin not found")
 
 // Returned by Call when the plugin was explicitly deregistered (binary was deleted).
 var ErrPluginRemoved = errors.New("plugin removed")
-
-// RolloutMode controls how traffic is split between old and new plugin versions.
-type RolloutMode int
-
-const (
-	// RolloutModeBlueGreen (default): pre-warm new pool, flip generation, drain old.
-	RolloutModeBlueGreen RolloutMode = iota
-	// RolloutModeCanary: route RolloutPct% of calls (by consistent hash) to the new version.
-	RolloutModeCanary
-	// RolloutModeShadow: call new version in background; discard result; log errors.
-	RolloutModeShadow
-)
-
-func (m RolloutMode) String() string {
-	switch m {
-	case RolloutModeBlueGreen:
-		return "blue-green"
-	case RolloutModeCanary:
-		return "canary"
-	case RolloutModeShadow:
-		return "shadow"
-	default:
-		return fmt.Sprintf("RolloutMode(%d)", int(m))
-	}
-}
-
-func (m RolloutMode) MarshalText() ([]byte, error) {
-	return []byte(m.String()), nil
-}
-
-func (m *RolloutMode) UnmarshalText(b []byte) error {
-	switch string(b) {
-	case "blue-green", "bluegreen", "":
-		*m = RolloutModeBlueGreen
-	case "canary":
-		*m = RolloutModeCanary
-	case "shadow":
-		*m = RolloutModeShadow
-	default:
-		return fmt.Errorf("unknown rollout mode %q", string(b))
-	}
-	return nil
-}
-
-// func stub that returns per-plugin routing parameters.
-// Return zero values for default blue-green behaviour.
-type RoutingConfig func(pluginID string) (mode RolloutMode, rolloutPct float64)
-
-// PoolKey uniquely identifies a versioned plugin subprocess pool.
-type PoolKey struct {
-	Id      string
-	Version string
-	Hash    string // SHA-256 of the binary; empty when not yet known
-}
-
-func (k PoolKey) String() string {
-	if k.Hash != "" {
-		return k.Id + "@" + k.Version + "@" + k.Hash
-	}
-	return k.Id + "@" + k.Version
-}
-
-// VersionedPool manages a fixed-size pool of plugin subprocess handles of type T.
-// Acquire/Release use a channel-based semaphore; handles are stateful gRPC connections
-// and must not be discarded by the GC (no sync.Pool).
-type VersionedPool[T any] struct {
-	key      PoolKey
-	slots    chan T
-	inflight atomic.Int64
-	draining atomic.Bool
-}
-
-func newVersionedPool[T any](key PoolKey, plugins []T, maxProcs int) *VersionedPool[T] {
-	size := maxProcs
-	if size < len(plugins) {
-		size = len(plugins)
-	}
-	p := &VersionedPool[T]{
-		key:   key,
-		slots: make(chan T, size),
-	}
-	for _, plugin := range plugins {
-		p.slots <- plugin
-	}
-	return p
-}
-
-// Returns a plugin handle for exclusive use. Blocks until one is available or ctx is cancelled.
-// Returns an error if the pool is draining.
-func (p *VersionedPool[T]) Acquire(ctx context.Context) (T, error) {
-	if p.draining.Load() {
-		var zero T
-		return zero, fmt.Errorf("pool %s is draining", p.key)
-	}
-	select {
-	case plugin := <-p.slots:
-		p.inflight.Add(1)
-		return plugin, nil
-	case <-ctx.Done():
-		var zero T
-		return zero, ctx.Err()
-	}
-}
-
-// Release returns the handle to the pool after use.
-func (p *VersionedPool[T]) Release(plugin T) {
-	p.inflight.Add(-1)
-	p.slots <- plugin
-}
-
-// Inflight returns the number of calls currently executing in this pool.
-func (p *VersionedPool[T]) Inflight() int64 {
-	return p.inflight.Load()
-}
-
-// Size returns the total capacity of this pool.
-func (p *VersionedPool[T]) Size() int {
-	return cap(p.slots)
-}
 
 // holds a pre-warmed pool that is waiting to be promoted to active via Promote().
 // Used for canary and shadow rollouts where traffic must stay on the old version until the operator explicitly graduates the new version.
@@ -189,13 +66,13 @@ func (pp *ProcessPool[T]) Register(key PoolKey, plugins []T, maxProcs int, onDra
 	pool := newVersionedPool(key, plugins, maxProcs)
 	pp.pools[key] = pool
 	if pp.metrics != nil {
-		pp.metrics.poolSize.WithLabelValues(key.Id, key.Version).Set(float64(pool.Size()))
+		pp.metrics.poolSize.WithLabelValues(key.Id, key.Name).Set(float64(pool.Size()))
 	}
 
 	// Clear tombstone: plugin has come back (re-deployed after deletion).
 	delete(pp.removed, key.Id)
 
-	mode, _ := pp.routing(key.Id)
+	mode, _ := pp.routing(key.Id, key.Name)
 
 	if mode == RolloutModeCanary || mode == RolloutModeShadow {
 		// Stage the new pool without promoting - preserve active as production.
@@ -227,6 +104,24 @@ func (pp *ProcessPool[T]) Register(key PoolKey, plugins []T, maxProcs int, onDra
 		if oldPool, ok := pp.pools[oldKey]; ok {
 			go pp.drain(oldKey, oldPool, onDrained)
 		}
+	}
+}
+
+// MigrateSlots atomically reassigns active and pending for pluginID without draining
+// or killing any processes. Used when two binaries for the same id swap modes
+// (e.g. BG↔CN/SH) via a YAML-only change — no binary restarts are needed.
+// Pass a zero PoolKey for pendingKey to clear the pending slot.
+func (pp *ProcessPool[T]) MigrateSlots(id string, activeKey, pendingKey PoolKey) {
+	pp.mu.Lock()
+	defer pp.mu.Unlock()
+	pp.active[id] = activeKey
+	if pendingKey != (PoolKey{}) {
+		existing, ok := pp.pending[id]
+		if !ok || existing.key != pendingKey {
+			pp.pending[id] = pendingPromotion{key: pendingKey}
+		}
+	} else {
+		delete(pp.pending, id)
 	}
 }
 
@@ -329,116 +224,6 @@ func (pp *ProcessPool[T]) Remove(key PoolKey) {
 	}
 }
 
-// DefaultCanaryHashKey is the call-site key used for consistent-hash canary routing.
-var DefaultCanaryHashKey = "tenant_id"
-
-// Acquires a handle from the appropriate pool (respecting canary/blue-green routing),
-// invokes fn on it, and releases the handle.
-//
-// For shadow mode, only the production pool is called. Use CallWithShadow to also evaluate a shadow pool concurrently with a separate, independent closure.
-func (pp *ProcessPool[T]) Call(ctx context.Context, id, hashKey string, fn func(context.Context, T) error) error {
-	return pp.CallWithShadow(ctx, id, hashKey, fn, nil)
-}
-
-// CallWithShadow is like Call but also invokes shadowFn on the shadow pool concurrently
-// when routing returns shadow mode for this plugin. shadowFn must operate on independent
-// state (e.g. a cloned input, a separate result variable) to avoid data races with prodFn.
-// Shadow errors are logged and counted but do not affect the return value.
-func (pp *ProcessPool[T]) CallWithShadow(ctx context.Context, id, hashKey string, prodFn, shadowFn func(context.Context, T) error) error {
-	// Snapshot everything we need under a short read lock.
-	// User code (prodFn/shadowFn) is called after the lock is released.
-	pp.mu.RLock()
-	key, ok := pp.active[id]
-	if !ok {
-		_, removed := pp.removed[id]
-		pp.mu.RUnlock()
-		if removed {
-			return fmt.Errorf("%w: %s", ErrPluginRemoved, id)
-		}
-		return fmt.Errorf("%w: %s", ErrPluginNotFound, id)
-	}
-	mode, rolloutPct := pp.routing(id)
-	prodPool := pp.pools[key]
-	// For canary/shadow: find any registered non-active pool for the same pluginID.
-	var altPool *VersionedPool[T]
-	if mode == RolloutModeCanary || mode == RolloutModeShadow {
-		for k, p := range pp.pools {
-			if k.Id == id && k != key {
-				altPool = p
-				break
-			}
-		}
-	}
-	pp.mu.RUnlock()
-
-	if prodPool == nil {
-		return fmt.Errorf("processpool: pool %s not found", key)
-	}
-
-	switch mode {
-	case RolloutModeCanary:
-		return pp.callCanary(ctx, id, hashKey, rolloutPct, prodPool, altPool, prodFn)
-	case RolloutModeShadow:
-		return pp.callShadow(ctx, id, prodPool, altPool, prodFn, shadowFn)
-	}
-	return pp.callPool(ctx, prodPool, prodFn)
-}
-
-// callCanary routes rolloutPct% of calls (via consistent hash on hashKey) to altPool
-// when one exists. Pool pointers are pre-snapshotted by the caller under RLock.
-func (pp *ProcessPool[T]) callCanary(ctx context.Context, id string, hashKey string, rolloutPct float64, prodPool, altPool *VersionedPool[T], fn func(context.Context, T) error) error {
-	if hashKey == "" {
-		hashKey = DefaultCanaryHashKey
-	}
-	h := fnv.New32a()
-	h.Write([]byte(hashKey))
-	pct := float64(h.Sum32()%100) + 1 // 1–100
-
-	if pct <= rolloutPct && altPool != nil {
-		return pp.callPool(ctx, altPool, fn)
-	}
-	return pp.callPool(ctx, prodPool, fn)
-}
-
-// callShadow calls prodFn on the production pool, then fires shadowFn on altPool
-// in a background goroutine. Pool pointers are pre-snapshotted by the caller under RLock.
-func (pp *ProcessPool[T]) callShadow(ctx context.Context, id string, prodPool, altPool *VersionedPool[T], prodFn, shadowFn func(context.Context, T) error) error {
-	prodErr := pp.callPool(ctx, prodPool, prodFn)
-
-	if shadowFn != nil && altPool != nil {
-		// Detach from the caller's context: the production call has already returned,
-		// so the caller's deadline may have expired or the ctx may be cancelled before
-		// the shadow goroutine gets CPU time. Shadow evaluation must be independent.
-		shadowCtx := context.WithoutCancel(ctx)
-		shadowPool := altPool
-		go func() {
-			plugin, err := shadowPool.Acquire(shadowCtx)
-			if err != nil {
-				log.Printf("processpool: shadow acquire failed for %s: %v", id, err)
-				return
-			}
-			defer shadowPool.Release(plugin)
-			if err := shadowFn(shadowCtx, plugin); err != nil {
-				log.Printf("processpool: shadow error for %s: %v", id, err)
-				if pp.metrics != nil {
-					pp.metrics.shadowDiffs.WithLabelValues(id).Inc()
-				}
-			}
-		}()
-	}
-
-	return prodErr
-}
-
-func (pp *ProcessPool[T]) callPool(ctx context.Context, pool *VersionedPool[T], fn func(context.Context, T) error) error {
-	plugin, err := pool.Acquire(ctx)
-	if err != nil {
-		return err
-	}
-	defer pool.Release(plugin)
-	return fn(ctx, plugin)
-}
-
 // marks the VersionedPool as draining, waits for in-flight calls to finish
 // (up to pp.drainTimeout), removes it from pp.pools, then calls onDrained if set.
 // For graceful updates, onDrained kills the old subprocess after the last in-flight
@@ -457,9 +242,9 @@ func (pp *ProcessPool[T]) drain(key PoolKey, pool *VersionedPool[T], onDrained f
 
 	elapsed := time.Since(start).Seconds()
 	if pp.metrics != nil {
-		pp.metrics.drainDuration.WithLabelValues(key.Id, key.Version).Observe(elapsed)
-		pp.metrics.poolSize.WithLabelValues(key.Id, key.Version).Set(0)
-		pp.metrics.poolInflight.WithLabelValues(key.Id, key.Version).Set(0)
+		pp.metrics.drainDuration.WithLabelValues(key.Id, key.Name).Observe(elapsed)
+		pp.metrics.poolSize.WithLabelValues(key.Id, key.Name).Set(0)
+		pp.metrics.poolInflight.WithLabelValues(key.Id, key.Name).Set(0)
 	}
 
 	if pool.Inflight() > 0 {
