@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/harishhary/blink/internal/executor"
+	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/internal/pools"
 	"go.yaml.in/yaml/v4"
 )
@@ -28,9 +28,9 @@ func (e ValidationError) Error() string {
 }
 
 // Loader[T] encapsulates per-plugin-type config loading logic.
-// Implement once per plugin type and inject into NewConfigManager.
+// Implement once per plugin type and inject into NewConfigWatcher.
 // Embed BaseLoader[T] to inherit default Validate and CrossValidate.
-type Loader[T executor.Syncable] interface {
+type Loader[T plugin.Syncable] interface {
 	// Parse reads a single YAML sidecar file and returns the parsed metadata.
 	Parse(path string) (T, error)
 	// Validate runs directory-level checks given already-parsed items and
@@ -44,12 +44,12 @@ type Loader[T executor.Syncable] interface {
 // CrossValidate. Embed in per-plugin Loader structs to inherit defaults and only
 // override what the plugin type needs. U is the concrete struct (e.g. FormatterMetadata);
 // T is its pointer type (e.g. *FormatterMetadata).
-type BaseLoader[U executor.Syncable, T interface {
+type BaseLoader[U plugin.Syncable, T interface {
 	*U
-	executor.Syncable
+	plugin.Syncable
 }] struct{}
 
-// named is satisfied by any metadata type that embeds *executor.PluginMetadata.
+// named is satisfied by any metadata type that embeds *plugin.PluginMetadata.
 // It is intentionally unexported — name injection is a loader concern, not a plugin runtime concern.
 type named interface{ SetName(string) }
 

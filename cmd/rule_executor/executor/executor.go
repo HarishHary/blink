@@ -61,13 +61,13 @@ type ExecutorService struct {
 	reader     brokers.Reader
 	writer     brokers.Writer
 	pool       *rules.Pool
-	cfgWatcher *rules.RuleConfigManager
+	cfgWatcher *rules.RuleConfigWatcher
 	sem        *semaphore.Weighted
 	batchSize  int
 	timeoutSec int
 }
 
-func NewExecutorService(pool *rules.Pool, cfgWatcher *rules.RuleConfigManager) (*ExecutorService, error) {
+func NewExecutorService(pool *rules.Pool, cfgWatcher *rules.RuleConfigWatcher) (*ExecutorService, error) {
 	serviceContext := ctx.New("BLINK-RULE-EXECUTOR - EXEC")
 	if err := configuration.LoadFromEnvironment(&serviceContext); err != nil {
 		return nil, err

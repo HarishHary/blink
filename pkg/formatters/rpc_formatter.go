@@ -6,19 +6,19 @@ import (
 	"fmt"
 
 	"github.com/harishhary/blink/internal/errors"
-	"github.com/harishhary/blink/internal/executor"
+	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/alerts"
 	"github.com/harishhary/blink/pkg/formatters/rpc_formatters"
 )
 
 type rpcFormatter struct {
-	cfgManager *FormatterConfigManager
+	cfgManager *FormatterConfigWatcher
 	fileName   string
 	checksum   string
 	client     rpc_formatters.FormatterClient
 }
 
-func newRpcFormatter(fileName string, client rpc_formatters.FormatterClient, manager *FormatterConfigManager, checksum string) *rpcFormatter {
+func newRpcFormatter(fileName string, client rpc_formatters.FormatterClient, manager *FormatterConfigWatcher, checksum string) *rpcFormatter {
 	return &rpcFormatter{
 		cfgManager: manager,
 		fileName:   fileName,
@@ -40,10 +40,10 @@ func (f *rpcFormatter) FormatterMetadata() *FormatterMetadata {
 	if c := f.cfg(); c != nil {
 		return c
 	}
-	return &FormatterMetadata{PluginMetadata: executor.PluginMetadata{Id: f.fileName, Name: f.fileName}}
+	return &FormatterMetadata{PluginMetadata: plugin.PluginMetadata{Id: f.fileName, Name: f.fileName}}
 }
 
-func (f *rpcFormatter) Metadata() executor.PluginMetadata {
+func (f *rpcFormatter) Metadata() plugin.PluginMetadata {
 	return f.FormatterMetadata().Metadata()
 }
 

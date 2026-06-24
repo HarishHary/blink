@@ -23,7 +23,7 @@ import (
 	"github.com/harishhary/blink/internal/logger"
 )
 
-type EnrichmentConfigManager = cfg.ConfigManager[*EnrichmentMetadata]
+type EnrichmentConfigWatcher = cfg.ConfigWatcher[*EnrichmentMetadata]
 
 // Loader implements cfg.Loader[*EnrichmentMetadata] for enrichments.
 // Embed cfg.BaseLoader to inherit default Parse and Validate; override CrossValidate.
@@ -72,6 +72,6 @@ func (Loader) CrossValidate(all []*EnrichmentMetadata) error {
 	return nil
 }
 
-func NewEnrichmentConfigManager(logger *logger.Logger, dir string) *EnrichmentConfigManager {
-	return cfg.NewConfigManager[*EnrichmentMetadata](logger, "enrichment", dir, Loader{})
+func NewEnrichmentConfigWatcher(logger *logger.Logger, dir string) *EnrichmentConfigWatcher {
+	return cfg.NewConfigWatcher[*EnrichmentMetadata](logger, "enrichment", dir, Loader{})
 }

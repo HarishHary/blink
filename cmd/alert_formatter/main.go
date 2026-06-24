@@ -28,7 +28,7 @@ func main() {
 	defer stop()
 
 	pluginDir := os.Getenv("FORMATTER_PLUGIN_DIR")
-	cfgMgr := formatters.NewFormatterConfigManager(logger.New("formatter-config", "dev"), pluginDir)
+	cfgMgr := formatters.NewFormatterConfigWatcher(logger.New("formatter-config", "dev"), pluginDir)
 	cfgSvc := services.NewConfigSyncService("formatter-config-sync", "BLINK-ALERT-FORMATTER - CONFIG", cfgMgr)
 
 	routingTable := pools.NewRoutingTable()

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 
 	"github.com/harishhary/blink/internal/errors"
-	"github.com/harishhary/blink/internal/executor"
+	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/events"
 	"github.com/harishhary/blink/pkg/rules/rpc_rules"
 )
@@ -13,12 +13,12 @@ import (
 // This is the executor-side wrapper for a live rule subprocess.
 type rpcRule struct {
 	client     rpc_rules.RuleClient
-	cfgManager *RuleConfigManager
+	cfgManager *RuleConfigWatcher
 	fileName   string
 	checksum   string // SHA-256 of the binary
 }
 
-func newRpcRule(fileName string, client rpc_rules.RuleClient, manager *RuleConfigManager, checksum string) *rpcRule {
+func newRpcRule(fileName string, client rpc_rules.RuleClient, manager *RuleConfigWatcher, checksum string) *rpcRule {
 	return &rpcRule{
 		client:     client,
 		cfgManager: manager,
@@ -38,22 +38,22 @@ func (r *rpcRule) cfg() *RuleMetadata {
 	return v
 }
 
-// RuleMetadata returns the live YAML-derived rule configuration for this executor.
+// RuleMetadata returns the live YAML-derived rule configuration for this plugin.
 func (r *rpcRule) RuleMetadata() *RuleMetadata {
 	if c := r.cfg(); c != nil {
 		return c
 	}
 	// Return a minimal stub so callers don't need to nil-check.
-	return &RuleMetadata{PluginMetadata: executor.PluginMetadata{Name: r.fileName, Id: r.fileName}}
+	return &RuleMetadata{PluginMetadata: plugin.PluginMetadata{Name: r.fileName, Id: r.fileName}}
 }
 
 func (r *rpcRule) Checksum() string { return r.checksum }
 
-func (r *rpcRule) Metadata() executor.PluginMetadata {
+func (r *rpcRule) Metadata() plugin.PluginMetadata {
 	if c := r.cfg(); c != nil {
 		return c.Metadata()
 	}
-	return executor.PluginMetadata{Name: r.fileName}
+	return plugin.PluginMetadata{Name: r.fileName}
 }
 
 // ctx carries the caller's deadline (e.g. the executor's per-event timeout).

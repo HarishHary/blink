@@ -6,20 +6,20 @@ import (
 	"fmt"
 
 	"github.com/harishhary/blink/internal/errors"
-	"github.com/harishhary/blink/internal/executor"
+	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/alerts"
 	"github.com/harishhary/blink/pkg/scoring"
 	"github.com/harishhary/blink/pkg/tuning_rules/rpc_tuning_rules"
 )
 
 type rpcTuningRule struct {
-	cfgManager *TuningRuleConfigManager
+	cfgManager *TuningRuleConfigWatcher
 	fileName   string
 	checksum   string
 	client     rpc_tuning_rules.TuningRuleClient
 }
 
-func newRpcTuningRule(fileName string, client rpc_tuning_rules.TuningRuleClient, manager *TuningRuleConfigManager, checksum string) *rpcTuningRule {
+func newRpcTuningRule(fileName string, client rpc_tuning_rules.TuningRuleClient, manager *TuningRuleConfigWatcher, checksum string) *rpcTuningRule {
 	return &rpcTuningRule{
 		cfgManager: manager,
 		fileName:   fileName,
@@ -41,10 +41,10 @@ func (r *rpcTuningRule) TuningRuleMetadata() *TuningRuleMetadata {
 	if c := r.cfg(); c != nil {
 		return c
 	}
-	return &TuningRuleMetadata{PluginMetadata: executor.PluginMetadata{Id: r.fileName, Name: r.fileName}}
+	return &TuningRuleMetadata{PluginMetadata: plugin.PluginMetadata{Id: r.fileName, Name: r.fileName}}
 }
 
-func (r *rpcTuningRule) Metadata() executor.PluginMetadata {
+func (r *rpcTuningRule) Metadata() plugin.PluginMetadata {
 	return r.TuningRuleMetadata().Metadata()
 }
 

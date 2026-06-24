@@ -157,7 +157,7 @@ func (c *RuleMetadata) TuningRules() []string               { return c.TuningRul
 type RuleRegistry = cfg.Registry[*RuleMetadata]
 
 // Manager is the generic config manager parameterised for rules.
-type RuleConfigManager = cfg.ConfigManager[*RuleMetadata]
+type RuleConfigWatcher = cfg.ConfigWatcher[*RuleMetadata]
 
 // Loader implements cfg.Loader[*RuleMetadata] for rules.
 // Embed cfg.BaseLoader to inherit default CrossValidate (no-op); override Parse and Validate.
@@ -206,8 +206,8 @@ func (l Loader) Validate(items []*RuleMetadata, binaries []string) []ValidationE
 	return errs
 }
 
-func NewRuleConfigManager(log *logger.Logger, dir string) *RuleConfigManager {
-	return cfg.NewConfigManager[*RuleMetadata](log, "rule", dir, Loader{})
+func NewRuleConfigWatcher(log *logger.Logger, dir string) *RuleConfigWatcher {
+	return cfg.NewConfigWatcher[*RuleMetadata](log, "rule", dir, Loader{})
 }
 
 // RulesForLogType returns all enabled rules from reg that apply to logType.

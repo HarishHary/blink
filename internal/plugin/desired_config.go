@@ -1,4 +1,4 @@
-package executor
+package plugin
 
 import internal "github.com/harishhary/blink/internal/pools"
 

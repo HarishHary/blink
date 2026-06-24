@@ -8,19 +8,19 @@ import (
 	goplugin "github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
 
-	"github.com/harishhary/blink/internal/executor"
 	"github.com/harishhary/blink/internal/helpers"
+	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/formatters/rpc_formatters"
 )
 
 // NewFormatterAdapter builds the PluginAdapter for the formatters plugin type.
-func NewFormatterAdapter(manager *FormatterConfigManager) *executor.PluginAdapter[Formatter] {
-	return &executor.PluginAdapter[Formatter]{
+func NewFormatterAdapter(manager *FormatterConfigWatcher) *plugin.PluginAdapter[Formatter] {
+	return &plugin.PluginAdapter[Formatter]{
 		Key:           "formatter",
 		Magic:         "formatter_v1",
 		Plugin:        &formatterPlugin{},
 		DesiredConfig: manager,
-		DoHandshake: func(ctx context.Context, raw any, binPath, hash string) (Formatter, executor.PluginLifecycle, string, string, error) {
+		DoHandshake: func(ctx context.Context, raw any, binPath, hash string) (Formatter, plugin.PluginLifecycle, string, string, error) {
 			rpc, ok := raw.(rpc_formatters.FormatterClient)
 			if !ok {
 				return nil, nil, "", "", fmt.Errorf("dispense: unexpected type %T", raw)

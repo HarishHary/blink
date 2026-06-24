@@ -28,7 +28,7 @@ func main() {
 	defer stop()
 
 	pluginDir := os.Getenv("TUNER_PLUGIN_DIR")
-	cfgMgr := tuning_rules.NewTuningRuleConfigManager(logger.New("tuning-config", "dev"), pluginDir)
+	cfgMgr := tuning_rules.NewTuningRuleConfigWatcher(logger.New("tuning-config", "dev"), pluginDir)
 	cfgSvc := services.NewConfigSyncService("tuning-config-sync", "BLINK-RULE-TUNER - CONFIG", cfgMgr)
 
 	routingTable := pools.NewRoutingTable()

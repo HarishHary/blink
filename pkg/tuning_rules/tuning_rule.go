@@ -4,12 +4,12 @@ import (
 	"context"
 
 	"github.com/harishhary/blink/internal/errors"
-	"github.com/harishhary/blink/internal/executor"
+	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/alerts"
 	"github.com/harishhary/blink/pkg/scoring"
 )
 
-type PluginMetadata = executor.PluginMetadata
+type PluginMetadata = plugin.PluginMetadata
 
 type RuleType int
 

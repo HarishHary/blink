@@ -1,4 +1,4 @@
-// Package config provides the generic Registry and ConfigManager used by all
+// Package config provides the generic Registry and ConfigWatcher used by all
 // plugin config packages (enrichments, formatters, matchers, tuning_rules).
 //
 // Each plugin type defines its own metadata struct and a Loader that provides
@@ -17,17 +17,17 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/harishhary/blink/internal/executor"
 	"github.com/harishhary/blink/internal/logger"
+	"github.com/harishhary/blink/internal/plugin"
 )
 
 const debounce = 400 * time.Millisecond
 
-// ConfigManager[T] is the generic engine for watching a directory of YAML sidecars.
+// ConfigWatcher[T] is the generic engine for watching a directory of YAML sidecars.
 // Start(ctx) performs an initial reconcile then watches the directory for changes.
 // Current() returns the live Registry at any time.
-// ConfigManager implements manager.Manager so it can be wrapped by ConfigSyncService.
-type ConfigManager[T executor.Syncable] struct {
+// ConfigWatcher implements manager.Manager so it can be wrapped by ConfigSyncService.
+type ConfigWatcher[T plugin.Syncable] struct {
 	logger  *logger.Logger
 	name    string // plugin type label (e.g. "rule"); used in log/error messages
 	dir     string
@@ -39,10 +39,10 @@ type ConfigManager[T executor.Syncable] struct {
 	modTimes map[string]time.Time // path → mtime at last successful load
 }
 
-// NewConfigManager creates a ConfigManager for the given plugin type.
+// NewConfigWatcher creates a ConfigWatcher for the given plugin type.
 // name is the short plugin type label (e.g. "rule", "enrichment").
-func NewConfigManager[T executor.Syncable](logger *logger.Logger, name, dir string, loader Loader[T]) *ConfigManager[T] {
-	m := &ConfigManager[T]{
+func NewConfigWatcher[T plugin.Syncable](logger *logger.Logger, name, dir string, loader Loader[T]) *ConfigWatcher[T] {
+	m := &ConfigWatcher[T]{
 		logger:   logger,
 		name:     name,
 		dir:      dir,
@@ -56,7 +56,7 @@ func NewConfigManager[T executor.Syncable](logger *logger.Logger, name, dir stri
 
 // Start performs an initial reconcile, sets up the fsnotify watcher, and spawns
 // the watch goroutine. Returns quickly; ongoing work runs in the background.
-func (m *ConfigManager[T]) Start(ctx context.Context) error {
+func (m *ConfigWatcher[T]) Start(ctx context.Context) error {
 	if err := m.reconcile("startup"); err != nil {
 		return err
 	}
@@ -108,11 +108,11 @@ func (m *ConfigManager[T]) Start(ctx context.Context) error {
 }
 
 // Current returns the most recently loaded Registry.
-func (m *ConfigManager[T]) Current() *Registry[T] { return m.current.Load() }
+func (m *ConfigWatcher[T]) Current() *Registry[T] { return m.current.Load() }
 
 // reconcile scans the directory, re-parses files whose mtime changed, removes
 // deleted entries, validates the full set, and atomically swaps the Registry.
-func (m *ConfigManager[T]) reconcile(reason string) error {
+func (m *ConfigWatcher[T]) reconcile(reason string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -200,7 +200,7 @@ func (m *ConfigManager[T]) reconcile(reason string) error {
 
 // liveItemsAndBinaries scans m.dir fresh, parsing all YAML files via loader.Parse,
 // and returns the parsed items and executable binary names.
-func (m *ConfigManager[T]) liveItemsAndBinaries() ([]T, []string) {
+func (m *ConfigWatcher[T]) liveItemsAndBinaries() ([]T, []string) {
 	entries, err := os.ReadDir(m.dir)
 	if err != nil {
 		return nil, nil
@@ -233,13 +233,13 @@ func (m *ConfigManager[T]) liveItemsAndBinaries() ([]T, []string) {
 
 // DesiredBinaryState returns the BinaryState for the binary with the given
 // filename stem (no extension). Returns false when no YAML sidecar is registered.
-func (m *ConfigManager[T]) DesiredBinaryState(name string) (executor.BinaryState, bool) {
+func (m *ConfigWatcher[T]) DesiredBinaryState(name string) (plugin.BinaryState, bool) {
 	item, ok := m.Current().ByFileName(name)
 	if !ok {
-		return executor.BinaryState{}, false
+		return plugin.BinaryState{}, false
 	}
 	md := item.Metadata()
-	return executor.BinaryState{
+	return plugin.BinaryState{
 		ID:       md.Id,
 		Name:     md.Name,
 		Enabled:  md.Enabled,
@@ -250,7 +250,7 @@ func (m *ConfigManager[T]) DesiredBinaryState(name string) (executor.BinaryState
 
 // HasBlockingErrorFor reports whether there is a blocking validation error matching
 // the given plugin ID or YAML file name.
-func (m *ConfigManager[T]) HasBlockingErrorFor(id string, yamlFile string) bool {
+func (m *ConfigWatcher[T]) HasBlockingErrorFor(id string, yamlFile string) bool {
 	items, binaries := m.liveItemsAndBinaries()
 	for _, e := range m.loader.Validate(items, binaries) {
 		if !e.Blocking {
@@ -267,7 +267,7 @@ func (m *ConfigManager[T]) HasBlockingErrorFor(id string, yamlFile string) bool 
 }
 
 // HasBlockingError reports whether the given plugin ID has any blocking validation error.
-func (m *ConfigManager[T]) HasBlockingError(pluginID string) bool {
+func (m *ConfigWatcher[T]) HasBlockingError(pluginID string) bool {
 	if pluginID == "" {
 		return false
 	}

@@ -4,16 +4,16 @@ import (
 	"context"
 
 	"github.com/harishhary/blink/internal/errors"
-	"github.com/harishhary/blink/internal/executor"
+	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/events"
 )
 
-type PluginMetadata = executor.PluginMetadata
+type PluginMetadata = plugin.PluginMetadata
 
 // MatcherMetadata is the in-memory representation of a matcher YAML sidecar.
 type MatcherMetadata struct {
-	executor.PluginMetadata `yaml:",inline"`
-	Global                  bool `yaml:"global"`
+	plugin.PluginMetadata `yaml:",inline"`
+	Global                bool `yaml:"global"`
 }
 
 type Matcher interface {

@@ -42,11 +42,11 @@ type MatcherService struct {
 	ctx.ServiceContext
 	reader     brokers.Reader
 	writer     brokers.Writer
-	cfgWatcher *rules.RuleConfigManager
+	cfgWatcher *rules.RuleConfigWatcher
 	pool       *matchers.Pool
 }
 
-func NewMatcherService(pool *matchers.Pool, cfgWatcher *rules.RuleConfigManager) (*MatcherService, error) {
+func NewMatcherService(pool *matchers.Pool, cfgWatcher *rules.RuleConfigWatcher) (*MatcherService, error) {
 	serviceContext := ctx.New("BLINK-EVENT-MATCHER - MATCHER")
 	if err := configuration.LoadFromEnvironment(&serviceContext); err != nil {
 		return nil, err

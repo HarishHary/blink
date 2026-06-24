@@ -4,15 +4,15 @@ import (
 	"context"
 
 	"github.com/harishhary/blink/internal/errors"
-	"github.com/harishhary/blink/internal/executor"
+	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/alerts"
 )
 
-type PluginMetadata = executor.PluginMetadata
+type PluginMetadata = plugin.PluginMetadata
 
 // FormatterMetadata is the in-memory representation of a formatter YAML sidecar.
 type FormatterMetadata struct {
-	executor.PluginMetadata `yaml:",inline"`
+	plugin.PluginMetadata `yaml:",inline"`
 }
 
 type Formatter interface {

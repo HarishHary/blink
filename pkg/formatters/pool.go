@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/harishhary/blink/internal/errors"
-	"github.com/harishhary/blink/internal/executor"
 	"github.com/harishhary/blink/internal/messaging"
+	"github.com/harishhary/blink/internal/plugin"
 	internal "github.com/harishhary/blink/internal/pools"
 	"github.com/harishhary/blink/pkg/alerts"
 )
@@ -65,15 +65,15 @@ func (p *Pool) Sync(msg messaging.Message) {
 		p.Register(poolKey(items[0]), items, maxProcs, onDrained)
 	}
 	switch m := msg.(type) {
-	case executor.RegisterMessage[Formatter]:
+	case plugin.RegisterMessage[Formatter]:
 		register(nil, m.Items, m.MaxProcs)
-	case executor.UpdateMessage[Formatter]:
+	case plugin.UpdateMessage[Formatter]:
 		register(m.OnDrained, m.Items, m.MaxProcs)
-	case executor.UnregisterMessage[Formatter]:
+	case plugin.UnregisterMessage[Formatter]:
 		p.Unregister(m.ItemKey)
-	case executor.RemoveMessage[Formatter]:
+	case plugin.RemoveMessage[Formatter]:
 		p.Remove(m.ItemKey)
-	case executor.MigrateMessage[Formatter]:
+	case plugin.MigrateMessage[Formatter]:
 		p.MigrateSlots(m.ActiveKey.Id, m.ActiveKey, m.PendingKey)
 	}
 }

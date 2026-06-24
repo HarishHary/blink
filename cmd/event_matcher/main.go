@@ -33,12 +33,12 @@ func main() {
 	if ruleConfigDir == "" {
 		log.Fatal("RULE_CONFIG_DIR is required")
 	}
-	ruleCfgMgr := rules.NewRuleConfigManager(logger.New("rule-config", "dev"), ruleConfigDir)
+	ruleCfgMgr := rules.NewRuleConfigWatcher(logger.New("rule-config", "dev"), ruleConfigDir)
 	ruleCfgSvc := services.NewConfigSyncService("rule-config-sync", "BLINK-EVENT-MATCHER - RULE-CONFIG", ruleCfgMgr)
 
 	// Matcher plugin config manager (YAML sidecars for matcher binaries).
 	matcherPluginDir := os.Getenv("MATCHER_PLUGIN_DIR")
-	matcherCfgMgr := matchers.NewMatcherConfigManager(logger.New("matcher-config", "dev"), matcherPluginDir)
+	matcherCfgMgr := matchers.NewMatcherConfigWatcher(logger.New("matcher-config", "dev"), matcherPluginDir)
 	matcherCfgSvc := services.NewConfigSyncService("matcher-config-sync", "BLINK-EVENT-MATCHER - MATCHER-CONFIG", matcherCfgMgr)
 
 	routingTable := pools.NewRoutingTable()

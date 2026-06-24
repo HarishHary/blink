@@ -33,7 +33,7 @@ func main() {
 	if rulePluginDir == "" {
 		log.Fatal("RULE_PLUGIN_DIR is required")
 	}
-	cfgMgr := rules.NewRuleConfigManager(logger.New("rule-config", "dev"), rulePluginDir)
+	cfgMgr := rules.NewRuleConfigWatcher(logger.New("rule-config", "dev"), rulePluginDir)
 	cfgSvc := services.NewConfigSyncService("rule-config-sync", "BLINK-RULE-EXECUTOR - CONFIG", cfgMgr)
 
 	rulePool := rules.NewPool(cfgMgr, 0)

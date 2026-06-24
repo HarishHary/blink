@@ -22,7 +22,7 @@ import (
 
 // Registry and Manager are the generic implementations parameterised for formatters.
 type Registry = cfg.Registry[*FormatterMetadata]
-type FormatterConfigManager = cfg.ConfigManager[*FormatterMetadata]
+type FormatterConfigWatcher = cfg.ConfigWatcher[*FormatterMetadata]
 
 // Loader implements cfg.Loader[*FormatterMetadata] for formatters.
 // Embed cfg.BaseLoader to inherit default Parse, Validate, and CrossValidate.
@@ -30,6 +30,6 @@ type Loader struct {
 	cfg.BaseLoader[FormatterMetadata, *FormatterMetadata]
 }
 
-func NewFormatterConfigManager(log *logger.Logger, dir string) *FormatterConfigManager {
-	return cfg.NewConfigManager[*FormatterMetadata](log, "formatter", dir, Loader{})
+func NewFormatterConfigWatcher(log *logger.Logger, dir string) *FormatterConfigWatcher {
+	return cfg.NewConfigWatcher[*FormatterMetadata](log, "formatter", dir, Loader{})
 }

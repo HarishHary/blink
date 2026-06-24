@@ -20,19 +20,19 @@ package tuning_rules
 
 import (
 	cfg "github.com/harishhary/blink/internal/config"
-	"github.com/harishhary/blink/internal/executor"
 	"github.com/harishhary/blink/internal/logger"
+	"github.com/harishhary/blink/internal/plugin"
 )
 
 // TuningRuleMetadata is the in-memory representation of a tuning rule YAML sidecar.
 type TuningRuleMetadata struct {
-	executor.PluginMetadata `yaml:",inline"`
-	Global                  bool   `yaml:"global"`
-	RuleType                string `yaml:"rule_type"`  // "ignore", "set_confidence", "increase_confidence", "decrease_confidence"
-	Confidence              string `yaml:"confidence"` // meaningful only for *_confidence rule types
+	plugin.PluginMetadata `yaml:",inline"`
+	Global                bool   `yaml:"global"`
+	RuleType              string `yaml:"rule_type"`  // "ignore", "set_confidence", "increase_confidence", "decrease_confidence"
+	Confidence            string `yaml:"confidence"` // meaningful only for *_confidence rule types
 }
 
-type TuningRuleConfigManager = cfg.ConfigManager[*TuningRuleMetadata]
+type TuningRuleConfigWatcher = cfg.ConfigWatcher[*TuningRuleMetadata]
 
 // Loader implements cfg.Loader[*TuningRuleMetadata] for tuning rules.
 // Embed cfg.BaseLoader to inherit default Parse, Validate, and CrossValidate.
@@ -40,6 +40,6 @@ type Loader struct {
 	cfg.BaseLoader[TuningRuleMetadata, *TuningRuleMetadata]
 }
 
-func NewTuningRuleConfigManager(log *logger.Logger, dir string) *TuningRuleConfigManager {
-	return cfg.NewConfigManager[*TuningRuleMetadata](log, "tuning_rule", dir, Loader{})
+func NewTuningRuleConfigWatcher(log *logger.Logger, dir string) *TuningRuleConfigWatcher {
+	return cfg.NewConfigWatcher[*TuningRuleMetadata](log, "tuning_rule", dir, Loader{})
 }

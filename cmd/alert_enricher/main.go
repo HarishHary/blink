@@ -28,7 +28,7 @@ func main() {
 	defer stop()
 
 	pluginDir := os.Getenv("ENRICHER_PLUGIN_DIR")
-	cfgMgr := enrichments.NewEnrichmentConfigManager(logger.New("enrichment-config", "dev"), pluginDir)
+	cfgMgr := enrichments.NewEnrichmentConfigWatcher(logger.New("enrichment-config", "dev"), pluginDir)
 	cfgSvc := services.NewConfigSyncService("enrichment-config-sync", "BLINK-ALERT-ENRICHER - CONFIG", cfgMgr)
 
 	routingTable := pools.NewRoutingTable()

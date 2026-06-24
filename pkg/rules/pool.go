@@ -5,8 +5,8 @@ import (
 	"time"
 
 	"github.com/harishhary/blink/internal/errors"
-	"github.com/harishhary/blink/internal/executor"
 	"github.com/harishhary/blink/internal/messaging"
+	"github.com/harishhary/blink/internal/plugin"
 	internal "github.com/harishhary/blink/internal/pools"
 	"github.com/harishhary/blink/pkg/events"
 )
@@ -15,7 +15,7 @@ type Pool struct {
 	*internal.ProcessPool[Rule]
 }
 
-func NewPool(manager *RuleConfigManager, drainTimeout time.Duration) *Pool {
+func NewPool(manager *RuleConfigWatcher, drainTimeout time.Duration) *Pool {
 	routing := func(id, name string) (internal.RolloutMode, float64) {
 		if name != "" {
 			// Register time: use per-binary YAML so a stable update isn't misrouted
@@ -62,15 +62,15 @@ func poolKey(r Rule) internal.PoolKey {
 // Handles plugin lifecycle messages from the plugin manager bus, registering or deregistering rules in the pool.
 func (p *Pool) Sync(msg messaging.Message) {
 	switch m := msg.(type) {
-	case executor.RegisterMessage[Rule]:
+	case plugin.RegisterMessage[Rule]:
 		p.Register(poolKey(m.Items[0]), m.Items, m.MaxProcs, nil)
-	case executor.UpdateMessage[Rule]:
+	case plugin.UpdateMessage[Rule]:
 		p.Register(poolKey(m.Items[0]), m.Items, m.MaxProcs, m.OnDrained)
-	case executor.UnregisterMessage[Rule]:
+	case plugin.UnregisterMessage[Rule]:
 		p.Unregister(m.ItemKey)
-	case executor.RemoveMessage[Rule]:
+	case plugin.RemoveMessage[Rule]:
 		p.Remove(m.ItemKey)
-	case executor.MigrateMessage[Rule]:
+	case plugin.MigrateMessage[Rule]:
 		p.MigrateSlots(m.ActiveKey.Id, m.ActiveKey, m.PendingKey)
 	}
 }

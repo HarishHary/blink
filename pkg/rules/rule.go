@@ -4,11 +4,11 @@ import (
 	"context"
 
 	"github.com/harishhary/blink/internal/errors"
-	"github.com/harishhary/blink/internal/executor"
+	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/events"
 )
 
-type PluginMetadata = executor.PluginMetadata
+type PluginMetadata = plugin.PluginMetadata
 
 // EvalResult is the per-event outcome returned by Rule.Evaluate.
 // Fields beyond Matched are populated only when the plugin implements the
@@ -25,7 +25,7 @@ type EvalResult struct {
 
 // Rule is the full interface for live rule plugins: config accessor + batch evaluation.
 // All rules receive a slice of events and return one EvalResult per event.
-// PluginMetadata + Checksum together satisfy executor.Syncable.
+// PluginMetadata + Checksum together satisfy plugin.Syncable.
 type Rule interface {
 	RuleMetadata() *RuleMetadata
 	Metadata() PluginMetadata

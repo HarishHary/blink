@@ -1,4 +1,4 @@
-// Package manager defines the Manager interface implemented by both PluginExecutor and ConfigManager - anything that can be started with a context.
+// Package manager defines the Manager interface implemented by both PluginExecutor and ConfigWatcher - anything that can be started with a context.
 package manager
 
 import "context"

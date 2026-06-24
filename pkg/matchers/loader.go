@@ -22,7 +22,7 @@ import (
 )
 
 // Registry and Manager are the generic implementations parameterised for matchers.
-type MatcherConfigManager = cfg.ConfigManager[*MatcherMetadata]
+type MatcherConfigWatcher = cfg.ConfigWatcher[*MatcherMetadata]
 
 // Loader implements cfg.Loader[*MatcherMetadata] for matchers.
 // Embed cfg.BaseLoader to inherit default Parse, Validate, and CrossValidate.
@@ -30,6 +30,6 @@ type Loader struct {
 	cfg.BaseLoader[MatcherMetadata, *MatcherMetadata]
 }
 
-func NewMatcherConfigManager(log *logger.Logger, dir string) *MatcherConfigManager {
-	return cfg.NewConfigManager[*MatcherMetadata](log, "matcher", dir, Loader{})
+func NewMatcherConfigWatcher(log *logger.Logger, dir string) *MatcherConfigWatcher {
+	return cfg.NewConfigWatcher[*MatcherMetadata](log, "matcher", dir, Loader{})
 }

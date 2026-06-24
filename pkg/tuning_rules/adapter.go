@@ -8,19 +8,19 @@ import (
 	goplugin "github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
 
-	"github.com/harishhary/blink/internal/executor"
 	"github.com/harishhary/blink/internal/helpers"
+	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/tuning_rules/rpc_tuning_rules"
 )
 
 // NewTuningRuleAdapter builds the PluginAdapter for the tuning_rules plugin type.
-func NewTuningRuleAdapter(manager *TuningRuleConfigManager) *executor.PluginAdapter[TuningRule] {
-	return &executor.PluginAdapter[TuningRule]{
+func NewTuningRuleAdapter(manager *TuningRuleConfigWatcher) *plugin.PluginAdapter[TuningRule] {
+	return &plugin.PluginAdapter[TuningRule]{
 		Key:           "tuning_rule",
 		Magic:         "tuning_rule_v1",
 		Plugin:        &tuningPlugin{},
 		DesiredConfig: manager,
-		DoHandshake: func(ctx context.Context, raw any, binPath, hash string) (TuningRule, executor.PluginLifecycle, string, string, error) {
+		DoHandshake: func(ctx context.Context, raw any, binPath, hash string) (TuningRule, plugin.PluginLifecycle, string, string, error) {
 			rpc, ok := raw.(rpc_tuning_rules.TuningRuleClient)
 			if !ok {
 				return nil, nil, "", "", fmt.Errorf("dispense: unexpected type %T", raw)
