@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/harishhary/blink/internal/brokers"
-	"github.com/harishhary/blink/internal/brokers/kafka"
 	"github.com/harishhary/blink/internal/configuration"
 	ctx "github.com/harishhary/blink/internal/context"
 	"github.com/harishhary/blink/internal/errors"
@@ -53,7 +52,7 @@ func NewMatcherService(pool *matchers.Pool, cfgWatcher *rules.RuleConfigWatcher)
 	}
 	serviceContext.Logger = logger.New(serviceContext.Name(), "dev")
 
-	b := kafka.NewKafkaBroker(serviceContext.Configuration().Kafka)
+	b := brokers.NewKafkaBroker(serviceContext.Configuration().Kafka)
 	readr := b.NewReader(
 		serviceContext.Configuration().Topics.MatcherTopic,
 		serviceContext.Configuration().Topics.MatcherGroup,

@@ -1,11 +1,10 @@
-package kafka
+package brokers
 
 import (
 	"context"
 	"strings"
 	"time"
 
-	"github.com/harishhary/blink/internal/brokers"
 	"github.com/harishhary/blink/internal/configuration"
 	"github.com/segmentio/kafka-go"
 )
@@ -17,7 +16,7 @@ type kafkaBroker struct {
 }
 
 // NewKafkaBroker constructs a Broker using the given KafkaConfig.
-func NewKafkaBroker(cfg configuration.KafkaConfig) brokers.Broker {
+func NewKafkaBroker(cfg configuration.KafkaConfig) Broker {
 	return &kafkaBroker{
 		brokers:     strings.Split(cfg.Brokers, ","),
 		dialTimeout: 10 * time.Second,
@@ -25,7 +24,7 @@ func NewKafkaBroker(cfg configuration.KafkaConfig) brokers.Broker {
 }
 
 // NewReader returns a kafka-backed Reader for the specified topic and group.
-func (kb *kafkaBroker) NewReader(topic, groupID string) brokers.Reader {
+func (kb *kafkaBroker) NewReader(topic, groupID string) Reader {
 	r := kafka.NewReader(kafka.ReaderConfig{
 		Brokers:  kb.brokers,
 		Topic:    topic,
@@ -34,32 +33,32 @@ func (kb *kafkaBroker) NewReader(topic, groupID string) brokers.Reader {
 		MaxBytes: 10e6, // 10MB
 		Dialer:   &kafka.Dialer{Timeout: kb.dialTimeout},
 	})
-	return &reader{r: r}
+	return &kafkaReader{r: r}
 }
 
 // NewWriter returns a kafka-backed Writer for the specified topic.
-func (kb *kafkaBroker) NewWriter(topic string) brokers.Writer {
+func (kb *kafkaBroker) NewWriter(topic string) Writer {
 	w := kafka.NewWriter(kafka.WriterConfig{
 		Brokers:  kb.brokers,
 		Topic:    topic,
 		Balancer: &kafka.LeastBytes{},
 		Dialer:   &kafka.Dialer{Timeout: kb.dialTimeout},
 	})
-	return &writer{w: w}
+	return &kafkaWriter{w: w}
 }
 
-// reader wraps kafka.Reader to implement brokers.Reader.
-type reader struct {
+// kafkaReader wraps kafka.Reader to implement Reader.
+type kafkaReader struct {
 	r *kafka.Reader
 }
 
 // ReadMessage reads the next message from Kafka.
-func (rd *reader) ReadMessage(ctx context.Context) (brokers.Message, error) {
+func (rd *kafkaReader) ReadMessage(ctx context.Context) (Message, error) {
 	m, err := rd.r.ReadMessage(ctx)
 	if err != nil {
-		return brokers.Message{}, err
+		return Message{}, err
 	}
-	return brokers.Message{
+	return Message{
 		Topic:     m.Topic,
 		Partition: m.Partition,
 		Offset:    m.Offset,
@@ -69,8 +68,8 @@ func (rd *reader) ReadMessage(ctx context.Context) (brokers.Message, error) {
 }
 
 // ReadBatch reads up to batchSize messages from Kafka.
-func (rd *reader) ReadBatch(ctx context.Context, batchSize int) ([]brokers.Message, error) {
-	var out []brokers.Message
+func (rd *kafkaReader) ReadBatch(ctx context.Context, batchSize int) ([]Message, error) {
+	var out []Message
 	for i := 0; i < batchSize; i++ {
 		m, err := rd.r.ReadMessage(ctx)
 		if err != nil {
@@ -79,7 +78,7 @@ func (rd *reader) ReadBatch(ctx context.Context, batchSize int) ([]brokers.Messa
 			}
 			return nil, err
 		}
-		out = append(out, brokers.Message{
+		out = append(out, Message{
 			Topic:     m.Topic,
 			Partition: m.Partition,
 			Offset:    m.Offset,
@@ -91,7 +90,7 @@ func (rd *reader) ReadBatch(ctx context.Context, batchSize int) ([]brokers.Messa
 }
 
 // CommitMessages commits offsets of the processed messages.
-func (rd *reader) CommitMessages(ctx context.Context, msgs ...brokers.Message) error {
+func (rd *kafkaReader) CommitMessages(ctx context.Context, msgs ...Message) error {
 	var written []kafka.Message
 	for _, m := range msgs {
 		written = append(written, kafka.Message{Topic: m.Topic, Partition: m.Partition, Offset: m.Offset + 1})
@@ -100,15 +99,15 @@ func (rd *reader) CommitMessages(ctx context.Context, msgs ...brokers.Message) e
 }
 
 // Close closes the underlying kafka.Reader.
-func (rd *reader) Close() error { return rd.r.Close() }
+func (rd *kafkaReader) Close() error { return rd.r.Close() }
 
-// writer wraps kafka.Writer to implement brokers.Writer.
-type writer struct {
+// kafkaWriter wraps kafka.Writer to implement Writer.
+type kafkaWriter struct {
 	w *kafka.Writer
 }
 
 // WriteMessages writes one or more messages to Kafka.
-func (wr *writer) WriteMessages(ctx context.Context, msgs ...brokers.Message) error {
+func (wr *kafkaWriter) WriteMessages(ctx context.Context, msgs ...Message) error {
 	var records []kafka.Message
 	for _, m := range msgs {
 		records = append(records, kafka.Message{Key: m.Key, Value: m.Value})
@@ -117,4 +116,4 @@ func (wr *writer) WriteMessages(ctx context.Context, msgs ...brokers.Message) er
 }
 
 // Close closes the underlying kafka.Writer.
-func (wr *writer) Close() error { return wr.w.Close() }
+func (wr *kafkaWriter) Close() error { return wr.w.Close() }
