@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/harishhary/blink/internal/helpers"
-	internal "github.com/harishhary/blink/internal/pools"
 	goplugin "github.com/hashicorp/go-plugin"
 )
 
@@ -41,29 +40,6 @@ func (a *PluginAdapter[T]) IsReady(binPath string) bool {
 		return false
 	}
 	return !a.DesiredConfig.HasBlockingErrorFor(d.ID, name+".yaml")
-}
-
-// CurrentMode returns the rollout mode declared in the binary's current YAML sidecar.
-// reconcile() compares this against PluginHandle.Mode to detect YAML-only mode changes.
-func (a *PluginAdapter[T]) CurrentMode(binPath string) internal.RolloutMode {
-	d, ok := a.DesiredConfig.DesiredBinaryState(helpers.BinaryBaseName(binPath))
-	if !ok {
-		return internal.RolloutModeBlueGreen
-	}
-	return d.Mode
-}
-
-// IsShadow reports whether this binary is a canary/shadow version that should NOT
-// claim the active pool slot on a fresh start.
-func (a *PluginAdapter[T]) IsShadow(binPath string) bool {
-	mode := a.CurrentMode(binPath)
-	return mode == internal.RolloutModeCanary || mode == internal.RolloutModeShadow
-}
-
-// IsEnabled reports whether a running handle should continue running.
-func (a *PluginAdapter[T]) IsEnabled(h *PluginHandle) bool {
-	d, ok := a.DesiredConfig.DesiredBinaryState(helpers.BinaryBaseName(h.BinPath))
-	return ok && d.Enabled
 }
 
 // Workers returns how many subprocess instances to spawn for this binary.

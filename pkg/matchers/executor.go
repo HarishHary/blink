@@ -9,6 +9,6 @@ var matcherExecutorMetrics = plugin.NewPluginExecutorMetrics("matchersvc")
 
 type MatcherPluginExecutor = plugin.PluginExecutor[Matcher]
 
-func NewMatcherPluginExecutor(log *logger.Logger, notify plugin.Notify, dir string, manager *MatcherConfigWatcher) *MatcherPluginExecutor {
-	return plugin.NewPluginExecutor[Matcher](log, notify, dir, NewMatcherAdapter(manager), matcherExecutorMetrics)
+func NewMatcherPluginExecutor(log *logger.Logger, notify plugin.Notify, dir string, snap plugin.SnapshotSource, manager *MatcherConfigWatcher) *MatcherPluginExecutor {
+	return plugin.NewPluginExecutor[Matcher](log, notify, dir, snap, NewMatcherAdapter(manager), matcherExecutorMetrics)
 }

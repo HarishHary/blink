@@ -69,10 +69,20 @@ type KafkaTopicsGroups struct {
 	DispatcherTopic   string `env:"KAFKA_TOPIC_DISPATCHER"`
 	DispatcherGroup   string `env:"KAFKA_GROUP_DISPATCHER"`
 
-	// ControllerSnapshotTopic is written by rule_controller (write mode) and consumed
-	// by read replicas to keep their atomic.Pointer[Snapshot] cache up to date.
-	ControllerSnapshotTopic string `env:"KAFKA_TOPIC_CONTROLLER_SNAPSHOT,optional"`
-	ControllerSnapshotGroup string `env:"KAFKA_GROUP_CONTROLLER_SNAPSHOT,optional"`
+	// Per-type controller snapshot topics: each type's controller writes its effective
+	// Snapshot here; the matching pipeline service's read replica consumes it to keep its
+	// atomic.Pointer[Snapshot] cache up to date. One topic per plugin type so a replica
+	// only sees snapshots for its own type (no discriminator/filtering needed).
+	RuleSnapshotTopic       string `env:"KAFKA_TOPIC_RULE_SNAPSHOT,optional"`
+	RuleSnapshotGroup       string `env:"KAFKA_GROUP_RULE_SNAPSHOT,optional"`
+	MatcherSnapshotTopic    string `env:"KAFKA_TOPIC_MATCHER_SNAPSHOT,optional"`
+	MatcherSnapshotGroup    string `env:"KAFKA_GROUP_MATCHER_SNAPSHOT,optional"`
+	TuningSnapshotTopic     string `env:"KAFKA_TOPIC_TUNING_SNAPSHOT,optional"`
+	TuningSnapshotGroup     string `env:"KAFKA_GROUP_TUNING_SNAPSHOT,optional"`
+	FormatterSnapshotTopic  string `env:"KAFKA_TOPIC_FORMATTER_SNAPSHOT,optional"`
+	FormatterSnapshotGroup  string `env:"KAFKA_GROUP_FORMATTER_SNAPSHOT,optional"`
+	EnrichmentSnapshotTopic string `env:"KAFKA_TOPIC_ENRICHMENT_SNAPSHOT,optional"`
+	EnrichmentSnapshotGroup string `env:"KAFKA_GROUP_ENRICHMENT_SNAPSHOT,optional"`
 }
 
 type ExecutorConfig struct {

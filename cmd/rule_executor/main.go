@@ -9,6 +9,9 @@ import (
 	"syscall"
 
 	"github.com/harishhary/blink/cmd/rule_executor/executor"
+	"github.com/harishhary/blink/internal/brokers"
+	"github.com/harishhary/blink/internal/configuration"
+	"github.com/harishhary/blink/internal/controller"
 	"github.com/harishhary/blink/internal/logger"
 	"github.com/harishhary/blink/internal/services"
 	"github.com/harishhary/blink/pkg/rules"
@@ -36,9 +39,25 @@ func main() {
 	cfgMgr := rules.NewRuleConfigWatcher(logger.New("rule-config", "dev"), rulePluginDir)
 	cfgSvc := services.NewConfigSyncService("rule-config-sync", "BLINK-RULE-EXECUTOR - CONFIG", cfgMgr)
 
+	// Read replica: consumes the rule controller's snapshot topic and feeds the
+	// executor the control plane's desired state.
+	var cfg configuration.ServiceConfiguration
+	if err := configuration.LoadFromEnvironment(&cfg); err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	b := brokers.NewKafkaBroker(cfg.Kafka)
+	replica := controller.NewReplica(
+		logger.New("rule-snapshot", "dev"),
+		b.NewReader(cfg.Topics.RuleSnapshotTopic, cfg.Topics.RuleSnapshotGroup),
+	)
+	replicaSvc, err := services.NewPluginSyncService("rule-snapshot-sync", "BLINK-RULE-EXECUTOR - SNAPSHOT", replica)
+	if err != nil {
+		log.Fatalf("snapshot service: %v", err)
+	}
+
 	rulePool := rules.NewPool(cfgMgr, 0)
 
-	pluginMgr := rules.NewRulePluginExecutor(logger.New("rule-executor", "dev"), rulePool.Sync, rulePluginDir, cfgMgr)
+	pluginMgr := rules.NewRulePluginExecutor(logger.New("rule-executor", "dev"), rulePool.Sync, rulePluginDir, replica, cfgMgr)
 	syncSvc, err := services.NewPluginSyncService("rule-executor-sync", "BLINK-RULE-EXECUTOR - SYNC", pluginMgr)
 	if err != nil {
 		log.Fatalf("sync service: %v", err)
@@ -52,6 +71,7 @@ func main() {
 	runner := services.New()
 	runner.Register(
 		cfgSvc,
+		replicaSvc,
 		syncSvc,
 		executorSvc,
 	)

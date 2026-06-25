@@ -9,6 +9,9 @@ import (
 	"syscall"
 
 	"github.com/harishhary/blink/cmd/event_matcher/matcher"
+	"github.com/harishhary/blink/internal/brokers"
+	"github.com/harishhary/blink/internal/configuration"
+	"github.com/harishhary/blink/internal/controller"
 	"github.com/harishhary/blink/internal/logger"
 	pools "github.com/harishhary/blink/internal/pools"
 	"github.com/harishhary/blink/internal/services"
@@ -41,10 +44,26 @@ func main() {
 	matcherCfgMgr := matchers.NewMatcherConfigWatcher(logger.New("matcher-config", "dev"), matcherPluginDir)
 	matcherCfgSvc := services.NewConfigSyncService("matcher-config-sync", "BLINK-EVENT-MATCHER - MATCHER-CONFIG", matcherCfgMgr)
 
+	// Read replica: consumes the matcher controller's snapshot topic and feeds the
+	// executor the control plane's desired state.
+	var cfg configuration.ServiceConfiguration
+	if err := configuration.LoadFromEnvironment(&cfg); err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	b := brokers.NewKafkaBroker(cfg.Kafka)
+	replica := controller.NewReplica(
+		logger.New("matcher-snapshot", "dev"),
+		b.NewReader(cfg.Topics.MatcherSnapshotTopic, cfg.Topics.MatcherSnapshotGroup),
+	)
+	replicaSvc, err := services.NewPluginSyncService("matcher-snapshot-sync", "BLINK-EVENT-MATCHER - SNAPSHOT", replica)
+	if err != nil {
+		log.Fatalf("snapshot service: %v", err)
+	}
+
 	routingTable := pools.NewRoutingTable()
 	matcherPool := matchers.NewPool(routingTable, 0)
 
-	pluginMgr := matchers.NewMatcherPluginExecutor(logger.New("event-matcher", "dev"), matcherPool.Sync, matcherPluginDir, matcherCfgMgr)
+	pluginMgr := matchers.NewMatcherPluginExecutor(logger.New("event-matcher", "dev"), matcherPool.Sync, matcherPluginDir, replica, matcherCfgMgr)
 	syncSvc, err := services.NewPluginSyncService("event-matcher-sync", "BLINK-EVENT-MATCHER - SYNC", pluginMgr)
 	if err != nil {
 		log.Fatalf("sync service: %v", err)
@@ -58,6 +77,7 @@ func main() {
 	runner.Register(
 		ruleCfgSvc,
 		matcherCfgSvc,
+		replicaSvc,
 		syncSvc,
 		matcherSvc,
 	)
