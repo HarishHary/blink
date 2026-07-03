@@ -14,29 +14,19 @@ import (
 	"github.com/harishhary/blink/pkg/matchers/rpc_matchers"
 )
 
-// MagicValue is this plugin type's cookie value; the shared cookie key and
-// protocol version live in internal/handshake.
 const MagicValue = "matcher_v1"
 
-// MatcherPlugin is the interface that all matcher plugin binaries must implement.
-// Embed sdk.BaseMatcher to get no-op defaults for Init and Shutdown.
-//
-// All static metadata (name, id, enabled, global, etc.) lives in the YAML
-// sidecar file alongside the binary — the subprocess owns only matching logic.
 type MatcherPlugin interface {
 	Init() error
 	Match(ctx context.Context, event events.Event) (bool, errors.Error)
 	Shutdown() error
 }
 
-// BaseMatcher provides no-op defaults for Init and Shutdown.
-// Embed in your matcher struct to avoid implementing them when not needed.
 type BaseMatcher struct{}
 
 func (BaseMatcher) Init() error     { return nil }
 func (BaseMatcher) Shutdown() error { return nil }
 
-// server wraps a MatcherPlugin and serves the gRPC MatcherServer interface.
 type server struct {
 	rpc_matchers.UnimplementedMatcherServer
 	matcher MatcherPlugin

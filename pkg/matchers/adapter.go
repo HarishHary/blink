@@ -8,18 +8,20 @@ import (
 	goplugin "github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
 
+	"github.com/harishhary/blink/internal/config"
 	"github.com/harishhary/blink/internal/helpers"
 	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/matchers/rpc_matchers"
 )
 
-// NewMatcherAdapter builds the PluginAdapter for the matchers plugin type.
-func NewMatcherAdapter(manager *MatcherConfigWatcher) *plugin.PluginAdapter[Matcher] {
+// NewMatcherAdapter builds the PluginAdapter for the matchers plugin type. cfg is the
+// config source (snapshot-backed in the data plane, disk-backed in the controller).
+func NewMatcherAdapter(cfg config.Source[*MatcherMetadata]) *plugin.PluginAdapter[Matcher] {
 	return &plugin.PluginAdapter[Matcher]{
-		Key:           "matcher",
-		Magic:         "matcher_v1",
-		Plugin:        &matcherPlugin{},
-		DesiredConfig: manager,
+		Key:    "matcher",
+		Magic:  MagicValue,
+		Plugin: &matcherPlugin{},
+		Config: cfg,
 		DoHandshake: func(ctx context.Context, raw any, binPath, hash string) (Matcher, plugin.PluginLifecycle, string, string, error) {
 			rpc, ok := raw.(rpc_matchers.MatcherClient)
 			if !ok {
@@ -35,10 +37,10 @@ func NewMatcherAdapter(manager *MatcherConfigWatcher) *plugin.PluginAdapter[Matc
 				return nil, nil, "", "", fmt.Errorf("init: %w", err)
 			}
 
-			m := newRpcMatcher(fileName, rpc, manager, 5*time.Second, hash)
+			m := newRpcMatcher(fileName, rpc, cfg, hash)
 			id, name := fileName, fileName
-			if desired, ok := manager.DesiredBinaryState(fileName); ok {
-				id = desired.ID
+			if desired, ok := cfg.DesiredBinaryState(fileName); ok {
+				id = desired.Id
 				name = desired.Name
 			}
 			return m, &matcherLifecycle{rpc: rpc}, id, name, nil
@@ -46,7 +48,9 @@ func NewMatcherAdapter(manager *MatcherConfigWatcher) *plugin.PluginAdapter[Matc
 	}
 }
 
-type matcherLifecycle struct{ rpc rpc_matchers.MatcherClient }
+type matcherLifecycle struct {
+	rpc rpc_matchers.MatcherClient
+}
 
 func (l *matcherLifecycle) Ping(ctx context.Context) error {
 	_, err := l.rpc.Ping(ctx, &rpc_matchers.Empty{})

@@ -1,35 +1,25 @@
-// Each matcher binary ships alongside a <name>.yaml sidecar file.
-//
-// YAML schema example:
-//
-//	id: "550e8400-e29b-41d4-a716-446655440002"
-//	name: "prod-accounts"
-//	display_name: "Production Accounts Matcher"
-//	description: "Matches events from production AWS accounts."
-//	enabled: true
-//	version: "1.0.0"
-//	file_name: "prod-accounts"
-//	global: false
-//	mode: "blue-green"
-//	min_procs: 1
-//	max_procs: 2
+// Each matcher binary ships alongside a <name>.yaml sidecar.
+// Schema and field reference: docs/internals/schemas/matchers-schema.md.
 
 package matchers
 
 import (
-	cfg "github.com/harishhary/blink/internal/config"
+	"github.com/harishhary/blink/internal/config"
 	"github.com/harishhary/blink/internal/logger"
+	"github.com/harishhary/blink/internal/plugin"
 )
 
-// Registry and Manager are the generic implementations parameterised for matchers.
-type MatcherConfigWatcher = cfg.ConfigWatcher[*MatcherMetadata]
+// MatcherSnapshotConfig is the control plane backed config source (published snapshot)
+type MatcherSnapshotConfig = config.SnapshotConfig[*MatcherMetadata]
 
-// Loader implements cfg.Loader[*MatcherMetadata] for matchers.
-// Embed cfg.BaseLoader to inherit default Parse, Validate, and CrossValidate.
-type Loader struct {
-	cfg.BaseLoader[MatcherMetadata, *MatcherMetadata]
+// Loader implements config.Loader[*MatcherMetadata] for matchers.
+// Embed config.BaseLoader to inherit default Parse, ParseSpec, Validate, and CrossValidate.
+type MatcherLoader struct {
+	config.BaseLoader[MatcherMetadata, *MatcherMetadata]
 }
 
-func NewMatcherConfigWatcher(log *logger.Logger, dir string) *MatcherConfigWatcher {
-	return cfg.NewConfigWatcher[*MatcherMetadata](log, "matcher", dir, Loader{})
+// NewMatcherSnapshotConfig builds the snapshot-backed matcher config, parsing specs with
+// MatcherLoader.
+func NewMatcherSnapshotConfig(logger *logger.Logger, src plugin.SnapshotSource) *MatcherSnapshotConfig {
+	return config.NewSnapshotConfig[*MatcherMetadata](logger, src, MatcherLoader{})
 }

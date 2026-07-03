@@ -8,8 +8,6 @@ import (
 	"github.com/harishhary/blink/pkg/events"
 )
 
-type PluginMetadata = plugin.PluginMetadata
-
 // MatcherMetadata is the in-memory representation of a matcher YAML sidecar.
 type MatcherMetadata struct {
 	plugin.PluginMetadata `yaml:",inline"`
@@ -17,10 +15,10 @@ type MatcherMetadata struct {
 }
 
 type Matcher interface {
+	Match(ctx context.Context, evts []events.Event) ([]bool, errors.Error)
+
 	MatcherMetadata() *MatcherMetadata
-	Metadata() PluginMetadata
-	Global() bool
+	Metadata() plugin.PluginMetadata
 	Checksum() string
 	String() string
-	Match(ctx context.Context, evts []events.Event) ([]bool, errors.Error)
 }

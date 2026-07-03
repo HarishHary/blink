@@ -3,8 +3,9 @@ package matchers
 import (
 	"context"
 	"encoding/json"
-	"time"
+	"fmt"
 
+	"github.com/harishhary/blink/internal/config"
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/events"
@@ -12,28 +13,26 @@ import (
 )
 
 type rpcMatcher struct {
-	cfgManager *MatcherConfigWatcher
-	fileName   string
-	checksum   string
-	client     rpc_matchers.MatcherClient
-	timeout    time.Duration
+	src      config.Source[*MatcherMetadata]
+	fileName string
+	checksum string
+	client   rpc_matchers.MatcherClient
 }
 
-func newRpcMatcher(fileName string, client rpc_matchers.MatcherClient, manager *MatcherConfigWatcher, timeout time.Duration, checksum string) *rpcMatcher {
+func newRpcMatcher(fileName string, client rpc_matchers.MatcherClient, src config.Source[*MatcherMetadata], checksum string) *rpcMatcher {
 	return &rpcMatcher{
-		cfgManager: manager,
-		fileName:   fileName,
-		checksum:   checksum,
-		client:     client,
-		timeout:    timeout,
+		src:      src,
+		fileName: fileName,
+		checksum: checksum,
+		client:   client,
 	}
 }
 
 func (r *rpcMatcher) cfg() *MatcherMetadata {
-	if r.cfgManager == nil {
+	if r.src == nil {
 		return nil
 	}
-	v, _ := r.cfgManager.Current().ByFileName(r.fileName)
+	v, _ := r.src.ByFileName(r.fileName)
 	return v
 }
 
@@ -46,14 +45,16 @@ func (r *rpcMatcher) MatcherMetadata() *MatcherMetadata {
 }
 
 func (r *rpcMatcher) Metadata() plugin.PluginMetadata {
-	return r.MatcherMetadata().Metadata()
+	if c := r.cfg(); c != nil {
+		return c.Metadata()
+	}
+	return plugin.PluginMetadata{Name: r.fileName, Id: r.fileName}
 }
 
-func (r *rpcMatcher) Global() bool     { return r.MatcherMetadata().Global }
 func (r *rpcMatcher) Checksum() string { return r.checksum }
 func (r *rpcMatcher) String() string {
 	m := r.MatcherMetadata().Metadata()
-	return "RpcMatcher '" + m.Name + "' id:'" + m.Id + "'"
+	return fmt.Sprintf("Matcher '%s' (id:%s)", m.Name, m.Id)
 }
 
 func (r *rpcMatcher) Match(ctx context.Context, evts []events.Event) ([]bool, errors.Error) {
@@ -61,13 +62,13 @@ func (r *rpcMatcher) Match(ctx context.Context, evts []events.Event) ([]bool, er
 	for _, ev := range evts {
 		b, err := json.Marshal(ev)
 		if err != nil {
-			return nil, errors.New(err)
+			return nil, errors.NewE(err)
 		}
 		protoEvents = append(protoEvents, &rpc_matchers.Event{Json: b})
 	}
 	resp, err := r.client.MatchBatch(ctx, &rpc_matchers.MatchBatchRequest{Events: protoEvents})
 	if err != nil {
-		return nil, errors.New(err)
+		return nil, errors.NewE(err)
 	}
 	return resp.GetMatched(), nil
 }
