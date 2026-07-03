@@ -16,9 +16,8 @@ import (
 	"github.com/harishhary/blink/pkg/scoring"
 )
 
-// Alert struct encapsulates a single alert and handles serialization
 type Alert struct {
-	AlertID            string
+	Id                 string
 	Attempts           int
 	Cluster            string
 	Created            time.Time
@@ -34,11 +33,11 @@ type Alert struct {
 	SourceEntity  string
 	SourceService string
 
-	Confidence scoring.Confidence // coming from base rule but changed by tuning rules
-	Severity   scoring.Severity   // coming from base rule but changed by asset tagging and AlertSeverity
+	Confidence scoring.Confidence
+	Severity   scoring.Severity
 
 	Rule                *rules.RuleMetadata
-	OverrideMergeByKeys []string // set by plugin's AlertMergeByKeys; overrides Rule.MergeByKeys() when non-nil
+	OverrideMergeByKeys []string
 }
 
 // MergeByKeys returns the effective merge keys for this alert.
@@ -47,13 +46,13 @@ func (a *Alert) MergeByKeys() []string {
 	if len(a.OverrideMergeByKeys) > 0 {
 		return a.OverrideMergeByKeys
 	}
-	return a.MergeByKeys()
+	return a.Rule.MergeByKeys()
 }
 
 // Creates a new Alert
 func NewAlert(rule *rules.RuleMetadata, event events.Event, optFns ...AlertOptions) (*Alert, errors.Error) {
 	alert := &Alert{
-		AlertID:    uuid.NewString(),
+		Id:         uuid.NewString(),
 		Created:    time.Now().UTC(),
 		Attempts:   0,
 		Event:      event,
@@ -156,7 +155,7 @@ func (a *Alert) OutputDict() map[string]any {
 	output := map[string]any{
 		"cluster":          a.Cluster,
 		"created":          a.Created.Format(helpers.DATETIME_FORMAT),
-		"id":               a.AlertID,
+		"id":               a.Id,
 		"log_source":       a.LogSource,
 		"log_type":         a.LogType,
 		"outputs":          a.Rule.Dispatchers(),
@@ -173,7 +172,7 @@ func (a *Alert) OutputDict() map[string]any {
 
 // Returns a simple representation of the alert
 func (a *Alert) String() string {
-	return fmt.Sprintf("<Alert %s triggered from %s>", a.AlertID, a.Rule.Name)
+	return fmt.Sprintf("Alert %s triggered from %s", a.Id, a.Rule.Name)
 }
 
 // Returns a detailed representation of the alert
@@ -182,7 +181,6 @@ func (a *Alert) FullString() (string, errors.Error) {
 	if err != nil {
 		return "", errors.NewF("error marshalling record: %s", err)
 	}
-
 	return string(recordJSON), nil
 }
 
@@ -224,7 +222,7 @@ func (a *Alert) MergeEnabled() bool {
 }
 
 // MergePartitionKey returns a stable Kafka partition key for this alert so that alerts belonging to the same merge group always land on the same partition and therefore the same alert-merger replica.
-// The key is "rule_name|key1=val1|key2=val2" with merge-by fields sorted alphabetically.  When merge is not enabled the rule name alone is returned, which is still a stable key - the merger will pass those alerts straight through on whichever partition they arrive.
+// The key is "rule_name|key1=val1|key2=val2" with merge-by fields sorted alphabetically. When merge is not enabled the rule name alone is returned, which is still a stable key - the merger will pass those alerts straight through on whichever partition they arrive.
 func (a *Alert) MergePartitionKey() string {
 	keys := a.MergeByKeys()
 	sort.Strings(keys)
@@ -232,7 +230,7 @@ func (a *Alert) MergePartitionKey() string {
 	parts := make([]string, 0, len(keys)+1)
 	parts = append(parts, a.Rule.Name)
 	for _, k := range keys {
-		parts = append(parts, fmt.Sprintf("%v", merged[k]))
+		parts = append(parts, fmt.Sprintf("%s=%v", k, merged[k]))
 	}
 	return strings.Join(parts, "|")
 }
@@ -250,7 +248,7 @@ func (a *Alert) RemainingOutputs(requiredOutputs []string) []string {
 func (a *Alert) RecordKey() map[string]string {
 	key := map[string]string{
 		"RuleName": a.Rule.Name,
-		"AlertID":  a.AlertID,
+		"AlertID":  a.Id,
 	}
 	return key
 }

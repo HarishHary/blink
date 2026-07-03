@@ -27,16 +27,15 @@ message RuleMetadata {
   repeated string enrichments       = 17;
   repeated string tuning_rules      = 18;
   string          version           = 19;
-  string          file_name         = 20;
-  string          display_name      = 21;
-  repeated string references        = 22;
-  string          risk_score        = 23;
+  string          display_name      = 20;
+  repeated string references        = 21;
+  string          risk_score        = 22;
 }
 
 // Alert is the Kafka wire format for a single alert travelling through the
 // tuner → enricher → formatter → dispatcher pipeline.
 message Alert {
-  string                 alert_id               = 1;
+  string                 id                     = 1;
   int32                  attempts               = 2;
   string                 cluster                = 3;
   int64                  created_ns             = 4; // time.Time as Unix nanoseconds

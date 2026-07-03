@@ -3,12 +3,13 @@ package alerts
 import (
 	"time"
 
+	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/alerts/pb"
 	"github.com/harishhary/blink/pkg/events"
 	"github.com/harishhary/blink/pkg/rules"
 	"github.com/harishhary/blink/pkg/scoring"
-	proto "google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -32,12 +33,20 @@ func Unmarshal(data []byte) (*Alert, error) {
 
 // Converts an in-process Alert to its proto wire representation.
 func AlertToProto(a *Alert) (*pb.Alert, error) {
+	if a == nil {
+		return nil, errors.New("nil alert")
+	}
+
 	eventStruct, err := structpb.NewStruct(a.Event)
 	if err != nil {
 		return nil, err
 	}
-	p := &pb.Alert{
-		AlertId:             a.AlertID,
+	ruleProto, err := RuleMetadataToProto(a.Rule)
+	if err != nil {
+		return nil, err
+	}
+	return &pb.Alert{
+		Id:                  a.Id,
 		Attempts:            int32(a.Attempts),
 		Cluster:             a.Cluster,
 		CreatedNs:           a.Created.UnixNano(),
@@ -53,13 +62,16 @@ func AlertToProto(a *Alert) (*pb.Alert, error) {
 		SourceService:       a.SourceService,
 		Confidence:          a.Confidence.String(),
 		Severity:            a.Severity.String(),
-		Rule:                ruleToProto(a.Rule),
-	}
-	return p, nil
+		Rule:                ruleProto,
+	}, nil
 }
 
 // Converts a proto Alert back to an in-process Alert
 func ProtoToAlert(p *pb.Alert) (*Alert, error) {
+	if p == nil {
+		return nil, errors.New("nil protobuf alert")
+	}
+
 	var event events.Event
 	if p.GetEvent() != nil {
 		event = events.Event(p.GetEvent().AsMap())
@@ -67,8 +79,12 @@ func ProtoToAlert(p *pb.Alert) (*Alert, error) {
 	conf, _ := scoring.ParseConfidence(p.GetConfidence())
 	sev, _ := scoring.ParseSeverity(p.GetSeverity())
 
-	a := &Alert{
-		AlertID:             p.GetAlertId(),
+	rule, err := ProtoToRuleMetadata(p.GetRule())
+	if err != nil {
+		return nil, err
+	}
+	return &Alert{
+		Id:                  p.GetId(),
 		Attempts:            int(p.GetAttempts()),
 		Cluster:             p.GetCluster(),
 		Created:             time.Unix(0, p.GetCreatedNs()).UTC(),
@@ -84,21 +100,22 @@ func ProtoToAlert(p *pb.Alert) (*Alert, error) {
 		SourceService:       p.GetSourceService(),
 		Confidence:          conf,
 		Severity:            sev,
-		Rule:                protoToRuleMetadata(p.GetRule()),
-	}
-	return a, nil
+		Rule:                rule,
+	}, nil
 }
 
 // Converts a *config.RuleMetadata to its protobuf representation for embedding in an alert payload.
-func ruleToProto(r *rules.RuleMetadata) *pb.RuleMetadata {
+func RuleMetadataToProto(r *rules.RuleMetadata) (*pb.RuleMetadata, error) {
 	if r == nil {
-		return nil
+		return nil, errors.New("nil rule metadata")
 	}
 	return &pb.RuleMetadata{
 		Id:              r.Id,
 		Name:            r.Name,
 		Description:     r.Description,
 		Enabled:         r.Enabled,
+		Version:         r.Version,
+		DisplayName:     r.DisplayName,
 		Severity:        r.Severity().String(),
 		Confidence:      r.Confidence().String(),
 		MergeByKeys:     r.MergeByKeys(),
@@ -113,19 +130,16 @@ func ruleToProto(r *rules.RuleMetadata) *pb.RuleMetadata {
 		Formatters:      r.Formatters(),
 		Enrichments:     r.Enrichments(),
 		TuningRules:     r.TuningRules(),
-		Version:         r.Version,
-		FileName:        r.Name,
-		DisplayName:     r.DisplayName,
 		References:      r.References(),
-	}
+	}, nil
 }
 
 // Reconstructs a *config.RuleMetadata from the alert's embedded rule metadata.
-func protoToRuleMetadata(m *pb.RuleMetadata) *rules.RuleMetadata {
+func ProtoToRuleMetadata(m *pb.RuleMetadata) (*rules.RuleMetadata, error) {
 	if m == nil {
-		return &rules.RuleMetadata{}
+		return nil, errors.New("nil protobuf rule metadata")
 	}
-	cfg, _ := rules.New(rules.RuleMetadata{
+	cfg, err := rules.NewRuleMetadata(rules.RuleMetadata{
 		PluginMetadata: plugin.PluginMetadata{
 			Id:          m.GetId(),
 			Name:        m.GetName(),
@@ -150,5 +164,8 @@ func protoToRuleMetadata(m *pb.RuleMetadata) *rules.RuleMetadata {
 		EnrichmentsField:     m.GetEnrichments(),
 		TuningRulesField:     m.GetTuningRules(),
 	})
-	return cfg
+	if err != nil {
+		return nil, err
+	}
+	return cfg, nil
 }
