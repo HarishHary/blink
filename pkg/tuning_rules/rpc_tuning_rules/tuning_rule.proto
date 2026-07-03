@@ -1,33 +1,14 @@
 syntax = "proto3";
-
 package tuning_rules;
-
-option go_package = "github.com/harishhary/blink/pkg/tuning_rules/rpc_tuning_rules";
+option go_package = "rpc_tuning_rules/;rpc_tuning_rules";
 
 message Empty {}
-
-message TuningMetadata {
-  string id          = 1;
-  string name        = 2;
-  string description = 3;
-  bool   enabled     = 4;
-  bool   global      = 5;
-  int32  rule_type   = 6; // 0=Ignore, 1=SetConfidence, 2=IncreaseConfidence, 3=DecreaseConfidence
-  string confidence  = 7; // "verylow|low|medium|high|veryhigh"
-}
-
-message TuneRequest {
-  bytes alert_json = 1; // JSON-encoded alerts.Alert
-}
-
-message TuneResponse {
-  bool applies = 1;
-}
+message TuneBatchRequest  { repeated bytes alert_json = 1; } // one JSON-encoded map[string]any per alert
+message TuneBatchResponse { repeated bool  applies    = 1; } // one result per alert
 
 service TuningRule {
-  rpc GetMetadata(Empty)          returns (TuningMetadata);
-  rpc Init(Empty)                 returns (Empty);
-  rpc Tune(TuneRequest)           returns (TuneResponse);
-  rpc Shutdown(Empty)             returns (Empty);
-  rpc Ping(Empty)                 returns (Empty);
+  rpc Init(Empty)                     returns (Empty);
+  rpc TuneBatch(TuneBatchRequest)     returns (TuneBatchResponse);
+  rpc Shutdown(Empty)                 returns (Empty);
+  rpc Ping(Empty)                     returns (Empty);
 }

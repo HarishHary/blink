@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,17 +16,17 @@ import (
 	"github.com/harishhary/blink/pkg/scoring"
 )
 
-// Alert struct encapsulates a single alert and handles serialization
+// Alert wraps a detection Event with its rule reference, scoring, and pipeline metadata as it flows through the stages.
 type Alert struct {
-	AlertID     string
-	Attempts    int
-	Cluster     string
-	Created     time.Time
-	Dispatched  time.Time
-	Event       events.Event
-	Staged              bool
-	OutputsSent         []string
-	EnrichmentsApplied  []string
+	Id                 string
+	Attempts           int
+	Cluster            string
+	Created            time.Time
+	Dispatched         time.Time
+	Event              events.Event
+	Staged             bool
+	OutputsSent        []string
+	EnrichmentsApplied []string
 
 	LogSource string
 	LogType   string
@@ -33,21 +34,32 @@ type Alert struct {
 	SourceEntity  string
 	SourceService string
 
-	Confidence scoring.Confidence // coming from base rule but changed by tuning rules
-	Severity   scoring.Severity   // coming from base rule but changed by asset tagging and dynamicSeverity
+	Confidence scoring.Confidence
+	Severity   scoring.Severity
 
-	Rule rules.Metadata
+	Rule                *rules.RuleMetadata
+	OverrideMergeByKeys []string
+}
+
+// MergeByKeys returns the effective merge keys; the plugin's AlertMergeByKeys override takes precedence over the YAML value.
+func (a *Alert) MergeByKeys() []string {
+	if len(a.OverrideMergeByKeys) > 0 {
+		return a.OverrideMergeByKeys
+	}
+	return a.Rule.MergeByKeys()
 }
 
 // Creates a new Alert
-func NewAlert(rule rules.Metadata, event events.Event, optFns ...AlertOptions) (*Alert, errors.Error) {
+func NewAlert(rule *rules.RuleMetadata, event events.Event, optFns ...AlertOptions) (*Alert, errors.Error) {
 	alert := &Alert{
-		AlertID:  uuid.NewString(),
-		Created:  time.Now().UTC(),
-		Attempts: 0,
-		Event:    event,
-		Rule:     rule,
-		Staged:   false,
+		Id:         uuid.NewString(),
+		Created:    time.Now().UTC(),
+		Attempts:   0,
+		Event:      event,
+		Rule:       rule,
+		Staged:     false,
+		Severity:   rule.Severity(),
+		Confidence: rule.Confidence(),
 	}
 	for _, optFn := range optFns {
 		optFn(alert)
@@ -65,7 +77,7 @@ func Merge(alerts []*Alert) (*Alert, errors.Error) {
 		return alerts[i].Created.Before(alerts[j].Created)
 	})
 
-	mergeKeys := alerts[0].Rule.MergeByKeys()
+	mergeKeys := alerts[0].MergeByKeys()
 	cleanedEvents := make([]events.Event, len(alerts))
 	for i, alert := range alerts {
 		cleanedEvents[i] = alert.Event.CleanEvent(mergeKeys)
@@ -143,14 +155,14 @@ func (a *Alert) OutputDict() map[string]any {
 	output := map[string]any{
 		"cluster":          a.Cluster,
 		"created":          a.Created.Format(helpers.DATETIME_FORMAT),
-		"id":               a.AlertID,
+		"id":               a.Id,
 		"log_source":       a.LogSource,
 		"log_type":         a.LogType,
 		"outputs":          a.Rule.Dispatchers(),
 		"formatters":       a.Rule.Formatters(),
 		"event":            a.Event,
-		"rule_description": a.Rule.Description(),
-		"rule_name":        a.Rule.Name(),
+		"rule_description": a.Rule.Description,
+		"rule_name":        a.Rule.Name,
 		"source_entity":    a.SourceEntity,
 		"source_service":   a.SourceService,
 		"staged":           a.Staged,
@@ -160,7 +172,7 @@ func (a *Alert) OutputDict() map[string]any {
 
 // Returns a simple representation of the alert
 func (a *Alert) String() string {
-	return fmt.Sprintf("<Alert %s triggered from %s>", a.AlertID, a.Rule.Name())
+	return fmt.Sprintf("Alert %s triggered from %s", a.Id, a.Rule.Name)
 }
 
 // Returns a detailed representation of the alert
@@ -169,7 +181,6 @@ func (a *Alert) FullString() (string, errors.Error) {
 	if err != nil {
 		return "", errors.NewF("error marshalling record: %s", err)
 	}
-
 	return string(recordJSON), nil
 }
 
@@ -193,11 +204,11 @@ func (a *Alert) CanMerge(other *Alert) bool {
 		return false
 	}
 
-	if !helpers.EqualStringSlices(a.Rule.MergeByKeys(), other.Rule.MergeByKeys()) {
+	if !helpers.EqualStringSlices(a.MergeByKeys(), other.Rule.MergeByKeys()) {
 		return false
 	}
 
-	for _, key := range a.Rule.MergeByKeys() {
+	for _, key := range a.MergeByKeys() {
 		if a.Event.GetFirstKey(key, "n/a") != other.Event.GetFirstKey(key, "n/a2") {
 			return false
 		}
@@ -206,10 +217,27 @@ func (a *Alert) CanMerge(other *Alert) bool {
 	return true
 }
 
+// MergeEnabled reports whether this alert is eligible for merging (has merge keys and a positive window).
 func (a *Alert) MergeEnabled() bool {
-	return len(a.Rule.MergeByKeys()) > 0 && a.Rule.MergeWindowMins() > 0
+	return len(a.MergeByKeys()) > 0 && a.Rule.MergeWindowMins() > 0
 }
 
+// MergePartitionKey returns a stable Kafka key ("rule_name|k1=v1|k2=v2", merge-by fields sorted) so
+// alerts in the same merge group land on the same partition, hence the same merger replica. Merge
+// disabled → rule name alone (still stable; those alerts pass straight through).
+func (a *Alert) MergePartitionKey() string {
+	keys := a.MergeByKeys()
+	sort.Strings(keys)
+	merged := a.Event.GetMergedKeys(keys)
+	parts := make([]string, 0, len(keys)+1)
+	parts = append(parts, a.Rule.Name)
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%v", k, merged[k]))
+	}
+	return strings.Join(parts, "|")
+}
+
+// RemainingOutputs returns the alert's dispatchers not yet sent - narrowed to requiredOutputs when merge is enabled.
 func (a *Alert) RemainingOutputs(requiredOutputs []string) []string {
 	var outputsToSendNow []string
 	if a.MergeEnabled() {
@@ -220,22 +248,26 @@ func (a *Alert) RemainingOutputs(requiredOutputs []string) []string {
 	return helpers.Difference(outputsToSendNow, a.OutputsSent)
 }
 
+// RecordKey returns the {RuleName, AlertID} key identifying this alert in the store.
 func (a *Alert) RecordKey() map[string]string {
 	key := map[string]string{
-		"RuleName": a.Rule.Name(),
-		"AlertID":  a.AlertID,
+		"RuleName": a.Rule.Name,
+		"AlertID":  a.Id,
 	}
 	return key
 }
 
+// Signal reports whether this alert qualifies as a signal (the rule opts in and confidence meets its threshold).
 func (a *Alert) Signal() bool {
 	return a.Rule.Signal() && a.Rule.SignalThreshold() <= a.Confidence
 }
 
+// RiskScore computes the alert's risk score from its confidence and severity.
 func (a *Alert) RiskScore() scoring.RiskScore {
 	return scoring.ComputeRiskScore(a.Confidence, a.Severity)
 }
 
+// SignalType classifies the alert's signal from its confidence.
 func (a *Alert) SignalType() scoring.SignalType {
 	return scoring.ComputeSignalType(a.Confidence)
 }

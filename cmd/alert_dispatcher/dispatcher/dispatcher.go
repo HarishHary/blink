@@ -5,8 +5,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/harishhary/blink/internal/broker"
-	"github.com/harishhary/blink/internal/broker/kafka"
+	"github.com/harishhary/blink/internal/brokers"
 	"github.com/harishhary/blink/internal/configuration"
 	svcctx "github.com/harishhary/blink/internal/context"
 	"github.com/harishhary/blink/internal/dispatchers"
@@ -28,7 +27,7 @@ var (
 
 type DispatcherService struct {
 	svcctx.ServiceContext
-	reader         broker.Reader
+	reader         brokers.Reader
 	dispatcherRepo *dispatchers.DispatcherRepository
 }
 
@@ -40,7 +39,7 @@ func New(dispatcherRepo *dispatchers.DispatcherRepository) (*DispatcherService, 
 	serviceContext.Logger = logger.New(serviceContext.Name(), "dev")
 
 	cfg := serviceContext.Configuration()
-	b := kafka.NewKafkaBroker(cfg.Kafka)
+	b := brokers.NewKafkaBroker(cfg.Kafka)
 	reader := b.NewReader(cfg.Topics.DispatcherTopic, cfg.Topics.DispatcherGroup)
 
 	return &DispatcherService{

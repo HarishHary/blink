@@ -9,12 +9,13 @@ import (
 	"syscall"
 
 	"github.com/harishhary/blink/cmd/alert_formatter/formatter"
+	"github.com/harishhary/blink/internal/brokers"
+	"github.com/harishhary/blink/internal/configuration"
+	"github.com/harishhary/blink/internal/controller"
 	"github.com/harishhary/blink/internal/logger"
-	"github.com/harishhary/blink/internal/pluginmgr"
+	pools "github.com/harishhary/blink/internal/pools"
 	"github.com/harishhary/blink/internal/services"
 	"github.com/harishhary/blink/pkg/formatters"
-	pools "github.com/harishhary/blink/internal/pools"
-	fmtcatalog "github.com/harishhary/blink/pkg/formatters/pool"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -29,17 +30,31 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	routingTable := pools.NewRoutingTable()
-	formatterPool := fmtcatalog.NewPool(routingTable, 0)
+	pluginDir := os.Getenv("FORMATTER_PLUGIN_DIR")
+	cfgMgr := formatters.NewFormatterConfigWatcher(logger.New("formatter-config", "dev"), pluginDir)
+	cfgSvc := services.NewConfigSyncService("formatter-config-sync", "BLINK-ALERT-FORMATTER - CONFIG", cfgMgr)
 
-	syncSvc, err := services.NewPluginSyncService(
-		"alert-formatter-sync",
-		"BLINK-ALERT-FORMATTER - SYNC",
-		"FORMATTER_PLUGIN_DIR",
-		func(log *logger.Logger, dir string) pluginmgr.Plugin {
-			return formatters.NewManager(log, formatterPool.Sync, dir)
-		},
+	// Read replica: consumes the formatter controller's snapshot topic and feeds the
+	// executor the control plane's desired state.
+	var cfg configuration.ServiceConfiguration
+	if err := configuration.LoadFromEnvironment(&cfg); err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	b := brokers.NewKafkaBroker(cfg.Kafka)
+	replica := controller.NewReplica(
+		logger.New("formatter-snapshot", "dev"),
+		b.NewReader(cfg.Topics.FormatterSnapshotTopic, cfg.Topics.FormatterSnapshotGroup),
 	)
+	replicaSvc, err := services.NewPluginSyncService("formatter-snapshot-sync", "BLINK-ALERT-FORMATTER - SNAPSHOT", replica)
+	if err != nil {
+		log.Fatalf("snapshot service: %v", err)
+	}
+
+	routingTable := pools.NewRoutingTable()
+	formatterPool := formatters.NewPool(routingTable, 0)
+
+	pluginMgr := formatters.NewFormatterPluginExecutor(logger.New("alert-formatter", "dev"), formatterPool.Sync, pluginDir, replica, cfgMgr)
+	syncSvc, err := services.NewPluginSyncService("alert-formatter-sync", "BLINK-ALERT-FORMATTER - SYNC", pluginMgr)
 	if err != nil {
 		log.Fatalf("sync service: %v", err)
 	}
@@ -50,6 +65,8 @@ func main() {
 
 	runner := services.New()
 	runner.Register(
+		cfgSvc,
+		replicaSvc,
 		syncSvc,
 		formatterSvc,
 	)

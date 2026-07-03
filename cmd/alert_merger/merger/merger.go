@@ -2,14 +2,10 @@ package merger
 
 import (
 	"context"
-	"fmt"
-	"sort"
-	"strings"
 	"sync"
 	"time"
 
-	"github.com/harishhary/blink/internal/broker"
-	"github.com/harishhary/blink/internal/broker/kafka"
+	"github.com/harishhary/blink/internal/brokers"
 	"github.com/harishhary/blink/internal/configuration"
 	svcctx "github.com/harishhary/blink/internal/context"
 	"github.com/harishhary/blink/internal/errors"
@@ -24,6 +20,7 @@ var (
 	alertsOut     = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "alert_merger", Name: "alerts_out_total"})
 	alertsMerged  = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "alert_merger", Name: "alerts_merged_total"})
 	groupsFlushed = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "alert_merger", Name: "groups_flushed_total"})
+	groupsEvicted = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "alert_merger", Name: "groups_evicted_total"})
 	parseErrors   = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "alert_merger", Name: "parse_errors_total"})
 	writeErrors   = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "alert_merger", Name: "write_errors_total"})
 	activeGroups  = promauto.NewGauge(prometheus.GaugeOpts{Namespace: "blink", Subsystem: "alert_merger", Name: "active_groups"})
@@ -38,10 +35,11 @@ type mergeGroup struct {
 // MergerService reads alerts from Kafka, merges related alerts within their time window, and writes merged (or pass-through) alerts to the tuner topic.
 type MergerService struct {
 	svcctx.ServiceContext
-	reader broker.Reader
-	writer broker.Writer
-	mu     sync.Mutex
-	groups map[string]*mergeGroup // key: rule_name|merge_by_values
+	reader    brokers.Reader
+	writer    brokers.Writer
+	mu        sync.Mutex
+	groups    map[string]*mergeGroup // key: rule_name|merge_by_values
+	maxGroups int                    // 0 = unlimited
 }
 
 func NewMergerService() (*MergerService, error) {
@@ -52,7 +50,7 @@ func NewMergerService() (*MergerService, error) {
 	serviceContext.Logger = logger.New(serviceContext.Name(), "dev")
 
 	cfg := serviceContext.Configuration()
-	b := kafka.NewKafkaBroker(cfg.Kafka)
+	b := brokers.NewKafkaBroker(cfg.Kafka)
 	reader := b.NewReader(cfg.Topics.MergerTopic, cfg.Topics.MergerGroup)
 	writer := b.NewWriter(cfg.Topics.TunerTopic)
 
@@ -61,6 +59,7 @@ func NewMergerService() (*MergerService, error) {
 		reader:         reader,
 		writer:         writer,
 		groups:         make(map[string]*mergeGroup),
+		maxGroups:      cfg.Merger.MaxGroups,
 	}, nil
 }
 
@@ -109,8 +108,9 @@ func (s *MergerService) Run(ctx context.Context) errors.Error {
 }
 
 // adds alert to its merge group, or flushes the existing group and starts a new one when the incoming alert falls outside the current window.
+// If maxGroups is set and the cap is exceeded after inserting, the oldest group (earliest expiry) is evicted immediately.
 func (s *MergerService) accumulate(ctx context.Context, alert *alerts.Alert) {
-	key := groupKey(alert)
+	key := alert.MergePartitionKey()
 
 	s.mu.Lock()
 	g, exists := s.groups[key]
@@ -123,20 +123,42 @@ func (s *MergerService) accumulate(ctx context.Context, alert *alerts.Alert) {
 
 	// Either no existing group or the window has moved on - flush the old group
 	// (if any) and start a new one.
-	var toFlush *mergeGroup
+	toFlush := make([]*mergeGroup, 0, 2)
 	if exists {
-		toFlush = g
+		toFlush = append(toFlush, g)
 	}
 	s.groups[key] = &mergeGroup{
 		alerts:  []*alerts.Alert{alert},
 		expires: alert.Created.Add(alert.Rule.MergeWindowMins()),
 	}
+
+	// Cap eviction: if over the limit, find and remove the oldest group so memory
+	// stays bounded regardless of merge key cardinality.
+	if s.maxGroups > 0 && len(s.groups) > s.maxGroups {
+		oldestKey := s.oldestKey()
+		toFlush = append(toFlush, s.groups[oldestKey])
+		delete(s.groups, oldestKey)
+		groupsEvicted.Inc()
+	}
+
 	activeGroups.Set(float64(len(s.groups)))
 	s.mu.Unlock()
 
-	if toFlush != nil {
-		s.flushGroup(ctx, toFlush)
+	for _, g := range toFlush {
+		s.flushGroup(ctx, g)
 	}
+}
+
+// oldestKey returns the map key of the group with the earliest expiry time.
+// Must be called with s.mu held.
+func (s *MergerService) oldestKey() string {
+	var oldest string
+	for k, g := range s.groups {
+		if oldest == "" || g.expires.Before(s.groups[oldest].expires) {
+			oldest = k
+		}
+	}
+	return oldest
 }
 
 // ticks every 10 seconds and flushes any group whose window has closed.
@@ -200,7 +222,7 @@ func (s *MergerService) flushGroup(ctx context.Context, g *mergeGroup) {
 		return
 	}
 
-	s.Info("merging %d alerts for rule %s", len(g.alerts), g.alerts[0].Rule.Name())
+	s.Info("merging %d alerts for rule %s", len(g.alerts), g.alerts[0].Rule.Name)
 	merged, err := alerts.Merge(g.alerts)
 	if err != nil {
 		s.Error(err)
@@ -221,23 +243,10 @@ func (s *MergerService) writeAlert(ctx context.Context, alert *alerts.Alert) {
 		s.Error(errors.NewE(err))
 		return
 	}
-	if err := s.writer.WriteMessages(ctx, broker.Message{Value: payload}); err != nil {
+	if err := s.writer.WriteMessages(ctx, brokers.Message{Value: payload}); err != nil {
 		writeErrors.Inc()
 		s.Error(errors.NewE(err))
 		return
 	}
 	alertsOut.Inc()
-}
-
-// groupKey builds a stable string key from the alert's rule name and merge-by field values. Keys are sorted before joining to ensure map key consistency regardless of iteration order.
-func groupKey(alert *alerts.Alert) string {
-	keys := alert.Rule.MergeByKeys()
-	sort.Strings(keys)
-	merged := alert.Event.GetMergedKeys(keys)
-	parts := make([]string, 0, len(keys)+1)
-	parts = append(parts, alert.Rule.Name())
-	for _, k := range keys {
-		parts = append(parts, fmt.Sprintf("%v", merged[k]))
-	}
-	return strings.Join(parts, "|")
 }

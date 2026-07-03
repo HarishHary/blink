@@ -9,12 +9,13 @@ import (
 	"syscall"
 
 	"github.com/harishhary/blink/cmd/rule_tuner/tuner"
+	"github.com/harishhary/blink/internal/brokers"
+	"github.com/harishhary/blink/internal/configuration"
+	"github.com/harishhary/blink/internal/controller"
 	"github.com/harishhary/blink/internal/logger"
-	"github.com/harishhary/blink/internal/pluginmgr"
+	pools "github.com/harishhary/blink/internal/pools"
 	"github.com/harishhary/blink/internal/services"
 	"github.com/harishhary/blink/pkg/tuning_rules"
-	pools "github.com/harishhary/blink/internal/pools"
-	tuningcatalog "github.com/harishhary/blink/pkg/tuning_rules/pool"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -29,17 +30,31 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	routingTable := pools.NewRoutingTable()
-	tuningPool := tuningcatalog.NewPool(routingTable, 0)
+	pluginDir := os.Getenv("TUNER_PLUGIN_DIR")
+	cfgMgr := tuning_rules.NewTuningRuleConfigWatcher(logger.New("tuning-config", "dev"), pluginDir)
+	cfgSvc := services.NewConfigSyncService("tuning-config-sync", "BLINK-RULE-TUNER - CONFIG", cfgMgr)
 
-	syncSvc, err := services.NewPluginSyncService(
-		"rule-tuner-sync",
-		"BLINK-RULE-TUNER - SYNC",
-		"TUNER_PLUGIN_DIR",
-		func(log *logger.Logger, dir string) pluginmgr.Plugin {
-			return tuning_rules.NewManager(log, tuningPool.Sync, dir)
-		},
+	// Read replica: consumes the tuning controller's snapshot topic and feeds the
+	// executor the control plane's desired state.
+	var cfg configuration.ServiceConfiguration
+	if err := configuration.LoadFromEnvironment(&cfg); err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	b := brokers.NewKafkaBroker(cfg.Kafka)
+	replica := controller.NewReplica(
+		logger.New("tuning-snapshot", "dev"),
+		b.NewReader(cfg.Topics.TuningSnapshotTopic, cfg.Topics.TuningSnapshotGroup),
 	)
+	replicaSvc, err := services.NewPluginSyncService("tuning-snapshot-sync", "BLINK-RULE-TUNER - SNAPSHOT", replica)
+	if err != nil {
+		log.Fatalf("snapshot service: %v", err)
+	}
+
+	routingTable := pools.NewRoutingTable()
+	tuningPool := tuning_rules.NewPool(routingTable, 0)
+
+	pluginMgr := tuning_rules.NewTuningRulePluginExecutor(logger.New("rule-tuner", "dev"), tuningPool.Sync, pluginDir, replica, cfgMgr)
+	syncSvc, err := services.NewPluginSyncService("rule-tuner-sync", "BLINK-RULE-TUNER - SYNC", pluginMgr)
 	if err != nil {
 		log.Fatalf("sync service: %v", err)
 	}
@@ -50,6 +65,8 @@ func main() {
 
 	runner := services.New()
 	runner.Register(
+		cfgSvc,
+		replicaSvc,
 		syncSvc,
 		tunerSvc,
 	)

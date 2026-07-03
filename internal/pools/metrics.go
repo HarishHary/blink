@@ -5,16 +5,15 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
-// Holds the Prometheus metrics for one ProcessPool instance.
+// PoolMetrics holds the Prometheus metrics for one ProcessPool.
 type PoolMetrics struct {
 	poolSize      *prometheus.GaugeVec
 	poolInflight  *prometheus.GaugeVec
 	drainDuration *prometheus.HistogramVec
-	killSwitches  *prometheus.CounterVec
 	shadowDiffs   *prometheus.CounterVec
 }
 
-// Registers and returns Prometheus metrics namespaced under
+// NewPoolMetrics registers and returns pool metrics namespaced under blink_pool_<subsystem>.
 func NewPoolMetrics(subsystem string) *PoolMetrics {
 	return &PoolMetrics{
 		poolSize: promauto.NewGaugeVec(prometheus.GaugeOpts{
@@ -30,10 +29,6 @@ func NewPoolMetrics(subsystem string) *PoolMetrics {
 			Name: "drain_duration_seconds", Help: "Time to drain an old pool.",
 			Buckets: prometheus.DefBuckets,
 		}, []string{"plugin_id", "version"}),
-		killSwitches: promauto.NewCounterVec(prometheus.CounterOpts{
-			Namespace: "blink", Subsystem: "pool_" + subsystem,
-			Name: "kill_switch_total", Help: "Kill switch activations.",
-		}, []string{"plugin_id"}),
 		shadowDiffs: promauto.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "blink", Subsystem: "pool_" + subsystem,
 			Name: "shadow_diff_total", Help: "Shadow evaluation errors or divergences.",

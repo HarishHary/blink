@@ -1,0 +1,19 @@
+id: "00000000-0000-0000-0000-000000000002"
+name: "failed_login"
+display_name: "Failed Login"
+description: "Fires on any failed login attempt."
+enabled: true
+version: "1.0.0"
+
+severity: "medium"
+confidence: "high"
+
+log_types: ["application"]
+matchers: ["allow-all"]
+
+req_subkeys: []
+merge_by_keys: ["source_ip"]
+merge_window_mins: 5
+
+signal: false
+tags: ["authentication", "brute-force"]

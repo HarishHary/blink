@@ -52,7 +52,7 @@ func WithSourceService(sourceService string) AlertOptions {
 	}
 }
 
-// SourceEntity sets the source entity for the alert
+// WithStaged sets whether the alert is staged
 func WithStaged(staged bool) AlertOptions {
 	return func(a *Alert) {
 		a.Staged = staged

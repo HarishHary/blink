@@ -1,22 +1,31 @@
 syntax = "proto3";
 package rules;
-
 option go_package = "rpc_rules/;rpc_rules";
 
 message Empty {}
 
 message Event { bytes json = 1; }
 
-message EvaluateRequest { Event event = 1; }
-message EvaluateResponse { bool matched = 1; }
-
 message EvaluateBatchRequest { repeated Event events = 1; }
-message EvaluateBatchResponse { repeated bool matched = 1; }
+
+// EventResult carries the match outcome and any optional per-event overrides.
+// Empty string / nil fields mean "use YAML default".
+message EventResult {
+  bool            matched       = 1;
+  string          title         = 2;
+  string          description   = 3;
+  string          severity      = 4; // "info|low|medium|high|critical"; "" = YAML default
+  bytes           context_json  = 5; // JSON-encoded map[string]any; empty = nil
+  repeated string merge_by_keys = 6; // empty = use YAML merge_by_keys
+}
+
+message EvaluateBatchResponse {
+  repeated EventResult results = 2;
+}
 
 service Rule {
-  rpc Init(Empty) returns (Empty);
-  rpc Evaluate(EvaluateRequest) returns (EvaluateResponse);
-  rpc EvaluateBatch(EvaluateBatchRequest) returns (EvaluateBatchResponse);
-  rpc Shutdown(Empty) returns (Empty);
-  rpc Ping(Empty) returns (Empty);
+  rpc Init(Empty)                                   returns (Empty);
+  rpc EvaluateBatch(EvaluateBatchRequest)           returns (EvaluateBatchResponse);
+  rpc Shutdown(Empty)                               returns (Empty);
+  rpc Ping(Empty)                                   returns (Empty);
 }

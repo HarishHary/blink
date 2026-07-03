@@ -3,51 +3,72 @@ package matchers
 import (
 	"context"
 	"encoding/json"
-	"time"
+	"fmt"
 
+	"github.com/harishhary/blink/internal/config"
 	"github.com/harishhary/blink/internal/errors"
+	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/events"
 	"github.com/harishhary/blink/pkg/matchers/rpc_matchers"
 )
 
 type rpcMatcher struct {
-	client   rpc_matchers.MatcherClient
-	meta     *rpc_matchers.MatcherMetadata
+	cfg      config.Source[*MatcherMetadata]
+	fileName string
 	checksum string
-	timeout  time.Duration
+	client   rpc_matchers.MatcherClient
 }
 
-func newRpcMatcher(meta *rpc_matchers.MatcherMetadata, client rpc_matchers.MatcherClient, timeout time.Duration, checksum string) *rpcMatcher {
+func newRpcMatcher(fileName string, client rpc_matchers.MatcherClient, cfg config.Source[*MatcherMetadata], checksum string) *rpcMatcher {
 	return &rpcMatcher{
-		meta:     meta,
+		cfg:      cfg,
+		fileName: fileName,
 		checksum: checksum,
 		client:   client,
-		timeout:  timeout,
 	}
 }
 
-func (r *rpcMatcher) Id() string {
-	if id := r.meta.GetId(); id != "" {
-		return id
+func (r *rpcMatcher) config() *MatcherMetadata {
+	if r.cfg == nil {
+		return nil
 	}
-	return r.meta.GetName()
+	v, _ := r.cfg.ByFileName(r.fileName)
+	return v
 }
-func (r *rpcMatcher) Name() string        { return r.meta.GetName() }
-func (r *rpcMatcher) Description() string { return r.meta.GetDescription() }
-func (r *rpcMatcher) Enabled() bool       { return r.meta.GetEnabled() }
-func (r *rpcMatcher) Checksum() string    { return r.checksum }
+
+// MatcherMetadata returns the live YAML-derived matcher configuration.
+func (r *rpcMatcher) MatcherMetadata() *MatcherMetadata {
+	if c := r.config(); c != nil {
+		return c
+	}
+	return &MatcherMetadata{PluginMetadata: plugin.PluginMetadata{Id: r.fileName, Name: r.fileName}}
+}
+
+func (r *rpcMatcher) Metadata() plugin.PluginMetadata {
+	if c := r.config(); c != nil {
+		return c.Metadata()
+	}
+	return plugin.PluginMetadata{Id: r.fileName, Name: r.fileName}
+}
+
+func (r *rpcMatcher) Checksum() string { return r.checksum }
 func (r *rpcMatcher) String() string {
-	return "RpcMatcher '" + r.meta.GetName() + "' id:'" + r.meta.GetId() + "'"
+	m := r.MatcherMetadata().Metadata()
+	return fmt.Sprintf("Matcher '%s' (id:%s)", m.Name, m.Id)
 }
 
-func (r *rpcMatcher) Match(ctx context.Context, event events.Event) (bool, errors.Error) {
-	b, err := json.Marshal(event)
-	if err != nil {
-		return false, errors.New(err)
+func (r *rpcMatcher) Match(ctx context.Context, evts []events.Event) ([]bool, errors.Error) {
+	protoEvents := make([]*rpc_matchers.Event, 0, len(evts))
+	for _, ev := range evts {
+		b, err := json.Marshal(ev)
+		if err != nil {
+			return nil, errors.NewE(err)
+		}
+		protoEvents = append(protoEvents, &rpc_matchers.Event{Json: b})
 	}
-	resp, err := r.client.Match(ctx, &rpc_matchers.MatchRequest{Event: &rpc_matchers.Event{Json: b}})
+	resp, err := r.client.MatchBatch(ctx, &rpc_matchers.MatchBatchRequest{Events: protoEvents})
 	if err != nil {
-		return false, errors.New(err)
+		return nil, errors.NewE(err)
 	}
 	return resp.GetMatched(), nil
 }

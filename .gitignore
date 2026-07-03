@@ -8,6 +8,7 @@
 
 # Test binary, built with `go test -c`
 *.test
+*_test.go
 
 # Output of the go coverage tool, specifically when used with LiteIDE
 *.out
@@ -50,7 +51,7 @@ terraform.rc
 
 ### VisualStudioCode ###
 .vscode/*
-!.vscode/settings.json
+.vscode/settings.json
 !.vscode/tasks.json
 !.vscode/launch.json
 !.vscode/extensions.json
@@ -66,3 +67,9 @@ terraform.rc
 # Ignore all local history of files
 .history
 .ionide
+
+## Temporary files
+.claude/*
+deployments/blink/*
+deployments/helm/*
+deployments/keda/*
