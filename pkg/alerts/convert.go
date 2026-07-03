@@ -104,7 +104,7 @@ func ProtoToAlert(p *pb.Alert) (*Alert, error) {
 	}, nil
 }
 
-// Converts a *config.RuleMetadata to its protobuf representation for embedding in an alert payload.
+// Converts a *rules.RuleMetadata to its protobuf representation for embedding in an alert payload.
 func RuleMetadataToProto(r *rules.RuleMetadata) (*pb.RuleMetadata, error) {
 	if r == nil {
 		return nil, errors.New("nil rule metadata")
@@ -134,7 +134,7 @@ func RuleMetadataToProto(r *rules.RuleMetadata) (*pb.RuleMetadata, error) {
 	}, nil
 }
 
-// Reconstructs a *config.RuleMetadata from the alert's embedded rule metadata.
+// Reconstructs a *rules.RuleMetadata from the alert's embedded rule metadata.
 func ProtoToRuleMetadata(m *pb.RuleMetadata) (*rules.RuleMetadata, error) {
 	if m == nil {
 		return nil, errors.New("nil protobuf rule metadata")

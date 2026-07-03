@@ -5,9 +5,10 @@ import (
 	"slices"
 )
 
+// Event is a dynamic detection record: a nested map of arbitrary fields with lookup/merge helpers.
 type Event map[string]any
 
-// getMergedKeys retrieves merge keys from a Event
+// GetMergedKeys retrieves merge keys from a Event
 func (e Event) GetMergedKeys(keys []string) map[string]any {
 	mergeKeys := make(map[string]any)
 	for _, key := range keys {
@@ -16,7 +17,7 @@ func (e Event) GetMergedKeys(keys []string) map[string]any {
 	return mergeKeys
 }
 
-// cleanEvent removes ignored keys from the Event
+// CleanEvent removes ignored keys from the Event
 func (e Event) CleanEvent(ignoredKeys []string) Event {
 	result := make(Event)
 	for key, val := range e {
@@ -32,7 +33,7 @@ func (e Event) CleanEvent(ignoredKeys []string) Event {
 	return result
 }
 
-// computeDiff finds values in the Event that are not in the common subset
+// ComputeDiff finds values in the Event that are not in the common subset
 func (e Event) ComputeDiff(common map[string]any) map[string]any {
 	diff := make(map[string]any)
 	for key, val := range e {
@@ -50,6 +51,7 @@ func (e Event) ComputeDiff(common map[string]any) map[string]any {
 	return diff
 }
 
+// DeepGet returns the value at the nested key path (each key a level down), or defaultValue if any level is missing.
 func (e Event) DeepGet(keys []string, defaultValue any) any {
 	var current any = e
 	for _, key := range keys {
@@ -69,6 +71,8 @@ func (e Event) DeepGet(keys []string, defaultValue any) any {
 	return current
 }
 
+// DeepWalk searches the nested structure along keys (descending into lists too) and returns the
+// first/last/all matches per returnVal, or defaultValue if none.
 func (e Event) DeepWalk(keys []string, defaultValue any, returnVal string) any {
 	found := map[any]struct{}{}
 	var walk func(obj any, keys []string) any
@@ -131,6 +135,7 @@ func (e Event) DeepWalk(keys []string, defaultValue any, returnVal string) any {
 	return defaultValue
 }
 
+// Get returns the top-level value for key, or defaultValue if absent.
 func (e Event) Get(key string, defaultValue any) any {
 	if value, exists := e[key]; exists {
 		return value
@@ -138,6 +143,7 @@ func (e Event) Get(key string, defaultValue any) any {
 	return defaultValue
 }
 
+// GetFirstKey returns the first value found anywhere in the nested structure for key, or defaultValue.
 func (e Event) GetFirstKey(key string, defaultValue any) any {
 	keys := e.GetKeys(key, 1)
 	if len(keys) > 0 {
@@ -168,7 +174,17 @@ func (e Event) GetKeys(key string, maxMatches int) []any {
 		current := containers[lastIndex]
 		containers = containers[:lastIndex]
 
-		switch obj := current.data.(type) {
+		// Event is a named type (type Event map[string]any). A type switch matches the exact
+		// dynamic type, so a value whose dynamic type is Event would NOT match `case
+		// map[string]any` - its keys would be silently skipped (top-level lookups returning the
+		// default). Normalize Event → map[string]any here so both forms are searched identically;
+		// this also covers nested Events (e.g. produced by CleanEvent).
+		data := current.data
+		if ev, ok := data.(Event); ok {
+			data = map[string]any(ev)
+		}
+
+		switch obj := data.(type) {
 		case map[string]any:
 			if value, found := obj[key]; found {
 				results = append(results, value)

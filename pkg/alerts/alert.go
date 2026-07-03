@@ -16,6 +16,7 @@ import (
 	"github.com/harishhary/blink/pkg/scoring"
 )
 
+// Alert wraps a detection Event with its rule reference, scoring, and pipeline metadata as it flows through the stages.
 type Alert struct {
 	Id                 string
 	Attempts           int
@@ -40,8 +41,7 @@ type Alert struct {
 	OverrideMergeByKeys []string
 }
 
-// MergeByKeys returns the effective merge keys for this alert.
-// The plugin's AlertMergeByKeys return value takes precedence over the YAML value.
+// MergeByKeys returns the effective merge keys; the plugin's AlertMergeByKeys override takes precedence over the YAML value.
 func (a *Alert) MergeByKeys() []string {
 	if len(a.OverrideMergeByKeys) > 0 {
 		return a.OverrideMergeByKeys
@@ -217,12 +217,14 @@ func (a *Alert) CanMerge(other *Alert) bool {
 	return true
 }
 
+// MergeEnabled reports whether this alert is eligible for merging (has merge keys and a positive window).
 func (a *Alert) MergeEnabled() bool {
 	return len(a.MergeByKeys()) > 0 && a.Rule.MergeWindowMins() > 0
 }
 
-// MergePartitionKey returns a stable Kafka partition key for this alert so that alerts belonging to the same merge group always land on the same partition and therefore the same alert-merger replica.
-// The key is "rule_name|key1=val1|key2=val2" with merge-by fields sorted alphabetically. When merge is not enabled the rule name alone is returned, which is still a stable key - the merger will pass those alerts straight through on whichever partition they arrive.
+// MergePartitionKey returns a stable Kafka key ("rule_name|k1=v1|k2=v2", merge-by fields sorted) so
+// alerts in the same merge group land on the same partition, hence the same merger replica. Merge
+// disabled → rule name alone (still stable; those alerts pass straight through).
 func (a *Alert) MergePartitionKey() string {
 	keys := a.MergeByKeys()
 	sort.Strings(keys)
@@ -235,6 +237,7 @@ func (a *Alert) MergePartitionKey() string {
 	return strings.Join(parts, "|")
 }
 
+// RemainingOutputs returns the alert's dispatchers not yet sent - narrowed to requiredOutputs when merge is enabled.
 func (a *Alert) RemainingOutputs(requiredOutputs []string) []string {
 	var outputsToSendNow []string
 	if a.MergeEnabled() {
@@ -245,6 +248,7 @@ func (a *Alert) RemainingOutputs(requiredOutputs []string) []string {
 	return helpers.Difference(outputsToSendNow, a.OutputsSent)
 }
 
+// RecordKey returns the {RuleName, AlertID} key identifying this alert in the store.
 func (a *Alert) RecordKey() map[string]string {
 	key := map[string]string{
 		"RuleName": a.Rule.Name,
@@ -253,14 +257,17 @@ func (a *Alert) RecordKey() map[string]string {
 	return key
 }
 
+// Signal reports whether this alert qualifies as a signal (the rule opts in and confidence meets its threshold).
 func (a *Alert) Signal() bool {
 	return a.Rule.Signal() && a.Rule.SignalThreshold() <= a.Confidence
 }
 
+// RiskScore computes the alert's risk score from its confidence and severity.
 func (a *Alert) RiskScore() scoring.RiskScore {
 	return scoring.ComputeRiskScore(a.Confidence, a.Severity)
 }
 
+// SignalType classifies the alert's signal from its confidence.
 func (a *Alert) SignalType() scoring.SignalType {
 	return scoring.ComputeSignalType(a.Confidence)
 }
