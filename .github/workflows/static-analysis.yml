@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@0d381219ddf674d61a7572ddd19d7941e271515c
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411
         with:
           egress-policy: block
           allowed-endpoints: >
@@ -30,14 +30,14 @@ jobs:
             *.actions.githubusercontent.com:443
             objects.githubusercontent.com:443
             go.dev:443
-      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           fetch-depth: 1
       - name: Set up Go
-        uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
         with:
           go-version: 1.22.5
-      - uses: dominikh/staticcheck-action@fe1dd0c3658873b46f8c9bb3291096a617310ca6
+      - uses: dominikh/staticcheck-action@9716614d4101e79b4340dd97b10e54d68234e431
         with:
           version: "2022.1"
           install-go: false
