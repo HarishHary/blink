@@ -9,8 +9,6 @@ import (
 )
 
 // allowAll matches every event. Use for testing only.
-// All static metadata (name, id, enabled, global, etc.) is declared in
-// the companion allow-all.yaml sidecar file.
 type allowAll struct{ matchers.BaseMatcher }
 
 func (allowAll) Match(_ context.Context, _ events.Event) (bool, errors.Error) {

@@ -10,14 +10,14 @@ version: "1.0.0"
 global: false
 
 # rule_type controls what the tuning rule does when Tune() returns true.
-#   ignore              — suppress the alert entirely
-#   set_confidence      — set confidence to the value in `confidence`
-#   increase_confidence — add `confidence` to the current score
-#   decrease_confidence — subtract `confidence` from the current score
+#   ignore              - suppress the alert entirely
+#   set_confidence      - set confidence to the value in `confidence`
+#   increase_confidence - add `confidence` to the current score
+#   decrease_confidence - subtract `confidence` from the current score
 rule_type: "increase_confidence"
 confidence: "medium"
 
-# Rollout control (optional — defaults to blue-green).
+# Rollout control (optional - defaults to blue-green).
 # mode: "blue-green"  # blue-green | canary | shadow
 # min_procs: 1
 # max_procs: 2

@@ -9,10 +9,7 @@ import (
 )
 
 // boostExternalIP raises alert confidence when the source_ip is not in
-// RFC 1918 address space — external origin is a stronger signal.
-//
-// All static metadata (name, id, enabled, global, rule_type, confidence, etc.)
-// is declared in the companion boost-external-ip.yaml sidecar file.
+// RFC 1918 address space - external origin is a stronger signal.
 type boostExternalIP struct{ tuning_rules.BaseTuningRule }
 
 var privateNets = mustParseCIDRs([]string{
@@ -47,9 +44,6 @@ func isPrivate(ipStr string) bool {
 	return false
 }
 
-// Tune returns true when the rule applies — i.e. the source IP is external.
-// alert is the full alerts.Alert struct serialised to JSON (no struct tags,
-// so field names are PascalCase). The event fields live under "Event".
 func (boostExternalIP) Tune(_ context.Context, alert map[string]any) (bool, errors.Error) {
 	event, _ := alert["Event"].(map[string]any)
 	sourceIP, _ := event["source_ip"].(string)

@@ -8,7 +8,7 @@ version: "1.0.0"
 # Dependency ordering: enrichments listed here must run before this one.
 depends_on: []
 
-# Rollout control (optional — defaults to blue-green).
+# Rollout control (optional - defaults to blue-green).
 # mode: "blue-green"  # blue-green | canary | shadow
 # min_procs: 1
 # max_procs: 2

@@ -9,7 +9,7 @@ version: "1.0.0"
 # matchers list. Set to false (or omit) for opt-in use only.
 global: false
 
-# Rollout control (optional — defaults to blue-green).
+# Rollout control (optional - defaults to blue-green).
 # mode: "blue-green"  # blue-green | canary | shadow
 # min_procs: 1
 # max_procs: 2

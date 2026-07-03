@@ -11,10 +11,6 @@ import (
 )
 
 // failedLogin fires when a login attempt is recorded as failed.
-// Rule metadata (severity, log_types, matchers, etc.) lives in rule.yaml.
-//
-// It overrides AlertTitle, AlertContext, and AlertSeverity to produce
-// richer alerts. All other sdk.BaseRule methods use their default (no-op) values.
 type failedLogin struct{ rules.BaseRule }
 
 func (failedLogin) Evaluate(_ context.Context, event events.Event) (bool, errors.Error) {
@@ -46,7 +42,7 @@ func (failedLogin) AlertSeverity(event events.Event) string {
 	if count, ok := event["failure_count"].(float64); ok && count >= 10 {
 		return "high"
 	}
-	return "" // "" → use YAML default ("medium")
+	return ""
 }
 
 func main() {

@@ -11,20 +11,12 @@ import (
 // slackFormatter converts an alert dict into a Slack Block Kit payload.
 // The host serialises the returned map to JSON and forwards it to the
 // configured Slack output.
-//
-// All static metadata (name, id, enabled, etc.) is declared in
-// the companion slack.yaml sidecar file.
 type slackFormatter struct{ formatters.BaseFormatter }
 
-// Format receives the full alerts.Alert struct serialised to JSON.
-// alerts.Alert has no JSON struct tags, so all field names are PascalCase.
-// Event fields (source_ip etc.) are nested under "Event".
 func (slackFormatter) Format(_ context.Context, alert map[string]any) (map[string]any, errors.Error) {
 	alertID, _ := alert["AlertID"].(string)
 	created, _ := alert["Created"].(string)
 
-	// Rule fields are available via alert["Rule"] (a *config.RuleMetadata).
-	// Cast it if you need structured access; common fields are already in the event.
 	event, _ := alert["Event"].(map[string]any)
 	sourceName, _ := event["source_name"].(string)
 
@@ -32,7 +24,7 @@ func (slackFormatter) Format(_ context.Context, alert map[string]any) (map[strin
 	body := fmt.Sprintf("*Source:* %s\n*Alert ID:* `%s`  •  *Time:* %s", sourceName, alertID, created)
 
 	return map[string]any{
-		"text": fmt.Sprintf("Alert fired — %s", alertID),
+		"text": fmt.Sprintf("Alert fired - %s", alertID),
 		"blocks": []map[string]any{
 			{
 				"type": "header",

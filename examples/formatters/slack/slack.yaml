@@ -5,7 +5,7 @@ description: "Converts an alert into a Slack Block Kit payload."
 enabled: true
 version: "1.0.0"
 
-# Rollout control (optional — defaults to blue-green).
+# Rollout control (optional - defaults to blue-green).
 # mode: "blue-green"  # blue-green | canary | shadow
 # min_procs: 1
 # max_procs: 2

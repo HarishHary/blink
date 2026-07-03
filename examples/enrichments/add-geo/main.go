@@ -11,9 +11,6 @@ import (
 // addGeo annotates each alert with geo_country and geo_is_internal derived
 // from the source_ip field in the alert event. In production, replace the
 // stub lookup with a real GeoIP database (e.g. MaxMind GeoLite2).
-//
-// All static metadata (name, id, enabled, depends_on, etc.) is declared in
-// the companion add-geo.yaml sidecar file.
 type addGeo struct{ enrichments.BaseEnrichment }
 
 var privateNets = mustParseCIDRs([]string{
@@ -48,9 +45,6 @@ func isPrivate(ipStr string) bool {
 	return false
 }
 
-// Enrich receives the full alerts.Alert struct serialised to JSON (PascalCase
-// field names, no struct tags). Return only the new fields to add; the host
-// merges them into alert.Event.
 func (addGeo) Enrich(_ context.Context, alert map[string]any) (map[string]any, errors.Error) {
 	event, _ := alert["Event"].(map[string]any)
 	sourceIP, _ := event["source_ip"].(string)
