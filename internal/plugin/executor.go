@@ -25,7 +25,7 @@ type PluginExecutor[T Syncable] struct {
 	logger         *logger.Logger
 	notify         Notify
 	dir            string
-	snapshot       SnapshotSource
+	src            SnapshotSource
 	adapter        *PluginAdapter[T]
 	metrics        *PluginExecutorMetrics
 	mu             sync.RWMutex
@@ -47,7 +47,7 @@ func NewPluginExecutor[T Syncable](logger *logger.Logger, notify Notify, dir str
 		logger:         logger,
 		notify:         notify,
 		dir:            dir,
-		snapshot:       snapshotSrc,
+		src:            snapshotSrc,
 		adapter:        adapter,
 		metrics:        metrics,
 		plugin_handles: make(map[string][]*PluginHandle),
@@ -66,7 +66,7 @@ func (m *PluginExecutor[T]) resolve(name string) string {
 // Start subscribes, does an initial reconcile, then re-reconciles on each snapshot change until ctx is cancelled.
 // Subscribe-before-reconcile means a concurrently-arriving snapshot is never missed (cap-1 signal retained; reconcile is idempotent).
 func (m *PluginExecutor[T]) Start(ctx context.Context) error {
-	ch, unsubscribe := m.snapshot.Subscribe()
+	ch, unsubscribe := m.src.Subscribe()
 	if err := m.reconcile("initial"); err != nil {
 		unsubscribe()
 		return err
@@ -93,7 +93,7 @@ func (m *PluginExecutor[T]) reconcile(reason string) error {
 	m.reconcileMu.Lock()
 	defer m.reconcileMu.Unlock()
 
-	snap := m.snapshot.Snapshot()
+	snap := m.src.Snapshot()
 	if snap == nil {
 		// Control plane has not delivered a snapshot yet. Nothing desired, nothing to do.
 		m.logger.Info("%s reconcile (%s): no snapshot yet", m.adapter.PluginKey(), reason)

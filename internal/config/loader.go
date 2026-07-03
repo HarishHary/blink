@@ -27,12 +27,15 @@ func (e ValidationError) Error() string {
 	return fmt.Sprintf("%s: %s", e.File, e.Message)
 }
 
-// Loader[T] encapsulates per-plugin-type config loading logic.
-// Implement once per plugin type and inject into NewConfigWatcher.
-// Embed BaseLoader[T] to inherit default Validate and CrossValidate.
+// Loader[T] encapsulates per-plugin-type config loading: implement once per type and inject into
+// NewLocalReader (disk) / NewSnapshotConfig (snapshot). Embed BaseLoader[T] for default Validate/CrossValidate.
 type Loader[T plugin.Syncable] interface {
 	// Parse reads a single YAML sidecar file and returns the parsed metadata.
 	Parse(path string) (T, error)
+	// ParseSpec reconstructs the metadata from a snapshot artifact's yaml-marshaled spec (the bytes
+	// Parse would read, minus the file); name is the binary stem, not carried in the spec. Snapshot
+	// counterpart to Parse, used by SnapshotConfig[T].
+	ParseSpec(name string, spec []byte) (T, error)
 	// Validate runs directory-level checks given already-parsed items and
 	// executable binary names present in the directory.
 	Validate(items []T, binaries []string) []ValidationError
@@ -40,17 +43,14 @@ type Loader[T plugin.Syncable] interface {
 	CrossValidate(all []T) error
 }
 
-// BaseLoader[U, T] provides default implementations of Parse, Validate, and
-// CrossValidate. Embed in per-plugin Loader structs to inherit defaults and only
-// override what the plugin type needs. U is the concrete struct (e.g. FormatterMetadata);
-// T is its pointer type (e.g. *FormatterMetadata).
+// BaseLoader[U, T] provides default Parse/ParseSpec/Validate/CrossValidate; embed in per-plugin Loader
+// structs and override only what's needed. U is the concrete struct, T its pointer type.
 type BaseLoader[U plugin.Syncable, T interface {
 	*U
 	plugin.Syncable
 }] struct{}
 
-// named is satisfied by any metadata type that embeds *plugin.PluginMetadata.
-// It is intentionally unexported — name injection is a loader concern, not a plugin runtime concern.
+// named is satisfied by metadata that embeds *plugin.PluginMetadata; unexported because name injection is a loader concern, not a runtime one.
 type named interface{ SetName(string) }
 
 func (BaseLoader[U, T]) Parse(path string) (T, error) {
@@ -66,6 +66,20 @@ func (BaseLoader[U, T]) Parse(path string) (T, error) {
 	stem := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	if n, ok := any(p).(named); ok {
 		n.SetName(stem)
+	}
+	return p, nil
+}
+
+// ParseSpec mirrors Parse without the disk read: unmarshal an already-loaded spec and inject name.
+// Types needing post-parse resolution (e.g. rules' resolveScoring) override this, as they override Parse.
+func (BaseLoader[U, T]) ParseSpec(name string, spec []byte) (T, error) {
+	var cfg U
+	p := T(&cfg)
+	if err := yaml.Unmarshal(spec, p); err != nil {
+		return nil, fmt.Errorf("parse spec %q: %w", name, err)
+	}
+	if n, ok := any(p).(named); ok {
+		n.SetName(name)
 	}
 	return p, nil
 }
@@ -129,7 +143,7 @@ func (BaseLoader[U, T]) Validate(items []T, binaries []string) []ValidationError
 			errs = append(errs, ValidationError{
 				Field: "mode", PluginID: id, Blocking: true,
 				Message: fmt.Sprintf(
-					"plugin id %q has %d versions (%s) but none is stable — all declare shadow/canary; one must omit mode or set mode: \"blue-green\"",
+					"plugin id %q has %d versions (%s) but none is stable - all declare shadow/canary; one must omit mode or set mode: \"blue-green\"",
 					id, len(group), strings.Join(files, ", "),
 				),
 			})
@@ -137,7 +151,7 @@ func (BaseLoader[U, T]) Validate(items []T, binaries []string) []ValidationError
 			errs = append(errs, ValidationError{
 				Field: "mode", PluginID: id, Blocking: true,
 				Message: fmt.Sprintf(
-					"plugin id %q has %d stable versions (%s) — only one may omit mode or use \"blue-green\"; mark the others as \"shadow\" or \"canary\"",
+					"plugin id %q has %d stable versions (%s) - only one may omit mode or use \"blue-green\"; mark the others as \"shadow\" or \"canary\"",
 					id, stableCount, strings.Join(files, ", "),
 				),
 			})
@@ -145,7 +159,7 @@ func (BaseLoader[U, T]) Validate(items []T, binaries []string) []ValidationError
 			errs = append(errs, ValidationError{
 				Field: "mode", PluginID: id, Blocking: true,
 				Message: fmt.Sprintf(
-					"plugin id %q has %d shadow/canary versions (%s) — only one non-stable version is supported at a time",
+					"plugin id %q has %d shadow/canary versions (%s) - only one non-stable version is supported at a time",
 					id, shadowCount, strings.Join(files, ", "),
 				),
 			})
