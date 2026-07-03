@@ -73,8 +73,8 @@ func (RolloutMode) EnumDescriptor() ([]byte, []int) {
 
 // EffectiveEntry is the wire form of internal/snapshot.EffectiveEntry: the desired state for
 // one logical plugin ID. The snapshot topic is per-ID keyed, so each entry is a standalone
-// message (there is no aggregate Snapshot on the wire) - convert with snapshot.EntryToProto /
-// EntryFromProto.
+// message (there is no aggregate Snapshot on the wire) - (de)serialise with snapshot.Marshal /
+// snapshot.Unmarshal.
 type EffectiveEntry struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -230,7 +230,7 @@ const file_snapshot_proto_rawDesc = "" +
 	"\vRolloutMode\x12\x1b\n" +
 	"\x17ROLLOUT_MODE_BLUE_GREEN\x10\x00\x12\x17\n" +
 	"\x13ROLLOUT_MODE_CANARY\x10\x01\x12\x17\n" +
-	"\x13ROLLOUT_MODE_SHADOW\x10\x02B\bZ\x06pb/;pbb\x06proto3"
+	"\x13ROLLOUT_MODE_SHADOW\x10\x02B\x06Z\x04.;pbb\x06proto3"
 
 var (
 	file_snapshot_proto_rawDescOnce sync.Once

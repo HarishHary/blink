@@ -1,12 +1,12 @@
 syntax = "proto3";
 package snapshot;
 
-option go_package = "pb/;pb";
+option go_package = ".;pb";
 
 // EffectiveEntry is the wire form of internal/snapshot.EffectiveEntry: the desired state for
 // one logical plugin ID. The snapshot topic is per-ID keyed, so each entry is a standalone
-// message (there is no aggregate Snapshot on the wire) - convert with snapshot.EntryToProto /
-// EntryFromProto.
+// message (there is no aggregate Snapshot on the wire) - (de)serialise with snapshot.Marshal /
+// snapshot.Unmarshal.
 message EffectiveEntry {
   string      id        = 1;
   bool        enabled   = 2;

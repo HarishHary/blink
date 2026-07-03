@@ -6,7 +6,61 @@ import (
 
 	"github.com/harishhary/blink/internal/pools"
 	"github.com/harishhary/blink/internal/snapshot/pb"
+	"google.golang.org/protobuf/proto"
 )
+
+// Marshal serialises one EffectiveEntry to protobuf bytes for the per-ID keyed snapshot topic.
+func Marshal(e EffectiveEntry) ([]byte, error) {
+	return proto.Marshal(EntryToProto(e))
+}
+
+// Unmarshal deserialises a snapshot-topic value back into an EffectiveEntry.
+func Unmarshal(data []byte) (EffectiveEntry, error) {
+	var pe pb.EffectiveEntry
+	if err := proto.Unmarshal(data, &pe); err != nil {
+		return EffectiveEntry{}, err
+	}
+	return ProtoToEntry(&pe), nil
+}
+
+// EntryToProto converts one EffectiveEntry to its protobuf form. The per-ID keyed snapshot
+// topic publishes these individually (one message per logical plugin ID).
+func EntryToProto(e EffectiveEntry) *pb.EffectiveEntry {
+	return &pb.EffectiveEntry{
+		Id:        e.Id,
+		Enabled:   e.Enabled,
+		Primary:   refToProto(e.Primary),
+		Candidate: refToProto(e.Candidate),
+	}
+}
+
+// ProtoToEntry converts one protobuf EffectiveEntry back to the domain type.
+func ProtoToEntry(e *pb.EffectiveEntry) EffectiveEntry {
+	return EffectiveEntry{
+		Id:        e.GetId(),
+		Enabled:   e.GetEnabled(),
+		Primary:   protoToRef(e.GetPrimary()),
+		Candidate: protoToRef(e.GetCandidate()),
+	}
+}
+
+func refToProto(r *ArtifactRef) *pb.ArtifactRef {
+	if r == nil {
+		return nil
+	}
+	return &pb.ArtifactRef{Name: r.Name, Mode: pb.RolloutMode(r.Mode), Spec: r.Spec, Hash: r.Hash}
+}
+
+func protoToRef(r *pb.ArtifactRef) *ArtifactRef {
+	if r == nil {
+		return nil
+	}
+	return &ArtifactRef{Name: r.GetName(), Mode: pools.RolloutMode(r.GetMode()), Spec: r.GetSpec(), Hash: r.GetHash()}
+}
+
+// --- Generation marker ---
+// A distinct codec from the entry codec above: the controller publishes the current DB
+// generation under a reserved key (not protobuf, just a big-endian int64) for rollout tracking.
 
 // GenerationMarkerKey is the reserved key the controller uses on the keyed snapshot topic to
 // publish the current DB generation for fleet rollout tracking. It is not a logical plugin ID:
@@ -27,39 +81,4 @@ func DecodeGeneration(b []byte) (int64, error) {
 		return 0, fmt.Errorf("generation marker: want 8 bytes, got %d", len(b))
 	}
 	return int64(binary.BigEndian.Uint64(b)), nil
-}
-
-// EntryToProto converts one EffectiveEntry to its protobuf form. The per-ID keyed snapshot
-// topic publishes these individually (one message per logical plugin ID).
-func EntryToProto(e EffectiveEntry) *pb.EffectiveEntry {
-	return &pb.EffectiveEntry{
-		Id:        e.Id,
-		Enabled:   e.Enabled,
-		Primary:   refToProto(e.Primary),
-		Candidate: refToProto(e.Candidate),
-	}
-}
-
-// EntryFromProto converts one protobuf EffectiveEntry back to the domain type.
-func EntryFromProto(e *pb.EffectiveEntry) EffectiveEntry {
-	return EffectiveEntry{
-		Id:        e.GetId(),
-		Enabled:   e.GetEnabled(),
-		Primary:   refFromProto(e.GetPrimary()),
-		Candidate: refFromProto(e.GetCandidate()),
-	}
-}
-
-func refToProto(r *ArtifactRef) *pb.ArtifactRef {
-	if r == nil {
-		return nil
-	}
-	return &pb.ArtifactRef{Name: r.Name, Mode: pb.RolloutMode(r.Mode), Spec: r.Spec, Hash: r.Hash}
-}
-
-func refFromProto(r *pb.ArtifactRef) *ArtifactRef {
-	if r == nil {
-		return nil
-	}
-	return &ArtifactRef{Name: r.GetName(), Mode: pools.RolloutMode(r.GetMode()), Spec: r.GetSpec(), Hash: r.GetHash()}
 }
