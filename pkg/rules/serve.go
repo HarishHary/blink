@@ -14,16 +14,8 @@ import (
 	"github.com/harishhary/blink/pkg/rules/rpc_rules"
 )
 
-// MagicValue is this plugin type's cookie value; the shared cookie key and
-// protocol version live in internal/handshake.
 const MagicValue = "rule_v1"
 
-// RulePlugin is the interface that all rule plugin binaries must implement.
-// Embed sdk.BaseRule to get default no-op / pass-through implementations for
-// every method. Override only the methods you need.
-//
-// All static rule metadata (name, severity, log_types, etc.) lives in the YAML
-// sidecar file alongside the binary — the subprocess owns only evaluation logic.
 type RulePlugin interface {
 	Init() error
 	Evaluate(ctx context.Context, event events.Event) (bool, errors.Error)
@@ -38,7 +30,7 @@ type RulePlugin interface {
 	AlertDescription(event events.Event) string
 
 	// AlertSeverity returns an event-level severity override.
-	// Return one of: "info", "low", "medium", "high", "critical", or "" to use the YAML value.
+	// Return one of: "info", "low", "medium", "high", "critical", or "" to use the YAML value (default).
 	AlertSeverity(event events.Event) string
 
 	// AlertContext returns extra key-value pairs merged into the alert event.
@@ -46,7 +38,7 @@ type RulePlugin interface {
 	AlertContext(event events.Event) map[string]any
 
 	// AlertMergeByKeys returns the merge keys for this event, overriding YAML merge_by_keys.
-	// Return nil to use the YAML value.
+	// Return nil to use the YAML value (default).
 	AlertMergeByKeys(event events.Event) []string
 
 	// AlertReqSubkeys guards evaluation: return false to skip Evaluate for this event.

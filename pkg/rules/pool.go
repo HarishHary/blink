@@ -4,44 +4,45 @@ import (
 	"context"
 	"time"
 
+	"github.com/harishhary/blink/internal/config"
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/messaging"
 	"github.com/harishhary/blink/internal/plugin"
-	internal "github.com/harishhary/blink/internal/pools"
+	"github.com/harishhary/blink/internal/pools"
 	"github.com/harishhary/blink/pkg/events"
 )
 
-type Pool struct {
-	*internal.ProcessPool[Rule]
+type RulePool struct {
+	*pools.ProcessPool[Rule]
 }
 
-func NewPool(manager *RuleConfigWatcher, drainTimeout time.Duration) *Pool {
-	routing := func(id, name string) (internal.RolloutMode, float64) {
+func NewRulePool(cfg config.Source[*RuleMetadata], drainTimeout time.Duration) *RulePool {
+	routing := func(id, name string) (pools.RolloutMode, float64) {
 		if name != "" {
-			// Register time: use per-binary YAML so a stable update isn't misrouted
+			// Register time: use per-binary spec so a stable update isn't misrouted
 			// to the pending slot because a running shadow inflates the merged mode.
-			if cfg, ok := manager.Current().ByFileName(name); ok {
-				return cfg.RolloutMode, cfg.RolloutPct
+			if m, ok := cfg.ByFileName(name); ok {
+				return m.RolloutMode, m.RolloutPct
 			}
 		}
-		re := manager.Current().RoutingByID(id)
+		re := cfg.RoutingByID(id)
 		return re.Mode, re.RolloutPct
 	}
-	return &Pool{
-		ProcessPool: internal.NewProcessPool[Rule](routing, internal.NewPoolMetrics("rules"), drainTimeout),
+	return &RulePool{
+		ProcessPool: pools.NewProcessPool[Rule](routing, pools.NewPoolMetrics("rules"), drainTimeout),
 	}
 }
 
 // Evaluate runs all evts against the rule identified by ruleID in a single pool call.
-func (p *Pool) Evaluate(ctx context.Context, ruleID string, evts []events.Event, canaryHashKey string) ([]EvalResult, errors.Error) {
+func (p *RulePool) Evaluate(ctx context.Context, ruleID string, evts []events.Event, canaryHashKey string) ([]EvalResult, errors.Error) {
 	var results []EvalResult
-	err := p.Call(ctx, ruleID, canaryHashKey, func(ctx context.Context, r Rule) error {
+	err := p.Call(ctx, ruleID, canaryHashKey, func(callCtx context.Context, r Rule) error {
 		if !r.RuleMetadata().Enabled {
 			results = make([]EvalResult, len(evts))
 			return nil
 		}
 		var e errors.Error
-		results, e = r.Evaluate(ctx, evts)
+		results, e = r.Evaluate(callCtx, evts)
 		return e
 	})
 	if err != nil {
@@ -50,17 +51,13 @@ func (p *Pool) Evaluate(ctx context.Context, ruleID string, evts []events.Event,
 	return results, nil
 }
 
-// poolKey builds a PoolKey that is unique per binary deployment.
-// Combining the rule name with the binary checksum means a binary change
-// always produces a distinct key even if the operator forgot to update the name
-// string in the rule config - preventing silent same-key overwrites in the pool.
-func poolKey(r Rule) internal.PoolKey {
+func poolKey(r Rule) pools.PoolKey {
 	cfg := r.RuleMetadata()
-	return internal.PoolKey{Id: cfg.Id, Name: cfg.Name, Hash: r.Checksum()}
+	return pools.PoolKey{Id: cfg.Id, Name: cfg.Name, Hash: r.Checksum()}
 }
 
 // Handles plugin lifecycle messages from the plugin manager bus, registering or deregistering rules in the pool.
-func (p *Pool) Sync(msg messaging.Message) {
+func (p *RulePool) Sync(msg messaging.Message) {
 	switch m := msg.(type) {
 	case plugin.RegisterMessage[Rule]:
 		p.Register(poolKey(m.Items[0]), m.Items, m.MaxProcs, nil)

@@ -14,22 +14,21 @@ import (
 )
 
 // NewRuleAdapter builds the PluginAdapter for the rules plugin type.
-// manager is used both as the DesiredConfig and for rpcRule construction.
-func NewRuleAdapter(manager *RuleConfigWatcher) *plugin.PluginAdapter[Rule] {
+func NewRuleAdapter(cfg Source) *plugin.PluginAdapter[Rule] {
 	return &plugin.PluginAdapter[Rule]{
-		Key:           "rule",
-		Magic:         "rule_v1",
-		Plugin:        &rulePlugin{},
-		DesiredConfig: manager,
+		Key:    "rule",
+		Magic:  MagicValue,
+		Plugin: &rulePlugin{},
+		Config: cfg,
 		DoHandshake: func(ctx context.Context, raw any, binPath, hash string) (Rule, plugin.PluginLifecycle, string, string, error) {
 			rpc, ok := raw.(rpc_rules.RuleClient)
 			if !ok {
 				return nil, nil, "", "", fmt.Errorf("dispense: unexpected type %T", raw)
 			}
 
-			desired, ok := manager.DesiredBinaryState(helpers.BinaryBaseName(binPath))
+			desired, ok := cfg.DesiredBinaryState(helpers.BinaryBaseName(binPath))
 			if !ok {
-				return nil, nil, "", "", fmt.Errorf("rule launcher: no YAML sidecar found for binary %q", binPath)
+				return nil, nil, "", "", fmt.Errorf("rule launcher: no snapshot spec for binary %q", binPath)
 			}
 
 			initCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -39,8 +38,8 @@ func NewRuleAdapter(manager *RuleConfigWatcher) *plugin.PluginAdapter[Rule] {
 				return nil, nil, "", "", fmt.Errorf("init: %w", err)
 			}
 
-			rule := newRpcRule(helpers.BinaryBaseName(binPath), rpc, manager, hash)
-			return rule, &ruleLifecycle{rpc: rpc}, desired.ID, desired.Name, nil
+			rule := newRpcRule(helpers.BinaryBaseName(binPath), rpc, cfg, hash)
+			return rule, &ruleLifecycle{rpc: rpc}, desired.Id, desired.Name, nil
 		},
 	}
 }
@@ -59,14 +58,11 @@ func (l *ruleLifecycle) Shutdown(ctx context.Context) error {
 	return err
 }
 
-// rulePlugin is the go-plugin client-side stub.
 type rulePlugin struct {
 	goplugin.NetRPCUnsupportedPlugin
 }
 
-func (p *rulePlugin) GRPCServer(_ *goplugin.GRPCBroker, _ *grpc.Server) error {
-	return nil
-}
+func (p *rulePlugin) GRPCServer(_ *goplugin.GRPCBroker, _ *grpc.Server) error { return nil }
 func (p *rulePlugin) GRPCClient(_ context.Context, _ *goplugin.GRPCBroker, c *grpc.ClientConn) (interface{}, error) {
 	return rpc_rules.NewRuleClient(c), nil
 }

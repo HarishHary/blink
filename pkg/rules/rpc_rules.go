@@ -3,42 +3,43 @@ package rules
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
+	"github.com/harishhary/blink/internal/config"
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/events"
 	"github.com/harishhary/blink/pkg/rules/rpc_rules"
 )
 
-// This is the executor-side wrapper for a live rule subprocess.
 type rpcRule struct {
-	client     rpc_rules.RuleClient
-	cfgManager *RuleConfigWatcher
-	fileName   string
-	checksum   string // SHA-256 of the binary
+	src      config.Source[*RuleMetadata]
+	fileName string
+	checksum string
+	client   rpc_rules.RuleClient
 }
 
-func newRpcRule(fileName string, client rpc_rules.RuleClient, manager *RuleConfigWatcher, checksum string) *rpcRule {
+func newRpcRule(fileName string, client rpc_rules.RuleClient, src config.Source[*RuleMetadata], checksum string) *rpcRule {
 	return &rpcRule{
-		client:     client,
-		cfgManager: manager,
-		fileName:   fileName,
-		checksum:   checksum,
+		src:      src,
+		fileName: fileName,
+		checksum: checksum,
+		client:   client,
 	}
 }
 
 func (r *rpcRule) cfg() *RuleMetadata {
-	if r.cfgManager == nil {
+	if r.src == nil {
 		return nil
 	}
-	v, ok := r.cfgManager.Current().ByFileName(r.fileName)
+	v, ok := r.src.ByFileName(r.fileName)
 	if !ok {
 		return nil
 	}
 	return v
 }
 
-// RuleMetadata returns the live YAML-derived rule configuration for this plugin.
+// RuleMetadata returns the snapshot-derived rule configuration for this plugin.
 func (r *rpcRule) RuleMetadata() *RuleMetadata {
 	if c := r.cfg(); c != nil {
 		return c
@@ -47,13 +48,17 @@ func (r *rpcRule) RuleMetadata() *RuleMetadata {
 	return &RuleMetadata{PluginMetadata: plugin.PluginMetadata{Name: r.fileName, Id: r.fileName}}
 }
 
-func (r *rpcRule) Checksum() string { return r.checksum }
-
 func (r *rpcRule) Metadata() plugin.PluginMetadata {
 	if c := r.cfg(); c != nil {
 		return c.Metadata()
 	}
-	return plugin.PluginMetadata{Name: r.fileName}
+	return plugin.PluginMetadata{Name: r.fileName, Id: r.fileName}
+}
+
+func (r *rpcRule) Checksum() string { return r.checksum }
+func (r *rpcRule) String() string {
+	m := r.RuleMetadata().Metadata()
+	return fmt.Sprintf("Rule '%s' (id:%s)", m.Name, m.Id)
 }
 
 // ctx carries the caller's deadline (e.g. the executor's per-event timeout).
