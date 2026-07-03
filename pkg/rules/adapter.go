@@ -8,13 +8,14 @@ import (
 	goplugin "github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
 
+	"github.com/harishhary/blink/internal/config"
 	"github.com/harishhary/blink/internal/helpers"
 	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/rules/rpc_rules"
 )
 
 // NewRuleAdapter builds the PluginAdapter for the rules plugin type.
-func NewRuleAdapter(cfg Source) *plugin.PluginAdapter[Rule] {
+func NewRuleAdapter(cfg config.Source[*RuleMetadata]) *plugin.PluginAdapter[Rule] {
 	return &plugin.PluginAdapter[Rule]{
 		Key:    "rule",
 		Magic:  MagicValue,
