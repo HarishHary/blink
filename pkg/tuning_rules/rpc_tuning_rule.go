@@ -14,39 +14,42 @@ import (
 )
 
 type rpcTuningRule struct {
-	src      config.Source[*TuningRuleMetadata]
+	cfg      config.Source[*TuningRuleMetadata]
 	fileName string
 	checksum string
 	client   rpc_tuning_rules.TuningRuleClient
 }
 
-func newRpcTuningRule(fileName string, client rpc_tuning_rules.TuningRuleClient, src config.Source[*TuningRuleMetadata], checksum string) *rpcTuningRule {
+func newRpcTuningRule(fileName string, client rpc_tuning_rules.TuningRuleClient, cfg config.Source[*TuningRuleMetadata], checksum string) *rpcTuningRule {
 	return &rpcTuningRule{
-		src:      src,
+		cfg:      cfg,
 		fileName: fileName,
 		checksum: checksum,
 		client:   client,
 	}
 }
 
-func (r *rpcTuningRule) cfg() *TuningRuleMetadata {
-	if r.src == nil {
+func (r *rpcTuningRule) config() *TuningRuleMetadata {
+	if r.cfg == nil {
 		return nil
 	}
-	v, _ := r.src.ByFileName(r.fileName)
+	v, _ := r.cfg.ByFileName(r.fileName)
 	return v
 }
 
 // TuningMetadata returns the live YAML-derived tuning rule configuration.
 func (r *rpcTuningRule) TuningRuleMetadata() *TuningRuleMetadata {
-	if c := r.cfg(); c != nil {
+	if c := r.config(); c != nil {
 		return c
 	}
 	return &TuningRuleMetadata{PluginMetadata: plugin.PluginMetadata{Id: r.fileName, Name: r.fileName}}
 }
 
 func (r *rpcTuningRule) Metadata() plugin.PluginMetadata {
-	return r.TuningRuleMetadata().Metadata()
+	if c := r.config(); c != nil {
+		return c.Metadata()
+	}
+	return plugin.PluginMetadata{Id: r.fileName, Name: r.fileName}
 }
 
 func (r *rpcTuningRule) Checksum() string { return r.checksum }

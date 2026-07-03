@@ -13,42 +13,42 @@ import (
 )
 
 type rpcMatcher struct {
-	src      config.Source[*MatcherMetadata]
+	cfg      config.Source[*MatcherMetadata]
 	fileName string
 	checksum string
 	client   rpc_matchers.MatcherClient
 }
 
-func newRpcMatcher(fileName string, client rpc_matchers.MatcherClient, src config.Source[*MatcherMetadata], checksum string) *rpcMatcher {
+func newRpcMatcher(fileName string, client rpc_matchers.MatcherClient, cfg config.Source[*MatcherMetadata], checksum string) *rpcMatcher {
 	return &rpcMatcher{
-		src:      src,
+		cfg:      cfg,
 		fileName: fileName,
 		checksum: checksum,
 		client:   client,
 	}
 }
 
-func (r *rpcMatcher) cfg() *MatcherMetadata {
-	if r.src == nil {
+func (r *rpcMatcher) config() *MatcherMetadata {
+	if r.cfg == nil {
 		return nil
 	}
-	v, _ := r.src.ByFileName(r.fileName)
+	v, _ := r.cfg.ByFileName(r.fileName)
 	return v
 }
 
 // MatcherMetadata returns the live YAML-derived matcher configuration.
 func (r *rpcMatcher) MatcherMetadata() *MatcherMetadata {
-	if c := r.cfg(); c != nil {
+	if c := r.config(); c != nil {
 		return c
 	}
 	return &MatcherMetadata{PluginMetadata: plugin.PluginMetadata{Id: r.fileName, Name: r.fileName}}
 }
 
 func (r *rpcMatcher) Metadata() plugin.PluginMetadata {
-	if c := r.cfg(); c != nil {
+	if c := r.config(); c != nil {
 		return c.Metadata()
 	}
-	return plugin.PluginMetadata{Name: r.fileName, Id: r.fileName}
+	return plugin.PluginMetadata{Id: r.fileName, Name: r.fileName}
 }
 
 func (r *rpcMatcher) Checksum() string { return r.checksum }

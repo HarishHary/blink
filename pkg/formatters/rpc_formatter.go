@@ -13,39 +13,42 @@ import (
 )
 
 type rpcFormatter struct {
-	src      config.Source[*FormatterMetadata]
+	cfg      config.Source[*FormatterMetadata]
 	fileName string
 	checksum string
 	client   rpc_formatters.FormatterClient
 }
 
-func newRpcFormatter(fileName string, client rpc_formatters.FormatterClient, src config.Source[*FormatterMetadata], checksum string) *rpcFormatter {
+func newRpcFormatter(fileName string, client rpc_formatters.FormatterClient, cfg config.Source[*FormatterMetadata], checksum string) *rpcFormatter {
 	return &rpcFormatter{
-		src:      src,
+		cfg:      cfg,
 		fileName: fileName,
 		checksum: checksum,
 		client:   client,
 	}
 }
 
-func (f *rpcFormatter) cfg() *FormatterMetadata {
-	if f.src == nil {
+func (f *rpcFormatter) config() *FormatterMetadata {
+	if f.cfg == nil {
 		return nil
 	}
-	v, _ := f.src.ByFileName(f.fileName)
+	v, _ := f.cfg.ByFileName(f.fileName)
 	return v
 }
 
 // FormatterMetadata returns the live YAML-derived formatter configuration.
 func (f *rpcFormatter) FormatterMetadata() *FormatterMetadata {
-	if c := f.cfg(); c != nil {
+	if c := f.config(); c != nil {
 		return c
 	}
 	return &FormatterMetadata{PluginMetadata: plugin.PluginMetadata{Id: f.fileName, Name: f.fileName}}
 }
 
 func (f *rpcFormatter) Metadata() plugin.PluginMetadata {
-	return f.FormatterMetadata().Metadata()
+	if c := f.config(); c != nil {
+		return c.Metadata()
+	}
+	return plugin.PluginMetadata{Id: f.fileName, Name: f.fileName}
 }
 
 func (f *rpcFormatter) Checksum() string { return f.checksum }

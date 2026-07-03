@@ -12,39 +12,42 @@ import (
 )
 
 type rpcEnrichment struct {
-	src      config.Source[*EnrichmentMetadata]
+	cfg      config.Source[*EnrichmentMetadata]
 	fileName string
 	checksum string
 	client   rpc_enrichments.EnrichmentClient
 }
 
-func newRpcEnrichment(fileName string, client rpc_enrichments.EnrichmentClient, src config.Source[*EnrichmentMetadata], checksum string) *rpcEnrichment {
+func newRpcEnrichment(fileName string, client rpc_enrichments.EnrichmentClient, cfg config.Source[*EnrichmentMetadata], checksum string) *rpcEnrichment {
 	return &rpcEnrichment{
-		src:      src,
+		cfg:      cfg,
 		fileName: fileName,
 		checksum: checksum,
 		client:   client,
 	}
 }
 
-func (r *rpcEnrichment) cfg() *EnrichmentMetadata {
-	if r.src == nil {
+func (r *rpcEnrichment) config() *EnrichmentMetadata {
+	if r.cfg == nil {
 		return nil
 	}
-	v, _ := r.src.ByFileName(r.fileName)
+	v, _ := r.cfg.ByFileName(r.fileName)
 	return v
 }
 
 // EnrichmentMetadata returns the live YAML-derived enrichment configuration.
 func (r *rpcEnrichment) EnrichmentMetadata() *EnrichmentMetadata {
-	if c := r.cfg(); c != nil {
+	if c := r.config(); c != nil {
 		return c
 	}
 	return &EnrichmentMetadata{PluginMetadata: plugin.PluginMetadata{Id: r.fileName, Name: r.fileName}}
 }
 
 func (r *rpcEnrichment) Metadata() plugin.PluginMetadata {
-	return r.EnrichmentMetadata().Metadata()
+	if c := r.config(); c != nil {
+		return c.Metadata()
+	}
+	return plugin.PluginMetadata{Id: r.fileName, Name: r.fileName}
 }
 
 func (r *rpcEnrichment) DependsOn() []string { return r.EnrichmentMetadata().DependsOn }

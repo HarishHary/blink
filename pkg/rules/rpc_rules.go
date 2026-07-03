@@ -13,26 +13,26 @@ import (
 )
 
 type rpcRule struct {
-	src      config.Source[*RuleMetadata]
+	cfg      config.Source[*RuleMetadata]
 	fileName string
 	checksum string
 	client   rpc_rules.RuleClient
 }
 
-func newRpcRule(fileName string, client rpc_rules.RuleClient, src config.Source[*RuleMetadata], checksum string) *rpcRule {
+func newRpcRule(fileName string, client rpc_rules.RuleClient, cfg config.Source[*RuleMetadata], checksum string) *rpcRule {
 	return &rpcRule{
-		src:      src,
+		cfg:      cfg,
 		fileName: fileName,
 		checksum: checksum,
 		client:   client,
 	}
 }
 
-func (r *rpcRule) cfg() *RuleMetadata {
-	if r.src == nil {
+func (r *rpcRule) config() *RuleMetadata {
+	if r.cfg == nil {
 		return nil
 	}
-	v, ok := r.src.ByFileName(r.fileName)
+	v, ok := r.cfg.ByFileName(r.fileName)
 	if !ok {
 		return nil
 	}
@@ -41,18 +41,18 @@ func (r *rpcRule) cfg() *RuleMetadata {
 
 // RuleMetadata returns the snapshot-derived rule configuration for this plugin.
 func (r *rpcRule) RuleMetadata() *RuleMetadata {
-	if c := r.cfg(); c != nil {
+	if c := r.config(); c != nil {
 		return c
 	}
 	// Return a minimal stub so callers don't need to nil-check.
-	return &RuleMetadata{PluginMetadata: plugin.PluginMetadata{Name: r.fileName, Id: r.fileName}}
+	return &RuleMetadata{PluginMetadata: plugin.PluginMetadata{Id: r.fileName, Name: r.fileName}}
 }
 
 func (r *rpcRule) Metadata() plugin.PluginMetadata {
-	if c := r.cfg(); c != nil {
+	if c := r.config(); c != nil {
 		return c.Metadata()
 	}
-	return plugin.PluginMetadata{Name: r.fileName, Id: r.fileName}
+	return plugin.PluginMetadata{Id: r.fileName, Name: r.fileName}
 }
 
 func (r *rpcRule) Checksum() string { return r.checksum }
@@ -67,13 +67,13 @@ func (r *rpcRule) Evaluate(ctx context.Context, evts []events.Event) ([]EvalResu
 	for _, ev := range evts {
 		b, err := json.Marshal(ev)
 		if err != nil {
-			return nil, errors.New(err)
+			return nil, errors.NewE(err)
 		}
 		protoEvents = append(protoEvents, &rpc_rules.Event{Json: b})
 	}
 	resp, err := r.client.EvaluateBatch(ctx, &rpc_rules.EvaluateBatchRequest{Events: protoEvents})
 	if err != nil {
-		return nil, errors.New(err)
+		return nil, errors.NewE(err)
 	}
 
 	out := make([]EvalResult, len(resp.GetResults()))
