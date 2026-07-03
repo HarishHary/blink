@@ -4,27 +4,39 @@ import (
 	"context"
 	"time"
 
+	"github.com/harishhary/blink/internal/config"
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/messaging"
 	"github.com/harishhary/blink/internal/plugin"
-	internal "github.com/harishhary/blink/internal/pools"
+	"github.com/harishhary/blink/internal/pools"
 	"github.com/harishhary/blink/pkg/alerts"
 	"github.com/harishhary/blink/pkg/scoring"
 )
 
-type Pool struct {
-	*internal.ProcessPool[TuningRule]
+type TuningRulePool struct {
+	*pools.ProcessPool[TuningRule]
 }
 
-func NewPool(routing *internal.RoutingTable, drainTimeout time.Duration) *Pool {
-	return &Pool{
-		ProcessPool: internal.NewProcessPool[TuningRule](routing.Config(), internal.NewPoolMetrics("tuning_rules"), drainTimeout),
+// NewTuningRulePool builds the tuning-rule pool with live rollout routing derived from src (see the
+// rules pool for the closure rationale).
+func NewTuningRulePool(src config.Source[*TuningRuleMetadata], drainTimeout time.Duration) *TuningRulePool {
+	routing := func(id, name string) (pools.RolloutMode, float64) {
+		if name != "" {
+			if m, ok := src.ByFileName(name); ok {
+				return m.RolloutMode, m.RolloutPct
+			}
+		}
+		re := src.RoutingByID(id)
+		return re.Mode, re.RolloutPct
+	}
+	return &TuningRulePool{
+		ProcessPool: pools.NewProcessPool[TuningRule](routing, pools.NewPoolMetrics("tuning_rules"), drainTimeout),
 	}
 }
 
 // Tune calls tuningRuleID once with all alerts, returning per-alert apply results.
 // ruleType and confidence are rule metadata - the same for every alert in the batch.
-func (p *Pool) Tune(ctx context.Context, tuningRuleID string, alerts []alerts.Alert, canaryHashKey string) (
+func (p *TuningRulePool) Tune(ctx context.Context, tuningRuleID string, alerts []alerts.Alert, canaryHashKey string) (
 	ruleType RuleType, confidence scoring.Confidence, applies []bool, _ errors.Error,
 ) {
 	applies = make([]bool, len(alerts))
@@ -45,20 +57,17 @@ func (p *Pool) Tune(ctx context.Context, tuningRuleID string, alerts []alerts.Al
 }
 
 // Handles plugin lifecycle messages from the plugin manager bus, registering or deregistering tuning rules in the pool.
-func poolKey(t TuningRule) internal.PoolKey {
+func poolKey(t TuningRule) pools.PoolKey {
 	cfg := t.TuningRuleMetadata()
-	return internal.PoolKey{Id: cfg.Id, Name: cfg.Name, Hash: t.Checksum()}
+	return pools.PoolKey{Id: cfg.Id, Name: cfg.Name, Hash: t.Checksum()}
 }
 
-func (p *Pool) Sync(msg messaging.Message) {
-	register := func(onDrained func(), items []TuningRule, maxProcs int) {
-		p.Register(poolKey(items[0]), items, maxProcs, onDrained)
-	}
+func (p *TuningRulePool) Sync(msg messaging.Message) {
 	switch m := msg.(type) {
 	case plugin.RegisterMessage[TuningRule]:
-		register(nil, m.Items, m.MaxProcs)
+		p.Register(poolKey(m.Items[0]), m.Items, m.MaxProcs, nil)
 	case plugin.UpdateMessage[TuningRule]:
-		register(m.OnDrained, m.Items, m.MaxProcs)
+		p.Register(poolKey(m.Items[0]), m.Items, m.MaxProcs, m.OnDrained)
 	case plugin.UnregisterMessage[TuningRule]:
 		p.Unregister(m.ItemKey)
 	case plugin.RemoveMessage[TuningRule]:

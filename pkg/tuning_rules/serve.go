@@ -21,7 +21,7 @@ const MagicValue = "tuning_rule_v1"
 // Embed sdk.BaseTuningRule to get no-op defaults for Init and Shutdown.
 //
 // All static metadata (name, id, enabled, global, rule_type, confidence, etc.) lives in
-// the YAML sidecar file alongside the binary — the subprocess owns only tuning logic.
+// the YAML sidecar file alongside the binary - the subprocess owns only tuning logic.
 type TuningRulePlugin interface {
 	Init() error
 	Tune(ctx context.Context, alert map[string]any) (bool, errors.Error)

@@ -8,18 +8,20 @@ import (
 	goplugin "github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
 
+	"github.com/harishhary/blink/internal/config"
 	"github.com/harishhary/blink/internal/helpers"
 	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/tuning_rules/rpc_tuning_rules"
 )
 
-// NewTuningRuleAdapter builds the PluginAdapter for the tuning_rules plugin type.
-func NewTuningRuleAdapter(manager *TuningRuleConfigWatcher) *plugin.PluginAdapter[TuningRule] {
+// NewTuningRuleAdapter builds the PluginAdapter for the tuning_rules plugin type. cfg is
+// the config source (snapshot-backed in the data plane, disk-backed in the controller).
+func NewTuningRuleAdapter(cfg config.Source[*TuningRuleMetadata]) *plugin.PluginAdapter[TuningRule] {
 	return &plugin.PluginAdapter[TuningRule]{
-		Key:           "tuning_rule",
-		Magic:         "tuning_rule_v1",
-		Plugin:        &tuningPlugin{},
-		DesiredConfig: manager,
+		Key:    "tuning_rule",
+		Magic:  MagicValue,
+		Plugin: &tuningPlugin{},
+		Config: cfg,
 		DoHandshake: func(ctx context.Context, raw any, binPath, hash string) (TuningRule, plugin.PluginLifecycle, string, string, error) {
 			rpc, ok := raw.(rpc_tuning_rules.TuningRuleClient)
 			if !ok {
@@ -35,10 +37,10 @@ func NewTuningRuleAdapter(manager *TuningRuleConfigWatcher) *plugin.PluginAdapte
 				return nil, nil, "", "", fmt.Errorf("init: %w", err)
 			}
 
-			tr := newRpcTuningRule(fileName, rpc, manager, hash)
+			tr := newRpcTuningRule(fileName, rpc, cfg, hash)
 			id, name := fileName, fileName
-			if desired, ok := manager.DesiredBinaryState(fileName); ok {
-				id = desired.ID
+			if desired, ok := cfg.DesiredBinaryState(fileName); ok {
+				id = desired.Id
 				name = desired.Name
 			}
 			return tr, &tuningLifecycle{rpc: rpc}, id, name, nil

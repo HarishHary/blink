@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/harishhary/blink/internal/config"
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/alerts"
@@ -13,26 +14,26 @@ import (
 )
 
 type rpcTuningRule struct {
-	cfgManager *TuningRuleConfigWatcher
-	fileName   string
-	checksum   string
-	client     rpc_tuning_rules.TuningRuleClient
+	src      config.Source[*TuningRuleMetadata]
+	fileName string
+	checksum string
+	client   rpc_tuning_rules.TuningRuleClient
 }
 
-func newRpcTuningRule(fileName string, client rpc_tuning_rules.TuningRuleClient, manager *TuningRuleConfigWatcher, checksum string) *rpcTuningRule {
+func newRpcTuningRule(fileName string, client rpc_tuning_rules.TuningRuleClient, src config.Source[*TuningRuleMetadata], checksum string) *rpcTuningRule {
 	return &rpcTuningRule{
-		cfgManager: manager,
-		fileName:   fileName,
-		checksum:   checksum,
-		client:     client,
+		src:      src,
+		fileName: fileName,
+		checksum: checksum,
+		client:   client,
 	}
 }
 
 func (r *rpcTuningRule) cfg() *TuningRuleMetadata {
-	if r.cfgManager == nil {
+	if r.src == nil {
 		return nil
 	}
-	v, _ := r.cfgManager.Current().ByFileName(r.fileName)
+	v, _ := r.src.ByFileName(r.fileName)
 	return v
 }
 
