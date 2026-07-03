@@ -8,8 +8,8 @@ import (
 
 var matcherExecutorMetrics = plugin.NewPluginExecutorMetrics("matchers")
 
-type MatcherPluginExecutor = plugin.PluginExecutor[Matcher]
+type PluginExecutor = plugin.PluginExecutor[Matcher]
 
-func NewMatcherPluginExecutor(logger *logger.Logger, notify plugin.Notify, dir string, src plugin.SnapshotSource, cfg config.Source[*MatcherMetadata]) *MatcherPluginExecutor {
-	return plugin.NewPluginExecutor[Matcher](logger, notify, dir, src, NewMatcherAdapter(cfg), matcherExecutorMetrics)
+func NewPluginExecutor(logger *logger.Logger, notify plugin.Notify, dir string, src plugin.SnapshotSource, cfg config.Source[*MatcherMetadata]) *PluginExecutor {
+	return plugin.NewPluginExecutor[Matcher](logger, notify, dir, src, NewAdapter(cfg), matcherExecutorMetrics)
 }

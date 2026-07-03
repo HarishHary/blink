@@ -16,7 +16,7 @@ import (
 
 const MagicValue = "matcher_v1"
 
-type MatcherPlugin interface {
+type Plugin interface {
 	Init() error
 	Match(ctx context.Context, event events.Event) (bool, errors.Error)
 	Shutdown() error
@@ -29,7 +29,7 @@ func (BaseMatcher) Shutdown() error { return nil }
 
 type server struct {
 	rpc_matchers.UnimplementedMatcherServer
-	matcher MatcherPlugin
+	matcher Plugin
 }
 
 func (s *server) Init(_ context.Context, _ *rpc_matchers.Empty) (*rpc_matchers.Empty, error) {
@@ -62,7 +62,7 @@ func (s *server) Shutdown(_ context.Context, _ *rpc_matchers.Empty) (*rpc_matche
 
 type pluginImpl struct {
 	plugin.NetRPCUnsupportedPlugin
-	matcher MatcherPlugin
+	matcher Plugin
 }
 
 func (p *pluginImpl) GRPCServer(_ *plugin.GRPCBroker, s *grpc.Server) error {
@@ -74,7 +74,7 @@ func (p *pluginImpl) GRPCClient(_ context.Context, _ *plugin.GRPCBroker, c *grpc
 	return rpc_matchers.NewMatcherClient(c), nil
 }
 
-func Serve(m MatcherPlugin) {
+func Serve(m Plugin) {
 	os.Setenv("GODEBUG", "madvdontneed=1")
 	plugin.Serve(&plugin.ServeConfig{
 		HandshakeConfig: plugin.HandshakeConfig{

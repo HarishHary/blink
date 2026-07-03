@@ -11,17 +11,17 @@ import (
 	"github.com/harishhary/blink/internal/plugin"
 )
 
-// EnrichmentSnapshotConfig is the enrichment instantiation of config.SnapshotConfig.
-type EnrichmentSnapshotConfig = config.SnapshotConfig[*EnrichmentMetadata]
+// SnapshotConfig is the enrichment instantiation of config.SnapshotConfig.
+type SnapshotConfig = config.SnapshotConfig[*EnrichmentMetadata]
 
-// EnrichmentLoader implements config.Loader[*EnrichmentMetadata] for enrichments.
+// Loader implements config.Loader[*EnrichmentMetadata] for enrichments.
 // Embed config.BaseLoader to inherit default Parse and Validate; override CrossValidate.
-type EnrichmentLoader struct {
+type Loader struct {
 	config.BaseLoader[EnrichmentMetadata, *EnrichmentMetadata]
 }
 
 // CrossValidate detects dependency cycles across all enrichment sidecars.
-func (EnrichmentLoader) CrossValidate(all []*EnrichmentMetadata) error {
+func (Loader) CrossValidate(all []*EnrichmentMetadata) error {
 	index := make(map[string]*EnrichmentMetadata, len(all))
 	for _, e := range all {
 		index[e.Name] = e
@@ -61,7 +61,7 @@ func (EnrichmentLoader) CrossValidate(all []*EnrichmentMetadata) error {
 	return nil
 }
 
-// NewEnrichmentSnapshotConfig builds the snapshot-backed enrichment config, parsing specs with EnrichmentLoader.
-func NewEnrichmentSnapshotConfig(logger *logger.Logger, src plugin.SnapshotSource) *EnrichmentSnapshotConfig {
-	return config.NewSnapshotConfig[*EnrichmentMetadata](logger, src, EnrichmentLoader{})
+// NewSnapshotConfig builds the snapshot-backed enrichment config, parsing specs with Loader.
+func NewSnapshotConfig(logger *logger.Logger, src plugin.SnapshotSource) *SnapshotConfig {
+	return config.NewSnapshotConfig[*EnrichmentMetadata](logger, src, Loader{})
 }

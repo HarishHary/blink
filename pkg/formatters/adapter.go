@@ -14,7 +14,7 @@ import (
 	"github.com/harishhary/blink/pkg/formatters/rpc_formatters"
 )
 
-func NewFormatterAdapter(cfg config.Source[*FormatterMetadata]) *plugin.PluginAdapter[Formatter] {
+func NewAdapter(cfg config.Source[*FormatterMetadata]) *plugin.PluginAdapter[Formatter] {
 	return &plugin.PluginAdapter[Formatter]{
 		Key:    "formatter",
 		Magic:  MagicValue,

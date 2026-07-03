@@ -9,17 +9,17 @@ import (
 	"github.com/harishhary/blink/internal/plugin"
 )
 
-// FormatterSnapshotConfig is the formatter instantiation of config.SnapshotConfig.
-type FormatterSnapshotConfig = config.SnapshotConfig[*FormatterMetadata]
+// SnapshotConfig is the formatter instantiation of config.SnapshotConfig.
+type SnapshotConfig = config.SnapshotConfig[*FormatterMetadata]
 
-// FormatterLoader implements config.Loader[*FormatterMetadata] for formatters.
+// Loader implements config.Loader[*FormatterMetadata] for formatters.
 // Embed config.BaseLoader to inherit default Parse, ParseSpec, Validate, and CrossValidate.
-type FormatterLoader struct {
+type Loader struct {
 	config.BaseLoader[FormatterMetadata, *FormatterMetadata]
 }
 
-// NewFormatterSnapshotConfig builds the snapshot-backed formatter config, parsing specs with
-// FormatterLoader.
-func NewFormatterSnapshotConfig(logger *logger.Logger, src plugin.SnapshotSource) *FormatterSnapshotConfig {
-	return config.NewSnapshotConfig[*FormatterMetadata](logger, src, FormatterLoader{})
+// NewSnapshotConfig builds the snapshot-backed formatter config, parsing specs with
+// Loader.
+func NewSnapshotConfig(logger *logger.Logger, src plugin.SnapshotSource) *SnapshotConfig {
+	return config.NewSnapshotConfig[*FormatterMetadata](logger, src, Loader{})
 }

@@ -12,14 +12,14 @@ import (
 	"github.com/harishhary/blink/pkg/events"
 )
 
-type MatcherPool struct {
+type Pool struct {
 	*pools.ProcessPool[Matcher]
 }
 
-// NewMatcherPool builds the matcher pool with live rollout routing derived from cfg: a
+// NewPool builds the matcher pool with live rollout routing derived from cfg: a
 // running canary/shadow artifact's mode+pct comes from its own spec (by binary name);
 // otherwise the merged per-ID routing applies. Mirrors the rules pool.
-func NewMatcherPool(cfg config.Source[*MatcherMetadata], drainTimeout time.Duration) *MatcherPool {
+func NewPool(cfg config.Source[*MatcherMetadata], drainTimeout time.Duration) *Pool {
 	routing := func(id, name string) (pools.RolloutMode, float64) {
 		if name != "" {
 			if m, ok := cfg.ByFileName(name); ok {
@@ -29,14 +29,14 @@ func NewMatcherPool(cfg config.Source[*MatcherMetadata], drainTimeout time.Durat
 		re := cfg.RoutingByID(id)
 		return re.Mode, re.RolloutPct
 	}
-	return &MatcherPool{
+	return &Pool{
 		ProcessPool: pools.NewProcessPool[Matcher](routing, pools.NewPoolMetrics("matchers"), drainTimeout),
 	}
 }
 
 // Match runs the matcher identified by matcherID against all events in a single pool call.
 // Disabled matchers are treated as pass-through (all results true).
-func (p *MatcherPool) Match(ctx context.Context, matcherID string, evts []events.Event, canaryHashKey string) ([]bool, errors.Error) {
+func (p *Pool) Match(ctx context.Context, matcherID string, evts []events.Event, canaryHashKey string) ([]bool, errors.Error) {
 	var results []bool
 	err := p.Call(ctx, matcherID, canaryHashKey, func(callCtx context.Context, m Matcher) error {
 		if !m.MatcherMetadata().Enabled {
@@ -61,7 +61,7 @@ func poolKey(m Matcher) pools.PoolKey {
 	return pools.PoolKey{Id: cfg.Id, Name: cfg.Name, Hash: m.Checksum()}
 }
 
-func (p *MatcherPool) Sync(msg messaging.Message) {
+func (p *Pool) Sync(msg messaging.Message) {
 	switch m := msg.(type) {
 	case plugin.RegisterMessage[Matcher]:
 		p.Register(poolKey(m.Items[0]), m.Items, m.MaxProcs, nil)

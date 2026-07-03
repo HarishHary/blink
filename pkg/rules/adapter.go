@@ -14,8 +14,8 @@ import (
 	"github.com/harishhary/blink/pkg/rules/rpc_rules"
 )
 
-// NewRuleAdapter builds the PluginAdapter for the rules plugin type.
-func NewRuleAdapter(cfg config.Source[*RuleMetadata]) *plugin.PluginAdapter[Rule] {
+// NewAdapter builds the PluginAdapter for the rules plugin type.
+func NewAdapter(cfg config.Source[*RuleMetadata]) *plugin.PluginAdapter[Rule] {
 	return &plugin.PluginAdapter[Rule]{
 		Key:    "rule",
 		Magic:  MagicValue,

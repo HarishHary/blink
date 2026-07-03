@@ -23,11 +23,11 @@ var semverRE = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+`)
 
 // Loader implements config.Loader[*RuleMetadata] for rules.
 // Embed config.BaseLoader to inherit default Parse, Validate, and CrossValidate.
-type RuleLoader struct {
+type Loader struct {
 	config.BaseLoader[RuleMetadata, *RuleMetadata]
 }
 
-func (r RuleLoader) Parse(path string) (*RuleMetadata, error) {
+func (r Loader) Parse(path string) (*RuleMetadata, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
@@ -46,7 +46,7 @@ func (r RuleLoader) Parse(path string) (*RuleMetadata, error) {
 // ParseSpec is the disk-less counterpart to Parse for snapshot-sourced rules: it
 // unmarshals the spec and injects name via the BaseLoader default, then applies the
 // same rule-specific scoring resolution Parse does.
-func (r RuleLoader) ParseSpec(name string, spec []byte) (*RuleMetadata, error) {
+func (r Loader) ParseSpec(name string, spec []byte) (*RuleMetadata, error) {
 	cfg, err := r.BaseLoader.ParseSpec(name, spec)
 	if err != nil {
 		return nil, err
@@ -59,7 +59,7 @@ func (r RuleLoader) ParseSpec(name string, spec []byte) (*RuleMetadata, error) {
 
 // Validate extends the common structural checks with rule-specific field validation
 // (required id, required version, semver format).
-func (r RuleLoader) Validate(items []*RuleMetadata, binaries []string) []ValidationError {
+func (r Loader) Validate(items []*RuleMetadata, binaries []string) []ValidationError {
 	var errs []ValidationError
 	for _, cfg := range items {
 		name := cfg.Name + ".yaml"
@@ -85,11 +85,11 @@ func (r RuleLoader) Validate(items []*RuleMetadata, binaries []string) []Validat
 // SnapshotConfig is the rules instantiation of config.SnapshotConfig: a snapshot adapted into the
 // data plane's rule catalog + DesiredConfig, fed by any SnapshotSource (a SnapshotReader over Kafka
 // or a LocalReader over disk).
-type RuleSnapshotConfig = config.SnapshotConfig[*RuleMetadata]
+type SnapshotConfig = config.SnapshotConfig[*RuleMetadata]
 
 // NewSnapshotConfig builds a rules SnapshotConfig reading from src - a SnapshotReader (Kafka) in
 // production, a LocalReader (disk) in dev mode, or a fake in tests - parsing each elected
-// artifact's spec with RuleLoader (unmarshal + name injection + scoring resolution).
-func NewRuleSnapshotConfig(logger *logger.Logger, src plugin.SnapshotSource) *RuleSnapshotConfig {
-	return config.NewSnapshotConfig[*RuleMetadata](logger, src, RuleLoader{})
+// artifact's spec with Loader (unmarshal + name injection + scoring resolution).
+func NewSnapshotConfig(logger *logger.Logger, src plugin.SnapshotSource) *SnapshotConfig {
+	return config.NewSnapshotConfig[*RuleMetadata](logger, src, Loader{})
 }

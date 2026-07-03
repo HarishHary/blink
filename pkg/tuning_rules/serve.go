@@ -17,12 +17,12 @@ import (
 // protocol version live in internal/handshake.
 const MagicValue = "tuning_rule_v1"
 
-// TuningRulePlugin is the interface that all tuning rule plugin binaries must implement.
+// Plugin is the interface that all tuning rule plugin binaries must implement.
 // Embed sdk.BaseTuningRule to get no-op defaults for Init and Shutdown.
 //
 // All static metadata (name, id, enabled, global, rule_type, confidence, etc.) lives in
 // the YAML sidecar file alongside the binary - the subprocess owns only tuning logic.
-type TuningRulePlugin interface {
+type Plugin interface {
 	Init() error
 	Tune(ctx context.Context, alert map[string]any) (bool, errors.Error)
 	Shutdown() error
@@ -34,10 +34,10 @@ type BaseTuningRule struct{}
 func (BaseTuningRule) Init() error     { return nil }
 func (BaseTuningRule) Shutdown() error { return nil }
 
-// server wraps a TuningRulePlugin and serves the gRPC TuningRuleServer interface.
+// server wraps a Plugin and serves the gRPC TuningRuleServer interface.
 type server struct {
 	rpc_tuning_rules.UnimplementedTuningRuleServer
-	rule TuningRulePlugin
+	rule Plugin
 }
 
 func (s *server) Init(_ context.Context, _ *rpc_tuning_rules.Empty) (*rpc_tuning_rules.Empty, error) {
@@ -70,7 +70,7 @@ func (s *server) Shutdown(_ context.Context, _ *rpc_tuning_rules.Empty) (*rpc_tu
 
 type pluginImpl struct {
 	plugin.NetRPCUnsupportedPlugin
-	rule TuningRulePlugin
+	rule Plugin
 }
 
 func (p *pluginImpl) GRPCServer(_ *plugin.GRPCBroker, s *grpc.Server) error {
@@ -82,7 +82,7 @@ func (p *pluginImpl) GRPCClient(_ context.Context, _ *plugin.GRPCBroker, c *grpc
 	return rpc_tuning_rules.NewTuningRuleClient(c), nil
 }
 
-func Serve(r TuningRulePlugin) {
+func Serve(r Plugin) {
 	os.Setenv("GODEBUG", "madvdontneed=1")
 	plugin.Serve(&plugin.ServeConfig{
 		HandshakeConfig: plugin.HandshakeConfig{

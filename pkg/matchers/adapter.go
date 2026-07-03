@@ -14,9 +14,9 @@ import (
 	"github.com/harishhary/blink/pkg/matchers/rpc_matchers"
 )
 
-// NewMatcherAdapter builds the PluginAdapter for the matchers plugin type. cfg is the
+// NewAdapter builds the PluginAdapter for the matchers plugin type. cfg is the
 // config source (snapshot-backed in the data plane, disk-backed in the controller).
-func NewMatcherAdapter(cfg config.Source[*MatcherMetadata]) *plugin.PluginAdapter[Matcher] {
+func NewAdapter(cfg config.Source[*MatcherMetadata]) *plugin.PluginAdapter[Matcher] {
 	return &plugin.PluginAdapter[Matcher]{
 		Key:    "matcher",
 		Magic:  MagicValue,

@@ -8,8 +8,8 @@ import (
 
 var formatterExecutorMetrics = plugin.NewPluginExecutorMetrics("formatters")
 
-type FormatterPluginExecutor = plugin.PluginExecutor[Formatter]
+type PluginExecutor = plugin.PluginExecutor[Formatter]
 
-func NewFormatterPluginExecutor(logger *logger.Logger, notify plugin.Notify, dir string, src plugin.SnapshotSource, cfg config.Source[*FormatterMetadata]) *FormatterPluginExecutor {
-	return plugin.NewPluginExecutor[Formatter](logger, notify, dir, src, NewFormatterAdapter(cfg), formatterExecutorMetrics)
+func NewPluginExecutor(logger *logger.Logger, notify plugin.Notify, dir string, src plugin.SnapshotSource, cfg config.Source[*FormatterMetadata]) *PluginExecutor {
+	return plugin.NewPluginExecutor[Formatter](logger, notify, dir, src, NewAdapter(cfg), formatterExecutorMetrics)
 }

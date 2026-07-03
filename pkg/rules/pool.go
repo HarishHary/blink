@@ -12,11 +12,11 @@ import (
 	"github.com/harishhary/blink/pkg/events"
 )
 
-type RulePool struct {
+type Pool struct {
 	*pools.ProcessPool[Rule]
 }
 
-func NewRulePool(cfg config.Source[*RuleMetadata], drainTimeout time.Duration) *RulePool {
+func NewPool(cfg config.Source[*RuleMetadata], drainTimeout time.Duration) *Pool {
 	routing := func(id, name string) (pools.RolloutMode, float64) {
 		if name != "" {
 			// Register time: use per-binary spec so a stable update isn't misrouted
@@ -28,13 +28,13 @@ func NewRulePool(cfg config.Source[*RuleMetadata], drainTimeout time.Duration) *
 		re := cfg.RoutingByID(id)
 		return re.Mode, re.RolloutPct
 	}
-	return &RulePool{
+	return &Pool{
 		ProcessPool: pools.NewProcessPool[Rule](routing, pools.NewPoolMetrics("rules"), drainTimeout),
 	}
 }
 
 // Evaluate runs all evts against the rule identified by ruleID in a single pool call.
-func (p *RulePool) Evaluate(ctx context.Context, ruleID string, evts []events.Event, canaryHashKey string) ([]EvalResult, errors.Error) {
+func (p *Pool) Evaluate(ctx context.Context, ruleID string, evts []events.Event, canaryHashKey string) ([]EvalResult, errors.Error) {
 	var results []EvalResult
 	err := p.Call(ctx, ruleID, canaryHashKey, func(callCtx context.Context, r Rule) error {
 		if !r.RuleMetadata().Enabled {
@@ -57,7 +57,7 @@ func poolKey(r Rule) pools.PoolKey {
 }
 
 // Handles plugin lifecycle messages from the plugin manager bus, registering or deregistering rules in the pool.
-func (p *RulePool) Sync(msg messaging.Message) {
+func (p *Pool) Sync(msg messaging.Message) {
 	switch m := msg.(type) {
 	case plugin.RegisterMessage[Rule]:
 		p.Register(poolKey(m.Items[0]), m.Items, m.MaxProcs, nil)

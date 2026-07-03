@@ -13,13 +13,13 @@ import (
 	"github.com/harishhary/blink/pkg/alerts"
 )
 
-type EnrichmentPool struct {
+type Pool struct {
 	*pools.ProcessPool[Enrichment]
 }
 
-// NewEnrichmentPool builds the enrichment pool with live rollout routing derived from src (see the
+// NewPool builds the enrichment pool with live rollout routing derived from src (see the
 // rules pool for the closure rationale).
-func NewEnrichmentPool(src config.Source[*EnrichmentMetadata], drainTimeout time.Duration) *EnrichmentPool {
+func NewPool(src config.Source[*EnrichmentMetadata], drainTimeout time.Duration) *Pool {
 	routing := func(id, name string) (pools.RolloutMode, float64) {
 		if name != "" {
 			if m, ok := src.ByFileName(name); ok {
@@ -29,14 +29,14 @@ func NewEnrichmentPool(src config.Source[*EnrichmentMetadata], drainTimeout time
 		re := src.RoutingByID(id)
 		return re.Mode, re.RolloutPct
 	}
-	return &EnrichmentPool{
+	return &Pool{
 		ProcessPool: pools.NewProcessPool[Enrichment](routing, pools.NewPoolMetrics("enrichments"), drainTimeout),
 	}
 }
 
 // Enrich calls enrichmentID once with all alerts, applying enrichment sequentially.
 // absent/removed refer to the plugin state. errs contains per-alert errors (nil on success).
-func (p *EnrichmentPool) Enrich(ctx context.Context, enrichmentID string, alerts []*alerts.Alert, canaryHashKey string) (absent bool, removed bool, errs []errors.Error) {
+func (p *Pool) Enrich(ctx context.Context, enrichmentID string, alerts []*alerts.Alert, canaryHashKey string) (absent bool, removed bool, errs []errors.Error) {
 	errs = make([]errors.Error, len(alerts))
 	err := p.Call(ctx, enrichmentID, canaryHashKey, func(callCtx context.Context, e Enrichment) error {
 		if !e.EnrichmentMetadata().Enabled {
@@ -66,7 +66,7 @@ func poolKey(e Enrichment) pools.PoolKey {
 	return pools.PoolKey{Id: cfg.Id, Name: cfg.Name, Hash: e.Checksum()}
 }
 
-func (p *EnrichmentPool) Sync(msg messaging.Message) {
+func (p *Pool) Sync(msg messaging.Message) {
 	switch m := msg.(type) {
 	case plugin.RegisterMessage[Enrichment]:
 		p.Register(poolKey(m.Items[0]), m.Items, m.MaxProcs, nil)

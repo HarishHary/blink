@@ -14,9 +14,9 @@ import (
 	"github.com/harishhary/blink/pkg/enrichments/rpc_enrichments"
 )
 
-// NewEnrichmentAdapter builds the PluginAdapter for the enrichments plugin type. cfg is
+// NewAdapter builds the PluginAdapter for the enrichments plugin type. cfg is
 // the config source (snapshot-backed in the data plane, disk-backed in the controller).
-func NewEnrichmentAdapter(cfg config.Source[*EnrichmentMetadata]) *plugin.PluginAdapter[Enrichment] {
+func NewAdapter(cfg config.Source[*EnrichmentMetadata]) *plugin.PluginAdapter[Enrichment] {
 	return &plugin.PluginAdapter[Enrichment]{
 		Key:    "enrichment",
 		Magic:  "enrichment_v1",

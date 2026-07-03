@@ -8,8 +8,8 @@ import (
 
 var enrichmentExecutorMetrics = plugin.NewPluginExecutorMetrics("enrichment")
 
-type EnrichmentPluginExecutor = plugin.PluginExecutor[Enrichment]
+type PluginExecutor = plugin.PluginExecutor[Enrichment]
 
-func NewEnrichmentPluginExecutor(logger *logger.Logger, notify plugin.Notify, dir string, src plugin.SnapshotSource, cfg config.Source[*EnrichmentMetadata]) *EnrichmentPluginExecutor {
-	return plugin.NewPluginExecutor[Enrichment](logger, notify, dir, src, NewEnrichmentAdapter(cfg), enrichmentExecutorMetrics)
+func NewPluginExecutor(logger *logger.Logger, notify plugin.Notify, dir string, src plugin.SnapshotSource, cfg config.Source[*EnrichmentMetadata]) *PluginExecutor {
+	return plugin.NewPluginExecutor[Enrichment](logger, notify, dir, src, NewAdapter(cfg), enrichmentExecutorMetrics)
 }

@@ -15,7 +15,7 @@ import (
 
 const MagicValue = "formatter_v1"
 
-type FormatterPlugin interface {
+type Plugin interface {
 	Init() error
 	Format(ctx context.Context, alert map[string]any) (map[string]any, errors.Error)
 	Shutdown() error
@@ -28,7 +28,7 @@ func (BaseFormatter) Shutdown() error { return nil }
 
 type server struct {
 	rpc_formatters.UnimplementedFormatterServer
-	formatter FormatterPlugin
+	formatter Plugin
 }
 
 func (s *server) Init(_ context.Context, _ *rpc_formatters.Empty) (*rpc_formatters.Empty, error) {
@@ -65,7 +65,7 @@ func (s *server) Shutdown(_ context.Context, _ *rpc_formatters.Empty) (*rpc_form
 
 type pluginImpl struct {
 	plugin.NetRPCUnsupportedPlugin
-	formatter FormatterPlugin
+	formatter Plugin
 }
 
 func (p *pluginImpl) GRPCServer(_ *plugin.GRPCBroker, s *grpc.Server) error {
@@ -77,7 +77,7 @@ func (p *pluginImpl) GRPCClient(_ context.Context, _ *plugin.GRPCBroker, c *grpc
 	return rpc_formatters.NewFormatterClient(c), nil
 }
 
-func Serve(f FormatterPlugin) {
+func Serve(f Plugin) {
 	os.Setenv("GODEBUG", "madvdontneed=1")
 	plugin.Serve(&plugin.ServeConfig{
 		HandshakeConfig: plugin.HandshakeConfig{

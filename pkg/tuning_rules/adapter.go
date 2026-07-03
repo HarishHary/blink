@@ -14,9 +14,9 @@ import (
 	"github.com/harishhary/blink/pkg/tuning_rules/rpc_tuning_rules"
 )
 
-// NewTuningRuleAdapter builds the PluginAdapter for the tuning_rules plugin type. cfg is
+// NewAdapter builds the PluginAdapter for the tuning_rules plugin type. cfg is
 // the config source (snapshot-backed in the data plane, disk-backed in the controller).
-func NewTuningRuleAdapter(cfg config.Source[*TuningRuleMetadata]) *plugin.PluginAdapter[TuningRule] {
+func NewAdapter(cfg config.Source[*TuningRuleMetadata]) *plugin.PluginAdapter[TuningRule] {
 	return &plugin.PluginAdapter[TuningRule]{
 		Key:    "tuning_rule",
 		Magic:  MagicValue,

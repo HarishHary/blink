@@ -13,13 +13,13 @@ import (
 	"github.com/harishhary/blink/pkg/scoring"
 )
 
-type TuningRulePool struct {
+type Pool struct {
 	*pools.ProcessPool[TuningRule]
 }
 
-// NewTuningRulePool builds the tuning-rule pool with live rollout routing derived from src (see the
+// NewPool builds the tuning-rule pool with live rollout routing derived from src (see the
 // rules pool for the closure rationale).
-func NewTuningRulePool(src config.Source[*TuningRuleMetadata], drainTimeout time.Duration) *TuningRulePool {
+func NewPool(src config.Source[*TuningRuleMetadata], drainTimeout time.Duration) *Pool {
 	routing := func(id, name string) (pools.RolloutMode, float64) {
 		if name != "" {
 			if m, ok := src.ByFileName(name); ok {
@@ -29,14 +29,14 @@ func NewTuningRulePool(src config.Source[*TuningRuleMetadata], drainTimeout time
 		re := src.RoutingByID(id)
 		return re.Mode, re.RolloutPct
 	}
-	return &TuningRulePool{
+	return &Pool{
 		ProcessPool: pools.NewProcessPool[TuningRule](routing, pools.NewPoolMetrics("tuning_rules"), drainTimeout),
 	}
 }
 
 // Tune calls tuningRuleID once with all alerts, returning per-alert apply results.
 // ruleType and confidence are rule metadata - the same for every alert in the batch.
-func (p *TuningRulePool) Tune(ctx context.Context, tuningRuleID string, alerts []alerts.Alert, canaryHashKey string) (
+func (p *Pool) Tune(ctx context.Context, tuningRuleID string, alerts []alerts.Alert, canaryHashKey string) (
 	ruleType RuleType, confidence scoring.Confidence, applies []bool, _ errors.Error,
 ) {
 	applies = make([]bool, len(alerts))
@@ -62,7 +62,7 @@ func poolKey(t TuningRule) pools.PoolKey {
 	return pools.PoolKey{Id: cfg.Id, Name: cfg.Name, Hash: t.Checksum()}
 }
 
-func (p *TuningRulePool) Sync(msg messaging.Message) {
+func (p *Pool) Sync(msg messaging.Message) {
 	switch m := msg.(type) {
 	case plugin.RegisterMessage[TuningRule]:
 		p.Register(poolKey(m.Items[0]), m.Items, m.MaxProcs, nil)

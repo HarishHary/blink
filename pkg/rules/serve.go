@@ -16,7 +16,7 @@ import (
 
 const MagicValue = "rule_v1"
 
-type RulePlugin interface {
+type Plugin interface {
 	Init() error
 	Evaluate(ctx context.Context, event events.Event) (bool, errors.Error)
 	Shutdown() error
@@ -47,7 +47,7 @@ type RulePlugin interface {
 	AlertReqSubkeys(event events.Event) bool
 }
 
-// BaseRule provides pass-through / no-op defaults for all RulePlugin methods.
+// BaseRule provides pass-through / no-op defaults for all Plugin methods.
 // Embed in your rule struct and override only what you need.
 type BaseRule struct{}
 
@@ -60,10 +60,10 @@ func (BaseRule) AlertContext(_ events.Event) map[string]any { return nil }
 func (BaseRule) AlertMergeByKeys(_ events.Event) []string   { return nil }
 func (BaseRule) AlertReqSubkeys(_ events.Event) bool        { return true }
 
-// server wraps a RulePlugin and serves the gRPC RuleServer interface.
+// server wraps a Plugin and serves the gRPC RuleServer interface.
 type server struct {
 	rpc_rules.UnimplementedRuleServer
-	rule RulePlugin
+	rule Plugin
 }
 
 func (s *server) Init(_ context.Context, _ *rpc_rules.Empty) (*rpc_rules.Empty, error) {
@@ -115,7 +115,7 @@ func (s *server) Shutdown(_ context.Context, _ *rpc_rules.Empty) (*rpc_rules.Emp
 
 type pluginImpl struct {
 	plugin.NetRPCUnsupportedPlugin
-	rule RulePlugin
+	rule Plugin
 }
 
 func (p *pluginImpl) GRPCServer(_ *plugin.GRPCBroker, s *grpc.Server) error {
@@ -127,7 +127,7 @@ func (p *pluginImpl) GRPCClient(_ context.Context, _ *plugin.GRPCBroker, c *grpc
 	return rpc_rules.NewRuleClient(c), nil
 }
 
-func Serve(r RulePlugin) {
+func Serve(r Plugin) {
 	os.Setenv("GODEBUG", "madvdontneed=1")
 	plugin.Serve(&plugin.ServeConfig{
 		HandshakeConfig: plugin.HandshakeConfig{

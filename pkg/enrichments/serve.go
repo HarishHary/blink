@@ -17,12 +17,12 @@ import (
 // protocol version live in internal/handshake.
 const MagicValue = "enrichment_v1"
 
-// EnrichmentPlugin is the interface that all enrichment plugin binaries must implement.
+// Plugin is the interface that all enrichment plugin binaries must implement.
 // Embed sdk.BaseEnrichment to get no-op defaults for Init and Shutdown.
 //
 // All static metadata (name, id, enabled, depends_on, etc.) lives in the YAML
 // sidecar file alongside the binary - the subprocess owns only enrichment logic.
-type EnrichmentPlugin interface {
+type Plugin interface {
 	// Init is called once after the plugin connects, before any Enrich calls.
 	Init() error
 	// Enrich enriches the alert event fields and returns the modified fields.
@@ -40,7 +40,7 @@ func (BaseEnrichment) Shutdown() error { return nil }
 
 type server struct {
 	rpc_enrichments.UnimplementedEnrichmentServer
-	enrichment EnrichmentPlugin
+	enrichment Plugin
 }
 
 func (s *server) Init(_ context.Context, _ *rpc_enrichments.Empty) (*rpc_enrichments.Empty, error) {
@@ -77,7 +77,7 @@ func (s *server) Shutdown(_ context.Context, _ *rpc_enrichments.Empty) (*rpc_enr
 
 type pluginImpl struct {
 	plugin.NetRPCUnsupportedPlugin
-	enrichment EnrichmentPlugin
+	enrichment Plugin
 }
 
 func (p *pluginImpl) GRPCServer(_ *plugin.GRPCBroker, s *grpc.Server) error {
@@ -89,7 +89,7 @@ func (p *pluginImpl) GRPCClient(_ context.Context, _ *plugin.GRPCBroker, c *grpc
 	return rpc_enrichments.NewEnrichmentClient(c), nil
 }
 
-func Serve(e EnrichmentPlugin) {
+func Serve(e Plugin) {
 	os.Setenv("GODEBUG", "madvdontneed=1")
 	plugin.Serve(&plugin.ServeConfig{
 		HandshakeConfig: plugin.HandshakeConfig{
