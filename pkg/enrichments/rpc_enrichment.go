@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/harishhary/blink/internal/config"
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/alerts"
@@ -11,26 +12,26 @@ import (
 )
 
 type rpcEnrichment struct {
-	cfgManager *EnrichmentConfigWatcher
-	fileName   string
-	checksum   string
-	client     rpc_enrichments.EnrichmentClient
+	src      config.Source[*EnrichmentMetadata]
+	fileName string
+	checksum string
+	client   rpc_enrichments.EnrichmentClient
 }
 
-func newRpcEnrichment(fileName string, client rpc_enrichments.EnrichmentClient, manager *EnrichmentConfigWatcher, checksum string) *rpcEnrichment {
+func newRpcEnrichment(fileName string, client rpc_enrichments.EnrichmentClient, src config.Source[*EnrichmentMetadata], checksum string) *rpcEnrichment {
 	return &rpcEnrichment{
-		cfgManager: manager,
-		fileName:   fileName,
-		checksum:   checksum,
-		client:     client,
+		src:      src,
+		fileName: fileName,
+		checksum: checksum,
+		client:   client,
 	}
 }
 
 func (r *rpcEnrichment) cfg() *EnrichmentMetadata {
-	if r.cfgManager == nil {
+	if r.src == nil {
 		return nil
 	}
-	v, _ := r.cfgManager.Current().ByFileName(r.fileName)
+	v, _ := r.src.ByFileName(r.fileName)
 	return v
 }
 

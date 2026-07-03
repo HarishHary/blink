@@ -8,18 +8,20 @@ import (
 	goplugin "github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
 
+	"github.com/harishhary/blink/internal/config"
 	"github.com/harishhary/blink/internal/helpers"
 	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/enrichments/rpc_enrichments"
 )
 
-// NewEnrichmentAdapter builds the PluginAdapter for the enrichments plugin type.
-func NewEnrichmentAdapter(manager *EnrichmentConfigWatcher) *plugin.PluginAdapter[Enrichment] {
+// NewEnrichmentAdapter builds the PluginAdapter for the enrichments plugin type. cfg is
+// the config source (snapshot-backed in the data plane, disk-backed in the controller).
+func NewEnrichmentAdapter(cfg config.Source[*EnrichmentMetadata]) *plugin.PluginAdapter[Enrichment] {
 	return &plugin.PluginAdapter[Enrichment]{
-		Key:           "enrichment",
-		Magic:         "enrichment_v1",
-		Plugin:        &enrichmentPlugin{},
-		DesiredConfig: manager,
+		Key:    "enrichment",
+		Magic:  "enrichment_v1",
+		Plugin: &enrichmentPlugin{},
+		Config: cfg,
 		DoHandshake: func(ctx context.Context, raw any, binPath, hash string) (Enrichment, plugin.PluginLifecycle, string, string, error) {
 			rpc, ok := raw.(rpc_enrichments.EnrichmentClient)
 			if !ok {
@@ -35,10 +37,10 @@ func NewEnrichmentAdapter(manager *EnrichmentConfigWatcher) *plugin.PluginAdapte
 				return nil, nil, "", "", fmt.Errorf("init: %w", err)
 			}
 
-			e := newRpcEnrichment(fileName, rpc, manager, hash)
+			e := newRpcEnrichment(fileName, rpc, cfg, hash)
 			id, name := fileName, fileName
-			if desired, ok := manager.DesiredBinaryState(fileName); ok {
-				id = desired.ID
+			if desired, ok := cfg.DesiredBinaryState(fileName); ok {
+				id = desired.Id
 				name = desired.Name
 			}
 			return e, &enrichmentLifecycle{rpc: rpc}, id, name, nil

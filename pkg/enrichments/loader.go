@@ -1,38 +1,27 @@
-// Each enrichment binary ships alongside a <name>.yaml sidecar file.
-//
-// YAML schema example:
-//
-//	id: "550e8400-e29b-41d4-a716-446655440000"
-//	name: "geoip"
-//	display_name: "GeoIP Enrichment"
-//	description: "Adds geographic location data to events."
-//	enabled: true
-//	version: "1.0.0"
-//	file_name: "geoip"
-//	depends_on: ["other-enrichment"]
-//	mode: "blue-green"
-//	min_procs: 1
-//	max_procs: 2
+// Each enrichment binary ships alongside a <name>.yaml sidecar.
+// Schema and field reference: docs/internals/schemas/enrichments-schema.md.
 
 package enrichments
 
 import (
 	"fmt"
 
-	cfg "github.com/harishhary/blink/internal/config"
+	"github.com/harishhary/blink/internal/config"
 	"github.com/harishhary/blink/internal/logger"
+	"github.com/harishhary/blink/internal/plugin"
 )
 
-type EnrichmentConfigWatcher = cfg.ConfigWatcher[*EnrichmentMetadata]
+// EnrichmentSnapshotConfig is the enrichment instantiation of config.SnapshotConfig.
+type EnrichmentSnapshotConfig = config.SnapshotConfig[*EnrichmentMetadata]
 
-// Loader implements cfg.Loader[*EnrichmentMetadata] for enrichments.
-// Embed cfg.BaseLoader to inherit default Parse and Validate; override CrossValidate.
-type Loader struct {
-	cfg.BaseLoader[EnrichmentMetadata, *EnrichmentMetadata]
+// EnrichmentLoader implements config.Loader[*EnrichmentMetadata] for enrichments.
+// Embed config.BaseLoader to inherit default Parse and Validate; override CrossValidate.
+type EnrichmentLoader struct {
+	config.BaseLoader[EnrichmentMetadata, *EnrichmentMetadata]
 }
 
 // CrossValidate detects dependency cycles across all enrichment sidecars.
-func (Loader) CrossValidate(all []*EnrichmentMetadata) error {
+func (EnrichmentLoader) CrossValidate(all []*EnrichmentMetadata) error {
 	index := make(map[string]*EnrichmentMetadata, len(all))
 	for _, e := range all {
 		index[e.Name] = e
@@ -72,6 +61,7 @@ func (Loader) CrossValidate(all []*EnrichmentMetadata) error {
 	return nil
 }
 
-func NewEnrichmentConfigWatcher(logger *logger.Logger, dir string) *EnrichmentConfigWatcher {
-	return cfg.NewConfigWatcher[*EnrichmentMetadata](logger, "enrichment", dir, Loader{})
+// NewEnrichmentSnapshotConfig builds the snapshot-backed enrichment config, parsing specs with EnrichmentLoader.
+func NewEnrichmentSnapshotConfig(logger *logger.Logger, src plugin.SnapshotSource) *EnrichmentSnapshotConfig {
+	return config.NewSnapshotConfig[*EnrichmentMetadata](logger, src, EnrichmentLoader{})
 }
