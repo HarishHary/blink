@@ -7,25 +7,20 @@ import (
 	"sync"
 	"time"
 
-	"github.com/harishhary/blink/internal/controller/model"
 	"github.com/harishhary/blink/internal/helpers"
 	"github.com/harishhary/blink/internal/logger"
 	"github.com/harishhary/blink/internal/pools"
+	"github.com/harishhary/blink/internal/snapshot"
 )
 
-// SnapshotSource is the executor's view of the control plane: the latest desired
-// state plus a notification when it changes. *controller.Replica satisfies it.
+// SnapshotSource is the executor's view of the control plane: latest desired state plus a change signal (satisfied by *controller.SnapshotReader).
 type SnapshotSource interface {
-	Snapshot() *model.Snapshot
+	Snapshot() *snapshot.Snapshot
 	Subscribe() (<-chan struct{}, func())
 }
 
-// PluginExecutor[T] is the generic plugin subprocess manager.
-// It reconciles running subprocesses against the control plane's desired state
-// (a model.Snapshot delivered via SnapshotSource), manages their lifecycle, and
-// calls notify for Register/Update/Unregister events so the caller can update pools.
-// The directory remains the local artifact store: snapshot refs name binaries that
-// resolve() maps to files on disk.
+// PluginExecutor[T] reconciles running subprocesses against the control plane's snapshot (via SnapshotSource),
+// manages their lifecycle, and notifies the pool of Register/Update/Unregister events. dir is the artifact store.
 type PluginExecutor[T Syncable] struct {
 	logger         *logger.Logger
 	notify         Notify
@@ -41,20 +36,18 @@ type PluginExecutor[T Syncable] struct {
 	pingInterval   time.Duration       // 0 → defaults to 15s; set before Start() for tests
 }
 
-// WithPingInterval overrides the default 15-second health-check interval.
-// Must be called before Start(). Primarily useful in tests where a short interval
-// is needed to detect subprocess crashes quickly without a 15-second wait.
+// WithPingInterval overrides the default 15s health-check interval; call before Start() (mainly for tests).
 func (m *PluginExecutor[T]) WithPingInterval(d time.Duration) *PluginExecutor[T] {
 	m.pingInterval = d
 	return m
 }
 
-func NewPluginExecutor[T Syncable](logger *logger.Logger, notify Notify, dir string, snapshot SnapshotSource, adapter *PluginAdapter[T], metrics *PluginExecutorMetrics) *PluginExecutor[T] {
+func NewPluginExecutor[T Syncable](logger *logger.Logger, notify Notify, dir string, snapshotSrc SnapshotSource, adapter *PluginAdapter[T], metrics *PluginExecutorMetrics) *PluginExecutor[T] {
 	return &PluginExecutor[T]{
 		logger:         logger,
 		notify:         notify,
 		dir:            dir,
-		snapshot:       snapshot,
+		snapshot:       snapshotSrc,
 		adapter:        adapter,
 		metrics:        metrics,
 		plugin_handles: make(map[string][]*PluginHandle),
@@ -70,11 +63,8 @@ func (m *PluginExecutor[T]) resolve(name string) string {
 	return filepath.Join(m.dir, name)
 }
 
-// Start subscribes to control-plane snapshot changes, performs an initial reconcile,
-// then re-reconciles on every snapshot update until ctx is cancelled.
-// Subscribe happens before the initial reconcile so a snapshot arriving concurrently
-// (the replica is a sibling service) is never missed: the cap-1 watcher channel retains
-// the signal and the loop re-reconciles. reconcile is idempotent, so a double run is safe.
+// Start subscribes, does an initial reconcile, then re-reconciles on each snapshot change until ctx is cancelled.
+// Subscribe-before-reconcile means a concurrently-arriving snapshot is never missed (cap-1 signal retained; reconcile is idempotent).
 func (m *PluginExecutor[T]) Start(ctx context.Context) error {
 	ch, unsubscribe := m.snapshot.Subscribe()
 	if err := m.reconcile("initial"); err != nil {
@@ -111,27 +101,19 @@ func (m *PluginExecutor[T]) reconcile(reason string) error {
 	}
 	m.logger.Info("reconciling %s plugins (%s, generation=%d)...", m.adapter.PluginKey(), reason, snap.Generation)
 
-	// Desired state comes from the snapshot: each enabled entry contributes its primary
-	// and candidate refs. resolve() maps each ref Name to a binary in the artifact store.
-	// Mode is authoritative from the snapshot ref (the controller derived it). Worker count
-	// and readiness still come from the YAML sidecar via the adapter until those move into
-	// the snapshot.
-	//
-	// ponytail: readiness (IsReady) reads the local YAML while reconcile only triggers on
-	// snapshot changes — a binary deferred as not-ready retries on the next snapshot, not on
-	// a YAML edit. Harmless today (the controller derives the snapshot from that same YAML,
-	// and a Kafka snapshot delivery is slower than the local config load); removed entirely
-	// when workers/readiness move into the snapshot and the YAML sidecar goes away.
+	// Desired state from the snapshot: each enabled entry's primary+candidate refs. resolve() maps ref.Name to
+	// a binary; mode is authoritative from the ref; worker count/readiness come from the snapshot-backed DesiredConfig.
 	type desired struct {
 		path   string
 		hash   string
 		mode   pools.RolloutMode
 		shadow bool
 	}
-	wanted := make(map[string]desired)     // path → desired binary (enabled)
-	disabled := make(map[string]struct{})  // paths the controller knows but has disabled → stop, not remove
+	wanted := make(map[string]desired)    // path → desired binary (enabled)
+	disabled := make(map[string]struct{}) // paths the controller knows but has disabled → stop, not remove
+	deferred := make(map[string]struct{}) // paths whose local binary is unresolvable or fails digest verification → keep the current version running, do not upgrade or tear down
 	for _, e := range snap.Entries {
-		for _, ref := range [...]*model.ArtifactRef{e.Primary, e.Candidate} {
+		for _, ref := range [...]*snapshot.ArtifactRef{e.Primary, e.Candidate} {
 			if ref == nil {
 				continue
 			}
@@ -142,17 +124,26 @@ func (m *PluginExecutor[T]) reconcile(reason string) error {
 			}
 			h, err := helpers.BinaryChecksum(path)
 			if err != nil {
-				m.logger.ErrorF("%s hash %s: %v", m.adapter.PluginKey(), path, err)
-				continue // artifact not resolvable locally; skip until it is
+				// Binary missing/unreadable: defer like a digest mismatch (keep any running version, don't start).
+				// Else this enabled path, in no bucket, would be torn down + tombstoned over a transient artifact blip.
+				m.logger.ErrorF("%s hash %s: %v (deferring - keeping current version, not starting)", m.adapter.PluginKey(), path, err)
+				deferred[path] = struct{}{}
+				continue
+			}
+			// Digest mismatch = wrong/tampered/not-yet-deployed binary: defer (keep running, don't upgrade; never tears down a healthy process).
+			// Empty ref.Hash = pre-digest snapshot; trust the local binary.
+			if ref.Hash != "" && h != ref.Hash {
+				m.metrics.DigestMismatches.Inc()
+				m.logger.ErrorF("%s %s: local binary digest %s != published %s; deferring (keeping current version, not upgrading)", m.adapter.PluginKey(), path, h, ref.Hash)
+				deferred[path] = struct{}{}
+				continue
 			}
 			shadow := ref.Mode == pools.RolloutModeCanary || ref.Mode == pools.RolloutModeShadow
 			wanted[path] = desired{path: path, hash: h, mode: ref.Mode, shadow: shadow}
 		}
 	}
 
-	// toStart collects binaries needing a fresh start this cycle. They are sorted
-	// stable-first so that, on a fresh pod start with both versions present, the stable
-	// (non-shadow) version always wins the active pool slot regardless of map order.
+	// toStart collects fresh starts, sorted stable-first so on a cold pod the stable (non-shadow) version wins the active slot regardless of map order.
 	var toStart []desired
 	var modeOnlyChanges []modeOnlyChange
 
@@ -174,9 +165,7 @@ func (m *PluginExecutor[T]) reconcile(reason string) error {
 			}
 			if !m.adapter.IsReady(path) {
 				if modeChanged {
-					// Mode change creates an invalid combination (e.g. CN→BG while another
-					// BG binary already holds active). Kill now — no tombstone, so it
-					// restarts automatically once the config is consistent again.
+					// Mode change creates an invalid combo (e.g. CN→BG while another BG holds active): kill now, no tombstone - restarts once config is consistent.
 					m.logger.Info("%s %s: mode change creates invalid config, stopping until ready", m.adapter.PluginKey(), path)
 					m.stop(path, handles)
 				} else {
@@ -185,9 +174,7 @@ func (m *PluginExecutor[T]) reconcile(reason string) error {
 				continue
 			}
 			if !hashChanged && modeChanged {
-				// Pure mode change — no new binary, no kill needed.
-				// Collect for atomic slot migration after the full pass so that
-				// two-binary swaps (e.g. BG↔CN/SH) are applied together.
+				// Pure mode change (no new binary, no kill): collect for atomic slot migration after the full pass so two-binary swaps apply together.
 				modeOnlyChanges = append(modeOnlyChanges, modeOnlyChange{
 					path:    path,
 					handles: handles,
@@ -220,10 +207,8 @@ func (m *PluginExecutor[T]) reconcile(reason string) error {
 
 	m.applyModeChanges(modeOnlyChanges)
 
-	// Stop or remove running handles the snapshot no longer wants. Act outside the lock
-	// so kill() (gRPC Shutdown, up to 3s) does not block readers.
-	//   - disabled in the snapshot → stop  (Unregister, no tombstone — may be re-enabled)
-	//   - absent from the snapshot → remove (Remove, tombstone — the ID is gone)
+	// Stop/remove handles the snapshot no longer wants, outside the lock (kill() blocks up to 3s on gRPC Shutdown):
+	// disabled → stop (no tombstone, may re-enable); absent → remove (tombstone, ID is gone).
 	type pendingAction struct {
 		key     string
 		handles []*PluginHandle
@@ -234,6 +219,9 @@ func (m *PluginExecutor[T]) reconcile(reason string) error {
 	for key, handles := range m.plugin_handles {
 		if _, keep := wanted[key]; keep {
 			continue
+		}
+		if _, def := deferred[key]; def {
+			continue // digest mismatch: keep the running version until a matching binary appears
 		}
 		_, isDisabled := disabled[key]
 		pending = append(pending, pendingAction{key, handles, !isDisabled})
@@ -256,11 +244,8 @@ type modeOnlyChange struct {
 	newMode pools.RolloutMode
 }
 
-// applyModeChanges handles pure YAML mode changes (hash unchanged) without killing
-// or spawning any processes. Changes are grouped by plugin ID so that two-binary
-// swaps (one going BG, the other going CN/SH) are applied atomically via a single
-// MigrateSlots call. Single-binary mode changes only update the mode snapshot so
-// the next reconcile does not re-detect the same change.
+// applyModeChanges applies pure mode flips (hash unchanged) with no kill/spawn: a two-binary BG↔CN/SH swap goes
+// through one atomic MigrateSlots; a single-binary flip just updates the mode label so the next reconcile doesn't re-detect it.
 func (m *PluginExecutor[T]) applyModeChanges(changes []modeOnlyChange) {
 	if len(changes) == 0 {
 		return
@@ -285,9 +270,9 @@ func (m *PluginExecutor[T]) applyModeChanges(changes []modeOnlyChange) {
 				}
 			}
 			if bgC != nil && altC != nil {
-				// Atomically reassign slots — no kill, no spawn.
+				// Atomically reassign slots - no kill, no spawn.
 				m.notify(NewMigrateMessage[T](bgC.handles[0].Key, altC.handles[0].Key))
-				m.logger.Info("%s: slot swap — %s (BG) → active, %s (%s) → pending",
+				m.logger.Info("%s: slot swap - %s (BG) → active, %s (%s) → pending",
 					m.adapter.PluginKey(), bgC.path, altC.path, altC.newMode)
 				m.mu.Lock()
 				for _, h := range bgC.handles {
@@ -300,8 +285,7 @@ func (m *PluginExecutor[T]) applyModeChanges(changes []modeOnlyChange) {
 				continue
 			}
 		}
-		// Single binary or both moving to same category: slot stays unchanged.
-		// Just update the mode snapshot so the next reconcile does not re-trigger.
+		// Single binary (or both to same category): slot unchanged, just update the mode label so the next reconcile doesn't re-trigger.
 		for _, c := range group {
 			m.logger.Info("%s %s: mode updated to %s (slot unchanged)", m.adapter.PluginKey(), c.path, c.newMode)
 			m.mu.Lock()

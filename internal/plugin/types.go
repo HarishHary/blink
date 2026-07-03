@@ -5,29 +5,28 @@ import (
 	"sync"
 	"time"
 
-	internal "github.com/harishhary/blink/internal/pools"
+	"github.com/harishhary/blink/internal/pools"
 	goplugin "github.com/hashicorp/go-plugin"
 )
 
 // PluginMetadata holds the common identity and rollout fields shared by all plugin types.
 // YAML tags are present so config packages can embed this struct with yaml:",inline".
-// Name is NOT read from YAML — it is derived from the filename at load time.
+// Name is NOT read from YAML - it is derived from the filename at load time.
 type PluginMetadata struct {
-	Id          string               `yaml:"id"`
-	Name        string               `yaml:"-"`
-	DisplayName string               `yaml:"display_name"`
-	Description string               `yaml:"description"`
-	Enabled     bool                 `yaml:"enabled"`
-	Version     string               `yaml:"version"`
-	RolloutMode internal.RolloutMode `yaml:"mode"` // UnmarshalText handles "blue-green" / "canary" / "shadow"
-	RolloutPct  float64              `yaml:"rollout_pct"`
-	MinProcs    int                  `yaml:"min_procs"`
-	MaxProcs    int                  `yaml:"max_procs"`
+	Id          string            `yaml:"id"`
+	Name        string            `yaml:"-"`
+	DisplayName string            `yaml:"display_name"`
+	Description string            `yaml:"description"`
+	Enabled     bool              `yaml:"enabled"`
+	Version     string            `yaml:"version"`
+	RolloutMode pools.RolloutMode `yaml:"mode"` // UnmarshalText handles "blue-green" / "canary" / "shadow"
+	RolloutPct  float64           `yaml:"rollout_pct"`
+	MinProcs    int               `yaml:"min_procs"`
+	MaxProcs    int               `yaml:"max_procs"`
 }
 
 func (m PluginMetadata) Metadata() PluginMetadata { return m }
-
-func (m *PluginMetadata) SetName(name string) { m.Name = name }
+func (m *PluginMetadata) SetName(name string)     { m.Name = name }
 
 // Syncable is the type constraint for all plugin types managed by a Manager.
 type Syncable interface {
@@ -45,9 +44,9 @@ type PluginHandle struct {
 	Client    *goplugin.Client
 	Lifecycle PluginLifecycle
 	BinPath   string
-	Key       internal.PoolKey     // {Id, Name, Hash}; Id used for logging, Key used for bus messages
-	Mode      internal.RolloutMode // mode at spawn time; compared against live YAML to detect soft-restart triggers
-	Name      string               // human-readable display name; used for logging
+	Key       pools.PoolKey     // {Id, Name, Hash}; Id used for logging, Key used for bus messages
+	Mode      pools.RolloutMode // mode at spawn time; compared against live YAML to detect soft-restart triggers
+	Name      string            // human-readable display name; used for logging
 	killOnce  sync.Once
 	stopped   chan struct{}
 }

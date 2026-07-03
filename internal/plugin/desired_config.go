@@ -1,26 +1,19 @@
 package plugin
 
-import internal "github.com/harishhary/blink/internal/pools"
+import "github.com/harishhary/blink/internal/pools"
 
-// BinaryState is the normalized desired state for a single binary,
-// derived from its YAML sidecar. PluginAdapter uses this to implement the
-// shared adapter methods without per-type config manager dependencies.
+// BinaryState is the normalized desired state for one binary; PluginAdapter uses it to implement the shared adapter methods without per-type config dependencies.
 type BinaryState struct {
-	ID       string
+	Id       string
 	Name     string
 	Enabled  bool
-	Mode     internal.RolloutMode
+	Mode     pools.RolloutMode
 	MaxProcs int
 }
 
-// DesiredConfig is the read-only interface PluginAdapter uses to query the
-// desired config of a binary. It is satisfied directly by the type-specific
-// config manager and passed to NewXxxAdapter.
+// DesiredConfig is the read-only interface PluginAdapter queries for a binary's desired config; satisfied by the type's snapshot-backed SnapshotConfig.
 type DesiredConfig interface {
 	// DesiredBinaryState returns the desired state keyed by binary filename (no extension).
-	// Returns false when no YAML sidecar exists for the binary.
+	// Returns false when the snapshot names no artifact for the binary (or its spec is unparseable).
 	DesiredBinaryState(name string) (BinaryState, bool)
-	// HasBlockingErrorFor reports whether the plugin has a validation error that
-	// prevents it from starting. Plugin types without validation should return false.
-	HasBlockingErrorFor(pluginID string, yamlFile string) bool
 }

@@ -11,11 +11,10 @@ import (
 
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/handshake"
-	internal "github.com/harishhary/blink/internal/pools"
+	"github.com/harishhary/blink/internal/pools"
 )
 
-// This is a gRPC service config that retries UNAVAILABLE responses with exponential backoff. This absorbs the startup race where the subprocess hasn't yet
-// bound its port when the first RPC arrives. maxAttempts=3 means 1 attempt + 2 retries.
+// pluginRetryPolicy: gRPC config retrying UNAVAILABLE 3× (1 attempt + 2 retries) with backoff, absorbing the startup race before the subprocess binds its port.
 const pluginRetryPolicy = `{
   "methodConfig": [{
     "name": [{}],
@@ -29,9 +28,7 @@ const pluginRetryPolicy = `{
   }]
 }`
 
-// spawn ONE subprocess, runs the PluginAdapter handshake, and returns the
-// wrapped handle. It does NOT store the handle in plugin_handles or start pingLoop -
-// spawnN handles that after all worker instances are ready.
+// spawn starts ONE subprocess and runs the adapter handshake, returning the wrapped handle; it does not store it or start pingLoop (spawnN does, once all workers are ready).
 func (m *PluginExecutor[T]) spawn(path, hash string) (T, *PluginHandle, error) {
 	startedAt := time.Now()
 
@@ -73,7 +70,7 @@ func (m *PluginExecutor[T]) spawn(path, hash string) (T, *PluginHandle, error) {
 		return zero, nil, err
 	}
 
-	handle := &PluginHandle{Client: cl, Lifecycle: lifecycle, BinPath: path, Key: internal.PoolKey{Id: id, Name: wrapped.Metadata().Name, Hash: hash}, Mode: wrapped.Metadata().RolloutMode, Name: name, stopped: make(chan struct{})}
+	handle := &PluginHandle{Client: cl, Lifecycle: lifecycle, BinPath: path, Key: pools.PoolKey{Id: id, Name: wrapped.Metadata().Name, Hash: hash}, Mode: wrapped.Metadata().RolloutMode, Name: name, stopped: make(chan struct{})}
 
 	m.metrics.StartLatency.Observe(time.Since(startedAt).Seconds())
 	m.metrics.ActiveSubprocesses.WithLabelValues(m.adapter.PluginKey()).Inc()
@@ -83,9 +80,7 @@ func (m *PluginExecutor[T]) spawn(path, hash string) (T, *PluginHandle, error) {
 	return wrapped, handle, nil
 }
 
-// spawnN spawns n worker subprocess instances for the same binary, stores the full
-// slice in plugin_handles, and starts a pingLoop for each. If any spawn fails, all
-// already-started subprocesses are killed and an error is returned.
+// spawnN spawns n workers for the same binary, stores them in plugin_handles, and starts a pingLoop each; if any spawn fails, all already-started ones are killed (start is atomic).
 func (m *PluginExecutor[T]) spawnN(path, hash string, n int) ([]T, []*PluginHandle, error) {
 	if n <= 0 {
 		n = 1
@@ -115,7 +110,7 @@ func (m *PluginExecutor[T]) spawnN(path, hash string, n int) ([]T, []*PluginHand
 	return wrapped, handles, nil
 }
 
-// wraps start() with exponential backoff on consecutive failures.
+// startWithBackoff wraps start() with exponential backoff on consecutive failures.
 func (m *PluginExecutor[T]) startWithBackoff(path, hash string) error {
 	m.mu.Lock()
 	f := m.failures[path]
@@ -158,7 +153,7 @@ func (m *PluginExecutor[T]) startWithBackoff(path, hash string) error {
 	return nil
 }
 
-// spawns n worker subprocesses and notifies the pool to register them.
+// start spawns n workers and notifies the pool to register them.
 func (m *PluginExecutor[T]) start(path, hash string) error {
 	n := m.adapter.Workers(path)
 	wrapped, handles, err := m.spawnN(path, hash, n)
@@ -169,9 +164,7 @@ func (m *PluginExecutor[T]) start(path, hash string) error {
 	return nil
 }
 
-// spawns new worker subprocesses and notifies the pool with an onDrained callback.
-// The old subprocesses are only killed after all in-flight calls on the old VersionedPool
-// complete - ensuring no call ever hits a dead gRPC connection.
+// update spawns new workers and notifies the pool with an onDrained callback; the old subprocesses are killed only after in-flight calls on the old pool drain, so none hits a dead conn.
 func (m *PluginExecutor[T]) update(path string, oldHandles []*PluginHandle, newHash string) error {
 	n := m.adapter.Workers(path)
 	wrapped, newHandles, err := m.spawnN(path, newHash, n)
@@ -188,8 +181,7 @@ func (m *PluginExecutor[T]) update(path string, oldHandles []*PluginHandle, newH
 	return nil
 }
 
-// kill gracefully shuts down the subprocess exactly once (safe for concurrent calls).
-// It does NOT touch plugin_handles - callers that own the map entry call evict instead.
+// kill gracefully shuts down the subprocess exactly once (concurrency-safe); it does NOT touch plugin_handles - callers that own the map entry call evict.
 func (m *PluginExecutor[T]) kill(handle *PluginHandle) {
 	handle.killOnce.Do(func() {
 		close(handle.stopped)
@@ -206,10 +198,8 @@ func (m *PluginExecutor[T]) kill(handle *PluginHandle) {
 	})
 }
 
-// kills all handles in the group and removes the group from plugin_handles.
-// It acquires the write lock only for the map delete, so kill() (gRPC Shutdown)
-// runs outside the lock. Guards against a concurrent handle replacement at the same key
-// by checking that the stored slice still begins with the same pointer.
+// evict kills all handles and deletes the group from plugin_handles (write lock only for the delete, so kill() runs outside it).
+// Guards a concurrent replacement at the same key by checking the stored slice still begins with the same pointer.
 func (m *PluginExecutor[T]) evict(key string, handles []*PluginHandle) {
 	for _, h := range handles {
 		m.kill(h)
@@ -222,26 +212,22 @@ func (m *PluginExecutor[T]) evict(key string, handles []*PluginHandle) {
 	m.mu.Unlock()
 }
 
-// evicts the subprocesses transiently (crash restart, config disable) and
-// sends UnregisterMessage - pool removes the active entry but does NOT tombstone.
+// stop evicts transiently (crash-restart or config-disable) and sends UnregisterMessage - pool drops the entry but does NOT tombstone.
 func (m *PluginExecutor[T]) stop(key string, handles []*PluginHandle) {
 	m.evict(key, handles)
 	m.notify(NewUnregisterMessage[T](handles[0].Key))
 	m.logger.Info("%s stopped: %s [%s]", m.adapter.PluginKey(), handles[0].Name, handles[0].Key.Id)
 }
 
-// evicts the subprocesses permanently (binary deleted from disk) and
-// sends RemoveMessage - pool removes the active entry AND tombstones the plugin ID.
+// remove evicts permanently (binary deleted from disk) and sends RemoveMessage - pool drops the entry AND tombstones the plugin ID.
 func (m *PluginExecutor[T]) remove(key string, handles []*PluginHandle) {
 	m.evict(key, handles)
 	m.notify(NewRemoveMessage[T](handles[0].Key))
 	m.logger.Info("%s removed: %s [%s]", m.adapter.PluginKey(), handles[0].Name, handles[0].Key.Id)
 }
 
-// stops the subprocesses and restarts them with backoff.
-// Sets restarting[path] before stop() so reconcile() does not race to fill the
-// now-empty plugin_handles slot while the new spawn is in progress.
-// If restarting[path] is already set, another pingLoop worker beat us to it - bail.
+// restart stops then re-starts (with backoff), setting restarting[path] first so reconcile doesn't race to refill the empty slot;
+// bails if restarting[path] is already set (another pingLoop worker beat us to it).
 func (m *PluginExecutor[T]) restart(key string, handles []*PluginHandle) error {
 	path := handles[0].BinPath
 	hash := handles[0].Key.Hash
@@ -277,9 +263,7 @@ func (m *PluginExecutor[T]) pingLoop(handle *PluginHandle) {
 		case <-handle.stopped:
 			return // intentionally stopped - do not restart
 		case <-t.C:
-			// During a graceful update, spawnN stores the new handles in the map
-			// before notify() is called. If this handle is no longer in the active
-			// slice, it was replaced - exit without restarting.
+			// During a graceful update spawnN stores new handles before notify; if this handle is no longer in the slice it was replaced - exit without restarting.
 			m.mu.RLock()
 			current := m.plugin_handles[handle.BinPath]
 			m.mu.RUnlock()
@@ -304,8 +288,7 @@ func (m *PluginExecutor[T]) pingLoop(handle *PluginHandle) {
 				m.mu.RLock()
 				group := m.plugin_handles[handle.BinPath]
 				m.mu.RUnlock()
-				// Guard: if our handle is no longer in the group, update() replaced it
-				// while Ping() was running. The new workers' pingLoops own any future restarts.
+				// Guard: if our handle is no longer in the group, update() replaced it mid-Ping; the new workers' pingLoops own future restarts.
 				inGroup := false
 				for _, h := range group {
 					if h == handle {

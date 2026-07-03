@@ -5,17 +5,18 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
-// Holds the Prometheus metrics shared by all plugin managers.
+// PluginExecutorMetrics holds the Prometheus metrics shared by all plugin executors.
 type PluginExecutorMetrics struct {
 	Starts             prometheus.Counter
 	Crashes            prometheus.Counter
 	Restarts           prometheus.Counter
 	Updates            prometheus.Counter
+	DigestMismatches   prometheus.Counter
 	StartLatency       prometheus.Histogram
 	ActiveSubprocesses *prometheus.GaugeVec
 }
 
-// Registers and returns a metric set for the given subsystem.
+// NewPluginExecutorMetrics registers and returns a metric set for the given subsystem.
 func NewPluginExecutorMetrics(subsystem string) *PluginExecutorMetrics {
 	return &PluginExecutorMetrics{
 		Starts: promauto.NewCounter(prometheus.CounterOpts{
@@ -33,6 +34,10 @@ func NewPluginExecutorMetrics(subsystem string) *PluginExecutorMetrics {
 		Updates: promauto.NewCounter(prometheus.CounterOpts{
 			Namespace: "blink", Subsystem: "plugin_executor" + subsystem, Name: "plugin_updates_total",
 			Help: "Total plugin subprocess hot-updates (binary replacement).",
+		}),
+		DigestMismatches: promauto.NewCounter(prometheus.CounterOpts{
+			Namespace: "blink", Subsystem: "plugin_executor" + subsystem, Name: "plugin_digest_mismatches_total",
+			Help: "Local binaries whose checksum did not match the digest published in the snapshot (refused to run).",
 		}),
 		StartLatency: promauto.NewHistogram(prometheus.HistogramOpts{
 			Namespace: "blink", Subsystem: "plugin_executor" + subsystem, Name: "plugin_start_latency_seconds",
