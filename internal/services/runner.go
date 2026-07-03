@@ -36,23 +36,23 @@ const (
 )
 
 type Runner struct {
-	inits    []Service
-	services []Service
+	inits    []service
+	services []service
 	logger   *log.Logger
 }
 
 func New() *Runner {
 	return &Runner{
-		services: make([]Service, 0),
+		services: make([]service, 0),
 		logger:   log.New(os.Stdout, "[SERVICE - RUNNER] ", log.Ldate|log.Ltime),
 	}
 }
 
-func (r *Runner) RegisterInit(services ...Service) {
+func (r *Runner) RegisterInit(services ...service) {
 	r.inits = append(r.inits, services...)
 }
 
-func (r *Runner) Register(services ...Service) {
+func (r *Runner) Register(services ...service) {
 	r.services = append(r.services, services...)
 }
 
@@ -86,7 +86,7 @@ func (r *Runner) Run(ctx context.Context) {
 
 // runWithBackoff runs a service with exponential backoff on failure,
 // stopping when ctx is cancelled.
-func (r *Runner) runWithBackoff(ctx context.Context, svc Service) {
+func (r *Runner) runWithBackoff(ctx context.Context, svc service) {
 	attempt := 0
 	for {
 		r.logger.Printf("service %s starting (attempt %d)\n", svc.Name(), attempt+1)
