@@ -1,35 +1,25 @@
-// Each formatter binary ships alongside a <name>.yaml sidecar file.
-//
-// YAML schema example:
-//
-//	id: "550e8400-e29b-41d4-a716-446655440001"
-//	name: "json-summary"
-//	display_name: "JSON Summary Formatter"
-//	description: "Formats alert data as a structured JSON summary."
-//	enabled: true
-//	version: "1.0.0"
-//	file_name: "json-summary"
-//	mode: "blue-green"
-//	min_procs: 1
-//	max_procs: 2
+// Each formatter binary ships alongside a <name>.yaml sidecar.
+// Schema and field reference: docs/internals/schemas/formatters-schema.md.
 
 package formatters
 
 import (
-	cfg "github.com/harishhary/blink/internal/config"
+	"github.com/harishhary/blink/internal/config"
 	"github.com/harishhary/blink/internal/logger"
+	"github.com/harishhary/blink/internal/plugin"
 )
 
-// Registry and Manager are the generic implementations parameterised for formatters.
-type Registry = cfg.Registry[*FormatterMetadata]
-type FormatterConfigWatcher = cfg.ConfigWatcher[*FormatterMetadata]
+// FormatterSnapshotConfig is the formatter instantiation of config.SnapshotConfig.
+type FormatterSnapshotConfig = config.SnapshotConfig[*FormatterMetadata]
 
-// Loader implements cfg.Loader[*FormatterMetadata] for formatters.
-// Embed cfg.BaseLoader to inherit default Parse, Validate, and CrossValidate.
-type Loader struct {
-	cfg.BaseLoader[FormatterMetadata, *FormatterMetadata]
+// FormatterLoader implements config.Loader[*FormatterMetadata] for formatters.
+// Embed config.BaseLoader to inherit default Parse, ParseSpec, Validate, and CrossValidate.
+type FormatterLoader struct {
+	config.BaseLoader[FormatterMetadata, *FormatterMetadata]
 }
 
-func NewFormatterConfigWatcher(log *logger.Logger, dir string) *FormatterConfigWatcher {
-	return cfg.NewConfigWatcher[*FormatterMetadata](log, "formatter", dir, Loader{})
+// NewFormatterSnapshotConfig builds the snapshot-backed formatter config, parsing specs with
+// FormatterLoader.
+func NewFormatterSnapshotConfig(logger *logger.Logger, src plugin.SnapshotSource) *FormatterSnapshotConfig {
+	return config.NewSnapshotConfig[*FormatterMetadata](logger, src, FormatterLoader{})
 }

@@ -5,28 +5,40 @@ import (
 	stderrors "errors"
 	"time"
 
+	"github.com/harishhary/blink/internal/config"
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/messaging"
 	"github.com/harishhary/blink/internal/plugin"
-	internal "github.com/harishhary/blink/internal/pools"
+	"github.com/harishhary/blink/internal/pools"
 	"github.com/harishhary/blink/pkg/alerts"
 )
 
-type Pool struct {
-	*internal.ProcessPool[Formatter]
+type FormatterPool struct {
+	*pools.ProcessPool[Formatter]
 }
 
-func NewPool(routing *internal.RoutingTable, drainTimeout time.Duration) *Pool {
-	return &Pool{
-		ProcessPool: internal.NewProcessPool[Formatter](routing.Config(), internal.NewPoolMetrics("formatters"), drainTimeout),
+// NewFormatterPool builds the formatter pool with live rollout routing derived from cfg (see the
+// rules pool for the closure rationale).
+func NewFormatterPool(cfg config.Source[*FormatterMetadata], drainTimeout time.Duration) *FormatterPool {
+	routing := func(id, name string) (pools.RolloutMode, float64) {
+		if name != "" {
+			if m, ok := cfg.ByFileName(name); ok {
+				return m.RolloutMode, m.RolloutPct
+			}
+		}
+		re := cfg.RoutingByID(id)
+		return re.Mode, re.RolloutPct
+	}
+	return &FormatterPool{
+		ProcessPool: pools.NewProcessPool[Formatter](routing, pools.NewPoolMetrics("formatters"), drainTimeout),
 	}
 }
 
-// Format runs the formatter identified by formatterID against all alerts in a single pool call.
+// Format runs the formatter identified by id against all alerts in a single pool call.
 //   - absent=true: plugin transiently missing, caller should dead-letter.
 //   - removed=true: plugin deregistered, caller should drop permanently.
 //   - outs/errs are per-alert (same length as alerts).
-func (p *Pool) Format(ctx context.Context, formatterID string, alerts []*alerts.Alert, canaryHashKey string) (outs []map[string]any, absent bool, removed bool, errs []errors.Error) {
+func (p *FormatterPool) Format(ctx context.Context, formatterID string, alerts []*alerts.Alert, canaryHashKey string) (outs []map[string]any, absent bool, removed bool, errs []errors.Error) {
 	outs = make([]map[string]any, len(alerts))
 	errs = make([]errors.Error, len(alerts))
 	err := p.Call(ctx, formatterID, canaryHashKey, func(callCtx context.Context, f Formatter) error {
@@ -44,10 +56,10 @@ func (p *Pool) Format(ctx context.Context, formatterID string, alerts []*alerts.
 		return nil
 	})
 	if err != nil {
-		if stderrors.Is(err, internal.ErrPluginNotFound) {
+		if stderrors.Is(err, pools.ErrPluginNotFound) {
 			return nil, true, false, nil
 		}
-		if stderrors.Is(err, internal.ErrPluginRemoved) {
+		if stderrors.Is(err, pools.ErrPluginRemoved) {
 			return nil, false, true, nil
 		}
 		return nil, false, false, []errors.Error{errors.NewE(err)}
@@ -55,20 +67,17 @@ func (p *Pool) Format(ctx context.Context, formatterID string, alerts []*alerts.
 	return outs, false, false, errs
 }
 
-func poolKey(f Formatter) internal.PoolKey {
+func poolKey(f Formatter) pools.PoolKey {
 	cfg := f.FormatterMetadata()
-	return internal.PoolKey{Id: cfg.Id, Name: cfg.Name, Hash: f.Checksum()}
+	return pools.PoolKey{Id: cfg.Id, Name: cfg.Name, Hash: f.Checksum()}
 }
 
-func (p *Pool) Sync(msg messaging.Message) {
-	register := func(onDrained func(), items []Formatter, maxProcs int) {
-		p.Register(poolKey(items[0]), items, maxProcs, onDrained)
-	}
+func (p *FormatterPool) Sync(msg messaging.Message) {
 	switch m := msg.(type) {
 	case plugin.RegisterMessage[Formatter]:
-		register(nil, m.Items, m.MaxProcs)
+		p.Register(poolKey(m.Items[0]), m.Items, m.MaxProcs, nil)
 	case plugin.UpdateMessage[Formatter]:
-		register(m.OnDrained, m.Items, m.MaxProcs)
+		p.Register(poolKey(m.Items[0]), m.Items, m.MaxProcs, m.OnDrained)
 	case plugin.UnregisterMessage[Formatter]:
 		p.Unregister(m.ItemKey)
 	case plugin.RemoveMessage[Formatter]:

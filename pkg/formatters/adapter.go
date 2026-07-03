@@ -8,18 +8,18 @@ import (
 	goplugin "github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
 
+	"github.com/harishhary/blink/internal/config"
 	"github.com/harishhary/blink/internal/helpers"
 	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/formatters/rpc_formatters"
 )
 
-// NewFormatterAdapter builds the PluginAdapter for the formatters plugin type.
-func NewFormatterAdapter(manager *FormatterConfigWatcher) *plugin.PluginAdapter[Formatter] {
+func NewFormatterAdapter(cfg config.Source[*FormatterMetadata]) *plugin.PluginAdapter[Formatter] {
 	return &plugin.PluginAdapter[Formatter]{
-		Key:           "formatter",
-		Magic:         "formatter_v1",
-		Plugin:        &formatterPlugin{},
-		DesiredConfig: manager,
+		Key:    "formatter",
+		Magic:  MagicValue,
+		Plugin: &formatterPlugin{},
+		Config: cfg,
 		DoHandshake: func(ctx context.Context, raw any, binPath, hash string) (Formatter, plugin.PluginLifecycle, string, string, error) {
 			rpc, ok := raw.(rpc_formatters.FormatterClient)
 			if !ok {
@@ -35,10 +35,10 @@ func NewFormatterAdapter(manager *FormatterConfigWatcher) *plugin.PluginAdapter[
 				return nil, nil, "", "", fmt.Errorf("init: %w", err)
 			}
 
-			f := newRpcFormatter(fileName, rpc, manager, hash)
+			f := newRpcFormatter(fileName, rpc, cfg, hash)
 			id, name := fileName, fileName
-			if desired, ok := manager.DesiredBinaryState(fileName); ok {
-				id = desired.ID
+			if desired, ok := cfg.DesiredBinaryState(fileName); ok {
+				id = desired.Id
 				name = desired.Name
 			}
 			return f, &formatterLifecycle{rpc: rpc}, id, name, nil

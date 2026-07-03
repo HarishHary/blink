@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/harishhary/blink/internal/config"
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/alerts"
@@ -12,26 +13,26 @@ import (
 )
 
 type rpcFormatter struct {
-	cfgManager *FormatterConfigWatcher
-	fileName   string
-	checksum   string
-	client     rpc_formatters.FormatterClient
+	src      config.Source[*FormatterMetadata]
+	fileName string
+	checksum string
+	client   rpc_formatters.FormatterClient
 }
 
-func newRpcFormatter(fileName string, client rpc_formatters.FormatterClient, manager *FormatterConfigWatcher, checksum string) *rpcFormatter {
+func newRpcFormatter(fileName string, client rpc_formatters.FormatterClient, src config.Source[*FormatterMetadata], checksum string) *rpcFormatter {
 	return &rpcFormatter{
-		cfgManager: manager,
-		fileName:   fileName,
-		checksum:   checksum,
-		client:     client,
+		src:      src,
+		fileName: fileName,
+		checksum: checksum,
+		client:   client,
 	}
 }
 
 func (f *rpcFormatter) cfg() *FormatterMetadata {
-	if f.cfgManager == nil {
+	if f.src == nil {
 		return nil
 	}
-	v, _ := f.cfgManager.Current().ByFileName(f.fileName)
+	v, _ := f.src.ByFileName(f.fileName)
 	return v
 }
 

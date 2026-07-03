@@ -13,22 +13,14 @@ import (
 	"github.com/harishhary/blink/pkg/formatters/rpc_formatters"
 )
 
-// MagicValue is this plugin type's cookie value; the shared cookie key and
-// protocol version live in internal/handshake.
 const MagicValue = "formatter_v1"
 
-// FormatterPlugin is the interface that all formatter plugin binaries must implement.
-// Embed sdk.BaseFormatter to get no-op defaults for Init and Shutdown.
-//
-// All static metadata (name, id, enabled, etc.) lives in the YAML
-// sidecar file alongside the binary — the subprocess owns only formatting logic.
 type FormatterPlugin interface {
 	Init() error
 	Format(ctx context.Context, alert map[string]any) (map[string]any, errors.Error)
 	Shutdown() error
 }
 
-// BaseFormatter provides no-op defaults for Init and Shutdown.
 type BaseFormatter struct{}
 
 func (BaseFormatter) Init() error     { return nil }
