@@ -1,50 +1,55 @@
 package pools
 
-import "sync"
+import "fmt"
+
+// RolloutMode controls how traffic is split between old and new plugin versions.
+type RolloutMode int
+
+const (
+	// RolloutModeBlueGreen (default): pre-warm new pool, flip generation, drain old.
+	RolloutModeBlueGreen RolloutMode = iota
+	// RolloutModeCanary: route RolloutPct% of calls (by consistent hash) to the new version.
+	RolloutModeCanary
+	// RolloutModeShadow: call new version in background; discard result; log errors.
+	RolloutModeShadow
+)
+
+func (m RolloutMode) String() string {
+	switch m {
+	case RolloutModeBlueGreen:
+		return "blue-green"
+	case RolloutModeCanary:
+		return "canary"
+	case RolloutModeShadow:
+		return "shadow"
+	default:
+		return fmt.Sprintf("RolloutMode(%d)", int(m))
+	}
+}
+
+func (m RolloutMode) MarshalText() ([]byte, error) {
+	return []byte(m.String()), nil
+}
+
+func (m *RolloutMode) UnmarshalText(b []byte) error {
+	switch string(b) {
+	case "blue-green", "bluegreen", "":
+		*m = RolloutModeBlueGreen
+	case "canary":
+		*m = RolloutModeCanary
+	case "shadow":
+		*m = RolloutModeShadow
+	default:
+		return fmt.Errorf("unknown rollout mode %q", string(b))
+	}
+	return nil
+}
+
+// RoutingConfig returns per-plugin (mode, rolloutPct): name!="" at Register (per-binary lookup), name=="" at Call (merged id-level); zero values mean blue-green.
+type RoutingConfig func(pluginID string, name string) (mode RolloutMode, rolloutPct float64)
 
 // RoutingEntry holds the routing configuration for a single plugin.
 type RoutingEntry struct {
 	Mode       RolloutMode
 	RolloutPct float64
-}
-
-// RoutingTable is a thread-safe map from pluginID to RoutingEntry.
-// Pass RoutingTable.Config() to NewProcessPool to enable live routing control.
-// An empty table is valid - missing entries default to blue-green.
-type RoutingTable struct {
-	mu      sync.RWMutex
-	entries map[string]RoutingEntry
-}
-
-// Creates an empty RoutingTable.
-func NewRoutingTable() *RoutingTable {
-	return &RoutingTable{entries: make(map[string]RoutingEntry)}
-}
-
-// Updates the routing config for pluginID. Reflected immediately on the next Call.
-func (t *RoutingTable) Set(pluginID string, r RoutingEntry) {
-	t.mu.Lock()
-	t.entries[pluginID] = r
-	t.mu.Unlock()
-}
-
-// Removes the routing config for pluginID, reverting it to blue-green defaults.
-func (t *RoutingTable) Delete(pluginID string) {
-	t.mu.Lock()
-	delete(t.entries, pluginID)
-	t.mu.Unlock()
-}
-
-// Returns a RoutingConfig closure that reads live from the table.
-// Pass this to NewProcessPool.
-func (t *RoutingTable) Config() RoutingConfig {
-	return func(pluginID string, name string) (RolloutMode, float64) {
-		t.mu.RLock()
-		r, ok := t.entries[pluginID]
-		t.mu.RUnlock()
-		if !ok {
-			return RolloutModeBlueGreen, 0
-		}
-		return r.Mode, r.RolloutPct
-	}
 }

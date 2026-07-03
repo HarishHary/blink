@@ -6,10 +6,7 @@ import (
 	"sync/atomic"
 )
 
-// PoolKey uniquely identifies a plugin subprocess pool.
-// Id is the logical plugin UUID from the YAML sidecar.
-// Name is the binary stem (= YAML stem), unique per directory.
-// Hash is the SHA-256 of the binary, changes on every binary update.
+// PoolKey uniquely identifies a plugin subprocess pool: Id (logical UUID from YAML), Name (binary stem), Hash (SHA-256 of the binary, changes every build).
 type PoolKey struct {
 	Id   string
 	Name string
@@ -23,9 +20,7 @@ func (k PoolKey) String() string {
 	return k.Id + "@" + k.Name
 }
 
-// VersionedPool manages a fixed-size pool of plugin subprocess handles of type T.
-// Acquire/Release use a channel-based semaphore; handles are stateful gRPC connections
-// and must not be discarded by the GC (no sync.Pool).
+// VersionedPool is a fixed-size channel semaphore over one binary version's subprocess handles; they're stateful gRPC conns, so no sync.Pool.
 type VersionedPool[T any] struct {
 	key      PoolKey
 	slots    chan T
@@ -48,8 +43,7 @@ func newVersionedPool[T any](key PoolKey, plugins []T, maxProcs int) *VersionedP
 	return p
 }
 
-// Returns a plugin handle for exclusive use. Blocks until one is available or ctx is cancelled.
-// Returns an error if the pool is draining.
+// Acquire returns a handle for exclusive use, blocking until one is free or ctx is cancelled; errors if the pool is draining.
 func (p *VersionedPool[T]) Acquire(ctx context.Context) (T, error) {
 	if p.draining.Load() {
 		var zero T

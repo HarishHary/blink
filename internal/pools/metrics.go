@@ -5,7 +5,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
-// Holds the Prometheus metrics for one ProcessPool instance.
+// PoolMetrics holds the Prometheus metrics for one ProcessPool.
 type PoolMetrics struct {
 	poolSize      *prometheus.GaugeVec
 	poolInflight  *prometheus.GaugeVec
@@ -13,7 +13,7 @@ type PoolMetrics struct {
 	shadowDiffs   *prometheus.CounterVec
 }
 
-// Registers and returns Prometheus metrics namespaced under
+// NewPoolMetrics registers and returns pool metrics namespaced under blink_pool_<subsystem>.
 func NewPoolMetrics(subsystem string) *PoolMetrics {
 	return &PoolMetrics{
 		poolSize: promauto.NewGaugeVec(prometheus.GaugeOpts{

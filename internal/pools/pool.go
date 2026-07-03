@@ -7,20 +7,19 @@ import (
 	"time"
 )
 
-// Returned by Call when no active pool exists for the requested
+// ErrPluginNotFound is returned by Call when no active pool exists for the plugin ID.
 var ErrPluginNotFound = errors.New("plugin not found")
 
 // Returned by Call when the plugin was explicitly deregistered (binary was deleted).
 var ErrPluginRemoved = errors.New("plugin removed")
 
-// holds a pre-warmed pool that is waiting to be promoted to active via Promote().
-// Used for canary and shadow rollouts where traffic must stay on the old version until the operator explicitly graduates the new version.
+// pendingPromotion is a staged canary/shadow pool awaiting Promote(); production stays on the old version until then.
 type pendingPromotion struct {
 	key       PoolKey
 	onDrained func()
 }
 
-// Manages VersionedPools keyed by (Id, Version).
+// ProcessPool manages VersionedPools keyed by PoolKey and routes calls by rollout mode.
 type ProcessPool[T any] struct {
 	mu           sync.RWMutex
 	pools        map[PoolKey]*VersionedPool[T]
@@ -50,15 +49,7 @@ func NewProcessPool[T any](routing RoutingConfig, metrics *PoolMetrics, drainTim
 	}
 }
 
-// Register adds a pre-warmed pool for the given key.
-//
-// Blue-green (default): the new pool is promoted to active immediately and the old pool
-// is drained asynchronously. onDrained is called once the drain completes
-//
-// Canary / Shadow: the new pool is added to pp.pools but active is NOT flipped. The old
-// pool keeps serving production traffic; the new pool serves only the canary/shadow
-// percentage as found by callCanary/callShadow. Call Promote(pluginID) to graduate the
-// new pool to production and drain the old one.
+// Register adds a pre-warmed pool for key: blue-green promotes to active immediately (draining the old async); canary/shadow stage to pending until Promote.
 func (pp *ProcessPool[T]) Register(key PoolKey, plugins []T, maxProcs int, onDrained func()) {
 	pp.mu.Lock()
 	defer pp.mu.Unlock()
@@ -75,14 +66,11 @@ func (pp *ProcessPool[T]) Register(key PoolKey, plugins []T, maxProcs int, onDra
 	mode, _ := pp.routing(key.Id, key.Name)
 
 	if mode == RolloutModeCanary || mode == RolloutModeShadow {
-		// Stage the new pool without promoting - preserve active as production.
-		// First registration for this pluginID still needs an active entry.
+		// Stage without promoting; the first registration for this ID still needs an active entry.
 		if _, hasActive := pp.active[key.Id]; !hasActive {
 			pp.active[key.Id] = key
 		} else {
-			// Drain the previous pending pool before replacing it so its subprocess
-			// is killed and its onDrained callback fires. Without this, rapid deploys
-			// in canary mode would orphan intermediate pools in pp.pools indefinitely.
+			// Drain the previous pending pool first, else rapid canary deploys orphan intermediate pools.
 			if prev, ok := pp.pending[key.Id]; ok {
 				if prevPool, ok := pp.pools[prev.key]; ok {
 					go pp.drain(prev.key, prevPool, prev.onDrained)
@@ -93,10 +81,7 @@ func (pp *ProcessPool[T]) Register(key PoolKey, plugins []T, maxProcs int, onDra
 		return
 	}
 
-	// Blue-green: promote immediately and drain old.
-	// Two co-existing blue-green binaries for the same plugin ID are prevented from ever
-	// reaching this point: IsReady() calls HasBlockingError() which runs Validate() fresh,
-	// and Validate() emits a blocking error for any plugin ID with multiple blue-green versions.
+	// Blue-green: promote immediately, drain old. Two BG binaries for one ID never reach here (Validate() blocks that group upstream).
 	oldKey, hasOld := pp.active[key.Id]
 	pp.active[key.Id] = key
 
@@ -107,10 +92,7 @@ func (pp *ProcessPool[T]) Register(key PoolKey, plugins []T, maxProcs int, onDra
 	}
 }
 
-// MigrateSlots atomically reassigns active and pending for pluginID without draining
-// or killing any processes. Used when two binaries for the same id swap modes
-// (e.g. BG↔CN/SH) via a YAML-only change — no binary restarts are needed.
-// Pass a zero PoolKey for pendingKey to clear the pending slot.
+// MigrateSlots atomically reassigns active/pending for id with no drain or restart (BG↔CN/SH YAML-only swap). A zero pendingKey clears the pending slot.
 func (pp *ProcessPool[T]) MigrateSlots(id string, activeKey, pendingKey PoolKey) {
 	pp.mu.Lock()
 	defer pp.mu.Unlock()
@@ -125,9 +107,7 @@ func (pp *ProcessPool[T]) MigrateSlots(id string, activeKey, pendingKey PoolKey)
 	}
 }
 
-// Promote graduates the pending canary/shadow pool for pluginID to active production,
-// draining the old pool asynchronously. If no pending pool exists, this is a no-op.
-// Typically called by an operator API or a health-check once canary metrics are green.
+// Promote graduates the pending canary/shadow pool for pluginID to active, draining the old async. No-op if nothing is pending.
 func (pp *ProcessPool[T]) Promote(pluginID string) {
 	pp.mu.Lock()
 
@@ -151,8 +131,7 @@ func (pp *ProcessPool[T]) Promote(pluginID string) {
 	}
 	pp.mu.Unlock()
 
-	// Call onDrained outside the lock - it may run kill() which blocks for up to 3s
-	// on gRPC Shutdown. Holding the lock that long would stall all Call() invocations.
+	// onDrained runs outside the lock: it may kill() (up to 3s on gRPC Shutdown), which would stall every Call().
 	switch {
 	case drainPool != nil:
 		go pp.drain(drainKey, drainPool, p.onDrained)
@@ -166,9 +145,7 @@ func (pp *ProcessPool[T]) Promote(pluginID string) {
 	}
 }
 
-// Unregister drains the specific versioned pool identified by key.
-// Used for transient stops (crash restarts, config disables) — no tombstone is set.
-// Only the pool that crashed is torn down; other versions of the same plugin are unaffected.
+// Unregister drains just the pool identified by key (active or pending); no tombstone - for transient stops (crash/disable) where the plugin may return.
 func (pp *ProcessPool[T]) Unregister(key PoolKey) {
 	pp.mu.Lock()
 	defer pp.mu.Unlock()
@@ -193,9 +170,7 @@ func (pp *ProcessPool[T]) Unregister(key PoolKey) {
 	}
 }
 
-// Remove drains the specific versioned pool identified by key and tombstones the plugin ID
-// only when no other pools for that plugin remain.
-// Used when a binary is permanently deleted from disk.
+// Remove drains the pool identified by key and tombstones the ID only if no pools for it remain (binary permanently deleted from disk).
 func (pp *ProcessPool[T]) Remove(key PoolKey) {
 	pp.mu.Lock()
 	defer pp.mu.Unlock()
@@ -211,7 +186,7 @@ func (pp *ProcessPool[T]) Remove(key PoolKey) {
 			go pp.drain(activeKey, pool, nil)
 		}
 	} else {
-		// Key not currently tracked — tombstone so callers don't wait forever.
+		// Key not currently tracked - tombstone so callers don't wait forever.
 		pp.removed[key.Id] = struct{}{}
 		return
 	}
@@ -224,10 +199,7 @@ func (pp *ProcessPool[T]) Remove(key PoolKey) {
 	}
 }
 
-// marks the VersionedPool as draining, waits for in-flight calls to finish
-// (up to pp.drainTimeout), removes it from pp.pools, then calls onDrained if set.
-// For graceful updates, onDrained kills the old subprocess after the last in-flight
-// call completes so no call ever hits a dead gRPC connection.
+// drain marks the pool draining, waits for Inflight()==0 (up to drainTimeout), removes it, then fires onDrained (which kills the old subprocess, so no call hits a dead conn).
 func (pp *ProcessPool[T]) drain(key PoolKey, pool *VersionedPool[T], onDrained func()) {
 	pool.draining.Store(true)
 	deadline := time.Now().Add(pp.drainTimeout)
@@ -253,8 +225,7 @@ func (pp *ProcessPool[T]) drain(key PoolKey, pool *VersionedPool[T], onDrained f
 		log.Printf("processpool: drained pool %s in %.2fs", key, elapsed)
 	}
 
-	// Only delete if this exact pool is still registered at this key.
-	// A concurrent Register() may have replaced it while we were waiting.
+	// Only delete if this exact pool is still at key - a concurrent Register() may have replaced it.
 	pp.mu.Lock()
 	if pp.pools[key] == pool {
 		delete(pp.pools, key)

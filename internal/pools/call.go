@@ -10,21 +10,14 @@ import (
 // DefaultCanaryHashKey is the call-site key used for consistent-hash canary routing.
 var DefaultCanaryHashKey = "tenant_id"
 
-// Acquires a handle from the appropriate pool (respecting canary/blue-green routing),
-// invokes fn on it, and releases the handle.
-//
-// For shadow mode, only the production pool is called. Use CallWithShadow to also evaluate a shadow pool concurrently with a separate, independent closure.
+// Call acquires a handle from the routed pool, runs fn, releases it. Shadow mode hits only production - use CallWithShadow for a concurrent shadow closure.
 func (pp *ProcessPool[T]) Call(ctx context.Context, id, hashKey string, fn func(context.Context, T) error) error {
 	return pp.CallWithShadow(ctx, id, hashKey, fn, nil)
 }
 
-// CallWithShadow is like Call but also invokes shadowFn on the shadow pool concurrently
-// when routing returns shadow mode for this plugin. shadowFn must operate on independent
-// state (e.g. a cloned input, a separate result variable) to avoid data races with prodFn.
-// Shadow errors are logged and counted but do not affect the return value.
+// CallWithShadow is Call plus a concurrent shadowFn on the shadow pool (shadow mode). shadowFn must use independent state (cloned input/result) to avoid races; shadow errors are logged/counted, not returned.
 func (pp *ProcessPool[T]) CallWithShadow(ctx context.Context, id string, hashKey string, prodFn, shadowFn func(context.Context, T) error) error {
-	// Snapshot everything we need under a short read lock.
-	// User code (prodFn/shadowFn) is called after the lock is released.
+	// Snapshot state under a short RLock; user code runs after release so plugin latency never blocks mutations.
 	pp.mu.RLock()
 	key, ok := pp.active[id]
 	if !ok {
@@ -62,8 +55,7 @@ func (pp *ProcessPool[T]) CallWithShadow(ctx context.Context, id string, hashKey
 	return pp.callPool(ctx, prodPool, prodFn)
 }
 
-// callCanary routes rolloutPct% of calls (via consistent hash on hashKey) to altPool
-// when one exists. Pool pointers are pre-snapshotted by the caller under RLock.
+// callCanary routes rolloutPct% of calls (consistent hash on hashKey) to altPool when set; pools pre-snapshotted under RLock.
 func (pp *ProcessPool[T]) callCanary(ctx context.Context, id string, hashKey string, rolloutPct float64, prodPool, altPool *VersionedPool[T], fn func(context.Context, T) error) error {
 	if hashKey == "" {
 		hashKey = DefaultCanaryHashKey
@@ -78,15 +70,12 @@ func (pp *ProcessPool[T]) callCanary(ctx context.Context, id string, hashKey str
 	return pp.callPool(ctx, prodPool, fn)
 }
 
-// callShadow calls prodFn on the production pool, then fires shadowFn on altPool
-// in a background goroutine. Pool pointers are pre-snapshotted by the caller under RLock.
+// callShadow runs prodFn on production, then fires shadowFn on altPool in a background goroutine; pools pre-snapshotted under RLock.
 func (pp *ProcessPool[T]) callShadow(ctx context.Context, id string, prodPool, altPool *VersionedPool[T], prodFn, shadowFn func(context.Context, T) error) error {
 	prodErr := pp.callPool(ctx, prodPool, prodFn)
 
 	if shadowFn != nil && altPool != nil {
-		// Detach from the caller's context: the production call has already returned,
-		// so the caller's deadline may have expired or the ctx may be cancelled before
-		// the shadow goroutine gets CPU time. Shadow evaluation must be independent.
+		// Detach from caller ctx: prod already returned, so its deadline may expire before the shadow goroutine runs.
 		shadowCtx := context.WithoutCancel(ctx)
 		shadowPool := altPool
 		go func() {
