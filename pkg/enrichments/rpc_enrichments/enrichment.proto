@@ -2,17 +2,16 @@ syntax = "proto3";
 package enrichments;
 option go_package = "rpc_enrichments/;rpc_enrichments";
 
-message Empty {}
+import "google/protobuf/empty.proto";
+import "pkg/alerts/pb/alert.proto";
 
-message Alert               { bytes json = 1; }
+message EnrichBatchRequest  { repeated alerts.Alert alerts = 1; } // structured alerts.Alert per alert
 
-message EnrichBatchRequest  { repeated Alert alerts = 1; }
-
-message EnrichBatchResponse { repeated Alert alerts = 1; }
+message EnrichBatchResponse { repeated bytes result_json = 1; } // one JSON-encoded map[string]any per alert
 
 service Enrichment {
-  rpc Init(Empty)                     returns (Empty);
   rpc EnrichBatch(EnrichBatchRequest) returns (EnrichBatchResponse);
-  rpc Shutdown(Empty)                 returns (Empty);
-  rpc Ping(Empty)                     returns (Empty);
+  rpc Init(google.protobuf.Empty)     returns (google.protobuf.Empty);
+  rpc Shutdown(google.protobuf.Empty) returns (google.protobuf.Empty);
+  rpc Ping(google.protobuf.Empty)     returns (google.protobuf.Empty);
 }

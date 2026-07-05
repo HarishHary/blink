@@ -7,9 +7,11 @@ import (
 
 	"github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/handshake"
+	"github.com/harishhary/blink/pkg/alerts"
 	"github.com/harishhary/blink/pkg/enrichments/rpc_enrichments"
 )
 
@@ -26,7 +28,7 @@ type Plugin interface {
 	// Init is called once after the plugin connects, before any Enrich calls.
 	Init() error
 	// Enrich enriches the alert event fields and returns the modified fields.
-	Enrich(ctx context.Context, alert map[string]any) (map[string]any, errors.Error)
+	Enrich(ctx context.Context, alert alerts.Alert) (map[string]any, errors.Error)
 	// Shutdown is called before the plugin exits. Release any held resources.
 	Shutdown() error
 }
@@ -43,18 +45,18 @@ type server struct {
 	enrichment Plugin
 }
 
-func (s *server) Init(_ context.Context, _ *rpc_enrichments.Empty) (*rpc_enrichments.Empty, error) {
-	return &rpc_enrichments.Empty{}, s.enrichment.Init()
+func (s *server) Init(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	return &emptypb.Empty{}, s.enrichment.Init()
 }
 
 func (s *server) EnrichBatch(ctx context.Context, req *rpc_enrichments.EnrichBatchRequest) (*rpc_enrichments.EnrichBatchResponse, error) {
-	results := make([]*rpc_enrichments.Alert, 0, len(req.GetAlerts()))
-	for _, a := range req.GetAlerts() {
-		var alert map[string]any
-		if err := json.Unmarshal(a.GetJson(), &alert); err != nil {
+	results := make([][]byte, 0, len(req.GetAlerts()))
+	for _, pa := range req.GetAlerts() {
+		alert, err := alerts.ProtoToAlert(pa)
+		if err != nil {
 			return nil, err
 		}
-		enriched, err := s.enrichment.Enrich(ctx, alert)
+		enriched, err := s.enrichment.Enrich(ctx, *alert)
 		if err != nil {
 			return nil, err
 		}
@@ -62,17 +64,17 @@ func (s *server) EnrichBatch(ctx context.Context, req *rpc_enrichments.EnrichBat
 		if err2 != nil {
 			return nil, err2
 		}
-		results = append(results, &rpc_enrichments.Alert{Json: b})
+		results = append(results, b)
 	}
-	return &rpc_enrichments.EnrichBatchResponse{Alerts: results}, nil
+	return &rpc_enrichments.EnrichBatchResponse{ResultJson: results}, nil
 }
 
-func (s *server) Ping(_ context.Context, _ *rpc_enrichments.Empty) (*rpc_enrichments.Empty, error) {
-	return &rpc_enrichments.Empty{}, nil
+func (s *server) Ping(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	return &emptypb.Empty{}, nil
 }
 
-func (s *server) Shutdown(_ context.Context, _ *rpc_enrichments.Empty) (*rpc_enrichments.Empty, error) {
-	return &rpc_enrichments.Empty{}, s.enrichment.Shutdown()
+func (s *server) Shutdown(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	return &emptypb.Empty{}, s.enrichment.Shutdown()
 }
 
 type pluginImpl struct {

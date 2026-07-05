@@ -138,8 +138,8 @@ func (m *PluginExecutor[T]) reconcile(reason string) error {
 				deferred[path] = struct{}{}
 				continue
 			}
-			shadow := ref.Mode == pools.RolloutModeCanary || ref.Mode == pools.RolloutModeShadow
-			wanted[path] = desired{path: path, hash: h, mode: ref.Mode, shadow: shadow}
+			shadow := ref.RolloutMode == pools.RolloutModeCanary || ref.RolloutMode == pools.RolloutModeShadow
+			wanted[path] = desired{path: path, hash: h, mode: ref.RolloutMode, shadow: shadow}
 		}
 	}
 

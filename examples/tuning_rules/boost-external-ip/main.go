@@ -5,6 +5,7 @@ import (
 	"net"
 
 	"github.com/harishhary/blink/internal/errors"
+	"github.com/harishhary/blink/pkg/alerts"
 	"github.com/harishhary/blink/pkg/tuning_rules"
 )
 
@@ -44,9 +45,8 @@ func isPrivate(ipStr string) bool {
 	return false
 }
 
-func (boostExternalIP) Tune(_ context.Context, alert map[string]any) (bool, errors.Error) {
-	event, _ := alert["Event"].(map[string]any)
-	sourceIP, _ := event["source_ip"].(string)
+func (boostExternalIP) Tune(_ context.Context, alert alerts.Alert) (bool, errors.Error) {
+	sourceIP, _ := alert.Event["source_ip"].(string)
 	return !isPrivate(sourceIP), nil
 }
 

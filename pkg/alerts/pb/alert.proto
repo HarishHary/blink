@@ -3,7 +3,7 @@ package alerts;
 
 import "google/protobuf/struct.proto";
 
-option go_package = "pb/;pb";
+option go_package = "github.com/harishhary/blink/pkg/alerts/pb";
 
 // Observable is a static field the rule surfaces in generated alerts.
 message Observable {

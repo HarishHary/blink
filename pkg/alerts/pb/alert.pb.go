@@ -84,7 +84,7 @@ func (x *Observable) GetAggregation() bool {
 }
 
 // RuleMetadata carries rule configuration in the alert wire format.
-// Mirrors pkg/rules.RuleMetadata with additions for display_name, references, and risk_score.
+// Mirrors pkg/rules.RuleMetadata with additions for display_name, references, risk_score, and observables.
 type RuleMetadata struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	Id              string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -544,7 +544,7 @@ const file_pkg_alerts_pb_alert_proto_rawDesc = "" +
 	"\bseverity\x18\x0e \x01(\tR\bseverity\x12(\n" +
 	"\x04rule\x18\x0f \x01(\v2\x14.alerts.RuleMetadataR\x04rule\x12/\n" +
 	"\x13enrichments_applied\x18\x10 \x03(\tR\x12enrichmentsApplied\x123\n" +
-	"\x16override_merge_by_keys\x18\x11 \x03(\tR\x13overrideMergeByKeysB\bZ\x06pb/;pbb\x06proto3"
+	"\x16override_merge_by_keys\x18\x11 \x03(\tR\x13overrideMergeByKeysB+Z)github.com/harishhary/blink/pkg/alerts/pbb\x06proto3"
 
 var (
 	file_pkg_alerts_pb_alert_proto_rawDescOnce sync.Once

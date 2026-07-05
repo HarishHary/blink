@@ -10,7 +10,7 @@ import (
 
 // CatalogGroup holds all YAML entries sharing a logical plugin ID (healthy: one BG Primary + at most one CN/SH Candidate).
 type CatalogGroup[T plugin.Syncable] struct {
-	ID      string
+	Id      string
 	Entries []T
 }
 
@@ -49,7 +49,7 @@ func electGroup[T plugin.Syncable](id string, group CatalogGroup[T], digests map
 		if m.Enabled {
 			anyEnabled = true
 		}
-		ref := &snapshot.ArtifactRef{Name: m.Name, Mode: m.RolloutMode, Hash: digests[m.Name]}
+		ref := &snapshot.ArtifactRef{Name: m.Name, RolloutMode: m.RolloutMode, Hash: digests[m.Name]}
 		if b, err := yaml.Marshal(item); err == nil {
 			ref.Spec = b
 		}
@@ -155,5 +155,5 @@ func refEqual(a, b *snapshot.ArtifactRef) bool {
 	if a == nil {
 		return true
 	}
-	return a.Name == b.Name && a.Mode == b.Mode && a.Hash == b.Hash && string(a.Spec) == string(b.Spec)
+	return a.Name == b.Name && a.RolloutMode == b.RolloutMode && a.Hash == b.Hash && string(a.Spec) == string(b.Spec)
 }

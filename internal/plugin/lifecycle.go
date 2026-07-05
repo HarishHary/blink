@@ -8,6 +8,7 @@ import (
 
 	goplugin "github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/handshake"
@@ -63,19 +64,20 @@ func (m *PluginExecutor[T]) spawn(path, hash string) (T, *PluginHandle, error) {
 		return zero, nil, fmt.Errorf("dispense: %w", err)
 	}
 
-	wrapped, lifecycle, id, name, err := m.adapter.Handshake(context.Background(), raw, path, hash)
+	wrapped, rpc, err := m.adapter.Handshake(context.Background(), raw, path, hash)
 	if err != nil {
 		cl.Kill()
 		var zero T
 		return zero, nil, err
 	}
 
-	handle := &PluginHandle{Client: cl, Lifecycle: lifecycle, BinPath: path, Key: pools.PoolKey{Id: id, Name: wrapped.Metadata().Name, Hash: hash}, Mode: wrapped.Metadata().RolloutMode, Name: name, stopped: make(chan struct{})}
+	md := wrapped.Metadata() // snapshot-derived id/name; single source of truth
+	handle := &PluginHandle{Client: cl, RPC: rpc, BinPath: path, Key: pools.PoolKey{Id: md.Id, Name: md.Name, Hash: hash}, Mode: md.RolloutMode, Name: md.Name, stopped: make(chan struct{})}
 
 	m.metrics.StartLatency.Observe(time.Since(startedAt).Seconds())
 	m.metrics.ActiveSubprocesses.WithLabelValues(m.adapter.PluginKey()).Inc()
 	m.metrics.Starts.Inc()
-	m.logger.Info("%s started: %s [%s] (%s)", m.adapter.PluginKey(), name, id, path)
+	m.logger.Info("%s started: %s [%s] (%s)", m.adapter.PluginKey(), md.Name, md.Id, path)
 
 	return wrapped, handle, nil
 }
@@ -192,7 +194,7 @@ func (m *PluginExecutor[T]) kill(handle *PluginHandle) {
 			}
 		}()
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		_ = handle.Lifecycle.Shutdown(ctx)
+		_, _ = handle.RPC.Shutdown(ctx, &emptypb.Empty{})
 		cancel()
 		handle.Client.Kill()
 		m.metrics.ActiveSubprocesses.WithLabelValues(m.adapter.PluginKey()).Dec()
@@ -280,7 +282,7 @@ func (m *PluginExecutor[T]) pingLoop(handle *PluginHandle) {
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			err := handle.Lifecycle.Ping(ctx)
+			_, err := handle.RPC.Ping(ctx, &emptypb.Empty{})
 			cancel()
 			if err != nil {
 				m.metrics.Crashes.Inc()

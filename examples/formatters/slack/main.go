@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/harishhary/blink/internal/errors"
+	"github.com/harishhary/blink/pkg/alerts"
 	"github.com/harishhary/blink/pkg/formatters"
 )
 
@@ -13,18 +15,14 @@ import (
 // configured Slack output.
 type slackFormatter struct{ formatters.BaseFormatter }
 
-func (slackFormatter) Format(_ context.Context, alert map[string]any) (map[string]any, errors.Error) {
-	alertID, _ := alert["AlertID"].(string)
-	created, _ := alert["Created"].(string)
-
-	event, _ := alert["Event"].(map[string]any)
-	sourceName, _ := event["source_name"].(string)
+func (slackFormatter) Format(_ context.Context, alert alerts.Alert) (map[string]any, errors.Error) {
+	sourceName, _ := alert.Event["source_name"].(string)
 
 	header := ":rotating_light: *Alert fired*"
-	body := fmt.Sprintf("*Source:* %s\n*Alert ID:* `%s`  •  *Time:* %s", sourceName, alertID, created)
+	body := fmt.Sprintf("*Source:* %s\n*Alert ID:* `%s`  •  *Time:* %s", sourceName, alert.Id, alert.Created.Format(time.RFC3339))
 
 	return map[string]any{
-		"text": fmt.Sprintf("Alert fired - %s", alertID),
+		"text": fmt.Sprintf("Alert fired - %s", alert.Id),
 		"blocks": []map[string]any{
 			{
 				"type": "header",

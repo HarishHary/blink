@@ -14,11 +14,7 @@ type EnrichmentMetadata struct {
 }
 
 type Enrichment interface {
+	plugin.Syncable
 	Enrich(ctx context.Context, alerts []*alerts.Alert) errors.Error
-	DependsOn() []string
-
 	EnrichmentMetadata() *EnrichmentMetadata
-	Metadata() plugin.PluginMetadata
-	Checksum() string
-	String() string
 }
