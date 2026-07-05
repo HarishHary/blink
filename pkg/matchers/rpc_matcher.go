@@ -2,8 +2,8 @@ package matchers
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
+
+	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/harishhary/blink/internal/config"
 	"github.com/harishhary/blink/internal/errors"
@@ -52,19 +52,15 @@ func (r *rpcMatcher) Metadata() plugin.PluginMetadata {
 }
 
 func (r *rpcMatcher) Checksum() string { return r.checksum }
-func (r *rpcMatcher) String() string {
-	m := r.MatcherMetadata().Metadata()
-	return fmt.Sprintf("Matcher '%s' (id:%s)", m.Name, m.Id)
-}
 
 func (r *rpcMatcher) Match(ctx context.Context, evts []events.Event) ([]bool, errors.Error) {
-	protoEvents := make([]*rpc_matchers.Event, 0, len(evts))
+	protoEvents := make([]*structpb.Struct, 0, len(evts))
 	for _, ev := range evts {
-		b, err := json.Marshal(ev)
+		s, err := structpb.NewStruct(ev)
 		if err != nil {
 			return nil, errors.NewE(err)
 		}
-		protoEvents = append(protoEvents, &rpc_matchers.Event{Json: b})
+		protoEvents = append(protoEvents, s)
 	}
 	resp, err := r.client.MatchBatch(ctx, &rpc_matchers.MatchBatchRequest{Events: protoEvents})
 	if err != nil {

@@ -2,17 +2,16 @@ syntax = "proto3";
 package matchers;
 option go_package = "rpc_matchers/;rpc_matchers";
 
-message Empty {}
+import "google/protobuf/empty.proto";
+import "google/protobuf/struct.proto";
 
-message Event              { bytes json = 1; }
-
-message MatchBatchRequest  { repeated Event events = 1; }
+message MatchBatchRequest  { repeated google.protobuf.Struct events = 1; }
 
 message MatchBatchResponse { repeated bool  matched = 1; }
 
 service Matcher {
-  rpc Init(Empty)                     returns (Empty);
   rpc MatchBatch(MatchBatchRequest)   returns (MatchBatchResponse);
-  rpc Shutdown(Empty)                 returns (Empty);
-  rpc Ping(Empty)                     returns (Empty);
+  rpc Init(google.protobuf.Empty)     returns (google.protobuf.Empty);
+  rpc Shutdown(google.protobuf.Empty) returns (google.protobuf.Empty);
+  rpc Ping(google.protobuf.Empty)     returns (google.protobuf.Empty);
 }
