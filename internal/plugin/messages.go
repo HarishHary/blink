@@ -51,7 +51,7 @@ func NewUpdateMessage[T Syncable](items []T, maxProcs int, onDrained func()) Upd
 	return UpdateMessage[T]{Items: items, MaxProcs: maxProcs, OnDrained: onDrained}
 }
 
-// MigrateMessage is delivered when two binaries for one ID swap modes (YAML-only, e.g. canary promoted to stable); no process is killed/spawned, only routing slots are reassigned.
+// MigrateMessage is delivered when two binaries for one ID swap modes (YAML-only, e.g. canary promoted to stable); no process is killed/spawned, only rollout slots are reassigned.
 type MigrateMessage[T Syncable] struct {
 	messaging.IsMessage
 	ActiveKey  pools.PoolKey // key that should hold active[id]

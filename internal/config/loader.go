@@ -27,14 +27,11 @@ func (e ValidationError) Error() string {
 	return fmt.Sprintf("%s: %s", e.File, e.Message)
 }
 
-// Loader[T] encapsulates per-plugin-type config loading: implement once per type and inject into
-// NewLocalReader (disk) / NewSnapshotConfig (snapshot). Embed BaseLoader[T] for default Validate/CrossValidate.
+// Loader[T] handles per-plugin-type config loading; embed BaseLoader[T] for defaults.
 type Loader[T plugin.Syncable] interface {
 	// Parse reads a single YAML sidecar file and returns the parsed metadata.
 	Parse(path string) (T, error)
-	// ParseSpec reconstructs the metadata from a snapshot artifact's yaml-marshaled spec (the bytes
-	// Parse would read, minus the file); name is the binary stem, not carried in the spec. Snapshot
-	// counterpart to Parse, used by SnapshotConfig[T].
+	// ParseSpec reconstructs metadata from a snapshot artifact's spec bytes (snapshot counterpart to Parse).
 	ParseSpec(name string, spec []byte) (T, error)
 	// Validate runs directory-level checks given already-parsed items and
 	// executable binary names present in the directory.
@@ -43,8 +40,7 @@ type Loader[T plugin.Syncable] interface {
 	CrossValidate(all []T) error
 }
 
-// BaseLoader[U, T] provides default Parse/ParseSpec/Validate/CrossValidate; embed in per-plugin Loader
-// structs and override only what's needed. U is the concrete struct, T its pointer type.
+// BaseLoader[U, T] provides default Parse/ParseSpec/Validate/CrossValidate; U is the struct, T its pointer.
 type BaseLoader[U plugin.Syncable, T interface {
 	*U
 	plugin.Syncable
@@ -70,8 +66,7 @@ func (BaseLoader[U, T]) Parse(path string) (T, error) {
 	return p, nil
 }
 
-// ParseSpec mirrors Parse without the disk read: unmarshal an already-loaded spec and inject name.
-// Types needing post-parse resolution (e.g. rules' resolveScoring) override this, as they override Parse.
+// ParseSpec mirrors Parse without the disk read; types that override Parse override this too.
 func (BaseLoader[U, T]) ParseSpec(name string, spec []byte) (T, error) {
 	var cfg U
 	p := T(&cfg)
