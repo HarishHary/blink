@@ -171,11 +171,12 @@ func (m *PluginExecutor[T]) update(path string, oldHandles []*PluginHandle, newH
 	if err != nil {
 		return err
 	}
-	m.notify(NewUpdateMessage[T](wrapped, len(newHandles), func() {
+	onDrained := func() {
 		for _, h := range oldHandles {
 			m.kill(h)
 		}
-	}))
+	}
+	m.notify(NewUpdateMessage[T](wrapped, len(newHandles), onDrained))
 	m.metrics.Updates.Inc()
 	m.logger.Info("%s updated: %s (%d worker(s))", m.adapter.PluginKey(), path, len(newHandles))
 	return nil
