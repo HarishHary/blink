@@ -79,7 +79,7 @@ func (c *PluginController[T]) Start(ctx context.Context) error {
 func (c *PluginController[T]) reconcile(ctx context.Context, reason string) error {
 	c.logger.Info("controller: reconciling (%s)...", reason)
 
-	// ── Step 1: load Postgres state ──────────────────────────────────────────────
+	// -- Step 1: load Postgres state ----------------------------------------------
 	records, err := c.db.LoadAll(ctx)
 	if err != nil {
 		return fmt.Errorf("load Postgres records: %w", err)
@@ -93,7 +93,7 @@ func (c *PluginController[T]) reconcile(ctx context.Context, reason string) erro
 		byID[records[i].Id] = &records[i]
 	}
 
-	// ── Step 2: read the present logical IDs (incl. currently-invalid groups) ─────
+	// -- Step 2: read the present logical IDs (incl. currently-invalid groups) -----
 	// LocalReader has already re-parsed/re-elected before signalling. IDs() reports every logical ID
 	// on disk (incl. groups election dropped as invalid) so absent-detection + carry-forward stay
 	// exact; the elected entries come from Snapshot().
@@ -102,7 +102,7 @@ func (c *PluginController[T]) reconcile(ctx context.Context, reason string) erro
 		presentIDs[id] = struct{}{}
 	}
 
-	// ── Step 3: reconcile YAML ↔ Postgres ────────────────────────────────────────
+	// -- Step 3: reconcile YAML ↔ Postgres ----------------------------------------
 	now := time.Now()
 	upsertBatch := make([]backends.ControllerRecord, 0, len(presentIDs))
 
@@ -127,7 +127,7 @@ func (c *PluginController[T]) reconcile(ctx context.Context, reason string) erro
 		}
 	}
 
-	// ── Steps 4-5: take the base election from the LocalReader; carry forward invalid groups ──
+	// -- Steps 4-5: take the base election from the LocalReader; carry forward invalid groups --
 	c.mu.RLock()
 	priorSnap := c.snapshot
 	c.mu.RUnlock()
@@ -156,14 +156,14 @@ func (c *PluginController[T]) reconcile(ctx context.Context, reason string) erro
 		}
 	}
 
-	// ── Step 6: bump generation only if content changed ──────────────────────────
+	// -- Step 6: bump generation only if content changed --------------------------
 	changed := snapshotChanged(nextEntries, priorSnap)
 	if changed {
 		generation++
 	}
 	nextSnap := &snapshot.Snapshot{Generation: generation, Entries: nextEntries}
 
-	// ── Step 7: persist reconciled state ─────────────────────────────────────────
+	// -- Step 7: persist reconciled state -----------------------------------------
 	if err := c.db.Upsert(ctx, upsertBatch); err != nil {
 		return fmt.Errorf("upsert Postgres records: %w", err)
 	}
@@ -176,7 +176,7 @@ func (c *PluginController[T]) reconcile(ctx context.Context, reason string) erro
 		}
 	}
 
-	// ── Step 8: publish new snapshot ─────────────────────────────────────────────
+	// -- Step 8: publish new snapshot ---------------------------------------------
 	c.mu.Lock()
 	c.snapshot = nextSnap
 	c.mu.Unlock()

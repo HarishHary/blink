@@ -1,99 +1,101 @@
-- [Development](#development)
-  - [Overview](#overview)
-  - [Prerequisites / Dependencies](#prerequisites-dependencies)
-    - [Developing locally](#developing-locally)
-    - [Developing using Docker](#developing-using-docker)
-  - [Components](#components)
-  - [Relevant commands](#relevant-commands)
-  - [IDEs](#ides)
-    - [Dev Containers](#dev-containers)
-  - [Formatting](#formatting)
-  - [Anything else](#anything-else)
-
 # Development
 
-This guide contains relevant and useful information if you are developing on the Blink project.
+This guide contains useful information for developing on the Blink project. For *what* Blink
+is and how messages flow, start with [README.md](README.md) and
+[docs/internals/message-flow.md](docs/internals/message-flow.md).
+
+- [Development](#development)
+  - [Overview](#overview)
+  - [Prerequisites](#prerequisites)
+  - [Components](#components)
+  - [Common commands](#common-commands)
+  - [Running on Kubernetes](#running-on-kubernetes)
+  - [IDEs \& Dev Containers](#ides-dev-containers)
+  - [Formatting \& hooks](#formatting-hooks)
+  - [Contributing](#contributing)
 
 ## Overview
 
-Blink is a monorepo codebase with code in several languages (Ansible, Go, Bash Script, Makefile, Terraform).
+Blink is a Go monorepo: an event-driven detection pipeline of small services wired over Kafka,
+with detection logic running in `hashicorp/go-plugin` subprocesses (gRPC). Supporting code is
+Bash (`scripts/`) and YAML/Helm (Kubernetes manifests under `deployments/`).
 
-## Prerequisites / Dependencies
+A separate control plane (`cmd/controller`) turns each plugin type's YAML into an effective
+`Snapshot` and publishes it on a log-compacted Kafka topic; every pipeline pod consumes its type's
+snapshot and reconciles its subprocesses. Both planes react to change with the same
+subscribe → signal → re-read → re-sync loop - see
+[docs/internals/reconcile-loop.md](docs/internals/reconcile-loop.md).
 
-Since Blink is still pretty alpha phase, you need to ensure several dependencies are installed if you are developing on the source code:
+## Prerequisites
 
-- [Go](https://go.dev/doc/install) >= 1.22
-- [Terraform CDK](https://developer.hashicorp.com/terraform/tutorials/cdktf/cdktf-install) >= 0.20.4
-- [Node](https://nodejs.org/en/download/package-manager) >= v20.14.0
-- [Docker](#developing-using-docker)
-
-This is the complete set of requirements. Of course, if you don't want to install all those dependencies, you can use a [Dev Containers](#dev-containers) to have a developement environement with Visual Studio code.
-
-### Developing locally
-
-<!-- FIXME -->
-
-### Developing using Docker
-
-<!-- FIXME -->
+- [Go](https://go.dev/doc/install) **>= 1.26** (see `go.mod`)
+- [Docker](https://docs.docker.com/get-docker/) or [Podman](https://podman.io/) - containers and a local Kafka
+- [Minikube](https://minikube.sigs.k8s.io/) - local Kubernetes (see [deployments/README.md](deployments/README.md))
+- [pre-commit](https://pre-commit.com/) - git hooks
+- Optional: VS Code + the Dev Containers extension (a `.devcontainer` is provided)
 
 ## Components
-## Components
 
-The major components of the codebase are:
+| Path                                                                             | What                                                                                                                                                                            |
+| -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cmd/`                                                                           | the eight services: `event_matcher`, `rule_executor`, `alert_merger`, `rule_tuner`, `alert_enricher`, `alert_formatter`, `alert_dispatcher`, and the control plane `controller` |
+| `internal/brokers`                                                               | Kafka broker abstraction (`Reader`/`Writer`/`Broker`); also an Event Hubs implementation                                                                                        |
+| `internal/controller`                                                            | control plane: `LocalReader[T]` (disk parse+elect → `Snapshot`), `PluginController[T]` (writer), `SnapshotReader` (per-pod reader)                                                                                             |
+| `internal/plugin`, `internal/pools`                                              | generic plugin runtime (`PluginExecutor[T]`) and process pools (`ProcessPool[T]`)                                                                                               |
+| `internal/config`, `internal/services`, `internal/backends`, `internal/snapshot` | plugin config `Loader[T]`/`Source[T]`/`SnapshotConfig[T]`, service runner/config loader, persistence adapters, snapshot wire model                                                                                    |
+| `pkg/{events,alerts,scoring}`                                                    | domain types                                                                                                                                                                    |
+| `pkg/{rules,matchers,tuning_rules,enrichments,formatters}`                       | per-type plugin interfaces, RPC, and SDKs                                                                                                                                       |
+| `deployments/`                                                                   | Kubernetes: `kafka/` (cluster + topics), `blink/` (per-service manifests + config), `keda/` (autoscaling), `helm/` (chart)                                                      |
+| `examples/`                                                                      | sample plugin configs, one directory per plugin type                                                                                                                            |
+| `docs/`                                                                          | architecture & internals - `docs/internals/message-flow.md` is the message-schema reference                                                                                     |
 
-- internal/broker: broker abstraction for event-driven messaging
-- internal/broker/kafka: Kafka implementation for the broker
-- cmd/{rule_engine,alert_engine,alert_processor}: standalone microservices wired via Kafka topics
-- deployments/k8s: example Kubernetes manifests for Kafka topics and Blink services
+## Common commands
 
-## Relevant commands
-
-# Relevant commands
-
-# Create Kafka cluster and topics (using Strimzi)
-kubectl apply -f deployments/k8s/kafka-cluster.yaml
-kubectl apply -f deployments/k8s/kafka-topics.yaml
-
-# Deploy rule-executor services (one per log_type)
-kubectl apply -f deployments/k8s/rule-executor-application.yaml
-kubectl apply -f deployments/k8s/rule-executor-auth.yaml
-
-# Note: duplicate rule-executor-<logtype>.yaml for each additional log_type
-
-## IDEs
-
-Of course, you can use any IDE you wish but using Visual Studio Code is used by the devlopement team and a dev container is given to ease up the process:
-
-With the terminal, the text editor is a developer's most important tool. Everyone has their preferences, but if you're just getting started and looking for something simple that works, Visual Studio Code is a pretty good option.
-
-Go ahead, download it and install it.
-
-I also recommend install the following visual studio plugins: Gitlens, Terraform, Azure, Ansible, Python
-
-### Dev Containers
-
-Dev Containers have become our preferred deployment and developement method. In short, with Docker installed, open `Code` and install the [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
-
-See the following for more detail on Dev Containers, including Docker troubleshooting:
-[Developing inside a Container using Visual Studio Code Remote Development](https://code.visualstudio.com/docs/devcontainers/containers#_installation)
-
-## Formatting
-
-Git hook scripts are useful for identifying simple issues before submission to code review. We run our hooks on every commit to automatically point out issues in code such as missing semicolons, trailing whitespace, and debug statements. By pointing these issues out before code review, this allows a code reviewer to focus on the architecture of a change while not wasting time with trivial style nitpicks.
-
-Run pre-commit install to set up the git hook scripts:
-
-``` bash
-# pre-commit install
-pre-commit installed at .git/hooks/pre-commit
+```bash
+go build ./...                       # build everything
+go build ./cmd/rule_executor         # build one service
+go test ./...                        # run all tests
+go test ./pkg/rules/...              # tests for one package
+go test ./pkg/rules -run TestName    # a single test by name
+staticcheck ./...                    # static analysis (matches CI)
+pre-commit run --all-files           # hooks: trailing whitespace, YAML lint, commit-msg
 ```
 
-If you are contributing, make sure to run `trunk fmt` before making a PR.
+Some tests build plugin binaries at runtime (e.g. `pkg/rules/executor_test.go`), so a Go
+toolchain must be on `PATH`. If a test fails with a missing-binary error, look for a
+`testdata/` directory with a `go build` step in the test setup.
 
-## Anything else
+## Running on Kubernetes
 
-If you discover anything confusing or missing while developing, feel free to:
+Local clusters run on Podman or Minikube. See **[deployments/README.md](deployments/README.md)**
+for the full prerequisites and apply sequence; in outline:
 
-- Create an issue or PR to improve these docs so others can benefit too.
-- You can directly ping me as well.
+```bash
+kubectl apply -f deployments/kafka/    # Kafka cluster + topics
+kubectl apply -f deployments/blink/    # services + shared config
+kubectl apply -f deployments/keda/     # autoscaling (optional)
+```
+
+A Helm chart is also available under `deployments/helm/blink`.
+
+## IDEs & Dev Containers
+
+Use any editor you like. The team uses VS Code, and a Dev Container is provided to give a
+ready-made environment: with Docker installed, open the repo in VS Code and install the
+[Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers),
+then "Reopen in Container". See
+[Developing inside a Container](https://code.visualstudio.com/docs/devcontainers/containers).
+
+## Formatting & hooks
+
+Install the git hooks once so style/lint issues are caught before review:
+
+```bash
+pre-commit install
+```
+
+Run `gofmt` and `staticcheck ./...` before opening a PR.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
