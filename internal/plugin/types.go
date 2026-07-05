@@ -28,9 +28,15 @@ type PluginMetadata struct {
 func (m PluginMetadata) Metadata() PluginMetadata { return m }
 func (m *PluginMetadata) SetName(name string)     { m.Name = name }
 
-// Syncable is the type constraint for all plugin types managed by a Manager.
+// Checksum satisfies Syncable for the *Metadata config types, which have no binary checksum; runtime
+// plugin handles override it with the loaded binary's hash.
+func (m PluginMetadata) Checksum() string { return "" }
+
+// Syncable is the type constraint for all plugin types managed by a Manager. Checksum distinguishes
+// binary versions: runtime handles return the loaded binary's hash, the *Metadata config types "".
 type Syncable interface {
 	Metadata() PluginMetadata
+	Checksum() string
 }
 
 // PluginLifecycle provides the health-check and graceful-shutdown primitives the Manager uses in ping loops and kill paths.
