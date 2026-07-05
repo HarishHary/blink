@@ -46,7 +46,7 @@ func (a *Alert) MergeByKeys() []string {
 	if len(a.OverrideMergeByKeys) > 0 {
 		return a.OverrideMergeByKeys
 	}
-	return a.Rule.MergeByKeys()
+	return a.Rule.MergeByKeys
 }
 
 // Creates a new Alert
@@ -58,8 +58,8 @@ func NewAlert(rule *rules.RuleMetadata, event events.Event, optFns ...AlertOptio
 		Event:      event,
 		Rule:       rule,
 		Staged:     false,
-		Severity:   rule.Severity(),
-		Confidence: rule.Confidence(),
+		Severity:   rule.Severity,
+		Confidence: rule.Confidence,
 	}
 	for _, optFn := range optFns {
 		optFn(alert)
@@ -158,8 +158,8 @@ func (a *Alert) OutputDict() map[string]any {
 		"id":               a.Id,
 		"log_source":       a.LogSource,
 		"log_type":         a.LogType,
-		"outputs":          a.Rule.Dispatchers(),
-		"formatters":       a.Rule.Formatters(),
+		"outputs":          a.Rule.Dispatchers,
+		"formatters":       a.Rule.Formatters,
 		"event":            a.Event,
 		"rule_description": a.Rule.Description,
 		"rule_name":        a.Rule.Name,
@@ -204,7 +204,7 @@ func (a *Alert) CanMerge(other *Alert) bool {
 		return false
 	}
 
-	if !helpers.EqualStringSlices(a.MergeByKeys(), other.Rule.MergeByKeys()) {
+	if !helpers.EqualStringSlices(a.MergeByKeys(), other.Rule.MergeByKeys) {
 		return false
 	}
 
@@ -241,9 +241,9 @@ func (a *Alert) MergePartitionKey() string {
 func (a *Alert) RemainingOutputs(requiredOutputs []string) []string {
 	var outputsToSendNow []string
 	if a.MergeEnabled() {
-		outputsToSendNow = helpers.Intersect(a.Rule.Dispatchers(), requiredOutputs)
+		outputsToSendNow = helpers.Intersect(a.Rule.Dispatchers, requiredOutputs)
 	} else {
-		outputsToSendNow = a.Rule.Dispatchers()
+		outputsToSendNow = a.Rule.Dispatchers
 	}
 	return helpers.Difference(outputsToSendNow, a.OutputsSent)
 }
@@ -259,7 +259,7 @@ func (a *Alert) RecordKey() map[string]string {
 
 // Signal reports whether this alert qualifies as a signal (the rule opts in and confidence meets its threshold).
 func (a *Alert) Signal() bool {
-	return a.Rule.Signal() && a.Rule.SignalThreshold() <= a.Confidence
+	return a.Rule.Signal && a.Rule.SignalThreshold <= a.Confidence
 }
 
 // RiskScore computes the alert's risk score from its confidence and severity.

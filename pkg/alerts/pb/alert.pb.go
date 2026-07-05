@@ -22,6 +22,67 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// Observable is a static field the rule surfaces in generated alerts.
+type Observable struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Description   string                 `protobuf:"bytes,2,opt,name=description,proto3" json:"description,omitempty"`
+	Aggregation   bool                   `protobuf:"varint,3,opt,name=aggregation,proto3" json:"aggregation,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Observable) Reset() {
+	*x = Observable{}
+	mi := &file_pkg_alerts_pb_alert_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Observable) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Observable) ProtoMessage() {}
+
+func (x *Observable) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_alerts_pb_alert_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Observable.ProtoReflect.Descriptor instead.
+func (*Observable) Descriptor() ([]byte, []int) {
+	return file_pkg_alerts_pb_alert_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *Observable) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *Observable) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *Observable) GetAggregation() bool {
+	if x != nil {
+		return x.Aggregation
+	}
+	return false
+}
+
 // RuleMetadata carries rule configuration in the alert wire format.
 // Mirrors pkg/rules.RuleMetadata with additions for display_name, references, and risk_score.
 type RuleMetadata struct {
@@ -48,13 +109,14 @@ type RuleMetadata struct {
 	DisplayName     string                 `protobuf:"bytes,20,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
 	References      []string               `protobuf:"bytes,21,rep,name=references,proto3" json:"references,omitempty"`
 	RiskScore       string                 `protobuf:"bytes,22,opt,name=risk_score,json=riskScore,proto3" json:"risk_score,omitempty"`
+	Observables     []*Observable          `protobuf:"bytes,23,rep,name=observables,proto3" json:"observables,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
 
 func (x *RuleMetadata) Reset() {
 	*x = RuleMetadata{}
-	mi := &file_pkg_alerts_pb_alert_proto_msgTypes[0]
+	mi := &file_pkg_alerts_pb_alert_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -66,7 +128,7 @@ func (x *RuleMetadata) String() string {
 func (*RuleMetadata) ProtoMessage() {}
 
 func (x *RuleMetadata) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_alerts_pb_alert_proto_msgTypes[0]
+	mi := &file_pkg_alerts_pb_alert_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -79,7 +141,7 @@ func (x *RuleMetadata) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuleMetadata.ProtoReflect.Descriptor instead.
 func (*RuleMetadata) Descriptor() ([]byte, []int) {
-	return file_pkg_alerts_pb_alert_proto_rawDescGZIP(), []int{0}
+	return file_pkg_alerts_pb_alert_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *RuleMetadata) GetId() string {
@@ -236,6 +298,13 @@ func (x *RuleMetadata) GetRiskScore() string {
 	return ""
 }
 
+func (x *RuleMetadata) GetObservables() []*Observable {
+	if x != nil {
+		return x.Observables
+	}
+	return nil
+}
+
 // Alert is the Kafka wire format for a single alert travelling through the
 // tuner → enricher → formatter → dispatcher pipeline.
 type Alert struct {
@@ -263,7 +332,7 @@ type Alert struct {
 
 func (x *Alert) Reset() {
 	*x = Alert{}
-	mi := &file_pkg_alerts_pb_alert_proto_msgTypes[1]
+	mi := &file_pkg_alerts_pb_alert_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -275,7 +344,7 @@ func (x *Alert) String() string {
 func (*Alert) ProtoMessage() {}
 
 func (x *Alert) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_alerts_pb_alert_proto_msgTypes[1]
+	mi := &file_pkg_alerts_pb_alert_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -288,7 +357,7 @@ func (x *Alert) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Alert.ProtoReflect.Descriptor instead.
 func (*Alert) Descriptor() ([]byte, []int) {
-	return file_pkg_alerts_pb_alert_proto_rawDescGZIP(), []int{1}
+	return file_pkg_alerts_pb_alert_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *Alert) GetId() string {
@@ -414,7 +483,12 @@ var File_pkg_alerts_pb_alert_proto protoreflect.FileDescriptor
 
 const file_pkg_alerts_pb_alert_proto_rawDesc = "" +
 	"\n" +
-	"\x19pkg/alerts/pb/alert.proto\x12\x06alerts\x1a\x1cgoogle/protobuf/struct.proto\"\xae\x05\n" +
+	"\x19pkg/alerts/pb/alert.proto\x12\x06alerts\x1a\x1cgoogle/protobuf/struct.proto\"d\n" +
+	"\n" +
+	"Observable\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12 \n" +
+	"\vdescription\x18\x02 \x01(\tR\vdescription\x12 \n" +
+	"\vaggregation\x18\x03 \x01(\bR\vaggregation\"\xe4\x05\n" +
 	"\fRuleMetadata\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12 \n" +
@@ -446,7 +520,8 @@ const file_pkg_alerts_pb_alert_proto_rawDesc = "" +
 	"references\x18\x15 \x03(\tR\n" +
 	"references\x12\x1d\n" +
 	"\n" +
-	"risk_score\x18\x16 \x01(\tR\triskScore\"\xcd\x04\n" +
+	"risk_score\x18\x16 \x01(\tR\triskScore\x124\n" +
+	"\vobservables\x18\x17 \x03(\v2\x12.alerts.ObservableR\vobservables\"\xcd\x04\n" +
 	"\x05Alert\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1a\n" +
 	"\battempts\x18\x02 \x01(\x05R\battempts\x12\x18\n" +
@@ -483,20 +558,22 @@ func file_pkg_alerts_pb_alert_proto_rawDescGZIP() []byte {
 	return file_pkg_alerts_pb_alert_proto_rawDescData
 }
 
-var file_pkg_alerts_pb_alert_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_pkg_alerts_pb_alert_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_pkg_alerts_pb_alert_proto_goTypes = []any{
-	(*RuleMetadata)(nil),    // 0: alerts.RuleMetadata
-	(*Alert)(nil),           // 1: alerts.Alert
-	(*structpb.Struct)(nil), // 2: google.protobuf.Struct
+	(*Observable)(nil),      // 0: alerts.Observable
+	(*RuleMetadata)(nil),    // 1: alerts.RuleMetadata
+	(*Alert)(nil),           // 2: alerts.Alert
+	(*structpb.Struct)(nil), // 3: google.protobuf.Struct
 }
 var file_pkg_alerts_pb_alert_proto_depIdxs = []int32{
-	2, // 0: alerts.Alert.event:type_name -> google.protobuf.Struct
-	0, // 1: alerts.Alert.rule:type_name -> alerts.RuleMetadata
-	2, // [2:2] is the sub-list for method output_type
-	2, // [2:2] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	0, // 0: alerts.RuleMetadata.observables:type_name -> alerts.Observable
+	3, // 1: alerts.Alert.event:type_name -> google.protobuf.Struct
+	1, // 2: alerts.Alert.rule:type_name -> alerts.RuleMetadata
+	3, // [3:3] is the sub-list for method output_type
+	3, // [3:3] is the sub-list for method input_type
+	3, // [3:3] is the sub-list for extension type_name
+	3, // [3:3] is the sub-list for extension extendee
+	0, // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_pkg_alerts_pb_alert_proto_init() }
@@ -510,7 +587,7 @@ func file_pkg_alerts_pb_alert_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_alerts_pb_alert_proto_rawDesc), len(file_pkg_alerts_pb_alert_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   3,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
