@@ -5,15 +5,11 @@ package rules
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"regexp"
-	"strings"
 
 	"github.com/harishhary/blink/internal/config"
 	"github.com/harishhary/blink/internal/logger"
 	"github.com/harishhary/blink/internal/plugin"
-	"go.yaml.in/yaml/v4"
 )
 
 // ValidationError is an alias so callers in this package use the short name.
@@ -28,19 +24,14 @@ type Loader struct {
 }
 
 func (r Loader) Parse(path string) (*RuleMetadata, error) {
-	data, err := os.ReadFile(path)
+	cfg, err := r.BaseLoader.Parse(path)
 	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", path, err)
+		return nil, err
 	}
-	var cfg RuleMetadata
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
-	}
-	cfg.SetName(strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)))
 	if err := cfg.resolveScoring(); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
-	return &cfg, nil
+	return cfg, nil
 }
 
 // ParseSpec is the disk-less counterpart to Parse for snapshot-sourced rules: it

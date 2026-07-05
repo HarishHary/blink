@@ -2,11 +2,12 @@ package rules
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 
 	"github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/handshake"
@@ -66,17 +67,14 @@ type server struct {
 	rule Plugin
 }
 
-func (s *server) Init(_ context.Context, _ *rpc_rules.Empty) (*rpc_rules.Empty, error) {
-	return &rpc_rules.Empty{}, s.rule.Init()
+func (s *server) Init(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	return &emptypb.Empty{}, s.rule.Init()
 }
 
 func (s *server) EvaluateBatch(ctx context.Context, req *rpc_rules.EvaluateBatchRequest) (*rpc_rules.EvaluateBatchResponse, error) {
 	results := make([]*rpc_rules.EventResult, 0, len(req.GetEvents()))
 	for _, ev := range req.GetEvents() {
-		var event events.Event
-		if err := json.Unmarshal(ev.GetJson(), &event); err != nil {
-			return nil, err
-		}
+		event := events.Event(ev.AsMap())
 
 		if !s.rule.AlertReqSubkeys(event) {
 			results = append(results, &rpc_rules.EventResult{Matched: false})
@@ -95,8 +93,8 @@ func (s *server) EvaluateBatch(ctx context.Context, req *rpc_rules.EvaluateBatch
 			result.Severity = s.rule.AlertSeverity(event)
 			result.MergeByKeys = s.rule.AlertMergeByKeys(event)
 			if c := s.rule.AlertContext(event); len(c) > 0 {
-				if b, err := json.Marshal(c); err == nil {
-					result.ContextJson = b
+				if st, err := structpb.NewStruct(c); err == nil {
+					result.Context = st
 				}
 			}
 		}
@@ -105,12 +103,12 @@ func (s *server) EvaluateBatch(ctx context.Context, req *rpc_rules.EvaluateBatch
 	return &rpc_rules.EvaluateBatchResponse{Results: results}, nil
 }
 
-func (s *server) Ping(_ context.Context, _ *rpc_rules.Empty) (*rpc_rules.Empty, error) {
-	return &rpc_rules.Empty{}, nil
+func (s *server) Ping(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	return &emptypb.Empty{}, nil
 }
 
-func (s *server) Shutdown(_ context.Context, _ *rpc_rules.Empty) (*rpc_rules.Empty, error) {
-	return &rpc_rules.Empty{}, s.rule.Shutdown()
+func (s *server) Shutdown(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	return &emptypb.Empty{}, s.rule.Shutdown()
 }
 
 type pluginImpl struct {

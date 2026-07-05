@@ -10,7 +10,7 @@ func DefaultSubKeysInEvent(rule *RuleMetadata, event events.Event) bool {
 	if !rule.Enabled {
 		return false
 	}
-	for _, k := range rule.ReqSubkeys() {
+	for _, k := range rule.ReqSubkeys {
 		if event.Get(k, nil) == nil {
 			return false
 		}
@@ -26,11 +26,11 @@ func RulesForLogTypeIn(rules []*RuleMetadata, logType string) []*RuleMetadata {
 		if !cfg.Enabled {
 			continue
 		}
-		if len(cfg.LogTypesField) == 0 {
+		if len(cfg.LogTypes) == 0 {
 			result = append(result, cfg)
 			continue
 		}
-		for _, lt := range cfg.LogTypesField {
+		for _, lt := range cfg.LogTypes {
 			if lt == logType {
 				result = append(result, cfg)
 				break
