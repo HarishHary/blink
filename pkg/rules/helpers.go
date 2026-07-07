@@ -2,6 +2,8 @@
 package rules
 
 import (
+	"slices"
+
 	"github.com/harishhary/blink/pkg/events"
 )
 
@@ -30,11 +32,8 @@ func RulesForLogTypeIn(rules []*RuleMetadata, logType string) []*RuleMetadata {
 			result = append(result, cfg)
 			continue
 		}
-		for _, lt := range cfg.LogTypes {
-			if lt == logType {
-				result = append(result, cfg)
-				break
-			}
+		if slices.Contains(cfg.LogTypes, logType) {
+			result = append(result, cfg)
 		}
 	}
 	return result

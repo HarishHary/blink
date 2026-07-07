@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"slices"
 	"time"
 
 	goplugin "github.com/hashicorp/go-plugin"
@@ -138,10 +139,7 @@ func (m *PluginExecutor[T]) startWithBackoff(path, hash string) error {
 			m.failures[path] = f
 		}
 		f.count++
-		backoff := time.Duration(10<<min(f.count-1, 5)) * time.Second // 10s→320s, cap 5min
-		if backoff > 5*time.Minute {
-			backoff = 5 * time.Minute
-		}
+		backoff := min(time.Duration(10<<min(f.count-1, 5))*time.Second, 5*time.Minute) // 10s→320s, cap 5min
 		f.nextRetry = time.Now().Add(backoff)
 		m.mu.Unlock()
 		m.logger.ErrorF("%s %s start failed (attempt %d), next retry in %v", m.adapter.PluginKey(), path, f.count, backoff)
@@ -270,14 +268,7 @@ func (m *PluginExecutor[T]) pingLoop(handle *PluginHandle) {
 			m.mu.RLock()
 			current := m.plugin_handles[handle.BinPath]
 			m.mu.RUnlock()
-			active := false
-			for _, h := range current {
-				if h == handle {
-					active = true
-					break
-				}
-			}
-			if !active {
+			if !slices.Contains(current, handle) {
 				return
 			}
 
@@ -292,14 +283,7 @@ func (m *PluginExecutor[T]) pingLoop(handle *PluginHandle) {
 				group := m.plugin_handles[handle.BinPath]
 				m.mu.RUnlock()
 				// Guard: if our handle is no longer in the group, update() replaced it mid-Ping; the new workers' pingLoops own future restarts.
-				inGroup := false
-				for _, h := range group {
-					if h == handle {
-						inGroup = true
-						break
-					}
-				}
-				if !inGroup {
+				if !slices.Contains(group, handle) {
 					return
 				}
 				if restartErr := m.restart(handle.BinPath, group); restartErr != nil {

@@ -115,7 +115,7 @@ func setFieldWithEnvVar(field reflect.Value, env string, optional bool) errors.E
 	case kind == reflect.String:
 		field.SetString(envValue)
 
-	case field.CanConvert(reflect.TypeOf(&url.URL{})):
+	case field.CanConvert(reflect.TypeFor[*url.URL]()):
 		url, err := url.Parse(envValue)
 		if err != nil {
 			return errors.NewE(err)

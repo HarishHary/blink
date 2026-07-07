@@ -3,6 +3,7 @@ package enrichments
 import (
 	"context"
 	"encoding/json"
+	"maps"
 
 	"github.com/harishhary/blink/internal/config"
 	"github.com/harishhary/blink/internal/errors"
@@ -71,9 +72,7 @@ func (r *rpcEnrichment) Enrich(ctx context.Context, batch []*alerts.Alert) error
 		if err := json.Unmarshal(raw, &enriched); err != nil {
 			return errors.New(err)
 		}
-		for k, v := range enriched {
-			batch[i].Event[k] = v
-		}
+		maps.Copy(batch[i].Event, enriched)
 	}
 	return nil
 }

@@ -31,10 +31,7 @@ type VersionedPool[T any] struct {
 
 // newVersionedPool creates a pool seeded with plugins; capacity is max(maxProcs, len(plugins)).
 func newVersionedPool[T any](key PoolKey, plugins []T, maxProcs int) *VersionedPool[T] {
-	size := maxProcs
-	if size < len(plugins) {
-		size = len(plugins)
-	}
+	size := max(maxProcs, len(plugins))
 	p := &VersionedPool[T]{
 		key:   key,
 		slots: make(chan T, size),
