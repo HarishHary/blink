@@ -2,11 +2,12 @@ package enricher
 
 import (
 	"context"
-	"maps"
 	"sync"
 	"time"
 
 	"github.com/harishhary/blink/internal/brokers"
+	"github.com/harishhary/blink/internal/configuration"
+	svcctx "github.com/harishhary/blink/internal/context"
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/logger"
 	"github.com/harishhary/blink/internal/services"
@@ -38,37 +39,37 @@ type alertState struct {
 
 // EnricherService reads alerts from Kafka, enriches them, and writes to the formatter topic.
 type EnricherService struct {
-	*logger.Logger
+	svcctx.ServiceContext
 	reader brokers.Reader
 	writer brokers.Writer
 	dlq    brokers.Writer
 	pool   *enrichments.Pool
 }
 
-// Config is the explicit set of dependencies NewEnricherService needs, injected by main.
-// Config's topic fields are populated from the environment by main (which embeds it);
-// Broker is injected after load.
-type Config struct {
-	Broker         brokers.Broker
-	EnricherTopic  string `env:"KAFKA_TOPIC_ENRICHER"`
-	EnricherGroup  string `env:"KAFKA_GROUP_ENRICHER"`
-	FormatterTopic string `env:"KAFKA_TOPIC_FORMATTER"`
-	DLQTopic       string `env:"KAFKA_TOPIC_ENRICHER_DLQ,optional"` // optional; empty = no dead-letter queue
-}
+func NewEnricherService(pool *enrichments.Pool) (*EnricherService, error) {
+	serviceContext := svcctx.New("BLINK-ALERT-ENRICHER - ENRICH")
+	if err := configuration.LoadFromEnvironment(&serviceContext); err != nil {
+		return nil, err
+	}
+	serviceContext.Logger = logger.New(serviceContext.Name(), "dev")
 
-func NewEnricherService(c Config, pool *enrichments.Pool) *EnricherService {
+	cfg := serviceContext.Configuration()
+	b := brokers.NewKafkaBroker(cfg.Kafka)
+	reader := b.NewReader(cfg.Topics.EnricherTopic, cfg.Topics.EnricherGroup)
+	writer := b.NewWriter(cfg.Topics.FormatterTopic)
+
 	var dlq brokers.Writer
-	if c.DLQTopic != "" {
-		dlq = c.Broker.NewWriter(c.DLQTopic)
+	if cfg.Topics.EnricherDLQTopic != "" {
+		dlq = b.NewWriter(cfg.Topics.EnricherDLQTopic)
 	}
 
 	return &EnricherService{
-		Logger: logger.New("alert-enricher", "dev"),
-		reader: c.Broker.NewReader(c.EnricherTopic, c.EnricherGroup),
-		writer: c.Broker.NewWriter(c.FormatterTopic),
-		dlq:    dlq,
-		pool:   pool,
-	}
+		ServiceContext: serviceContext,
+		reader:         reader,
+		writer:         writer,
+		dlq:            dlq,
+		pool:           pool,
+	}, nil
 }
 
 func (service *EnricherService) Name() string { return "alert-enricher" }
@@ -120,7 +121,7 @@ func (service *EnricherService) processBatch(ctx context.Context, msgs []brokers
 		for _, name := range s.alert.EnrichmentsApplied {
 			applied[name] = struct{}{}
 		}
-		for _, name := range s.alert.Rule.Enrichments {
+		for _, name := range s.alert.Rule.Enrichments() {
 			if _, done := applied[name]; done {
 				continue
 			}
@@ -136,16 +137,10 @@ func (service *EnricherService) processBatch(ctx context.Context, msgs []brokers
 		go func(name string, idxs []int) {
 			defer wg.Done()
 
-			// Copy under the lock (a bare read of the shared alert would race the locked writers
-			// below); clone Event because Enrich writes into it. Results merge back serially.
-			mu.Lock()
 			batch := make([]*alerts.Alert, len(idxs))
 			for j, idx := range idxs {
-				cp := *states[idx].alert
-				cp.Event = maps.Clone(cp.Event)
-				batch[j] = &cp
+				batch[j] = states[idx].alert
 			}
-			mu.Unlock()
 
 			cctx, cancel := context.WithTimeout(ctx, defaultEnrichmentTimeout)
 			defer cancel()
@@ -173,7 +168,6 @@ func (service *EnricherService) processBatch(ctx context.Context, msgs []brokers
 						service.Error(errs[j])
 					} else {
 						enrichmentsApplied.WithLabelValues(name).Inc()
-						maps.Copy(states[idx].alert.Event, batch[j].Event)
 						states[idx].alert.EnrichmentsApplied = append(states[idx].alert.EnrichmentsApplied, name)
 					}
 				}
@@ -187,7 +181,7 @@ func (service *EnricherService) processBatch(ctx context.Context, msgs []brokers
 		if s.deadLetter {
 			s.alert.Attempts++
 			if s.alert.Attempts >= services.MaxPluginAttempts || service.dlq == nil {
-				service.Info("alert %s passed through after %d attempts (enrichment unavailable)", s.alert.Id, s.alert.Attempts)
+				service.Info("alert %s passed through after %d attempts (enrichment unavailable)", s.alert.AlertID, s.alert.Attempts)
 				s.alert.EnrichmentsApplied = nil
 				// fall through to write
 			} else {

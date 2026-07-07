@@ -2,12 +2,12 @@ package executor
 
 import (
 	"context"
-	"maps"
 	"sync"
 	"time"
 
 	"github.com/harishhary/blink/internal/brokers"
-	"github.com/harishhary/blink/internal/config"
+	"github.com/harishhary/blink/internal/configuration"
+	ctx "github.com/harishhary/blink/internal/context"
 	"github.com/harishhary/blink/internal/errors"
 	execpb "github.com/harishhary/blink/internal/exec/pb"
 	"github.com/harishhary/blink/internal/logger"
@@ -46,73 +46,64 @@ var (
 	ruleMatches = promauto.NewCounterVec(prometheus.CounterOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "rule_matches_total"}, []string{"rule"})
 )
 
-// ruleEntry groups the events (and the first event's tenantID for canary rollout)
+// ruleEntry groups the events (and the first event's tenantID for canary routing)
 // that should be evaluated against a single rule within one Kafka batch.
 type ruleEntry struct {
 	meta     *rules.RuleMetadata
 	events   []events.Event // subset of batch events eligible for this rule
-	tenantID string         // used as canary rollout key; taken from first event
+	tenantID string         // used as canary routing key; taken from first event
 }
 
-// Reads ExecMessages from blink-exec, applies the rolled out rules, and writes alerts to blink-merger.
+// Reads ExecMessages from blink-exec, applies the routed rules, and writes alerts to blink-merger.
 type ExecutorService struct {
-	*logger.Logger
+	ctx.ServiceContext
 	reader     brokers.Reader
 	writer     brokers.Writer
 	pool       *rules.Pool
-	cfg        config.Source[*rules.RuleMetadata]
+	cfgWatcher *rules.RuleConfigWatcher
 	sem        *semaphore.Weighted
 	batchSize  int
 	timeoutSec int
 }
 
-// Config is the explicit set of dependencies NewExecutorService needs. The composition
-// root (cmd/rule_executor/main) loads config once and injects these, rather than the
-// component reaching into a shared ServiceContext / re-loading the whole environment.
-// Config's topic fields (and the embedded Tuning knobs) are populated from the environment
-// by main (which embeds it); Broker is injected after load.
-type Config struct {
-	Broker      brokers.Broker
-	ExecTopic   string `env:"KAFKA_TOPIC_EXEC"`
-	ExecGroup   string `env:"KAFKA_GROUP_EXEC"`
-	MergerTopic string `env:"KAFKA_TOPIC_MERGER"`
-	Tuning      Tuning
-}
+func NewExecutorService(pool *rules.Pool, cfgWatcher *rules.RuleConfigWatcher) (*ExecutorService, error) {
+	serviceContext := ctx.New("BLINK-RULE-EXECUTOR - EXEC")
+	if err := configuration.LoadFromEnvironment(&serviceContext); err != nil {
+		return nil, err
+	}
+	serviceContext.Logger = logger.New(serviceContext.Name(), "dev")
 
-// Tuning holds the executor's performance knobs, loaded from EXECUTOR_* env vars.
-type Tuning struct {
-	// BatchSize is the maximum number of events to read in one batch.
-	BatchSize int `env:"EXECUTOR_BATCH_SIZE,optional"`
-	// Concurrency is the max number of parallel rule evaluations.
-	Concurrency int `env:"EXECUTOR_CONCURRENCY,optional"`
-	// TimeoutSec is the per-event evaluation timeout in seconds.
-	TimeoutSec int `env:"EXECUTOR_TIMEOUT_SEC,optional"`
-}
+	b := brokers.NewKafkaBroker(serviceContext.Configuration().Kafka)
+	reader := b.NewReader(
+		serviceContext.Configuration().Topics.ExecTopic,
+		serviceContext.Configuration().Topics.ExecGroup,
+	)
+	writer := b.NewWriter(serviceContext.Configuration().Topics.MergerTopic)
 
-func NewExecutorService(c Config, pool *rules.Pool, cfg config.Source[*rules.RuleMetadata]) *ExecutorService {
-	bs := c.Tuning.BatchSize
+	ecfg := serviceContext.Configuration().Executor
+	bs := ecfg.BatchSize
 	if bs <= 0 {
 		bs = 50
 	}
-	conc := c.Tuning.Concurrency
+	conc := ecfg.Concurrency
 	if conc <= 0 {
 		conc = 4
 	}
-	to := c.Tuning.TimeoutSec
+	to := ecfg.TimeoutSec
 	if to <= 0 {
 		to = 10
 	}
 
 	return &ExecutorService{
-		Logger:     logger.New("rule-executor", "dev"),
-		reader:     c.Broker.NewReader(c.ExecTopic, c.ExecGroup),
-		writer:     c.Broker.NewWriter(c.MergerTopic),
-		pool:       pool,
-		cfg:        cfg,
-		sem:        semaphore.NewWeighted(int64(conc)),
-		batchSize:  bs,
-		timeoutSec: to,
-	}
+		ServiceContext: serviceContext,
+		reader:         reader,
+		writer:         writer,
+		pool:           pool,
+		cfgWatcher:     cfgWatcher,
+		sem:            semaphore.NewWeighted(int64(conc)),
+		batchSize:      bs,
+		timeoutSec:     to,
+	}, nil
 }
 
 func (service *ExecutorService) Name() string { return "rule-executor" }
@@ -134,11 +125,11 @@ func (service *ExecutorService) Run(ctx context.Context) errors.Error {
 		batchSizeHist.Observe(float64(len(msgs)))
 		eventsIn.Add(float64(len(msgs)))
 
-		// Resolve the rule set once per batch so all concurrent goroutines evaluate
-		// against the same generation of control-plane config (cached by generation).
-		ruleSet := service.cfg.Primaries()
+		// Snapshot the registry once per batch so all concurrent goroutines
+		// evaluate against the same generation of rule config.
+		snapshot := service.cfgWatcher.Current()
 
-		service.processBatch(ctx, msgs, ruleSet)
+		service.processBatch(ctx, msgs, snapshot)
 
 		startCommit := time.Now()
 		if err := service.reader.CommitMessages(ctx, msgs...); err != nil {
@@ -158,7 +149,7 @@ func (service *ExecutorService) Run(ctx context.Context) errors.Error {
 //
 // gRPC calls = len(distinct eligible rules), regardless of batch size.
 // Previously: gRPC calls = len(msgs) × len(rules per event).
-func (service *ExecutorService) processBatch(ctx context.Context, msgs []brokers.Message, ruleSet []*rules.RuleMetadata) {
+func (service *ExecutorService) processBatch(ctx context.Context, msgs []brokers.Message, snapshot *rules.RuleRegistry) {
 	// Step 1: decode messages and index events by rule.
 	byRule := make(map[string]*ruleEntry)
 	decodedAny := false
@@ -178,7 +169,7 @@ func (service *ExecutorService) processBatch(ctx context.Context, msgs []brokers
 			continue
 		}
 
-		metaList := service.eligibleRules(ruleSet, lt, msg.GetRuleIds())
+		metaList := service.eligibleRules(snapshot, lt, msg.GetRuleIds())
 		if len(metaList) == 0 {
 			eventsNoRules.Inc()
 			continue
@@ -191,7 +182,7 @@ func (service *ExecutorService) processBatch(ctx context.Context, msgs []brokers
 			if !meta.Enabled {
 				continue
 			}
-			if len(meta.ReqSubkeys) > 0 && !rules.DefaultSubKeysInEvent(meta, event) {
+			if len(meta.ReqSubkeys()) > 0 && !rules.DefaultSubKeysInEvent(meta, event) {
 				continue
 			}
 			e, exists := byRule[meta.Id]
@@ -252,7 +243,7 @@ func (service *ExecutorService) evaluateRule(ctx context.Context, entry *ruleEnt
 		ruleMatches.WithLabelValues(entry.meta.Name).Inc()
 		alertsOut.Inc()
 
-		alert, err := alerts.NewAlert(entry.meta, mergeEventContext(entry.events[i], result.Context))
+		alert, err := alerts.NewAlert(entry.meta, entry.events[i])
 		if err != nil {
 			service.Error(err)
 			continue
@@ -268,6 +259,9 @@ func (service *ExecutorService) evaluateRule(ctx context.Context, entry *ruleEnt
 			} else {
 				service.Error(errors.NewF("rule %s returned invalid severity %q: %v", entry.meta.Name, result.Severity, err))
 			}
+		}
+		for k, v := range result.Context {
+			alert.Event[k] = v
 		}
 
 		payload, _ := alerts.Marshal(alert)
@@ -285,8 +279,8 @@ func (service *ExecutorService) evaluateRule(ctx context.Context, entry *ruleEnt
 }
 
 // eligibleRules returns the rule metadata to evaluate for this event.
-func (service *ExecutorService) eligibleRules(ruleSet []*rules.RuleMetadata, logType string, ruleIDs []string) []*rules.RuleMetadata {
-	all := rules.RulesForLogTypeIn(ruleSet, logType)
+func (service *ExecutorService) eligibleRules(snapshot *rules.RuleRegistry, logType string, ruleIDs []string) []*rules.RuleMetadata {
+	all := rules.RulesForLogType(snapshot, logType)
 	if len(ruleIDs) == 0 {
 		return all
 	}
@@ -303,18 +297,4 @@ func (service *ExecutorService) eligibleRules(ruleSet []*rules.RuleMetadata, log
 		}
 	}
 	return result
-}
-
-// mergeEventContext returns a fresh event carrying the original event's fields plus the plugin's
-// context, WITHOUT mutating the original. entry.events[i] is shared across every rule that matched
-// the event in this batch (and is read concurrently by the shadow copy), so writing into it would
-// race; a new map keeps it immutable. Returns the original unchanged when ctx is empty (no alloc).
-func mergeEventContext(event events.Event, ctx map[string]any) events.Event {
-	if len(ctx) == 0 {
-		return event
-	}
-	merged := make(events.Event, len(event)+len(ctx))
-	maps.Copy(merged, event)
-	maps.Copy(merged, ctx)
-	return merged
 }

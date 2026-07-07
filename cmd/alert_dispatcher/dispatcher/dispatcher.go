@@ -2,9 +2,12 @@ package dispatcher
 
 import (
 	"context"
+	"log"
 	"time"
 
 	"github.com/harishhary/blink/internal/brokers"
+	"github.com/harishhary/blink/internal/configuration"
+	svcctx "github.com/harishhary/blink/internal/context"
 	"github.com/harishhary/blink/internal/dispatchers"
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/logger"
@@ -23,24 +26,27 @@ var (
 )
 
 type DispatcherService struct {
-	*logger.Logger
+	svcctx.ServiceContext
 	reader         brokers.Reader
 	dispatcherRepo *dispatchers.DispatcherRepository
 }
 
-// Config is the explicit set of dependencies New needs, injected by main.
-type Config struct {
-	Broker          brokers.Broker
-	DispatcherTopic string
-	DispatcherGroup string
-}
-
-func New(c Config, dispatcherRepo *dispatchers.DispatcherRepository) *DispatcherService {
-	return &DispatcherService{
-		Logger:         logger.New("alert-dispatcher", "dev"),
-		reader:         c.Broker.NewReader(c.DispatcherTopic, c.DispatcherGroup),
-		dispatcherRepo: dispatcherRepo,
+func New(dispatcherRepo *dispatchers.DispatcherRepository) (*DispatcherService, error) {
+	serviceContext := svcctx.New("BLINK-ALERT-DISPATCHER - DISPATCH")
+	if err := configuration.LoadFromEnvironment(&serviceContext); err != nil {
+		return nil, err
 	}
+	serviceContext.Logger = logger.New(serviceContext.Name(), "dev")
+
+	cfg := serviceContext.Configuration()
+	b := brokers.NewKafkaBroker(cfg.Kafka)
+	reader := b.NewReader(cfg.Topics.DispatcherTopic, cfg.Topics.DispatcherGroup)
+
+	return &DispatcherService{
+		ServiceContext: serviceContext,
+		reader:         reader,
+		dispatcherRepo: dispatcherRepo,
+	}, nil
 }
 
 func (service *DispatcherService) Name() string { return "alert-dispatcher" }
@@ -64,9 +70,9 @@ func (service *DispatcherService) Run(ctx context.Context) errors.Error {
 				continue
 			}
 			alertsIn.Inc()
-			service.Info("dispatching alert %s", alert.Id)
+			service.Info("dispatching alert %s", alert.AlertID)
 
-			for _, name := range alert.Rule.Dispatchers {
+			for _, name := range alert.Rule.Dispatchers() {
 				disp, derr := service.dispatcherRepo.GetDispatcher(name)
 				if derr != nil {
 					service.Error(derr)
@@ -83,7 +89,7 @@ func (service *DispatcherService) Run(ctx context.Context) errors.Error {
 				if sent {
 					alertsDispatched.WithLabelValues(disp.Name()).Inc()
 				} else {
-					service.Info("dispatcher %s returned false for alert %s", disp.Name(), alert.Id)
+					log.Printf("dispatcher %s returned false for alert %s", disp.Name(), alert.AlertID)
 				}
 			}
 			alertsOut.Inc()

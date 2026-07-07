@@ -6,6 +6,8 @@ import (
 	"sync"
 
 	"github.com/harishhary/blink/internal/brokers"
+	"github.com/harishhary/blink/internal/configuration"
+	svcctx "github.com/harishhary/blink/internal/context"
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/logger"
 	pools "github.com/harishhary/blink/internal/pools"
@@ -45,36 +47,37 @@ type alertState struct {
 
 // TunerService reads alerts from Kafka, applies tuning rules, and writes to the enricher topic.
 type TunerService struct {
-	*logger.Logger
+	svcctx.ServiceContext
 	reader brokers.Reader
 	writer brokers.Writer
 	dlq    brokers.Writer
 	pool   *tuning_rules.Pool
 }
 
-// Config is the explicit set of dependencies NewTunerService needs, injected by main.
-// Config's topic fields are populated from the environment by main (which embeds it);
-// Broker is injected after load.
-type Config struct {
-	Broker        brokers.Broker
-	TunerTopic    string `env:"KAFKA_TOPIC_TUNER"`
-	TunerGroup    string `env:"KAFKA_GROUP_TUNER"`
-	EnricherTopic string `env:"KAFKA_TOPIC_ENRICHER"`
-	DLQTopic      string `env:"KAFKA_TOPIC_TUNER_DLQ,optional"` // optional; empty = no dead-letter queue
-}
+func NewTunerService(pool *tuning_rules.Pool) (*TunerService, error) {
+	serviceContext := svcctx.New("BLINK-RULE-TUNER - TUNER")
+	if err := configuration.LoadFromEnvironment(&serviceContext); err != nil {
+		return nil, err
+	}
+	serviceContext.Logger = logger.New(serviceContext.Name(), "dev")
 
-func NewTunerService(c Config, pool *tuning_rules.Pool) *TunerService {
+	cfg := serviceContext.Configuration()
+	b := brokers.NewKafkaBroker(cfg.Kafka)
+	reader := b.NewReader(cfg.Topics.TunerTopic, cfg.Topics.TunerGroup)
+	writer := b.NewWriter(cfg.Topics.EnricherTopic)
+
 	var dlq brokers.Writer
-	if c.DLQTopic != "" {
-		dlq = c.Broker.NewWriter(c.DLQTopic)
+	if cfg.Topics.TunerDLQTopic != "" {
+		dlq = b.NewWriter(cfg.Topics.TunerDLQTopic)
 	}
+
 	return &TunerService{
-		Logger: logger.New("rule-tuner", "dev"),
-		reader: c.Broker.NewReader(c.TunerTopic, c.TunerGroup),
-		writer: c.Broker.NewWriter(c.EnricherTopic),
-		dlq:    dlq,
-		pool:   pool,
-	}
+		ServiceContext: serviceContext,
+		reader:         reader,
+		writer:         writer,
+		dlq:            dlq,
+		pool:           pool,
+	}, nil
 }
 
 func (service *TunerService) Name() string { return "rule-tuner" }
@@ -121,7 +124,7 @@ func (service *TunerService) processBatch(ctx context.Context, msgs []brokers.Me
 	// Group by tuning rule name: name => indices into states.
 	byRule := make(map[string][]int)
 	for i, s := range states {
-		for _, name := range s.alert.Rule.TuningRules {
+		for _, name := range s.alert.Rule.TuningRules() {
 			byRule[name] = append(byRule[name], i)
 		}
 	}
@@ -177,7 +180,7 @@ func (service *TunerService) processBatch(ctx context.Context, msgs []brokers.Me
 		if s.deadLetter {
 			s.alert.Attempts++
 			if s.alert.Attempts >= services.MaxPluginAttempts || service.dlq == nil {
-				service.Info("alert %s passed through after %d attempts (tuning rule unavailable)", s.alert.Id, s.alert.Attempts)
+				service.Info("alert %s passed through after %d attempts (tuning rule unavailable)", s.alert.AlertID, s.alert.Attempts)
 				// fall through to write
 			} else {
 				payload, err := alerts.Marshal(s.alert)
@@ -199,7 +202,7 @@ func (service *TunerService) processBatch(ctx context.Context, msgs []brokers.Me
 		before := s.alert.Confidence
 		confidence, ignored := applyTuningResults(s.alert.Confidence, s.results)
 		if ignored {
-			service.Info("alert %s ignored by tuning rule", s.alert.Id)
+			service.Info("alert %s ignored by tuning rule", s.alert.AlertID)
 			alertsIgnored.Inc()
 			continue
 		}

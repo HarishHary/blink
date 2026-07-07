@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/harishhary/blink/internal/brokers"
+	"github.com/harishhary/blink/internal/configuration"
+	ctx "github.com/harishhary/blink/internal/context"
 	"github.com/harishhary/blink/internal/errors"
 	execpb "github.com/harishhary/blink/internal/exec/pb"
 	"github.com/harishhary/blink/internal/logger"
@@ -29,43 +31,46 @@ var (
 	rulesRouted     = promauto.NewHistogram(prometheus.HistogramOpts{Namespace: "blink", Subsystem: "event_matcher", Name: "rules_routed_per_event", Buckets: []float64{0, 1, 5, 10, 25, 50, 100}})
 )
 
-// Service routes incoming events to eligible rules and publishes ExecMessages
+// MatcherService routes incoming events to eligible rules and publishes ExecMessages
 // to blink-exec. For each batch it:
 //  1. Decodes all events and finds candidate rules by log_type.
 //  2. Groups events by matcher plugin and calls each matcher once with all relevant events,
 //     filtering candidates down to the eligible set (rules whose every matcher passed).
 //  3. Emits one ExecMessage per event with the eligible rule IDs from step 2.
-type Service struct {
-	*logger.Logger
-	reader  brokers.Reader
-	writer  brokers.Writer
-	ruleCfg *rules.SnapshotConfig // rule controller's snapshot - the rollout authority
-	pool    *matchers.Pool
+type MatcherService struct {
+	ctx.ServiceContext
+	reader     brokers.Reader
+	writer     brokers.Writer
+	cfgWatcher *rules.RuleConfigWatcher
+	pool       *matchers.Pool
 }
 
-// Config is the explicit set of dependencies NewService needs, injected by main.
-// Config's topic fields are populated from the environment by main (which embeds it);
-// Broker is injected after load.
-type Config struct {
-	Broker       brokers.Broker
-	MatcherTopic string `env:"KAFKA_TOPIC_MATCHER"`
-	MatcherGroup string `env:"KAFKA_GROUP_MATCHER"`
-	ExecTopic    string `env:"KAFKA_TOPIC_EXEC"`
-}
-
-func NewService(c Config, pool *matchers.Pool, ruleCfg *rules.SnapshotConfig) *Service {
-	return &Service{
-		Logger:  logger.New("event-matcher", "dev"),
-		reader:  c.Broker.NewReader(c.MatcherTopic, c.MatcherGroup),
-		writer:  c.Broker.NewWriter(c.ExecTopic),
-		ruleCfg: ruleCfg,
-		pool:    pool,
+func NewMatcherService(pool *matchers.Pool, cfgWatcher *rules.RuleConfigWatcher) (*MatcherService, error) {
+	serviceContext := ctx.New("BLINK-EVENT-MATCHER - MATCHER")
+	if err := configuration.LoadFromEnvironment(&serviceContext); err != nil {
+		return nil, err
 	}
+	serviceContext.Logger = logger.New(serviceContext.Name(), "dev")
+
+	b := brokers.NewKafkaBroker(serviceContext.Configuration().Kafka)
+	readr := b.NewReader(
+		serviceContext.Configuration().Topics.MatcherTopic,
+		serviceContext.Configuration().Topics.MatcherGroup,
+	)
+	writer := b.NewWriter(serviceContext.Configuration().Topics.ExecTopic)
+
+	return &MatcherService{
+		ServiceContext: serviceContext,
+		reader:         readr,
+		writer:         writer,
+		cfgWatcher:     cfgWatcher,
+		pool:           pool,
+	}, nil
 }
 
-func (service *Service) Name() string { return "event-matcher" }
+func (service *MatcherService) Name() string { return "event-matcher" }
 
-func (service *Service) Run(ctx context.Context) errors.Error {
+func (service *MatcherService) Run(ctx context.Context) errors.Error {
 	for {
 		msgs, err := service.reader.ReadBatch(ctx, 50)
 		if err != nil {
@@ -97,8 +102,8 @@ type eventState struct {
 	eligible   map[string]bool
 }
 
-func (service *Service) processBatch(batchCtx context.Context, msgs []brokers.Message) {
-	allRules := service.ruleCfg.Primaries()
+func (service *MatcherService) processBatch(batchCtx context.Context, msgs []brokers.Message) {
+	reg := service.cfgWatcher.Current()
 
 	// Decode events and find candidate rules.
 	states := make([]*eventState, 0, len(msgs))
@@ -116,7 +121,7 @@ func (service *Service) processBatch(batchCtx context.Context, msgs []brokers.Me
 			continue
 		}
 
-		candidates := rules.RulesForLogTypeIn(allRules, logType)
+		candidates := rules.RulesForLogType(reg, logType)
 		if len(candidates) == 0 {
 			continue
 		}
@@ -146,7 +151,7 @@ func (service *Service) processBatch(batchCtx context.Context, msgs []brokers.Me
 	slotOf := make(map[string]map[int]int) // matcher → stateIdx → position in byMatcher[matcher]
 	for i, s := range states {
 		for _, r := range s.candidates {
-			for _, name := range r.Matchers {
+			for _, name := range r.Matchers() {
 				if slotOf[name] == nil {
 					slotOf[name] = make(map[int]int)
 				}
@@ -220,7 +225,7 @@ func (service *Service) processBatch(batchCtx context.Context, msgs []brokers.Me
 			if len(ruleIDs) == 0 {
 				return
 			}
-			service.Info("rollout event log_type=%s to %d rule(s)", s.logType, len(ruleIDs))
+			service.Info("routing event log_type=%s to %d rule(s)", s.logType, len(ruleIDs))
 
 			eventStruct, err := structpb.NewStruct(s.event)
 			if err != nil {

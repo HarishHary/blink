@@ -3,58 +3,70 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/harishhary/blink/cmd/rule_tuner/tuner"
 	"github.com/harishhary/blink/internal/brokers"
+	"github.com/harishhary/blink/internal/configuration"
 	"github.com/harishhary/blink/internal/controller"
 	"github.com/harishhary/blink/internal/logger"
+	pools "github.com/harishhary/blink/internal/pools"
 	"github.com/harishhary/blink/internal/services"
 	"github.com/harishhary/blink/pkg/tuning_rules"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// config is everything rule_tuner needs. Required fields fail fast at load.
-// The embedded tuner.Config carries the service's topic fields; SnapshotTopic and
-// PluginDir wire the control plane here in main. Broker is injected post-load.
-type config struct {
-	services.Common
-	tuner.Config
-	SnapshotTopic string `env:"KAFKA_TOPIC_TUNING_SNAPSHOT"`
-	PluginDir     string `env:"TUNER_PLUGIN_DIR"`
-}
-
 func main() {
+	go func() {
+		http.Handle("/metrics", promhttp.Handler())
+		http.HandleFunc("/health/live", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+		http.HandleFunc("/health/ready", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+		log.Fatal(http.ListenAndServe(":8080", nil))
+	}()
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	var cfg config
-	if err := services.LoadFromEnvironment(&cfg); err != nil {
+	pluginDir := os.Getenv("TUNER_PLUGIN_DIR")
+	cfgMgr := tuning_rules.NewTuningRuleConfigWatcher(logger.New("tuning-config", "dev"), pluginDir)
+	cfgSvc := services.NewConfigSyncService("tuning-config-sync", "BLINK-RULE-TUNER - CONFIG", cfgMgr)
+
+	// Read replica: consumes the tuning controller's snapshot topic and feeds the
+	// executor the control plane's desired state.
+	var cfg configuration.ServiceConfiguration
+	if err := configuration.LoadFromEnvironment(&cfg); err != nil {
 		log.Fatalf("config: %v", err)
 	}
-	cfg.Config.Broker = brokers.NewKafkaBroker(cfg.Kafka)
-	b := cfg.Config.Broker
+	b := brokers.NewKafkaBroker(cfg.Kafka)
+	replica := controller.NewReplica(
+		logger.New("tuning-snapshot", "dev"),
+		b.NewReader(cfg.Topics.TuningSnapshotTopic, cfg.Topics.TuningSnapshotGroup),
+	)
+	replicaSvc, err := services.NewPluginSyncService("tuning-snapshot-sync", "BLINK-RULE-TUNER - SNAPSHOT", replica)
+	if err != nil {
+		log.Fatalf("snapshot service: %v", err)
+	}
 
-	// Snapshot reader: the sole source of tuning-rule config in the data plane - drives which
-	// subprocesses run AND their metadata + rolloutw (via tuningCfg). No local YAML.
-	snapshotReader := controller.NewSnapshotReader(logger.New("tuning-snapshot", "dev"), b.NewBroadcastReader(cfg.SnapshotTopic))
-	snapshotReaderSvc := services.NewManagedService("tuning-snapshot-sync", snapshotReader)
-	tuningCfg := tuning_rules.NewSnapshotConfig(logger.New("tuning-config", "dev"), snapshotReader)
+	routingTable := pools.NewRoutingTable()
+	tuningPool := tuning_rules.NewPool(routingTable, 0)
 
-	tuningPool := tuning_rules.NewPool(tuningCfg, 0)
-
-	pluginMgr := tuning_rules.NewPluginExecutor(logger.New("rule-tuner", "dev"), tuningPool.Sync, cfg.PluginDir, snapshotReader, tuningCfg)
-	syncSvc := services.NewManagedService("rule-tuner-sync", pluginMgr)
-
-	tunerSvc := tuner.NewTunerService(cfg.Config, tuningPool)
-
-	// Readiness: stay out of rotation until the control plane has delivered a snapshot.
-	go services.ServeHealth(":8080", snapshotReader.Ready)
+	pluginMgr := tuning_rules.NewTuningRulePluginExecutor(logger.New("rule-tuner", "dev"), tuningPool.Sync, pluginDir, replica, cfgMgr)
+	syncSvc, err := services.NewPluginSyncService("rule-tuner-sync", "BLINK-RULE-TUNER - SYNC", pluginMgr)
+	if err != nil {
+		log.Fatalf("sync service: %v", err)
+	}
+	tunerSvc, err := tuner.NewTunerService(tuningPool)
+	if err != nil {
+		log.Fatalf("tuner service: %v", err)
+	}
 
 	runner := services.New()
 	runner.Register(
-		snapshotReaderSvc,
+		cfgSvc,
+		replicaSvc,
 		syncSvc,
 		tunerSvc,
 	)

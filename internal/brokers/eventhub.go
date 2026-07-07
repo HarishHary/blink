@@ -1,3 +1,7 @@
+// Event Hubs implementation of the Broker/Reader/Writer interfaces. Replaces the
+// former internal/sources/eventhub (consumer) and internal/sinks/eventhub
+// (producer), exposing them through the shared Broker/Reader/Writer interfaces like kafka.go does.
+
 package brokers
 
 import (
@@ -37,14 +41,6 @@ func NewEventHubBroker(cfg Config) Broker {
 // NewReader returns a Reader bound to the given Event Hub (topic) and consumer group.
 func (b *eventHubBroker) NewReader(topic, groupID string) Reader {
 	return &eventHubReader{cfg: b.cfg, eventHubName: topic, consumerGroup: groupID}
-}
-
-// NewBroadcastReader reads via the default consumer group. In Event Hubs a consumer
-// group is already an independent view of the full stream, so this is inherently a
-// broadcast read - every pod's reader sees every event. (eventHubBroker is currently
-// unwired; this satisfies the Broker interface.)
-func (b *eventHubBroker) NewBroadcastReader(topic string) Reader {
-	return &eventHubReader{cfg: b.cfg, eventHubName: topic, consumerGroup: "$Default"}
 }
 
 // NewWriter returns a Writer bound to the given Event Hub (topic).
@@ -104,10 +100,6 @@ func (r *eventHubReader) ReadBatch(ctx context.Context, batchSize int) ([]Messag
 	}
 	return out, nil
 }
-
-// Lag is not supported by this Reader (no offset/high-water-mark tracking), so it reports
-// 0 - a broadcast consumer treats that as "caught up" and becomes ready immediately.
-func (r *eventHubReader) Lag(context.Context) (int64, error) { return 0, nil }
 
 // CommitMessages is a no-op: this Reader does not use an Event Hubs checkpoint
 // store, so offsets are not persisted. Wire a checkpoint store here if at-least-once

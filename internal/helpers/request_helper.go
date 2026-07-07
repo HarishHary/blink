@@ -42,7 +42,6 @@ func (h *RequestHelper) RetryOnException(fn func() (*http.Response, error), exce
 			return backoff.Permanent(err)
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			closeResponseBody(resp)
 			return &OutputRequestFailure{Response: resp}
 		}
 		return nil
@@ -150,16 +149,9 @@ func (h *RequestHelper) PostRequestRetry(url string, headers map[string]string, 
 func (h *RequestHelper) CheckHTTPResponse(response *http.Response) bool {
 	success := response != nil && (response.StatusCode >= 200 && response.StatusCode <= 299)
 	if !success {
-		closeResponseBody(response)
 		log.Printf("Encountered an error while sending: %v", response)
 	}
 	return success
-}
-
-func closeResponseBody(response *http.Response) {
-	if response != nil && response.Body != nil {
-		response.Body.Close()
-	}
 }
 
 func (h *RequestHelper) CatchExceptions() []any {

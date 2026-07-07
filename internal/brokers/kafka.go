@@ -5,14 +5,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/harishhary/blink/internal/configuration"
 	"github.com/segmentio/kafka-go"
 )
-
-// KafkaConfig configures a Kafka Broker.
-type KafkaConfig struct {
-	// Brokers is a comma-separated list of Kafka bootstrap servers (e.g. "kafka:9092,other:9092").
-	Brokers string `env:"KAFKA_BROKERS"`
-}
 
 // kafkaBroker is the default Kafka-based Broker implementation.
 type kafkaBroker struct {
@@ -21,7 +16,7 @@ type kafkaBroker struct {
 }
 
 // NewKafkaBroker constructs a Broker using the given KafkaConfig.
-func NewKafkaBroker(cfg KafkaConfig) Broker {
+func NewKafkaBroker(cfg configuration.KafkaConfig) Broker {
 	return &kafkaBroker{
 		brokers:     strings.Split(cfg.Brokers, ","),
 		dialTimeout: 10 * time.Second,
@@ -41,36 +36,12 @@ func (kb *kafkaBroker) NewReader(topic, groupID string) Reader {
 	return &kafkaReader{r: r}
 }
 
-// NewBroadcastReader consumes the full stream of a single-partition topic with no
-// consumer group: every reader independently reads partition 0 from the earliest
-// retained offset, so each pod sees every message (broadcast, not work queue). Pair
-// with a log-compacted topic (see Broker.NewBroadcastReader) so a starting reader gets
-// the latest snapshot rather than replaying the whole history.
-func (kb *kafkaBroker) NewBroadcastReader(topic string) Reader {
-	r := kafka.NewReader(kafka.ReaderConfig{
-		Brokers: kb.brokers,
-		Topic:   topic,
-		// No GroupID, Partition 0 (default), StartOffset FirstOffset (default):
-		// independent broadcast consumption of the whole topic.
-		MinBytes: 10e3, // 10KB
-		MaxBytes: 10e6, // 10MB
-		Dialer:   &kafka.Dialer{Timeout: kb.dialTimeout},
-	})
-	return &kafkaReader{r: r}
-}
-
 // NewWriter returns a kafka-backed Writer for the specified topic.
 func (kb *kafkaBroker) NewWriter(topic string) Writer {
 	w := kafka.NewWriter(kafka.WriterConfig{
-		Brokers: kb.brokers,
-		Topic:   topic,
-		// Hash partitioner: messages with the same Key always land on the same partition, so a
-		// merge group (keyed by Alert.MergePartitionKey) reaches one alert_merger replica and is
-		// actually merged. A nil Key (e.g. the merger's keyless downstream writes) falls back to
-		// round-robin. LeastBytes was wrong here - it ignores Key and scatters a merge group
-		// across partitions, defeating co-location. (Hash uses fnv1a; cross-client compatibility
-		// is moot since blink both produces and consumes these topics.)
-		Balancer: &kafka.Hash{},
+		Brokers:  kb.brokers,
+		Topic:    topic,
+		Balancer: &kafka.LeastBytes{},
 		Dialer:   &kafka.Dialer{Timeout: kb.dialTimeout},
 	})
 	return &kafkaWriter{w: w}
@@ -116,13 +87,6 @@ func (rd *kafkaReader) ReadBatch(ctx context.Context, batchSize int) ([]Message,
 		})
 	}
 	return out, nil
-}
-
-// Lag queries the broker for how many messages lie between this reader's position and the
-// high-water mark. ReadLag round-trips to the partition leader, so call it sparingly (e.g.
-// once at the end of a cold-start backlog) and never concurrently with ReadMessage.
-func (rd *kafkaReader) Lag(ctx context.Context) (int64, error) {
-	return rd.r.ReadLag(ctx)
 }
 
 // CommitMessages commits offsets of the processed messages.

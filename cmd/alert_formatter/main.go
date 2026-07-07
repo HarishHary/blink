@@ -3,58 +3,70 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/harishhary/blink/cmd/alert_formatter/formatter"
 	"github.com/harishhary/blink/internal/brokers"
+	"github.com/harishhary/blink/internal/configuration"
 	"github.com/harishhary/blink/internal/controller"
 	"github.com/harishhary/blink/internal/logger"
+	pools "github.com/harishhary/blink/internal/pools"
 	"github.com/harishhary/blink/internal/services"
 	"github.com/harishhary/blink/pkg/formatters"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// config is everything alert_formatter needs. Required fields fail fast at load.
-// The embedded formatter.Config carries the service's topic fields; SnapshotTopic and
-// PluginDir wire the control plane here in main. Broker is injected post-load.
-type config struct {
-	services.Common
-	formatter.Config
-	SnapshotTopic string `env:"KAFKA_TOPIC_FORMATTER_SNAPSHOT"`
-	PluginDir     string `env:"FORMATTER_PLUGIN_DIR"`
-}
-
 func main() {
+	go func() {
+		http.Handle("/metrics", promhttp.Handler())
+		http.HandleFunc("/health/live", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+		http.HandleFunc("/health/ready", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+		log.Fatal(http.ListenAndServe(":8080", nil))
+	}()
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	var cfg config
-	if err := services.LoadFromEnvironment(&cfg); err != nil {
+	pluginDir := os.Getenv("FORMATTER_PLUGIN_DIR")
+	cfgMgr := formatters.NewFormatterConfigWatcher(logger.New("formatter-config", "dev"), pluginDir)
+	cfgSvc := services.NewConfigSyncService("formatter-config-sync", "BLINK-ALERT-FORMATTER - CONFIG", cfgMgr)
+
+	// Read replica: consumes the formatter controller's snapshot topic and feeds the
+	// executor the control plane's desired state.
+	var cfg configuration.ServiceConfiguration
+	if err := configuration.LoadFromEnvironment(&cfg); err != nil {
 		log.Fatalf("config: %v", err)
 	}
-	cfg.Config.Broker = brokers.NewKafkaBroker(cfg.Kafka)
-	b := cfg.Config.Broker
+	b := brokers.NewKafkaBroker(cfg.Kafka)
+	replica := controller.NewReplica(
+		logger.New("formatter-snapshot", "dev"),
+		b.NewReader(cfg.Topics.FormatterSnapshotTopic, cfg.Topics.FormatterSnapshotGroup),
+	)
+	replicaSvc, err := services.NewPluginSyncService("formatter-snapshot-sync", "BLINK-ALERT-FORMATTER - SNAPSHOT", replica)
+	if err != nil {
+		log.Fatalf("snapshot service: %v", err)
+	}
 
-	// Snapshot reader: the sole source of formatter config in the data plane - drives which
-	// subprocesses run AND their metadata + rollout (via formatterCfg). No local YAML.
-	snapshotReader := controller.NewSnapshotReader(logger.New("formatter-snapshot", "dev"), b.NewBroadcastReader(cfg.SnapshotTopic))
-	snapshotReaderSvc := services.NewManagedService("formatter-snapshot-sync", snapshotReader)
-	formatterCfg := formatters.NewSnapshotConfig(logger.New("formatter-config", "dev"), snapshotReader)
+	routingTable := pools.NewRoutingTable()
+	formatterPool := formatters.NewPool(routingTable, 0)
 
-	formatterPool := formatters.NewPool(formatterCfg, 0)
-
-	pluginMgr := formatters.NewPluginExecutor(logger.New("alert-formatter", "dev"), formatterPool.Sync, cfg.PluginDir, snapshotReader, formatterCfg)
-	syncSvc := services.NewManagedService("alert-formatter-sync", pluginMgr)
-
-	formatterSvc := formatter.NewFormatterService(cfg.Config, formatterPool)
-
-	// Readiness: stay out of rotation until the control plane has delivered a snapshot.
-	go services.ServeHealth(":8080", snapshotReader.Ready)
+	pluginMgr := formatters.NewFormatterPluginExecutor(logger.New("alert-formatter", "dev"), formatterPool.Sync, pluginDir, replica, cfgMgr)
+	syncSvc, err := services.NewPluginSyncService("alert-formatter-sync", "BLINK-ALERT-FORMATTER - SYNC", pluginMgr)
+	if err != nil {
+		log.Fatalf("sync service: %v", err)
+	}
+	formatterSvc, err := formatter.NewFormatterService(formatterPool)
+	if err != nil {
+		log.Fatalf("formatter service: %v", err)
+	}
 
 	runner := services.New()
 	runner.Register(
-		snapshotReaderSvc,
+		cfgSvc,
+		replicaSvc,
 		syncSvc,
 		formatterSvc,
 	)

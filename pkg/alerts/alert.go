@@ -200,11 +200,11 @@ func (a *Alert) CanMerge(other *Alert) bool {
 		older, newer = newer, older
 	}
 
-	if newer.Created.After(older.Created.Add(older.Rule.MergeWindowMins())) {
+	if newer.Created.After(older.Created.Add(time.Duration(older.Rule.MergeWindowMins()) * time.Minute)) {
 		return false
 	}
 
-	if !helpers.EqualStringSlices(a.MergeByKeys(), other.MergeByKeys()) {
+	if !helpers.EqualStringSlices(a.MergeByKeys(), other.Rule.MergeByKeys) {
 		return false
 	}
 
