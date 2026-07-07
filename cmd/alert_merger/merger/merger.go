@@ -6,8 +6,6 @@ import (
 	"time"
 
 	"github.com/harishhary/blink/internal/brokers"
-	"github.com/harishhary/blink/internal/configuration"
-	svcctx "github.com/harishhary/blink/internal/context"
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/logger"
 	"github.com/harishhary/blink/pkg/alerts"
@@ -32,41 +30,43 @@ type mergeGroup struct {
 	expires time.Time // oldest.Created + MergeWindowMins
 }
 
-// MergerService reads alerts from Kafka, merges related alerts within their time window, and writes merged (or pass-through) alerts to the tuner topic.
-type MergerService struct {
-	svcctx.ServiceContext
+// Service reads alerts from Kafka, merges related alerts within their time window, and writes merged (or pass-through) alerts to the tuner topic.
+type Service struct {
+	*logger.Logger
 	reader    brokers.Reader
 	writer    brokers.Writer
 	mu        sync.Mutex
-	groups    map[string]*mergeGroup // key: rule_name|merge_by_values
-	maxGroups int                    // 0 = unlimited
+	groups    map[string]*mergeGroup
+	maxGroups int
 }
 
-func NewMergerService() (*MergerService, error) {
-	serviceContext := svcctx.New("BLINK-ALERT-MERGER - MERGER")
-	if err := configuration.LoadFromEnvironment(&serviceContext); err != nil {
-		return nil, err
+// Config is the explicit set of dependencies NewService needs. Its topic fields are
+// populated from the environment by main (which embeds it); Broker is injected after load.
+type Config struct {
+	Broker      brokers.Broker
+	MergerTopic string `env:"KAFKA_TOPIC_MERGER"`
+	MergerGroup string `env:"KAFKA_GROUP_MERGER"`
+	TunerTopic  string `env:"KAFKA_TOPIC_TUNER"`
+	// MaxGroups caps the live merge groups held in memory per replica. When exceeded, the
+	// oldest group (earliest expiry) is flushed immediately rather than waiting for its window.
+	// 0 means unlimited - only safe when merge_by_keys have low cardinality.
+	MaxGroups int `env:"MERGER_MAX_GROUPS,optional"`
+}
+
+func NewService(c Config) *Service {
+	return &Service{
+		Logger:    logger.New("alert-merger", "dev"),
+		reader:    c.Broker.NewReader(c.MergerTopic, c.MergerGroup),
+		writer:    c.Broker.NewWriter(c.TunerTopic),
+		groups:    make(map[string]*mergeGroup),
+		maxGroups: c.MaxGroups,
 	}
-	serviceContext.Logger = logger.New(serviceContext.Name(), "dev")
-
-	cfg := serviceContext.Configuration()
-	b := brokers.NewKafkaBroker(cfg.Kafka)
-	reader := b.NewReader(cfg.Topics.MergerTopic, cfg.Topics.MergerGroup)
-	writer := b.NewWriter(cfg.Topics.TunerTopic)
-
-	return &MergerService{
-		ServiceContext: serviceContext,
-		reader:         reader,
-		writer:         writer,
-		groups:         make(map[string]*mergeGroup),
-		maxGroups:      cfg.Merger.MaxGroups,
-	}, nil
 }
 
-func (s *MergerService) Name() string { return "alert-merger" }
+func (s *Service) Name() string { return "alert-merger" }
 
 // Reads alerts from MergerTopic, accumulates related alerts into merge groups, flushes expired groups to TunerTopic, and commits Kafka offsets.
-func (s *MergerService) Run(ctx context.Context) errors.Error {
+func (s *Service) Run(ctx context.Context) errors.Error {
 	// Periodic flush: every 10s, flush any merge group whose window has expired.
 	go s.flushLoop(ctx)
 
@@ -109,7 +109,7 @@ func (s *MergerService) Run(ctx context.Context) errors.Error {
 
 // adds alert to its merge group, or flushes the existing group and starts a new one when the incoming alert falls outside the current window.
 // If maxGroups is set and the cap is exceeded after inserting, the oldest group (earliest expiry) is evicted immediately.
-func (s *MergerService) accumulate(ctx context.Context, alert *alerts.Alert) {
+func (s *Service) accumulate(ctx context.Context, alert *alerts.Alert) {
 	key := alert.MergePartitionKey()
 
 	s.mu.Lock()
@@ -151,7 +151,7 @@ func (s *MergerService) accumulate(ctx context.Context, alert *alerts.Alert) {
 
 // oldestKey returns the map key of the group with the earliest expiry time.
 // Must be called with s.mu held.
-func (s *MergerService) oldestKey() string {
+func (s *Service) oldestKey() string {
 	var oldest string
 	for k, g := range s.groups {
 		if oldest == "" || g.expires.Before(s.groups[oldest].expires) {
@@ -162,7 +162,7 @@ func (s *MergerService) oldestKey() string {
 }
 
 // ticks every 10 seconds and flushes any group whose window has closed.
-func (s *MergerService) flushLoop(ctx context.Context) {
+func (s *Service) flushLoop(ctx context.Context) {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -178,7 +178,7 @@ func (s *MergerService) flushLoop(ctx context.Context) {
 }
 
 // flushes all groups whose expiry time has passed.
-func (s *MergerService) flushExpired(ctx context.Context) {
+func (s *Service) flushExpired(ctx context.Context) {
 	now := time.Now()
 
 	s.mu.Lock()
@@ -198,7 +198,7 @@ func (s *MergerService) flushExpired(ctx context.Context) {
 }
 
 // flushes every remaining merge group regardless of expiry.
-func (s *MergerService) flushAll(ctx context.Context) {
+func (s *Service) flushAll(ctx context.Context) {
 	s.mu.Lock()
 	remaining := make([]*mergeGroup, 0, len(s.groups))
 	for _, g := range s.groups {
@@ -214,7 +214,7 @@ func (s *MergerService) flushAll(ctx context.Context) {
 }
 
 // merges the group's alerts into one (or passes through a singleton) and writes it to the tuner topic.
-func (s *MergerService) flushGroup(ctx context.Context, g *mergeGroup) {
+func (s *Service) flushGroup(ctx context.Context, g *mergeGroup) {
 	groupsFlushed.Inc()
 
 	if len(g.alerts) == 1 {
@@ -236,7 +236,7 @@ func (s *MergerService) flushGroup(ctx context.Context, g *mergeGroup) {
 }
 
 // serialises alert and writes it to the tuner topic.
-func (s *MergerService) writeAlert(ctx context.Context, alert *alerts.Alert) {
+func (s *Service) writeAlert(ctx context.Context, alert *alerts.Alert) {
 	payload, err := alerts.Marshal(alert)
 	if err != nil {
 		writeErrors.Inc()

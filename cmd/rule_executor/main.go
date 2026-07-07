@@ -3,78 +3,73 @@ package main
 import (
 	"context"
 	"log"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/harishhary/blink/cmd/rule_executor/executor"
 	"github.com/harishhary/blink/internal/brokers"
-	"github.com/harishhary/blink/internal/configuration"
 	"github.com/harishhary/blink/internal/controller"
 	"github.com/harishhary/blink/internal/logger"
+	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/internal/services"
 	"github.com/harishhary/blink/pkg/rules"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-func main() {
-	go func() {
-		http.Handle("/metrics", promhttp.Handler())
-		http.HandleFunc("/health/live", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-		http.HandleFunc("/health/ready", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-		log.Fatal(http.ListenAndServe(":8080", nil))
-	}()
+// config is everything rule_executor needs. Every field is required (no ,optional) so a
+// missing topic or dir fails fast at load instead of degrading silently at runtime.
+// The embedded executor.Config carries the service's topics and its Tuning knobs; SnapshotTopic
+// and PluginDir wire the control plane here in main. Broker is injected post-load.
+type config struct {
+	services.Common
+	executor.Config
+	SnapshotTopic string `env:"KAFKA_TOPIC_RULE_SNAPSHOT"`
+	PluginDir     string `env:"RULE_PLUGIN_DIR"`
+}
 
+func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// RULE_PLUGIN_DIR contains both the rule binaries and their .yaml sidecars.
-	// The config manager must start before the rule manager so YAML configs are
-	// available when binaries are first discovered.
-	rulePluginDir := os.Getenv("RULE_PLUGIN_DIR")
-	if rulePluginDir == "" {
-		log.Fatal("RULE_PLUGIN_DIR is required")
-	}
-	cfgMgr := rules.NewRuleConfigWatcher(logger.New("rule-config", "dev"), rulePluginDir)
-	cfgSvc := services.NewConfigSyncService("rule-config-sync", "BLINK-RULE-EXECUTOR - CONFIG", cfgMgr)
-
-	// Read replica: consumes the rule controller's snapshot topic and feeds the
-	// executor the control plane's desired state.
-	var cfg configuration.ServiceConfiguration
-	if err := configuration.LoadFromEnvironment(&cfg); err != nil {
+	var cfg config
+	if err := services.LoadFromEnvironment(&cfg); err != nil {
 		log.Fatalf("config: %v", err)
 	}
-	b := brokers.NewKafkaBroker(cfg.Kafka)
-	replica := controller.NewReplica(
-		logger.New("rule-snapshot", "dev"),
-		b.NewReader(cfg.Topics.RuleSnapshotTopic, cfg.Topics.RuleSnapshotGroup),
-	)
-	replicaSvc, err := services.NewPluginSyncService("rule-snapshot-sync", "BLINK-RULE-EXECUTOR - SNAPSHOT", replica)
-	if err != nil {
-		log.Fatalf("snapshot service: %v", err)
-	}
+	cfg.Config.Broker = brokers.NewKafkaBroker(cfg.Kafka)
+	b := cfg.Config.Broker
 
-	rulePool := rules.NewPool(cfgMgr, 0)
+	// snapSrc is the executor's reconcile feed (a SnapshotSource); source is the pool/adapter's
+	// rollout view (a rules.Source). In normal mode these are two objects - a SnapshotReader
+	// tailing Kafka and a SnapshotConfig viewing it. In LocalDev mode a single LocalReader is
+	// BOTH: it reads YAML sidecars from PluginDir directly, serving Source[T] straight from disk
+	// and electing a snapshot for the reconcile feed - no controller, no Kafka snapshot topic.
+	var snapSrc plugin.SnapshotSource
+	var source *rules.SnapshotConfig
+	var ready func() bool
+	var srcSvcs []*services.ManagedService
 
-	pluginMgr := rules.NewRulePluginExecutor(logger.New("rule-executor", "dev"), rulePool.Sync, rulePluginDir, replica, cfgMgr)
-	syncSvc, err := services.NewPluginSyncService("rule-executor-sync", "BLINK-RULE-EXECUTOR - SYNC", pluginMgr)
-	if err != nil {
-		log.Fatalf("sync service: %v", err)
-	}
+	reader := controller.NewSnapshotReader(logger.New("rule-snapshot", "dev"), b.NewBroadcastReader(cfg.SnapshotTopic))
+	readerSvc := services.NewManagedService("rule-snapshot-sync", reader)
+	snapSrc = reader
+	source = rules.NewSnapshotConfig(logger.New("rule-config", "dev"), reader)
+	ready = reader.Ready
+	srcSvcs = []*services.ManagedService{readerSvc}
 
-	executorSvc, err := executor.NewExecutorService(rulePool, cfgMgr)
-	if err != nil {
-		log.Fatalf("executor service: %v", err)
-	}
+	rulePool := rules.NewPool(source, 0)
+
+	pluginMgr := rules.NewPluginExecutor(logger.New("rule-executor", "dev"), rulePool.Sync, cfg.PluginDir, snapSrc, source)
+	syncSvc := services.NewManagedService("rule-executor-sync", pluginMgr)
+
+	executorSvc := executor.NewExecutorService(cfg.Config, rulePool, source)
+
+	// Readiness: stay out of rotation until desired state has been delivered/elected.
+	go services.ServeHealth(":8080", ready)
 
 	runner := services.New()
-	runner.Register(
-		cfgSvc,
-		replicaSvc,
-		syncSvc,
-		executorSvc,
-	)
+	for _, s := range srcSvcs {
+		runner.Register(s)
+	}
+	runner.Register(syncSvc, executorSvc)
 	runner.Run(ctx)
 	log.Println("Shutting down rule-executor")
 }

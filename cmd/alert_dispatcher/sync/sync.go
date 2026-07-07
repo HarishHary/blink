@@ -2,40 +2,38 @@ package sync
 
 import (
 	"context"
-	"os"
 	"time"
 
-	"github.com/harishhary/blink/internal/configuration"
-	svcctx "github.com/harishhary/blink/internal/context"
 	"github.com/harishhary/blink/internal/dispatchers"
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/logger"
 )
 
 type SyncService struct {
-	svcctx.ServiceContext
+	*logger.Logger
 	dispatcherRepo *dispatchers.DispatcherRepository
+	configDir      string
 }
 
-func New(dispatcherRepo *dispatchers.DispatcherRepository) (*SyncService, error) {
-	sc := svcctx.New("BLINK-ALERT-DISPATCHER - SYNC")
-	if err := configuration.LoadFromEnvironment(&sc); err != nil {
-		return nil, err
-	}
-	sc.Logger = logger.New(sc.Name(), "dev")
+// Config is the explicit set of dependencies New needs, injected by main.
+type Config struct {
+	ConfigDir string
+}
+
+func New(c Config, dispatcherRepo *dispatchers.DispatcherRepository) *SyncService {
 	return &SyncService{
-		ServiceContext: sc,
+		Logger:         logger.New("alert-dispatcher-sync", "dev"),
 		dispatcherRepo: dispatcherRepo,
-	}, nil
+		configDir:      c.ConfigDir,
+	}
 }
 
 func (service *SyncService) Name() string { return "alert-dispatcher-sync" }
 
 func (service *SyncService) Run(ctx context.Context) errors.Error {
-	configDir := os.Getenv("DISPATCHER_CONFIG_DIR")
 	for {
-		service.Info("loading dispatcher configs from %s", configDir)
-		if err := service.dispatcherRepo.LoadDispatchers(configDir); err != nil {
+		service.Info("loading dispatcher configs from %s", service.configDir)
+		if err := service.dispatcherRepo.LoadDispatchers(service.configDir); err != nil {
 			service.Error(err)
 		}
 		select {

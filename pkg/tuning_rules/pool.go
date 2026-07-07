@@ -13,66 +13,90 @@ import (
 	"github.com/harishhary/blink/pkg/scoring"
 )
 
+// Pool is the tuning-rule process pool.
 type Pool struct {
 	*pools.ProcessPool[TuningRule]
 }
 
-// NewPool builds the tuning-rule pool with live rollout routing derived from src (see the
-// rules pool for the closure rationale).
-func NewPool(src config.Source[*TuningRuleMetadata], drainTimeout time.Duration) *Pool {
-	routing := func(id, name string) (pools.RolloutMode, float64) {
-		if name != "" {
-			if m, ok := src.ByFileName(name); ok {
-				return m.RolloutMode, m.RolloutPct
-			}
-		}
-		re := src.RoutingByID(id)
-		return re.Mode, re.RolloutPct
-	}
+// NewPool builds the tuning-rule pool with live rollout routing derived from cfg.
+func NewPool(cfg config.Source[*TuningRuleMetadata], drainTimeout time.Duration) *Pool {
 	return &Pool{
-		ProcessPool: pools.NewProcessPool[TuningRule](routing, pools.NewPoolMetrics("tuning_rules"), drainTimeout),
+		ProcessPool: pools.NewProcessPool[TuningRule](config.RolloutFor(cfg), pools.NewPoolMetrics("tuning_rules"), drainTimeout),
 	}
 }
 
-// Tune calls tuningRuleID once with all alerts, returning per-alert apply results.
-// ruleType and confidence are rule metadata - the same for every alert in the batch.
-func (p *Pool) Tune(ctx context.Context, tuningRuleID string, alerts []alerts.Alert, canaryHashKey string) (
+type tuneChunkResult struct {
+	ruleType   RuleType
+	confidence scoring.Confidence
+	applies    []bool
+	err        errors.Error
+}
+
+// Tune runs tuningRuleID against all alerts, sharded across the pool's workers, returning per-alert
+// apply results; ruleType/confidence (rule metadata, identical for all) come from the first shard.
+func (p *Pool) Tune(ctx context.Context, tuningRuleID string, alertBatch []alerts.Alert, canaryHashKey string) (
 	ruleType RuleType, confidence scoring.Confidence, applies []bool, _ errors.Error,
 ) {
-	applies = make([]bool, len(alerts))
-	err := p.Call(ctx, tuningRuleID, canaryHashKey, func(callCtx context.Context, t TuningRule) error {
-		if !t.TuningRuleMetadata().Enabled {
-			return nil
-		}
-		ruleType = t.RuleType()
-		confidence = t.Confidence()
-		var e errors.Error
-		applies, e = t.Tune(callCtx, alerts)
-		return e
+	// Shadow candidate (if any): separate fan-out at its own max_procs, results dropped.
+	p.shadowTune(ctx, tuningRuleID, alertBatch)
+	k := p.ServingPoolSize(tuningRuleID, canaryHashKey)
+	parts := pools.ShardConcurrent(alertBatch, k, func(alerts []alerts.Alert) tuneChunkResult {
+		return p.tuneChunk(ctx, tuningRuleID, alerts, canaryHashKey)
 	})
-	if err != nil {
-		return 0, 0, nil, errors.NewE(err)
+
+	applies = make([]bool, 0, len(alertBatch))
+	for i, part := range parts {
+		if part.err != nil {
+			return 0, 0, nil, part.err
+		}
+		if i == 0 {
+			ruleType = part.ruleType
+			confidence = part.confidence
+		}
+		applies = append(applies, part.applies...)
 	}
 	return ruleType, confidence, applies, nil
 }
 
-// Handles plugin lifecycle messages from the plugin manager bus, registering or deregistering tuning rules in the pool.
-func poolKey(t TuningRule) pools.PoolKey {
-	cfg := t.TuningRuleMetadata()
-	return pools.PoolKey{Id: cfg.Id, Name: cfg.Name, Hash: t.Checksum()}
+func (p *Pool) tuneChunk(ctx context.Context, tuningRuleID string, alerts []alerts.Alert, canaryHashKey string) tuneChunkResult {
+	var res tuneChunkResult
+	res.applies = make([]bool, len(alerts))
+	prodFn := func(callCtx context.Context, t TuningRule) error {
+		md := t.TuningRuleMetadata()
+		if !md.Enabled {
+			return nil
+		}
+		res.ruleType = md.RuleType
+		res.confidence = md.Confidence
+		var e errors.Error
+		res.applies, e = t.Tune(callCtx, alerts)
+		return e
+	}
+	err := p.Call(ctx, tuningRuleID, canaryHashKey, prodFn)
+	if err != nil {
+		return tuneChunkResult{err: errors.NewE(err)}
+	}
+	return res
 }
 
-func (p *Pool) Sync(msg messaging.Message) {
-	switch m := msg.(type) {
-	case plugin.RegisterMessage[TuningRule]:
-		p.Register(poolKey(m.Items[0]), m.Items, m.MaxProcs, nil)
-	case plugin.UpdateMessage[TuningRule]:
-		p.Register(poolKey(m.Items[0]), m.Items, m.MaxProcs, m.OnDrained)
-	case plugin.UnregisterMessage[TuningRule]:
-		p.Unregister(m.ItemKey)
-	case plugin.RemoveMessage[TuningRule]:
-		p.Remove(m.ItemKey)
-	case plugin.MigrateMessage[TuningRule]:
-		p.MigrateSlots(m.ActiveKey.Id, m.ActiveKey, m.PendingKey)
+// shadowTune fans the full batch out to the shadow candidate (if tuningRuleID is in shadow mode) at its
+// own max_procs, each shard a detached CallShadow whose result is dropped. Tune is read-only on the
+// alerts (it returns decisions), so shards share the batch.
+func (p *Pool) shadowTune(ctx context.Context, tuningRuleID string, alertBatch []alerts.Alert) {
+	sk := p.ShadowPoolSize(tuningRuleID)
+	if sk == 0 || len(alertBatch) == 0 {
+		return
+	}
+	for _, alerts := range pools.ShardSlice(alertBatch, sk) {
+		p.CallShadow(ctx, tuningRuleID, func(callCtx context.Context, t TuningRule) error {
+			if !t.TuningRuleMetadata().Enabled {
+				return nil
+			}
+			_, e := t.Tune(callCtx, alerts)
+			return e
+		})
 	}
 }
+
+// Sync applies plugin lifecycle messages (register/update/unregister/remove/migrate) to the pool.
+func (p *Pool) Sync(msg messaging.Message) { plugin.SyncPool(p.ProcessPool, msg) }

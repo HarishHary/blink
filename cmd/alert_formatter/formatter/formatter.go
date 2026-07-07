@@ -5,8 +5,6 @@ import (
 	"sync"
 
 	"github.com/harishhary/blink/internal/brokers"
-	"github.com/harishhary/blink/internal/configuration"
-	svcctx "github.com/harishhary/blink/internal/context"
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/logger"
 	"github.com/harishhary/blink/internal/services"
@@ -35,37 +33,37 @@ type alertState struct {
 }
 
 type FormatterService struct {
-	svcctx.ServiceContext
+	*logger.Logger
 	reader brokers.Reader
 	writer brokers.Writer
 	dlq    brokers.Writer
 	pool   *formatters.Pool
 }
 
-func NewFormatterService(pool *formatters.Pool) (*FormatterService, error) {
-	serviceContext := svcctx.New("BLINK-ALERT-FORMATTER - FORMAT")
-	if err := configuration.LoadFromEnvironment(&serviceContext); err != nil {
-		return nil, err
-	}
-	serviceContext.Logger = logger.New(serviceContext.Name(), "dev")
+// Config is the explicit set of dependencies NewFormatterService needs, injected by main.
+// Config's topic fields are populated from the environment by main (which embeds it);
+// Broker is injected after load.
+type Config struct {
+	Broker          brokers.Broker
+	FormatterTopic  string `env:"KAFKA_TOPIC_FORMATTER"`
+	FormatterGroup  string `env:"KAFKA_GROUP_FORMATTER"`
+	DispatcherTopic string `env:"KAFKA_TOPIC_DISPATCHER"`
+	DLQTopic        string `env:"KAFKA_TOPIC_FORMATTER_DLQ,optional"` // optional; empty = no dead-letter queue
+}
 
-	cfg := serviceContext.Configuration()
-	b := brokers.NewKafkaBroker(cfg.Kafka)
-	reader := b.NewReader(cfg.Topics.FormatterTopic, cfg.Topics.FormatterGroup)
-	writer := b.NewWriter(cfg.Topics.DispatcherTopic)
-
+func NewFormatterService(c Config, pool *formatters.Pool) *FormatterService {
 	var dlq brokers.Writer
-	if cfg.Topics.FormatterDLQTopic != "" {
-		dlq = b.NewWriter(cfg.Topics.FormatterDLQTopic)
+	if c.DLQTopic != "" {
+		dlq = c.Broker.NewWriter(c.DLQTopic)
 	}
 
 	return &FormatterService{
-		ServiceContext: serviceContext,
-		reader:         reader,
-		writer:         writer,
-		dlq:            dlq,
-		pool:           pool,
-	}, nil
+		Logger: logger.New("alert-formatter", "dev"),
+		reader: c.Broker.NewReader(c.FormatterTopic, c.FormatterGroup),
+		writer: c.Broker.NewWriter(c.DispatcherTopic),
+		dlq:    dlq,
+		pool:   pool,
+	}
 }
 
 func (service *FormatterService) Name() string { return "alert-formatter" }
@@ -121,7 +119,7 @@ func (service *FormatterService) processBatch(ctx context.Context, msgs []broker
 	// Determine the maximum number of formatter stages across all alerts.
 	maxStages := 0
 	for _, s := range states {
-		if n := len(s.alert.Rule.Formatters()); n > maxStages {
+		if n := len(s.alert.Rule.Formatters); n > maxStages {
 			maxStages = n
 		}
 	}
@@ -138,7 +136,7 @@ func (service *FormatterService) processBatch(ctx context.Context, msgs []broker
 			if s.deadLetter {
 				continue
 			}
-			fmts := s.alert.Rule.Formatters()
+			fmts := s.alert.Rule.Formatters
 			if fmtProgress[i] >= len(fmts) {
 				continue
 			}
@@ -157,10 +155,15 @@ func (service *FormatterService) processBatch(ctx context.Context, msgs []broker
 			go func(name string, idxs []int) {
 				defer wg.Done()
 
+				// Copy under the lock (a bare read of the shared alert would race the locked writers
+				// below). Format only reads the alert, so a shallow copy suffices.
+				mu.Lock()
 				batch := make([]*alerts.Alert, len(idxs))
 				for j, idx := range idxs {
-					batch[j] = states[idx].alert
+					cp := *states[idx].alert
+					batch[j] = &cp
 				}
+				mu.Unlock()
 
 				_, absent, removed, errs := service.pool.Format(ctx, name, batch, "")
 
@@ -174,11 +177,11 @@ func (service *FormatterService) processBatch(ctx context.Context, msgs []broker
 					}
 					for _, idx := range idxs {
 						s := states[idx]
-						service.Error(errors.NewF("formatter %s %s - alert %s missing formatter", name, label, s.alert.AlertID))
+						service.Error(errors.NewF("formatter %s %s - alert %s missing formatter", name, label, s.alert.Id))
 						s.alert.Attempts++
 						if s.alert.Attempts >= services.MaxPluginAttempts {
-							service.Info("alert %s passed through after %d attempts (formatter unavailable)", s.alert.AlertID, s.alert.Attempts)
-							fmtProgress[idx] = len(s.alert.Rule.Formatters())
+							service.Info("alert %s passed through after %d attempts (formatter unavailable)", s.alert.Id, s.alert.Attempts)
+							fmtProgress[idx] = len(s.alert.Rule.Formatters)
 						} else {
 							s.deadLetter = true
 						}
@@ -195,8 +198,8 @@ func (service *FormatterService) processBatch(ctx context.Context, msgs []broker
 							}
 							s.alert.Attempts++
 							if s.alert.Attempts >= services.MaxPluginAttempts {
-								service.Info("alert %s passed through after %d attempts (formatter %s errored)", s.alert.AlertID, s.alert.Attempts, name)
-								fmtProgress[idx] = len(s.alert.Rule.Formatters())
+								service.Info("alert %s passed through after %d attempts (formatter %s errored)", s.alert.Id, s.alert.Attempts, name)
+								fmtProgress[idx] = len(s.alert.Rule.Formatters)
 							} else {
 								s.deadLetter = true
 							}
