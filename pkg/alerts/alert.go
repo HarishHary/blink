@@ -3,6 +3,7 @@ package alerts
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"reflect"
 	"sort"
 	"strings"
@@ -39,6 +40,23 @@ type Alert struct {
 
 	Rule                *rules.RuleMetadata
 	OverrideMergeByKeys []string
+}
+
+// Clone returns a shallow copy of the alert with its Event map cloned. Metadata fields such
+// as Rule and slice fields are shared with the original; callers use this when plugins may mutate Event.
+func (a *Alert) Clone() *Alert {
+	clone := *a
+	clone.Event = maps.Clone(clone.Event)
+	return &clone
+}
+
+// CloneBatch returns shallow alert copies with cloned Event maps, preserving input order.
+func CloneBatch(in []*Alert) []*Alert {
+	out := make([]*Alert, len(in))
+	for i, alert := range in {
+		out[i] = alert.Clone()
+	}
+	return out
 }
 
 // MergeByKeys returns the effective merge keys; the plugin's AlertMergeByKeys override takes precedence over the YAML value.

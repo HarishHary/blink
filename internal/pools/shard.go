@@ -2,53 +2,55 @@ package pools
 
 import "sync"
 
-// ShardSlice splits xs into k contiguous, near-equal chunks (k >= 1), order-preserving. The first
-// (len(xs) % k) chunks get one extra element; empty chunks are omitted, so concatenating per-chunk
-// results realigns 1:1 with xs. Callers use it to fan a batch across a plugin's max_procs workers.
-func ShardSlice[E any](xs []E, k int) [][]E {
-	if k < 1 {
-		k = 1
+// ShardSlice splits items into maxChunks contiguous, near-equal chunks (maxChunks >= 1),
+// order-preserving. The first (len(items) % maxChunks) chunks get one extra element; empty chunks
+// are omitted, so concatenating per-chunk results realigns 1:1 with items. Callers use it to fan a
+// batch across a plugin's max_procs workers.
+func ShardSlice[Item any](items []Item, maxChunks int) [][]Item {
+	if maxChunks < 1 {
+		maxChunks = 1
 	}
-	n := len(xs)
-	base := n / k
-	rem := n % k
-	chunks := make([][]E, 0, k)
-	start := 0
-	for i := 0; i < k; i++ {
-		size := base
-		if i < rem {
-			size++
+	itemCount := len(items)
+	baseChunkSize := itemCount / maxChunks
+	extraItems := itemCount % maxChunks
+	chunks := make([][]Item, 0, maxChunks)
+	startIndex := 0
+	for chunkIndex := 0; chunkIndex < maxChunks; chunkIndex++ {
+		chunkSize := baseChunkSize
+		if chunkIndex < extraItems {
+			chunkSize++
 		}
-		if size == 0 {
+		if chunkSize == 0 {
 			continue
 		}
-		chunks = append(chunks, xs[start:start+size])
-		start += size
+		chunks = append(chunks, items[startIndex:startIndex+chunkSize])
+		startIndex += chunkSize
 	}
 	return chunks
 }
 
-// ShardConcurrent splits xs into up to k contiguous chunks and runs fn on each concurrently, returning
-// the per-chunk results in chunk order (out[i] is fn(chunk i), and chunk i precedes chunk i+1, so a
-// caller that concatenates the per-chunk results stays aligned with xs). With k <= 1 (or len(xs) <= 1)
-// it runs fn once over xs - the un-sharded path. k is clamped to len(xs) so no empty chunk is created.
-func ShardConcurrent[E, R any](xs []E, k int, fn func([]E) R) []R {
-	if k > len(xs) {
-		k = len(xs)
+// ShardConcurrent splits items into up to maxChunks contiguous chunks and runs processChunk on each
+// concurrently, returning the per-chunk results in chunk order (results[i] is processChunk(chunk i),
+// and chunk i precedes chunk i+1, so a caller that concatenates the per-chunk results stays aligned
+// with items). With maxChunks <= 1 (or len(items) <= 1) it runs processChunk once over items - the
+// un-sharded path. maxChunks is clamped to len(items) so no empty chunk is created.
+func ShardConcurrent[Item, Result any](items []Item, maxChunks int, processChunk func([]Item) Result) []Result {
+	if maxChunks > len(items) {
+		maxChunks = len(items)
 	}
-	if k <= 1 {
-		return []R{fn(xs)}
+	if maxChunks <= 1 {
+		return []Result{processChunk(items)}
 	}
-	chunks := ShardSlice(xs, k)
-	out := make([]R, len(chunks))
-	var wg sync.WaitGroup
-	for i := range chunks {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			out[i] = fn(chunks[i])
-		}(i)
+	chunks := ShardSlice(items, maxChunks)
+	results := make([]Result, len(chunks))
+	var waitGroup sync.WaitGroup
+	for chunkIndex := range chunks {
+		waitGroup.Add(1)
+		go func(chunkIndex int) {
+			defer waitGroup.Done()
+			results[chunkIndex] = processChunk(chunks[chunkIndex])
+		}(chunkIndex)
 	}
-	wg.Wait()
-	return out
+	waitGroup.Wait()
+	return results
 }
