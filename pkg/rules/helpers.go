@@ -2,6 +2,8 @@
 package rules
 
 import (
+	"slices"
+
 	"github.com/harishhary/blink/pkg/events"
 )
 
@@ -10,7 +12,7 @@ func DefaultSubKeysInEvent(rule *RuleMetadata, event events.Event) bool {
 	if !rule.Enabled {
 		return false
 	}
-	for _, k := range rule.ReqSubkeys() {
+	for _, k := range rule.ReqSubkeys {
 		if event.Get(k, nil) == nil {
 			return false
 		}
@@ -18,23 +20,19 @@ func DefaultSubKeysInEvent(rule *RuleMetadata, event events.Event) bool {
 	return true
 }
 
-// RulesForLogTypeIn returns the enabled rules in the slice that apply to logType. An empty
-// log_types list means the rule applies to all log types.
+// RulesForLogTypeIn returns enabled rules that apply to the given log type.
 func RulesForLogTypeIn(rules []*RuleMetadata, logType string) []*RuleMetadata {
 	var result []*RuleMetadata
 	for _, cfg := range rules {
 		if !cfg.Enabled {
 			continue
 		}
-		if len(cfg.LogTypesField) == 0 {
+		if len(cfg.LogTypes) == 0 {
 			result = append(result, cfg)
 			continue
 		}
-		for _, lt := range cfg.LogTypesField {
-			if lt == logType {
-				result = append(result, cfg)
-				break
-			}
+		if slices.Contains(cfg.LogTypes, logType) {
+			result = append(result, cfg)
 		}
 	}
 	return result

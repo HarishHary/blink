@@ -20,7 +20,7 @@ func PrintValue(writer *strings.Builder, value *reflect.Value) {
 	switch ttype.Kind() {
 	case reflect.Struct:
 		PrintStruct(writer, value)
-	case reflect.Ptr:
+	case reflect.Pointer:
 		value := value.Elem()
 		PrintStruct(writer, &value)
 	case reflect.Func:

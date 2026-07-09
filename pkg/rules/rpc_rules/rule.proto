@@ -2,21 +2,20 @@ syntax = "proto3";
 package rules;
 option go_package = "rpc_rules/;rpc_rules";
 
-message Empty {}
+import "google/protobuf/empty.proto";
+import "google/protobuf/struct.proto";
 
-message Event { bytes json = 1; }
-
-message EvaluateBatchRequest { repeated Event events = 1; }
+message EvaluateBatchRequest { repeated google.protobuf.Struct events = 1; }
 
 // EventResult carries the match outcome and any optional per-event overrides.
 // Empty string / nil fields mean "use YAML default".
 message EventResult {
-  bool            matched       = 1;
-  string          title         = 2;
-  string          description   = 3;
-  string          severity      = 4; // "info|low|medium|high|critical"; "" = YAML default
-  bytes           context_json  = 5; // JSON-encoded map[string]any; empty = nil
-  repeated string merge_by_keys = 6; // empty = use YAML merge_by_keys
+  bool                   matched       = 1;
+  string                 title         = 2;
+  string                 description   = 3;
+  string                 severity      = 4; // "info|low|medium|high|critical"; "" = YAML default
+  google.protobuf.Struct context       = 5; // per-event context map; nil = YAML default
+  repeated string        merge_by_keys = 6; // empty = use YAML merge_by_keys
 }
 
 message EvaluateBatchResponse {
@@ -24,8 +23,8 @@ message EvaluateBatchResponse {
 }
 
 service Rule {
-  rpc Init(Empty)                                   returns (Empty);
-  rpc EvaluateBatch(EvaluateBatchRequest)           returns (EvaluateBatchResponse);
-  rpc Shutdown(Empty)                               returns (Empty);
-  rpc Ping(Empty)                                   returns (Empty);
+  rpc EvaluateBatch(EvaluateBatchRequest) returns (EvaluateBatchResponse);
+  rpc Init(google.protobuf.Empty)         returns (google.protobuf.Empty);
+  rpc Shutdown(google.protobuf.Empty)     returns (google.protobuf.Empty);
+  rpc Ping(google.protobuf.Empty)         returns (google.protobuf.Empty);
 }

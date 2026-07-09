@@ -51,7 +51,7 @@ func NewUpdateMessage[T Syncable](items []T, maxProcs int, onDrained func()) Upd
 	return UpdateMessage[T]{Items: items, MaxProcs: maxProcs, OnDrained: onDrained}
 }
 
-// MigrateMessage is delivered when two binaries for one ID swap modes (YAML-only, e.g. canary promoted to stable); no process is killed/spawned, only routing slots are reassigned.
+// MigrateMessage is delivered when two binaries for one ID swap modes (YAML-only, e.g. canary promoted to stable); no process is killed/spawned, only rollout slots are reassigned.
 type MigrateMessage[T Syncable] struct {
 	messaging.IsMessage
 	ActiveKey  pools.PoolKey // key that should hold active[id]
@@ -60,4 +60,28 @@ type MigrateMessage[T Syncable] struct {
 
 func NewMigrateMessage[T Syncable](activeKey, pendingKey pools.PoolKey) MigrateMessage[T] {
 	return MigrateMessage[T]{ActiveKey: activeKey, PendingKey: pendingKey}
+}
+
+// poolKey builds the pool key for a runtime plugin handle: {Id, Name, binary Checksum}.
+func poolKey[T Syncable](item T) pools.PoolKey {
+	md := item.Metadata()
+	return pools.PoolKey{Id: md.Id, Name: md.Name, Hash: item.Checksum()}
+}
+
+// SyncPool applies a plugin lifecycle message to pp - the single implementation shared by every plugin
+// type's Pool.Sync: register/update stage or promote a version, unregister/remove drain it, migrate
+// swaps the active/pending slots.
+func SyncPool[T Syncable](pp *pools.ProcessPool[T], msg messaging.Message) {
+	switch m := msg.(type) {
+	case RegisterMessage[T]:
+		pp.Register(poolKey(m.Items[0]), m.Items, m.MaxProcs, nil)
+	case UpdateMessage[T]:
+		pp.Register(poolKey(m.Items[0]), m.Items, m.MaxProcs, m.OnDrained)
+	case UnregisterMessage[T]:
+		pp.Unregister(m.ItemKey)
+	case RemoveMessage[T]:
+		pp.Remove(m.ItemKey)
+	case MigrateMessage[T]:
+		pp.MigrateSlots(m.ActiveKey.Id, m.ActiveKey, m.PendingKey)
+	}
 }

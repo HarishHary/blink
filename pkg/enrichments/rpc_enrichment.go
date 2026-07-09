@@ -3,11 +3,13 @@ package enrichments
 import (
 	"context"
 	"encoding/json"
+	"maps"
 
 	"github.com/harishhary/blink/internal/config"
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/alerts"
+	pb "github.com/harishhary/blink/pkg/alerts/pb"
 	"github.com/harishhary/blink/pkg/enrichments/rpc_enrichments"
 )
 
@@ -50,34 +52,27 @@ func (r *rpcEnrichment) Metadata() plugin.PluginMetadata {
 	return plugin.PluginMetadata{Id: r.fileName, Name: r.fileName}
 }
 
-func (r *rpcEnrichment) DependsOn() []string { return r.EnrichmentMetadata().DependsOn }
-func (r *rpcEnrichment) Checksum() string    { return r.checksum }
-func (r *rpcEnrichment) String() string {
-	m := r.EnrichmentMetadata().Metadata()
-	return "RpcEnrichment '" + m.Name + "' id:'" + m.Id + "'"
-}
+func (r *rpcEnrichment) Checksum() string { return r.checksum }
 
-func (r *rpcEnrichment) Enrich(ctx context.Context, alerts []*alerts.Alert) errors.Error {
-	protoAlerts := make([]*rpc_enrichments.Alert, 0, len(alerts))
-	for _, alrt := range alerts {
-		b, err := json.Marshal(alrt)
+func (r *rpcEnrichment) Enrich(ctx context.Context, batch []*alerts.Alert) errors.Error {
+	pbAlerts := make([]*pb.Alert, 0, len(batch))
+	for _, a := range batch {
+		pa, err := alerts.AlertToProto(a)
 		if err != nil {
 			return errors.New(err)
 		}
-		protoAlerts = append(protoAlerts, &rpc_enrichments.Alert{Json: b})
+		pbAlerts = append(pbAlerts, pa)
 	}
-	resp, err := r.client.EnrichBatch(ctx, &rpc_enrichments.EnrichBatchRequest{Alerts: protoAlerts})
+	resp, err := r.client.EnrichBatch(ctx, &rpc_enrichments.EnrichBatchRequest{Alerts: pbAlerts})
 	if err != nil {
 		return errors.New(err)
 	}
-	for i, a := range resp.GetAlerts() {
+	for i, raw := range resp.GetResultJson() {
 		var enriched map[string]any
-		if err := json.Unmarshal(a.GetJson(), &enriched); err != nil {
+		if err := json.Unmarshal(raw, &enriched); err != nil {
 			return errors.New(err)
 		}
-		for k, v := range enriched {
-			alerts[i].Event[k] = v
-		}
+		maps.Copy(batch[i].Event, enriched)
 	}
 	return nil
 }

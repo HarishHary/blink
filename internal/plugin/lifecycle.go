@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"slices"
 	"time"
 
 	goplugin "github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/handshake"
@@ -63,19 +65,20 @@ func (m *PluginExecutor[T]) spawn(path, hash string) (T, *PluginHandle, error) {
 		return zero, nil, fmt.Errorf("dispense: %w", err)
 	}
 
-	wrapped, lifecycle, id, name, err := m.adapter.Handshake(context.Background(), raw, path, hash)
+	wrapped, rpc, err := m.adapter.Handshake(context.Background(), raw, path, hash)
 	if err != nil {
 		cl.Kill()
 		var zero T
 		return zero, nil, err
 	}
 
-	handle := &PluginHandle{Client: cl, Lifecycle: lifecycle, BinPath: path, Key: pools.PoolKey{Id: id, Name: wrapped.Metadata().Name, Hash: hash}, Mode: wrapped.Metadata().RolloutMode, Name: name, stopped: make(chan struct{})}
+	md := wrapped.Metadata() // snapshot-derived id/name; single source of truth
+	handle := &PluginHandle{Client: cl, RPC: rpc, BinPath: path, Key: pools.PoolKey{Id: md.Id, Name: md.Name, Hash: hash}, Mode: md.RolloutMode, Name: md.Name, stopped: make(chan struct{})}
 
 	m.metrics.StartLatency.Observe(time.Since(startedAt).Seconds())
 	m.metrics.ActiveSubprocesses.WithLabelValues(m.adapter.PluginKey()).Inc()
 	m.metrics.Starts.Inc()
-	m.logger.Info("%s started: %s [%s] (%s)", m.adapter.PluginKey(), name, id, path)
+	m.logger.Info("%s started: %s [%s] (%s)", m.adapter.PluginKey(), md.Name, md.Id, path)
 
 	return wrapped, handle, nil
 }
@@ -136,10 +139,7 @@ func (m *PluginExecutor[T]) startWithBackoff(path, hash string) error {
 			m.failures[path] = f
 		}
 		f.count++
-		backoff := time.Duration(10<<min(f.count-1, 5)) * time.Second // 10s→320s, cap 5min
-		if backoff > 5*time.Minute {
-			backoff = 5 * time.Minute
-		}
+		backoff := min(time.Duration(10<<min(f.count-1, 5))*time.Second, 5*time.Minute) // 10s→320s, cap 5min
 		f.nextRetry = time.Now().Add(backoff)
 		m.mu.Unlock()
 		m.logger.ErrorF("%s %s start failed (attempt %d), next retry in %v", m.adapter.PluginKey(), path, f.count, backoff)
@@ -171,11 +171,12 @@ func (m *PluginExecutor[T]) update(path string, oldHandles []*PluginHandle, newH
 	if err != nil {
 		return err
 	}
-	m.notify(NewUpdateMessage[T](wrapped, len(newHandles), func() {
+	onDrained := func() {
 		for _, h := range oldHandles {
 			m.kill(h)
 		}
-	}))
+	}
+	m.notify(NewUpdateMessage[T](wrapped, len(newHandles), onDrained))
 	m.metrics.Updates.Inc()
 	m.logger.Info("%s updated: %s (%d worker(s))", m.adapter.PluginKey(), path, len(newHandles))
 	return nil
@@ -191,7 +192,7 @@ func (m *PluginExecutor[T]) kill(handle *PluginHandle) {
 			}
 		}()
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		_ = handle.Lifecycle.Shutdown(ctx)
+		_, _ = handle.RPC.Shutdown(ctx, &emptypb.Empty{})
 		cancel()
 		handle.Client.Kill()
 		m.metrics.ActiveSubprocesses.WithLabelValues(m.adapter.PluginKey()).Dec()
@@ -267,19 +268,12 @@ func (m *PluginExecutor[T]) pingLoop(handle *PluginHandle) {
 			m.mu.RLock()
 			current := m.plugin_handles[handle.BinPath]
 			m.mu.RUnlock()
-			active := false
-			for _, h := range current {
-				if h == handle {
-					active = true
-					break
-				}
-			}
-			if !active {
+			if !slices.Contains(current, handle) {
 				return
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			err := handle.Lifecycle.Ping(ctx)
+			_, err := handle.RPC.Ping(ctx, &emptypb.Empty{})
 			cancel()
 			if err != nil {
 				m.metrics.Crashes.Inc()
@@ -289,14 +283,7 @@ func (m *PluginExecutor[T]) pingLoop(handle *PluginHandle) {
 				group := m.plugin_handles[handle.BinPath]
 				m.mu.RUnlock()
 				// Guard: if our handle is no longer in the group, update() replaced it mid-Ping; the new workers' pingLoops own future restarts.
-				inGroup := false
-				for _, h := range group {
-					if h == handle {
-						inGroup = true
-						break
-					}
-				}
-				if !inGroup {
+				if !slices.Contains(group, handle) {
 					return
 				}
 				if restartErr := m.restart(handle.BinPath, group); restartErr != nil {

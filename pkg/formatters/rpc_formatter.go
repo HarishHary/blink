@@ -3,12 +3,12 @@ package formatters
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 
 	"github.com/harishhary/blink/internal/config"
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/alerts"
+	pb "github.com/harishhary/blink/pkg/alerts/pb"
 	"github.com/harishhary/blink/pkg/formatters/rpc_formatters"
 )
 
@@ -52,21 +52,17 @@ func (f *rpcFormatter) Metadata() plugin.PluginMetadata {
 }
 
 func (f *rpcFormatter) Checksum() string { return f.checksum }
-func (f *rpcFormatter) String() string {
-	m := f.FormatterMetadata().Metadata()
-	return fmt.Sprintf("Formatter '%s' (id:%s)", m.Name, m.Id)
-}
 
-func (f *rpcFormatter) Format(ctx context.Context, alerts []*alerts.Alert) ([]map[string]any, errors.Error) {
-	alertJSONs := make([][]byte, 0, len(alerts))
-	for _, alrt := range alerts {
-		b, err := json.Marshal(alrt)
+func (f *rpcFormatter) Format(ctx context.Context, batch []*alerts.Alert) ([]map[string]any, errors.Error) {
+	pbAlerts := make([]*pb.Alert, 0, len(batch))
+	for _, a := range batch {
+		pa, err := alerts.AlertToProto(a)
 		if err != nil {
 			return nil, errors.NewE(err)
 		}
-		alertJSONs = append(alertJSONs, b)
+		pbAlerts = append(pbAlerts, pa)
 	}
-	resp, err := f.client.FormatBatch(ctx, &rpc_formatters.FormatBatchRequest{AlertJson: alertJSONs})
+	resp, err := f.client.FormatBatch(ctx, &rpc_formatters.FormatBatchRequest{Alerts: pbAlerts})
 	if err != nil {
 		return nil, errors.NewE(err)
 	}

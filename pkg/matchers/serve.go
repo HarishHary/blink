@@ -2,11 +2,11 @@ package matchers
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 
 	"github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/handshake"
@@ -14,14 +14,17 @@ import (
 	"github.com/harishhary/blink/pkg/matchers/rpc_matchers"
 )
 
+// MagicValue is the matcher plugin handshake cookie value.
 const MagicValue = "matcher_v1"
 
+// Plugin is the interface matcher plugin binaries must implement.
 type Plugin interface {
 	Init() error
 	Match(ctx context.Context, event events.Event) (bool, errors.Error)
 	Shutdown() error
 }
 
+// BaseMatcher provides no-op Init and Shutdown defaults.
 type BaseMatcher struct{}
 
 func (BaseMatcher) Init() error     { return nil }
@@ -32,17 +35,14 @@ type server struct {
 	matcher Plugin
 }
 
-func (s *server) Init(_ context.Context, _ *rpc_matchers.Empty) (*rpc_matchers.Empty, error) {
-	return &rpc_matchers.Empty{}, s.matcher.Init()
+func (s *server) Init(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	return &emptypb.Empty{}, s.matcher.Init()
 }
 
 func (s *server) MatchBatch(ctx context.Context, req *rpc_matchers.MatchBatchRequest) (*rpc_matchers.MatchBatchResponse, error) {
 	results := make([]bool, 0, len(req.GetEvents()))
 	for _, ev := range req.GetEvents() {
-		var event events.Event
-		if err := json.Unmarshal(ev.GetJson(), &event); err != nil {
-			return nil, err
-		}
+		event := events.Event(ev.AsMap())
 		matched, err := s.matcher.Match(ctx, event)
 		if err != nil {
 			return nil, err
@@ -52,12 +52,12 @@ func (s *server) MatchBatch(ctx context.Context, req *rpc_matchers.MatchBatchReq
 	return &rpc_matchers.MatchBatchResponse{Matched: results}, nil
 }
 
-func (s *server) Ping(_ context.Context, _ *rpc_matchers.Empty) (*rpc_matchers.Empty, error) {
-	return &rpc_matchers.Empty{}, nil
+func (s *server) Ping(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	return &emptypb.Empty{}, nil
 }
 
-func (s *server) Shutdown(_ context.Context, _ *rpc_matchers.Empty) (*rpc_matchers.Empty, error) {
-	return &rpc_matchers.Empty{}, s.matcher.Shutdown()
+func (s *server) Shutdown(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	return &emptypb.Empty{}, s.matcher.Shutdown()
 }
 
 type pluginImpl struct {
@@ -70,10 +70,11 @@ func (p *pluginImpl) GRPCServer(_ *plugin.GRPCBroker, s *grpc.Server) error {
 	return nil
 }
 
-func (p *pluginImpl) GRPCClient(_ context.Context, _ *plugin.GRPCBroker, c *grpc.ClientConn) (interface{}, error) {
+func (p *pluginImpl) GRPCClient(_ context.Context, _ *plugin.GRPCBroker, c *grpc.ClientConn) (any, error) {
 	return rpc_matchers.NewMatcherClient(c), nil
 }
 
+// Serve starts the matcher plugin gRPC server.
 func Serve(m Plugin) {
 	os.Setenv("GODEBUG", "madvdontneed=1")
 	plugin.Serve(&plugin.ServeConfig{

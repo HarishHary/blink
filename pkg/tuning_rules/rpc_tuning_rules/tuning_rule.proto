@@ -2,13 +2,16 @@ syntax = "proto3";
 package tuning_rules;
 option go_package = "rpc_tuning_rules/;rpc_tuning_rules";
 
-message Empty {}
-message TuneBatchRequest  { repeated bytes alert_json = 1; } // one JSON-encoded map[string]any per alert
-message TuneBatchResponse { repeated bool  applies    = 1; } // one result per alert
+import "google/protobuf/empty.proto";
+import "pkg/alerts/pb/alert.proto";
+
+message TuneBatchRequest  { repeated alerts.Alert alerts = 1; } // structured alerts.Alert per alert
+
+message TuneBatchResponse { repeated bool applies = 1; } // one result per alert
 
 service TuningRule {
-  rpc Init(Empty)                     returns (Empty);
   rpc TuneBatch(TuneBatchRequest)     returns (TuneBatchResponse);
-  rpc Shutdown(Empty)                 returns (Empty);
-  rpc Ping(Empty)                     returns (Empty);
+  rpc Init(google.protobuf.Empty)     returns (google.protobuf.Empty);
+  rpc Shutdown(google.protobuf.Empty) returns (google.protobuf.Empty);
+  rpc Ping(google.protobuf.Empty)     returns (google.protobuf.Empty);
 }

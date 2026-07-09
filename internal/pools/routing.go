@@ -14,6 +14,7 @@ const (
 	RolloutModeShadow
 )
 
+// String returns the mode's canonical name: "blue-green", "canary", or "shadow".
 func (m RolloutMode) String() string {
 	switch m {
 	case RolloutModeBlueGreen:
@@ -27,10 +28,12 @@ func (m RolloutMode) String() string {
 	}
 }
 
+// MarshalText encodes the mode as its String() name, for YAML/JSON round-tripping.
 func (m RolloutMode) MarshalText() ([]byte, error) {
 	return []byte(m.String()), nil
 }
 
+// UnmarshalText parses a mode name; empty and "bluegreen" both map to blue-green.
 func (m *RolloutMode) UnmarshalText(b []byte) error {
 	switch string(b) {
 	case "blue-green", "bluegreen", "":
@@ -45,11 +48,12 @@ func (m *RolloutMode) UnmarshalText(b []byte) error {
 	return nil
 }
 
-// RoutingConfig returns per-plugin (mode, rolloutPct): name!="" at Register (per-binary lookup), name=="" at Call (merged id-level); zero values mean blue-green.
-type RoutingConfig func(pluginID string, name string) (mode RolloutMode, rolloutPct float64)
+// RolloutConfig returns per-plugin (mode, rolloutPct): name != "" at Register (per-binary lookup),
+// name == "" at Call (merged id-level); zero values mean blue-green.
+type RolloutConfig func(pluginID, name string) (mode RolloutMode, rolloutPct float64)
 
-// RoutingEntry holds the routing configuration for a single plugin.
-type RoutingEntry struct {
-	Mode       RolloutMode
-	RolloutPct float64
+// RolloutEntry holds the rollout configuration for a single plugin.
+type RolloutEntry struct {
+	RolloutMode RolloutMode
+	RolloutPct  float64
 }

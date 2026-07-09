@@ -14,13 +14,13 @@ type PluginAdapter[T Syncable] struct {
 	Magic       string
 	Plugin      goplugin.Plugin
 	Config      DesiredConfig
-	DoHandshake func(ctx context.Context, raw any, binPath, hash string) (T, PluginLifecycle, string, string, error)
+	DoHandshake func(ctx context.Context, raw any, binPath, hash string) (T, PluginRPC, error)
 }
 
 func (a *PluginAdapter[T]) PluginKey() string           { return a.Key }
 func (a *PluginAdapter[T]) MagicValue() string          { return a.Magic }
 func (a *PluginAdapter[T]) GRPCPlugin() goplugin.Plugin { return a.Plugin }
-func (a *PluginAdapter[T]) Handshake(ctx context.Context, raw interface{}, binPath string, hash string) (T, PluginLifecycle, string, string, error) {
+func (a *PluginAdapter[T]) Handshake(ctx context.Context, raw any, binPath string, hash string) (T, PluginRPC, error) {
 	return a.DoHandshake(ctx, raw, binPath, hash)
 }
 

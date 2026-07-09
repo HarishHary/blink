@@ -2,15 +2,16 @@ syntax = "proto3";
 package formatters;
 option go_package = "rpc_formatters/;rpc_formatters";
 
-message Empty {}
+import "google/protobuf/empty.proto";
+import "pkg/alerts/pb/alert.proto";
 
-message FormatBatchRequest  { repeated bytes alert_json  = 1; } // one JSON-encoded alerts.Alert per alert
+message FormatBatchRequest  { repeated alerts.Alert alerts = 1; } // structured alerts.Alert per alert
 
 message FormatBatchResponse { repeated bytes result_json = 1; } // one JSON-encoded map[string]any per alert
 
 service Formatter {
-  rpc Init(Empty)                     returns (Empty);
   rpc FormatBatch(FormatBatchRequest) returns (FormatBatchResponse);
-  rpc Shutdown(Empty)                 returns (Empty);
-  rpc Ping(Empty)                     returns (Empty);
+  rpc Init(google.protobuf.Empty)     returns (google.protobuf.Empty);
+  rpc Shutdown(google.protobuf.Empty) returns (google.protobuf.Empty);
+  rpc Ping(google.protobuf.Empty)     returns (google.protobuf.Empty);
 }

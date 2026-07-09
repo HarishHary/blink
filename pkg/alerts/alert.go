@@ -3,6 +3,7 @@ package alerts
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"reflect"
 	"sort"
 	"strings"
@@ -41,12 +42,29 @@ type Alert struct {
 	OverrideMergeByKeys []string
 }
 
+// Clone returns a shallow copy of the alert with its Event map cloned. Metadata fields such
+// as Rule and slice fields are shared with the original; callers use this when plugins may mutate Event.
+func (a *Alert) Clone() *Alert {
+	clone := *a
+	clone.Event = maps.Clone(clone.Event)
+	return &clone
+}
+
+// CloneBatch returns shallow alert copies with cloned Event maps, preserving input order.
+func CloneBatch(in []*Alert) []*Alert {
+	out := make([]*Alert, len(in))
+	for i, alert := range in {
+		out[i] = alert.Clone()
+	}
+	return out
+}
+
 // MergeByKeys returns the effective merge keys; the plugin's AlertMergeByKeys override takes precedence over the YAML value.
 func (a *Alert) MergeByKeys() []string {
 	if len(a.OverrideMergeByKeys) > 0 {
 		return a.OverrideMergeByKeys
 	}
-	return a.Rule.MergeByKeys()
+	return a.Rule.MergeByKeys
 }
 
 // Creates a new Alert
@@ -58,8 +76,8 @@ func NewAlert(rule *rules.RuleMetadata, event events.Event, optFns ...AlertOptio
 		Event:      event,
 		Rule:       rule,
 		Staged:     false,
-		Severity:   rule.Severity(),
-		Confidence: rule.Confidence(),
+		Severity:   rule.Severity,
+		Confidence: rule.Confidence,
 	}
 	for _, optFn := range optFns {
 		optFn(alert)
@@ -158,8 +176,8 @@ func (a *Alert) OutputDict() map[string]any {
 		"id":               a.Id,
 		"log_source":       a.LogSource,
 		"log_type":         a.LogType,
-		"outputs":          a.Rule.Dispatchers(),
-		"formatters":       a.Rule.Formatters(),
+		"outputs":          a.Rule.Dispatchers,
+		"formatters":       a.Rule.Formatters,
 		"event":            a.Event,
 		"rule_description": a.Rule.Description,
 		"rule_name":        a.Rule.Name,
@@ -200,11 +218,11 @@ func (a *Alert) CanMerge(other *Alert) bool {
 		older, newer = newer, older
 	}
 
-	if newer.Created.After(older.Created.Add(time.Duration(older.Rule.MergeWindowMins()) * time.Minute)) {
+	if newer.Created.After(older.Created.Add(older.Rule.MergeWindowMins())) {
 		return false
 	}
 
-	if !helpers.EqualStringSlices(a.MergeByKeys(), other.Rule.MergeByKeys()) {
+	if !helpers.EqualStringSlices(a.MergeByKeys(), other.MergeByKeys()) {
 		return false
 	}
 
@@ -241,9 +259,9 @@ func (a *Alert) MergePartitionKey() string {
 func (a *Alert) RemainingOutputs(requiredOutputs []string) []string {
 	var outputsToSendNow []string
 	if a.MergeEnabled() {
-		outputsToSendNow = helpers.Intersect(a.Rule.Dispatchers(), requiredOutputs)
+		outputsToSendNow = helpers.Intersect(a.Rule.Dispatchers, requiredOutputs)
 	} else {
-		outputsToSendNow = a.Rule.Dispatchers()
+		outputsToSendNow = a.Rule.Dispatchers
 	}
 	return helpers.Difference(outputsToSendNow, a.OutputsSent)
 }
@@ -259,7 +277,7 @@ func (a *Alert) RecordKey() map[string]string {
 
 // Signal reports whether this alert qualifies as a signal (the rule opts in and confidence meets its threshold).
 func (a *Alert) Signal() bool {
-	return a.Rule.Signal() && a.Rule.SignalThreshold() <= a.Confidence
+	return a.Rule.Signal && a.Rule.SignalThreshold <= a.Confidence
 }
 
 // RiskScore computes the alert's risk score from its confidence and severity.

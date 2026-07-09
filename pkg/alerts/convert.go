@@ -116,21 +116,23 @@ func RuleMetadataToProto(r *rules.RuleMetadata) (*pb.RuleMetadata, error) {
 		Enabled:         r.Enabled,
 		Version:         r.Version,
 		DisplayName:     r.DisplayName,
-		Severity:        r.Severity().String(),
-		Confidence:      r.Confidence().String(),
-		MergeByKeys:     r.MergeByKeys(),
+		Severity:        r.Severity.String(),
+		Confidence:      r.Confidence.String(),
+		MergeByKeys:     r.MergeByKeys,
 		MergeWindowMins: uint32(r.MergeWindowMins() / time.Minute),
-		ReqSubkeys:      r.ReqSubkeys(),
-		Signal:          r.Signal(),
-		SignalThreshold: r.SignalThreshold().String(),
-		Tags:            r.Tags(),
-		Dispatchers:     r.Dispatchers(),
-		LogTypes:        r.LogTypes(),
-		Matchers:        r.Matchers(),
-		Formatters:      r.Formatters(),
-		Enrichments:     r.Enrichments(),
-		TuningRules:     r.TuningRules(),
-		References:      r.References(),
+		ReqSubkeys:      r.ReqSubkeys,
+		Signal:          r.Signal,
+		SignalThreshold: r.SignalThreshold.String(),
+		Tags:            r.Tags,
+		Dispatchers:     r.Dispatchers,
+		LogTypes:        r.LogTypes,
+		Matchers:        r.Matchers,
+		Formatters:      r.Formatters,
+		Enrichments:     r.Enrichments,
+		TuningRules:     r.TuningRules,
+		References:      r.References,
+		RiskScore:       r.RiskScore.String(),
+		Observables:     observablesToProto(r.Observables),
 	}, nil
 }
 
@@ -151,21 +153,45 @@ func ProtoToRuleMetadata(m *pb.RuleMetadata) (*rules.RuleMetadata, error) {
 		SeverityStr:          m.GetSeverity(),
 		ConfidenceStr:        m.GetConfidence(),
 		SignalThresholdStr:   m.GetSignalThreshold(),
-		LogTypesField:        m.GetLogTypes(),
-		MatchersField:        m.GetMatchers(),
-		ReqSubkeysField:      m.GetReqSubkeys(),
-		MergeByKeysField:     m.GetMergeByKeys(),
+		LogTypes:             m.GetLogTypes(),
+		Matchers:             m.GetMatchers(),
+		ReqSubkeys:           m.GetReqSubkeys(),
+		MergeByKeys:          m.GetMergeByKeys(),
 		MergeWindowMinsField: m.GetMergeWindowMins(),
-		SignalField:          m.GetSignal(),
-		TagsField:            m.GetTags(),
-		ReferencesField:      m.GetReferences(),
-		DispatchersField:     m.GetDispatchers(),
-		FormattersField:      m.GetFormatters(),
-		EnrichmentsField:     m.GetEnrichments(),
-		TuningRulesField:     m.GetTuningRules(),
+		Signal:               m.GetSignal(),
+		Tags:                 m.GetTags(),
+		References:           m.GetReferences(),
+		Dispatchers:          m.GetDispatchers(),
+		Formatters:           m.GetFormatters(),
+		Enrichments:          m.GetEnrichments(),
+		TuningRules:          m.GetTuningRules(),
+		Observables:          observablesFromProto(m.GetObservables()),
 	})
 	if err != nil {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// observablesToProto / observablesFromProto convert rule observables between the Go struct and the wire.
+func observablesToProto(in []rules.Observable) []*pb.Observable {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]*pb.Observable, len(in))
+	for i, o := range in {
+		out[i] = &pb.Observable{Name: o.Name, Description: o.Description, Aggregation: o.Aggregation}
+	}
+	return out
+}
+
+func observablesFromProto(in []*pb.Observable) []rules.Observable {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]rules.Observable, len(in))
+	for i, o := range in {
+		out[i] = rules.Observable{Name: o.GetName(), Description: o.GetDescription(), Aggregation: o.GetAggregation()}
+	}
+	return out
 }

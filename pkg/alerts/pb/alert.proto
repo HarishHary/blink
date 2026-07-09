@@ -3,10 +3,17 @@ package alerts;
 
 import "google/protobuf/struct.proto";
 
-option go_package = "pb/;pb";
+option go_package = "github.com/harishhary/blink/pkg/alerts/pb";
+
+// Observable is a static field the rule surfaces in generated alerts.
+message Observable {
+  string name        = 1;
+  string description = 2;
+  bool   aggregation = 3;
+}
 
 // RuleMetadata carries rule configuration in the alert wire format.
-// Mirrors pkg/rules.RuleMetadata with additions for display_name, references, and risk_score.
+// Mirrors pkg/rules.RuleMetadata with additions for display_name, references, risk_score, and observables.
 message RuleMetadata {
   string          id                = 1;
   string          name              = 2;
@@ -29,7 +36,8 @@ message RuleMetadata {
   string          version           = 19;
   string          display_name      = 20;
   repeated string references        = 21;
-  string          risk_score        = 22;
+  string             risk_score        = 22;
+  repeated Observable observables       = 23;
 }
 
 // Alert is the Kafka wire format for a single alert travelling through the

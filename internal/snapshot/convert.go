@@ -23,8 +23,7 @@ func Unmarshal(data []byte) (EffectiveEntry, error) {
 	return ProtoToEntry(&pe), nil
 }
 
-// EntryToProto converts one EffectiveEntry to its protobuf form. The per-ID keyed snapshot
-// topic publishes these individually (one message per logical plugin ID).
+// EntryToProto converts one EffectiveEntry to its protobuf form.
 func EntryToProto(e EffectiveEntry) *pb.EffectiveEntry {
 	return &pb.EffectiveEntry{
 		Id:        e.Id,
@@ -44,18 +43,20 @@ func ProtoToEntry(e *pb.EffectiveEntry) EffectiveEntry {
 	}
 }
 
+// refToProto converts an ArtifactRef to its protobuf form (nil-safe).
 func refToProto(r *ArtifactRef) *pb.ArtifactRef {
 	if r == nil {
 		return nil
 	}
-	return &pb.ArtifactRef{Name: r.Name, Mode: pb.RolloutMode(r.Mode), Spec: r.Spec, Hash: r.Hash}
+	return &pb.ArtifactRef{Name: r.Name, Mode: pb.RolloutMode(r.RolloutMode), Spec: r.Spec, Hash: r.Hash}
 }
 
+// protoToRef converts a protobuf ArtifactRef back to the domain type (nil-safe).
 func protoToRef(r *pb.ArtifactRef) *ArtifactRef {
 	if r == nil {
 		return nil
 	}
-	return &ArtifactRef{Name: r.GetName(), Mode: pools.RolloutMode(r.GetMode()), Spec: r.GetSpec(), Hash: r.GetHash()}
+	return &ArtifactRef{Name: r.GetName(), RolloutMode: pools.RolloutMode(r.GetMode()), Spec: r.GetSpec(), Hash: r.GetHash()}
 }
 
 // --- Generation marker ---
@@ -65,7 +66,6 @@ func protoToRef(r *pb.ArtifactRef) *ArtifactRef {
 // GenerationMarkerKey is the reserved key the controller uses on the keyed snapshot topic to
 // publish the current DB generation for fleet rollout tracking. It is not a logical plugin ID:
 // readers special-case it (updating AppliedGeneration) and never treat it as an EffectiveEntry.
-// The name is chosen so it cannot collide with a plugin ID.
 const GenerationMarkerKey = "__blink_generation__"
 
 // EncodeGeneration marshals a generation-marker value as a big-endian int64.

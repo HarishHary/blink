@@ -2,8 +2,8 @@ package rules
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
+
+	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/harishhary/blink/internal/config"
 	"github.com/harishhary/blink/internal/errors"
@@ -56,40 +56,33 @@ func (r *rpcRule) Metadata() plugin.PluginMetadata {
 }
 
 func (r *rpcRule) Checksum() string { return r.checksum }
-func (r *rpcRule) String() string {
-	m := r.RuleMetadata().Metadata()
-	return fmt.Sprintf("Rule '%s' (id:%s)", m.Name, m.Id)
-}
 
 // ctx carries the caller's deadline (e.g. the executor's per-event timeout).
-func (r *rpcRule) Evaluate(ctx context.Context, evts []events.Event) ([]EvalResult, errors.Error) {
-	protoEvents := make([]*rpc_rules.Event, 0, len(evts))
+func (r *rpcRule) Evaluate(ctx context.Context, evts []events.Event) ([]EventResult, errors.Error) {
+	protoEvents := make([]*structpb.Struct, 0, len(evts))
 	for _, ev := range evts {
-		b, err := json.Marshal(ev)
+		s, err := structpb.NewStruct(ev)
 		if err != nil {
 			return nil, errors.NewE(err)
 		}
-		protoEvents = append(protoEvents, &rpc_rules.Event{Json: b})
+		protoEvents = append(protoEvents, s)
 	}
 	resp, err := r.client.EvaluateBatch(ctx, &rpc_rules.EvaluateBatchRequest{Events: protoEvents})
 	if err != nil {
 		return nil, errors.NewE(err)
 	}
 
-	out := make([]EvalResult, len(resp.GetResults()))
+	out := make([]EventResult, len(resp.GetResults()))
 	for i, r := range resp.GetResults() {
-		res := EvalResult{
+		res := EventResult{
 			Matched:     r.GetMatched(),
 			Title:       r.GetTitle(),
 			Description: r.GetDescription(),
 			Severity:    r.GetSeverity(),
 			MergeByKeys: r.GetMergeByKeys(),
 		}
-		if b := r.GetContextJson(); len(b) > 0 {
-			var ctx map[string]any
-			if err := json.Unmarshal(b, &ctx); err == nil {
-				res.Context = ctx
-			}
+		if c := r.GetContext(); c != nil {
+			res.Context = c.AsMap()
 		}
 		out[i] = res
 	}

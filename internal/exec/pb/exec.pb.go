@@ -24,7 +24,7 @@ const (
 
 // ExecMessage is written to blink-exec by event_matcher and consumed by rule_executor.
 //
-// RuleIDs contains the IDs of rules that passed log-type routing and matcher checks
+// RuleIDs contains the IDs of rules that passed log-type rollout and matcher checks
 // for this event. rule_executor evaluates only these rules, skipping the rest of
 // its pool. An empty RuleIDs slice is treated as "evaluate all rules for this log type"
 // (backwards-compatible for direct producers that bypass event_matcher).

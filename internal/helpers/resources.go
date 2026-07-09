@@ -2,6 +2,7 @@ package helpers
 
 import (
 	"fmt"
+	"maps"
 	"strings"
 )
 
@@ -25,9 +26,7 @@ func GetRequiredOutputs() []string {
 // MergeRequiredOutputs iterates through the required outputs and merges them with the user outputs
 func MergeRequiredOutputs(userConfig map[string]map[string]string, prefix string) map[string]map[string]string {
 	config := make(map[string]map[string]string)
-	for k, v := range userConfig {
-		config[k] = v
-	}
+	maps.Copy(config, userConfig)
 
 	for service, value := range REQUIRED_OUTPUTS {
 		// Format the resource with the prefix value
@@ -43,9 +42,7 @@ func MergeRequiredOutputs(userConfig map[string]map[string]string, prefix string
 		}
 
 		// Merge the outputs with existing ones for this service
-		for output, resource := range formattedValue {
-			config[service][output] = resource
-		}
+		maps.Copy(config[service], formattedValue)
 	}
 
 	return config

@@ -79,7 +79,7 @@ func (c *PluginController[T]) Start(ctx context.Context) error {
 func (c *PluginController[T]) reconcile(ctx context.Context, reason string) error {
 	c.logger.Info("controller: reconciling (%s)...", reason)
 
-	// ── Step 1: load Postgres state ──────────────────────────────────────────────
+	// -- Step 1: load Postgres state ----------------------------------------------
 	records, err := c.db.LoadAll(ctx)
 	if err != nil {
 		return fmt.Errorf("load Postgres records: %w", err)
@@ -93,7 +93,7 @@ func (c *PluginController[T]) reconcile(ctx context.Context, reason string) erro
 		byID[records[i].Id] = &records[i]
 	}
 
-	// ── Step 2: read the present logical IDs (incl. currently-invalid groups) ─────
+	// -- Step 2: read the present logical IDs (incl. currently-invalid groups) -----
 	// LocalReader has already re-parsed/re-elected before signalling. IDs() reports every logical ID
 	// on disk (incl. groups election dropped as invalid) so absent-detection + carry-forward stay
 	// exact; the elected entries come from Snapshot().
@@ -102,7 +102,7 @@ func (c *PluginController[T]) reconcile(ctx context.Context, reason string) erro
 		presentIDs[id] = struct{}{}
 	}
 
-	// ── Step 3: reconcile YAML ↔ Postgres ────────────────────────────────────────
+	// -- Step 3: reconcile YAML ↔ Postgres ----------------------------------------
 	now := time.Now()
 	upsertBatch := make([]backends.ControllerRecord, 0, len(presentIDs))
 
@@ -127,7 +127,7 @@ func (c *PluginController[T]) reconcile(ctx context.Context, reason string) erro
 		}
 	}
 
-	// ── Steps 4-5: take the base election from the LocalReader; carry forward invalid groups ──
+	// -- Steps 4-5: take the base election from the LocalReader; carry forward invalid groups --
 	c.mu.RLock()
 	priorSnap := c.snapshot
 	c.mu.RUnlock()
@@ -156,42 +156,29 @@ func (c *PluginController[T]) reconcile(ctx context.Context, reason string) erro
 		}
 	}
 
-	// ── Step 6: bump generation only if content changed ──────────────────────────
+	// -- Step 6: bump generation only if content changed --------------------------
 	changed := snapshotChanged(nextEntries, priorSnap)
 	if changed {
 		generation++
 	}
 	nextSnap := &snapshot.Snapshot{Generation: generation, Entries: nextEntries}
 
-	// ── Step 7: persist reconciled state ─────────────────────────────────────────
+	// -- Step 7: persist reconciled records ---------------------------------------
 	if err := c.db.Upsert(ctx, upsertBatch); err != nil {
 		return fmt.Errorf("upsert Postgres records: %w", err)
 	}
-	if changed {
-		if err := c.db.SaveSnapshot(ctx, *nextSnap); err != nil {
-			return fmt.Errorf("save snapshot: %w", err)
-		}
-		if err := c.db.SaveGeneration(ctx, generation); err != nil {
-			return fmt.Errorf("save generation: %w", err)
-		}
-	}
 
-	// ── Step 8: publish new snapshot ─────────────────────────────────────────────
-	c.mu.Lock()
-	c.snapshot = nextSnap
-	c.mu.Unlock()
-
+	// -- Step 8: publish and persist new snapshot ---------------------------------
 	if changed {
 		// Publish per-ID: one keyed message per changed entry + a nil-value tombstone per removed ID.
 		// The log-compacted topic converges to one message per key, so a cold reader assembles state
 		// from the compacted set and editing one rule republishes one small message, not all of them.
 		upserts, tombstones := diffEntries(priorSnap, nextEntries, byID)
-		msgs := make([]brokers.Message, 0, len(upserts)+len(tombstones))
+		msgs := make([]brokers.Message, 0, len(upserts)+len(tombstones)+1)
 		for _, e := range upserts {
 			b, err := snapshot.Marshal(e)
 			if err != nil {
-				c.logger.ErrorF("controller: marshal entry %q: %v", e.Id, err)
-				continue
+				return fmt.Errorf("marshal snapshot entry %q: %w", e.Id, err)
 			}
 			msgs = append(msgs, brokers.Message{Key: []byte(e.Id), Value: b})
 		}
@@ -205,13 +192,22 @@ func (c *PluginController[T]) reconcile(ctx context.Context, reason string) erro
 			Key:   []byte(snapshot.GenerationMarkerKey),
 			Value: snapshot.EncodeGeneration(generation),
 		})
-		if len(msgs) > 0 {
-			if err := c.writer.WriteMessages(ctx, msgs...); err != nil {
-				// Non-fatal: replicas converge on the next reconcile cycle.
-				c.logger.ErrorF("controller: publish snapshot entries: %v", err)
-			}
+		if err := c.writer.WriteMessages(ctx, msgs...); err != nil {
+			return fmt.Errorf("publish snapshot entries: %w", err)
+		}
+
+		if err := c.db.SaveSnapshot(ctx, *nextSnap); err != nil {
+			return fmt.Errorf("save snapshot: %w", err)
+		}
+		if err := c.db.SaveGeneration(ctx, generation); err != nil {
+			return fmt.Errorf("save generation: %w", err)
 		}
 	}
+
+	// Publish has succeeded, so future reconciles can use this as the prior snapshot.
+	c.mu.Lock()
+	c.snapshot = nextSnap
+	c.mu.Unlock()
 
 	c.logger.Info("controller: reconcile done (generation=%d, entries=%d, changed=%v)",
 		generation, len(nextEntries), changed)

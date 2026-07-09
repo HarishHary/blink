@@ -7,6 +7,8 @@ import (
 
 	"github.com/harishhary/blink/internal/pools"
 	goplugin "github.com/hashicorp/go-plugin"
+	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 // PluginMetadata holds the common identity and rollout fields shared by all plugin types.
@@ -28,27 +30,36 @@ type PluginMetadata struct {
 func (m PluginMetadata) Metadata() PluginMetadata { return m }
 func (m *PluginMetadata) SetName(name string)     { m.Name = name }
 
-// Syncable is the type constraint for all plugin types managed by a Manager.
+// Checksum satisfies Syncable for the *Metadata config types, which have no binary checksum; runtime
+// plugin handles override it with the loaded binary's hash.
+func (m PluginMetadata) Checksum() string { return "" }
+
+// Syncable is the type constraint for all plugin types managed by a Manager. Checksum distinguishes
+// binary versions: runtime handles return the loaded binary's hash, the *Metadata config types "".
 type Syncable interface {
 	Metadata() PluginMetadata
+	Checksum() string
 }
 
-// PluginLifecycle provides the health-check and graceful-shutdown primitives the Manager uses in ping loops and kill paths.
-type PluginLifecycle interface {
-	Ping(ctx context.Context) error
-	Shutdown(ctx context.Context) error
+// PluginRPC is a plugin subprocess's raw gRPC line: the three calls the framework makes on every
+// plugin regardless of type - Init at startup, Ping for health, Shutdown to stop. All five generated
+// *Client types satisfy it. Handshake calls Init; the Manager loops on Ping and calls Shutdown to stop.
+type PluginRPC interface {
+	Init(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	Ping(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	Shutdown(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error)
 }
 
 // PluginHandle tracks everything the Manager needs for one running plugin subprocess.
 type PluginHandle struct {
-	Client    *goplugin.Client
-	Lifecycle PluginLifecycle
-	BinPath   string
-	Key       pools.PoolKey     // {Id, Name, Hash}; Id used for logging, Key used for bus messages
-	Mode      pools.RolloutMode // mode at spawn time; compared against live YAML to detect soft-restart triggers
-	Name      string            // human-readable display name; used for logging
-	killOnce  sync.Once
-	stopped   chan struct{}
+	Client   *goplugin.Client
+	RPC      PluginRPC
+	BinPath  string
+	Key      pools.PoolKey     // {Id, Name, Hash}; Id used for logging, Key used for bus messages
+	Mode     pools.RolloutMode // mode at spawn time; compared against live YAML to detect soft-restart triggers
+	Name     string            // human-readable display name; used for logging
+	killOnce sync.Once
+	stopped  chan struct{}
 }
 
 // startFailure tracks consecutive start failures for a binary path.

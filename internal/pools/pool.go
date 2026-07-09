@@ -13,8 +13,8 @@ var ErrPluginNotFound = errors.New("plugin not found")
 // Returned by Call when the plugin was explicitly deregistered (binary was deleted).
 var ErrPluginRemoved = errors.New("plugin removed")
 
-// pendingPromotion is a staged canary/shadow pool awaiting Promote(); production stays on the old version until then.
-type pendingPromotion struct {
+// pendingPoolKey is a staged canary/shadow pool awaiting Promote(); production stays on the old version until then.
+type pendingPoolKey struct {
 	key       PoolKey
 	onDrained func()
 }
@@ -23,27 +23,27 @@ type pendingPromotion struct {
 type ProcessPool[T any] struct {
 	mu           sync.RWMutex
 	pools        map[PoolKey]*VersionedPool[T]
-	active       map[string]PoolKey
-	pending      map[string]pendingPromotion
-	removed      map[string]struct{}
-	routing      RoutingConfig
+	active       map[string]PoolKey        // pluginID → active PoolKey
+	pending      map[string]pendingPoolKey // pluginID → pending PoolKey (canary/shadow)
+	removed      map[string]struct{}       // pluginID tombstone for removed binaries (no pools remain)
+	rolloutCfg   RolloutConfig
 	drainTimeout time.Duration // drainTimeout ≤ 0 uses 60s.
 	metrics      *PoolMetrics
 }
 
 const defaultDrainTimeout = 60 * time.Second
 
-// Creates a ProcessPool driven by the given RoutingConfig callback.
-func NewProcessPool[T any](routing RoutingConfig, metrics *PoolMetrics, drainTimeout time.Duration) *ProcessPool[T] {
+// Creates a ProcessPool driven by the given RolloutConfig callback.
+func NewProcessPool[T any](rolloutCfg RolloutConfig, metrics *PoolMetrics, drainTimeout time.Duration) *ProcessPool[T] {
 	if drainTimeout <= 0 {
 		drainTimeout = defaultDrainTimeout
 	}
 	return &ProcessPool[T]{
 		pools:        make(map[PoolKey]*VersionedPool[T]),
 		active:       make(map[string]PoolKey),
-		pending:      make(map[string]pendingPromotion),
+		pending:      make(map[string]pendingPoolKey),
 		removed:      make(map[string]struct{}),
-		routing:      routing,
+		rolloutCfg:   rolloutCfg,
 		drainTimeout: drainTimeout,
 		metrics:      metrics,
 	}
@@ -63,7 +63,7 @@ func (pp *ProcessPool[T]) Register(key PoolKey, plugins []T, maxProcs int, onDra
 	// Clear tombstone: plugin has come back (re-deployed after deletion).
 	delete(pp.removed, key.Id)
 
-	mode, _ := pp.routing(key.Id, key.Name)
+	mode, _ := pp.rolloutCfg(key.Id, key.Name)
 
 	if mode == RolloutModeCanary || mode == RolloutModeShadow {
 		// Stage without promoting; the first registration for this ID still needs an active entry.
@@ -76,7 +76,7 @@ func (pp *ProcessPool[T]) Register(key PoolKey, plugins []T, maxProcs int, onDra
 					go pp.drain(prev.key, prevPool, prev.onDrained)
 				}
 			}
-			pp.pending[key.Id] = pendingPromotion{key: key, onDrained: onDrained}
+			pp.pending[key.Id] = pendingPoolKey{key: key, onDrained: onDrained}
 		}
 		return
 	}
@@ -100,7 +100,7 @@ func (pp *ProcessPool[T]) MigrateSlots(id string, activeKey, pendingKey PoolKey)
 	if pendingKey != (PoolKey{}) {
 		existing, ok := pp.pending[id]
 		if !ok || existing.key != pendingKey {
-			pp.pending[id] = pendingPromotion{key: pendingKey}
+			pp.pending[id] = pendingPoolKey{key: pendingKey}
 		}
 	} else {
 		delete(pp.pending, id)

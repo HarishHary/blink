@@ -5,6 +5,7 @@ import (
 	"net"
 
 	"github.com/harishhary/blink/internal/errors"
+	"github.com/harishhary/blink/pkg/alerts"
 	"github.com/harishhary/blink/pkg/enrichments"
 )
 
@@ -45,9 +46,8 @@ func isPrivate(ipStr string) bool {
 	return false
 }
 
-func (addGeo) Enrich(_ context.Context, alert map[string]any) (map[string]any, errors.Error) {
-	event, _ := alert["Event"].(map[string]any)
-	sourceIP, _ := event["source_ip"].(string)
+func (addGeo) Enrich(_ context.Context, alert alerts.Alert) (map[string]any, errors.Error) {
+	sourceIP, _ := alert.Event["source_ip"].(string)
 
 	internal := isPrivate(sourceIP)
 

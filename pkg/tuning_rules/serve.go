@@ -2,14 +2,15 @@ package tuning_rules
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 
 	"github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/handshake"
+	"github.com/harishhary/blink/pkg/alerts"
 	"github.com/harishhary/blink/pkg/tuning_rules/rpc_tuning_rules"
 )
 
@@ -17,14 +18,10 @@ import (
 // protocol version live in internal/handshake.
 const MagicValue = "tuning_rule_v1"
 
-// Plugin is the interface that all tuning rule plugin binaries must implement.
-// Embed sdk.BaseTuningRule to get no-op defaults for Init and Shutdown.
-//
-// All static metadata (name, id, enabled, global, rule_type, confidence, etc.) lives in
-// the YAML sidecar file alongside the binary - the subprocess owns only tuning logic.
+// Plugin is the interface every tuning rule binary implements. Embed BaseTuningRule for no-op Init/Shutdown.
 type Plugin interface {
 	Init() error
-	Tune(ctx context.Context, alert map[string]any) (bool, errors.Error)
+	Tune(ctx context.Context, alert alerts.Alert) (bool, errors.Error)
 	Shutdown() error
 }
 
@@ -40,18 +37,18 @@ type server struct {
 	rule Plugin
 }
 
-func (s *server) Init(_ context.Context, _ *rpc_tuning_rules.Empty) (*rpc_tuning_rules.Empty, error) {
-	return &rpc_tuning_rules.Empty{}, s.rule.Init()
+func (s *server) Init(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	return &emptypb.Empty{}, s.rule.Init()
 }
 
 func (s *server) TuneBatch(ctx context.Context, req *rpc_tuning_rules.TuneBatchRequest) (*rpc_tuning_rules.TuneBatchResponse, error) {
-	results := make([]bool, 0, len(req.GetAlertJson()))
-	for _, raw := range req.GetAlertJson() {
-		var alert map[string]any
-		if err := json.Unmarshal(raw, &alert); err != nil {
+	results := make([]bool, 0, len(req.GetAlerts()))
+	for _, pa := range req.GetAlerts() {
+		alert, err := alerts.ProtoToAlert(pa)
+		if err != nil {
 			return nil, err
 		}
-		applies, err := s.rule.Tune(ctx, alert)
+		applies, err := s.rule.Tune(ctx, *alert)
 		if err != nil {
 			return nil, err
 		}
@@ -60,12 +57,12 @@ func (s *server) TuneBatch(ctx context.Context, req *rpc_tuning_rules.TuneBatchR
 	return &rpc_tuning_rules.TuneBatchResponse{Applies: results}, nil
 }
 
-func (s *server) Ping(_ context.Context, _ *rpc_tuning_rules.Empty) (*rpc_tuning_rules.Empty, error) {
-	return &rpc_tuning_rules.Empty{}, nil
+func (s *server) Ping(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	return &emptypb.Empty{}, nil
 }
 
-func (s *server) Shutdown(_ context.Context, _ *rpc_tuning_rules.Empty) (*rpc_tuning_rules.Empty, error) {
-	return &rpc_tuning_rules.Empty{}, s.rule.Shutdown()
+func (s *server) Shutdown(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	return &emptypb.Empty{}, s.rule.Shutdown()
 }
 
 type pluginImpl struct {
@@ -78,10 +75,11 @@ func (p *pluginImpl) GRPCServer(_ *plugin.GRPCBroker, s *grpc.Server) error {
 	return nil
 }
 
-func (p *pluginImpl) GRPCClient(_ context.Context, _ *plugin.GRPCBroker, c *grpc.ClientConn) (interface{}, error) {
+func (p *pluginImpl) GRPCClient(_ context.Context, _ *plugin.GRPCBroker, c *grpc.ClientConn) (any, error) {
 	return rpc_tuning_rules.NewTuningRuleClient(c), nil
 }
 
+// Serve starts the plugin RPC server for a tuning rule binary.
 func Serve(r Plugin) {
 	os.Setenv("GODEBUG", "madvdontneed=1")
 	plugin.Serve(&plugin.ServeConfig{

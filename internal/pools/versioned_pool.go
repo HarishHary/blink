@@ -13,6 +13,7 @@ type PoolKey struct {
 	Hash string
 }
 
+// String renders the key as Id@Name@Hash (Hash omitted when empty).
 func (k PoolKey) String() string {
 	if k.Hash != "" {
 		return k.Id + "@" + k.Name + "@" + k.Hash
@@ -28,11 +29,9 @@ type VersionedPool[T any] struct {
 	draining atomic.Bool
 }
 
+// newVersionedPool creates a pool seeded with plugins; capacity is max(maxProcs, len(plugins)).
 func newVersionedPool[T any](key PoolKey, plugins []T, maxProcs int) *VersionedPool[T] {
-	size := maxProcs
-	if size < len(plugins) {
-		size = len(plugins)
-	}
+	size := max(maxProcs, len(plugins))
 	p := &VersionedPool[T]{
 		key:   key,
 		slots: make(chan T, size),

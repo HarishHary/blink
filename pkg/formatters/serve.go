@@ -7,20 +7,25 @@ import (
 
 	"github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/handshake"
+	"github.com/harishhary/blink/pkg/alerts"
 	"github.com/harishhary/blink/pkg/formatters/rpc_formatters"
 )
 
+// MagicValue is the formatter plugin handshake cookie value.
 const MagicValue = "formatter_v1"
 
+// Plugin is the interface formatter plugin binaries must implement.
 type Plugin interface {
 	Init() error
-	Format(ctx context.Context, alert map[string]any) (map[string]any, errors.Error)
+	Format(ctx context.Context, alert alerts.Alert) (map[string]any, errors.Error)
 	Shutdown() error
 }
 
+// BaseFormatter provides no-op Init and Shutdown defaults.
 type BaseFormatter struct{}
 
 func (BaseFormatter) Init() error     { return nil }
@@ -31,18 +36,18 @@ type server struct {
 	formatter Plugin
 }
 
-func (s *server) Init(_ context.Context, _ *rpc_formatters.Empty) (*rpc_formatters.Empty, error) {
-	return &rpc_formatters.Empty{}, s.formatter.Init()
+func (s *server) Init(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	return &emptypb.Empty{}, s.formatter.Init()
 }
 
 func (s *server) FormatBatch(ctx context.Context, req *rpc_formatters.FormatBatchRequest) (*rpc_formatters.FormatBatchResponse, error) {
-	results := make([][]byte, 0, len(req.GetAlertJson()))
-	for _, raw := range req.GetAlertJson() {
-		var alert map[string]any
-		if err := json.Unmarshal(raw, &alert); err != nil {
+	results := make([][]byte, 0, len(req.GetAlerts()))
+	for _, pa := range req.GetAlerts() {
+		alert, err := alerts.ProtoToAlert(pa)
+		if err != nil {
 			return nil, err
 		}
-		result, err := s.formatter.Format(ctx, alert)
+		result, err := s.formatter.Format(ctx, *alert)
 		if err != nil {
 			return nil, err
 		}
@@ -55,12 +60,12 @@ func (s *server) FormatBatch(ctx context.Context, req *rpc_formatters.FormatBatc
 	return &rpc_formatters.FormatBatchResponse{ResultJson: results}, nil
 }
 
-func (s *server) Ping(_ context.Context, _ *rpc_formatters.Empty) (*rpc_formatters.Empty, error) {
-	return &rpc_formatters.Empty{}, nil
+func (s *server) Ping(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	return &emptypb.Empty{}, nil
 }
 
-func (s *server) Shutdown(_ context.Context, _ *rpc_formatters.Empty) (*rpc_formatters.Empty, error) {
-	return &rpc_formatters.Empty{}, s.formatter.Shutdown()
+func (s *server) Shutdown(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	return &emptypb.Empty{}, s.formatter.Shutdown()
 }
 
 type pluginImpl struct {
@@ -73,10 +78,11 @@ func (p *pluginImpl) GRPCServer(_ *plugin.GRPCBroker, s *grpc.Server) error {
 	return nil
 }
 
-func (p *pluginImpl) GRPCClient(_ context.Context, _ *plugin.GRPCBroker, c *grpc.ClientConn) (interface{}, error) {
+func (p *pluginImpl) GRPCClient(_ context.Context, _ *plugin.GRPCBroker, c *grpc.ClientConn) (any, error) {
 	return rpc_formatters.NewFormatterClient(c), nil
 }
 
+// Serve starts the formatter plugin gRPC server.
 func Serve(f Plugin) {
 	os.Setenv("GODEBUG", "madvdontneed=1")
 	plugin.Serve(&plugin.ServeConfig{

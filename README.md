@@ -22,10 +22,10 @@ A separate control plane (`cmd/controller`) reconciles each plugin type's YAML c
 Both planes run the **same reaction loop**: a *source* assembles a `Snapshot` and fires a coalescing signal; a *subscriber* running alongside it re-reads the latest snapshot and re-syncs.
 
 ```
-YAML edit ─▶ LocalReader ──elect──▶ PluginController ──▶ ═══ Kafka snapshot topic ═══
+YAML edit -▶ LocalReader --elect--▶ PluginController --▶ ═══ Kafka snapshot topic ═══
              (control plane)         (writer, + DB)             │  broadcast to every pod
                                                                 ▼
-                               SnapshotReader ──signal──▶ PluginExecutor ──▶ spawn / kill subprocs
+                               SnapshotReader --signal--▶ PluginExecutor --▶ spawn / kill subprocs
                                (per pod)                   (subscriber)
 ```
 
@@ -49,7 +49,7 @@ Five plugin types - `rules`, `matchers`, `tuning_rules`, `enrichments`, `formatt
 ## Documentation
 
 - **[`docs/internals/message-flow.md`](docs/internals/message-flow.md)** - the authoritative reference for every message hop: schemas, concrete examples, and edge cases.
-- **[`docs/internals/performance.md`](docs/internals/performance.md)** - scaling: batching, pools, partitions/pods, `log_type` routing, autoscaling, DLQ, and the edge cases.
+- **[`docs/internals/performance.md`](docs/internals/performance.md)** - scaling: batching, pools, partitions/pods, `log_type` rollout, autoscaling, DLQ, and the edge cases.
 - **[`docs/internals/partitioning.md`](docs/internals/partitioning.md)** - the three "keys" (Kafka partition key vs. `PoolKey` vs. canary hash key), worked examples, and merge co-location.
 - **[`docs/internals/reconcile-loop.md`](docs/internals/reconcile-loop.md)** - the subscribe → coalescing-signal → re-read → re-sync loop, mirrored on both planes (`LocalReader`→`PluginController` and `SnapshotReader`→`PluginExecutor`), with the code flow and worked examples.
 - [`docs/services/`](docs/services/) - per-service reference. [`docs/internals/`](docs/internals/) - plugin-system internals.

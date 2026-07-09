@@ -2,14 +2,12 @@ package tuning_rules
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 
 	"github.com/harishhary/blink/internal/config"
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/alerts"
-	"github.com/harishhary/blink/pkg/scoring"
+	pb "github.com/harishhary/blink/pkg/alerts/pb"
 	"github.com/harishhary/blink/pkg/tuning_rules/rpc_tuning_rules"
 )
 
@@ -37,7 +35,7 @@ func (r *rpcTuningRule) config() *TuningRuleMetadata {
 	return v
 }
 
-// TuningMetadata returns the live YAML-derived tuning rule configuration.
+// TuningRuleMetadata returns live config or a file-name fallback when config is unavailable.
 func (r *rpcTuningRule) TuningRuleMetadata() *TuningRuleMetadata {
 	if c := r.config(); c != nil {
 		return c
@@ -45,6 +43,7 @@ func (r *rpcTuningRule) TuningRuleMetadata() *TuningRuleMetadata {
 	return &TuningRuleMetadata{PluginMetadata: plugin.PluginMetadata{Id: r.fileName, Name: r.fileName}}
 }
 
+// Metadata returns the live plugin metadata, or a file-name fallback before config is available.
 func (r *rpcTuningRule) Metadata() plugin.PluginMetadata {
 	if c := r.config(); c != nil {
 		return c.Metadata()
@@ -52,44 +51,20 @@ func (r *rpcTuningRule) Metadata() plugin.PluginMetadata {
 	return plugin.PluginMetadata{Id: r.fileName, Name: r.fileName}
 }
 
+// Checksum returns the binary checksum captured during handshake.
 func (r *rpcTuningRule) Checksum() string { return r.checksum }
-func (r *rpcTuningRule) String() string {
-	m := r.TuningRuleMetadata().Metadata()
-	return fmt.Sprintf("TuningRule '%s' (id:%s, enabled:%t)", m.Name, m.Id, m.Enabled)
-}
 
-func (r *rpcTuningRule) Global() bool { return r.TuningRuleMetadata().Global }
-
-// RuleType parses the YAML rule_type string into a typed RuleType constant.
-func (r *rpcTuningRule) RuleType() RuleType {
-	switch r.TuningRuleMetadata().RuleType {
-	case "set_confidence":
-		return SetConfidence
-	case "increase_confidence":
-		return IncreaseConfidence
-	case "decrease_confidence":
-		return DecreaseConfidence
-	default:
-		return Ignore
-	}
-}
-
-// Confidence parses the YAML confidence string into a scoring.Confidence value.
-func (r *rpcTuningRule) Confidence() scoring.Confidence {
-	conf, _ := scoring.ParseConfidence(r.TuningRuleMetadata().Confidence)
-	return conf
-}
-
-func (r *rpcTuningRule) Tune(ctx context.Context, alerts []alerts.Alert) ([]bool, errors.Error) {
-	alertJSONs := make([][]byte, 0, len(alerts))
-	for _, alrt := range alerts {
-		b, err := json.Marshal(alrt)
+// Tune converts alerts to protobufs, invokes the RPC batch method, and returns per-alert apply decisions.
+func (r *rpcTuningRule) Tune(ctx context.Context, batch []alerts.Alert) ([]bool, errors.Error) {
+	pbAlerts := make([]*pb.Alert, 0, len(batch))
+	for i := range batch {
+		pa, err := alerts.AlertToProto(&batch[i])
 		if err != nil {
 			return nil, errors.NewE(err)
 		}
-		alertJSONs = append(alertJSONs, b)
+		pbAlerts = append(pbAlerts, pa)
 	}
-	resp, err := r.client.TuneBatch(ctx, &rpc_tuning_rules.TuneBatchRequest{AlertJson: alertJSONs})
+	resp, err := r.client.TuneBatch(ctx, &rpc_tuning_rules.TuneBatchRequest{Alerts: pbAlerts})
 	if err != nil {
 		return nil, errors.NewE(err)
 	}

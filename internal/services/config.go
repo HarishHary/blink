@@ -8,4 +8,7 @@ import "github.com/harishhary/blink/internal/brokers"
 // Common as services reveal genuinely shared needs.
 type Common struct {
 	Kafka brokers.KafkaConfig
+	// Env selects log verbosity (dev|staging|integration|prod); see logger.New. Optional: an
+	// empty value defaults to integration (Debug off), which is the prod-safe default.
+	Env string `env:"ENVIRONMENT,optional"`
 }

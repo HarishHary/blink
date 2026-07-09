@@ -344,7 +344,7 @@ func (r *LocalReader[T]) reelect() (publish bool) {
 			}
 			paired = append(paired, item)
 		}
-		group := CatalogGroup[T]{ID: id, Entries: paired}
+		group := CatalogGroup[T]{Id: id, Entries: paired}
 		if len(group.Entries) == 0 { // every artifact for this ID is gone or unpaired
 			if _, ok := r.entries[id]; ok {
 				delete(r.entries, id)
