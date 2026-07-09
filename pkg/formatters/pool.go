@@ -34,13 +34,21 @@ type formatChunkResult struct {
 	callErr errors.Error   // whole-call failure (not per-alert)
 }
 
+// FormatResult holds the batch-level result from formatting alerts.
+type FormatResult struct {
+	Outs    []map[string]any
+	Absent  bool
+	Removed bool
+	Errs    []errors.Error // per-alert (aligned with Outs)
+}
+
 // Format runs the formatter identified by id against all alerts. When the routed pool has
 // max_procs > 1 the alerts are sharded into that many contiguous chunks formatted concurrently
 // (each on its own subprocess) and the per-alert outs/errs are concatenated in original order.
 //   - absent=true: plugin transiently missing, caller should dead-letter.
 //   - removed=true: plugin deregistered, caller should drop permanently.
 //   - outs/errs are per-alert (same length as alertBatch) on success.
-func (p *Pool) Format(ctx context.Context, formatterID string, alerts []*alts.Alert, canaryHashKey string) (outs []map[string]any, absent bool, removed bool, errs []errors.Error) {
+func (p *Pool) Format(ctx context.Context, formatterID string, alerts []*alts.Alert, canaryHashKey string) FormatResult {
 	p.shadowFormat(ctx, formatterID, alerts)
 	k := p.ServingPoolSize(formatterID, canaryHashKey)
 	parts := pools.ShardConcurrent(alerts, k, func(chunk []*alts.Alert) formatChunkResult {
@@ -50,10 +58,10 @@ func (p *Pool) Format(ctx context.Context, formatterID string, alerts []*alts.Al
 	// Pool-level conditions apply to the whole batch (every shard hit the same routed pool).
 	for _, part := range parts {
 		if part.removed {
-			return nil, false, true, nil
+			return FormatResult{Removed: true}
 		}
 		if part.absent {
-			return nil, true, false, nil
+			return FormatResult{Absent: true}
 		}
 		if part.callErr != nil {
 			for i := range part.errs {
@@ -62,13 +70,13 @@ func (p *Pool) Format(ctx context.Context, formatterID string, alerts []*alts.Al
 		}
 	}
 
-	outs = make([]map[string]any, 0, len(alerts))
-	errs = make([]errors.Error, 0, len(alerts))
+	outs := make([]map[string]any, 0, len(alerts))
+	errs := make([]errors.Error, 0, len(alerts))
 	for _, part := range parts {
 		outs = append(outs, part.outs...)
 		errs = append(errs, part.errs...)
 	}
-	return outs, false, false, errs
+	return FormatResult{Outs: outs, Errs: errs}
 }
 
 func (p *Pool) formatChunk(ctx context.Context, formatterID string, altsChunk []*alts.Alert, canaryHashKey string) formatChunkResult {

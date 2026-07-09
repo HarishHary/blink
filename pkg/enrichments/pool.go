@@ -33,11 +33,18 @@ type enrichChunkResult struct {
 	callErr errors.Error   // whole-call failure (not per-alert)
 }
 
+// EnrichResult holds the batch-level result from enriching alerts.
+type EnrichResult struct {
+	Absent  bool
+	Removed bool
+	Errs    []errors.Error // per-alert (aligned with the input alerts)
+}
+
 // Enrich calls enrichmentID with all alerts. When the routed pool has max_procs > 1 the alerts are
 // sharded into that many contiguous chunks enriched concurrently (each on its own subprocess); the
 // chunks are DISJOINT, so no two shards ever touch the same *Alert. Per-alert errs are concatenated
 // in original order. absent/removed refer to the plugin state.
-func (p *Pool) Enrich(ctx context.Context, enrichmentID string, alerts []*alts.Alert, canaryHashKey string) (absent bool, removed bool, errs []errors.Error) {
+func (p *Pool) Enrich(ctx context.Context, enrichmentID string, alerts []*alts.Alert, canaryHashKey string) EnrichResult {
 	// Shadow candidate (if any): separate fan-out at its own max_procs on CLONED alerts (Enrich writes),
 	// fired before the production path so the clone reads complete before prod mutates. Results dropped.
 	p.shadowEnrich(ctx, enrichmentID, alerts)
@@ -49,10 +56,10 @@ func (p *Pool) Enrich(ctx context.Context, enrichmentID string, alerts []*alts.A
 	// Pool-level conditions apply to the whole batch (every shard hit the same routed pool).
 	for _, part := range parts {
 		if part.removed {
-			return false, true, nil
+			return EnrichResult{Removed: true}
 		}
 		if part.absent {
-			return true, false, nil
+			return EnrichResult{Absent: true}
 		}
 		if part.callErr != nil {
 			for i := range part.errs {
@@ -61,11 +68,11 @@ func (p *Pool) Enrich(ctx context.Context, enrichmentID string, alerts []*alts.A
 		}
 	}
 
-	errs = make([]errors.Error, 0, len(alerts))
+	errs := make([]errors.Error, 0, len(alerts))
 	for _, part := range parts {
 		errs = append(errs, part.errs...)
 	}
-	return false, false, errs
+	return EnrichResult{Errs: errs}
 }
 
 func (p *Pool) enrichChunk(ctx context.Context, enrichmentID string, altsChunk []*alts.Alert, canaryHashKey string) enrichChunkResult {

@@ -35,6 +35,14 @@ type matchChunkResult struct {
 	callErr errors.Error   // whole-call failure (not plugin Match result)
 }
 
+// MatchResult holds the batch-level result from matching events.
+type MatchResult struct {
+	Results []bool
+	Absent  bool
+	Removed bool
+	Errs    []errors.Error // per-event (aligned with Results)
+}
+
 // Match runs matcher matcherID against every event and returns one bool per event in input order
 // (a disabled matcher passes through as all-true). It is deliberately mode-agnostic - the rollout mode
 // is handled entirely inside the pool primitives, so the body reads the same for every mode. Two things
@@ -45,7 +53,7 @@ type matchChunkResult struct {
 //     need to know which.
 //   - Shadow (shadow mode only): shadowMatch also mirrors the whole batch to the candidate in the
 //     background at the candidate's own max_procs, dropping the result. It is a no-op in every other mode.
-func (p *Pool) Match(ctx context.Context, matcherID string, events []evts.Event, canaryHashKey string) (results []bool, absent bool, removed bool, errs []errors.Error) {
+func (p *Pool) Match(ctx context.Context, matcherID string, events []evts.Event, canaryHashKey string) MatchResult {
 	p.shadowMatch(ctx, matcherID, events)
 	k := p.ServingPoolSize(matcherID, canaryHashKey)
 	parts := pools.ShardConcurrent(events, k, func(chunk []evts.Event) matchChunkResult {
@@ -55,10 +63,10 @@ func (p *Pool) Match(ctx context.Context, matcherID string, events []evts.Event,
 	// Pool-level conditions apply to the whole batch (every shard hit the same routed pool).
 	for _, part := range parts {
 		if part.removed {
-			return nil, false, true, nil
+			return MatchResult{Removed: true}
 		}
 		if part.absent {
-			return nil, true, false, nil
+			return MatchResult{Absent: true}
 		}
 		if part.callErr != nil {
 			for i := range part.errs {
@@ -67,13 +75,13 @@ func (p *Pool) Match(ctx context.Context, matcherID string, events []evts.Event,
 		}
 	}
 
-	results = make([]bool, 0, len(events))
-	errs = make([]errors.Error, 0, len(events))
+	results := make([]bool, 0, len(events))
+	errs := make([]errors.Error, 0, len(events))
 	for _, part := range parts {
 		results = append(results, part.result...)
 		errs = append(errs, part.errs...)
 	}
-	return results, false, false, errs
+	return MatchResult{Results: results, Errs: errs}
 }
 
 // matchChunk is one production call: it matches a single shard on the serving pool (stable, or the

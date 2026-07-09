@@ -36,10 +36,18 @@ type tuneChunkResult struct {
 	callErr    errors.Error   // whole-call failure (not per-alert)
 }
 
+// TuneResult holds the batch-level result from tuning alerts.
+type TuneResult struct {
+	RuleType   RuleType
+	Confidence scoring.Confidence
+	Applies    []bool
+	Absent     bool
+	Removed    bool
+	Errs       []errors.Error // per-alert (aligned with Applies)
+}
+
 // Tune runs tuningRuleID across the batch and returns metadata, per-alert apply results, pool state flags, and per-alert errors.
-func (p *Pool) Tune(ctx context.Context, tuningRuleID string, alerts []alts.Alert, canaryHashKey string) (
-	ruleType RuleType, confidence scoring.Confidence, applies []bool, absent bool, removed bool, errs []errors.Error,
-) {
+func (p *Pool) Tune(ctx context.Context, tuningRuleID string, alerts []alts.Alert, canaryHashKey string) TuneResult {
 	p.shadowTune(ctx, tuningRuleID, alerts)
 	k := p.ServingPoolSize(tuningRuleID, canaryHashKey)
 	parts := pools.ShardConcurrent(alerts, k, func(altsChunk []alts.Alert) tuneChunkResult {
@@ -48,10 +56,10 @@ func (p *Pool) Tune(ctx context.Context, tuningRuleID string, alerts []alts.Aler
 
 	for _, part := range parts {
 		if part.removed {
-			return 0, 0, nil, false, true, nil
+			return TuneResult{Removed: true}
 		}
 		if part.absent {
-			return 0, 0, nil, true, false, nil
+			return TuneResult{Absent: true}
 		}
 		if part.callErr != nil {
 			for i := range part.errs {
@@ -60,8 +68,10 @@ func (p *Pool) Tune(ctx context.Context, tuningRuleID string, alerts []alts.Aler
 		}
 	}
 
-	applies = make([]bool, 0, len(alerts))
-	errs = make([]errors.Error, 0, len(alerts))
+	var ruleType RuleType
+	var confidence scoring.Confidence
+	applies := make([]bool, 0, len(alerts))
+	errs := make([]errors.Error, 0, len(alerts))
 	metadataSet := false
 	for _, part := range parts {
 		if !metadataSet && part.callErr == nil {
@@ -72,7 +82,7 @@ func (p *Pool) Tune(ctx context.Context, tuningRuleID string, alerts []alts.Aler
 		applies = append(applies, part.applies...)
 		errs = append(errs, part.errs...)
 	}
-	return ruleType, confidence, applies, false, false, errs
+	return TuneResult{RuleType: ruleType, Confidence: confidence, Applies: applies, Errs: errs}
 }
 
 func (p *Pool) tuneChunk(ctx context.Context, tuningRuleID string, altsChunk []alts.Alert, canaryHashKey string) tuneChunkResult {
