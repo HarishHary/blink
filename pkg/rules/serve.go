@@ -15,11 +15,16 @@ import (
 	"github.com/harishhary/blink/pkg/rules/rpc_rules"
 )
 
+// MagicValue is the handshake cookie value for rule plugins.
 const MagicValue = "rule_v1"
 
+// Plugin defines the SDK contract implemented by rule binaries.
 type Plugin interface {
+	// Init prepares the plugin before it begins serving evaluations.
 	Init() error
+	// Evaluate returns whether the event matched and any rule-specific error.
 	Evaluate(ctx context.Context, event events.Event) (bool, errors.Error)
+	// Shutdown releases plugin resources before process exit.
 	Shutdown() error
 
 	// AlertTitle returns a dynamic title for the alert.
@@ -48,18 +53,32 @@ type Plugin interface {
 	AlertReqSubkeys(event events.Event) bool
 }
 
-// BaseRule provides pass-through / no-op defaults for all Plugin methods.
-// Embed in your rule struct and override only what you need.
+// BaseRule provides no-op defaults for optional Plugin methods.
 type BaseRule struct{}
 
-func (BaseRule) Init() error                                { return nil }
-func (BaseRule) Shutdown() error                            { return nil }
-func (BaseRule) AlertTitle(_ events.Event) string           { return "" }
-func (BaseRule) AlertDescription(_ events.Event) string     { return "" }
-func (BaseRule) AlertSeverity(_ events.Event) string        { return "" }
+// Init is a no-op default implementation.
+func (BaseRule) Init() error { return nil }
+
+// Shutdown is a no-op default implementation.
+func (BaseRule) Shutdown() error { return nil }
+
+// AlertTitle returns no title override by default.
+func (BaseRule) AlertTitle(_ events.Event) string { return "" }
+
+// AlertDescription returns no description override by default.
+func (BaseRule) AlertDescription(_ events.Event) string { return "" }
+
+// AlertSeverity returns no severity override by default.
+func (BaseRule) AlertSeverity(_ events.Event) string { return "" }
+
+// AlertContext returns no additional alert context by default.
 func (BaseRule) AlertContext(_ events.Event) map[string]any { return nil }
-func (BaseRule) AlertMergeByKeys(_ events.Event) []string   { return nil }
-func (BaseRule) AlertReqSubkeys(_ events.Event) bool        { return true }
+
+// AlertMergeByKeys returns no merge key override by default.
+func (BaseRule) AlertMergeByKeys(_ events.Event) []string { return nil }
+
+// AlertReqSubkeys always allows evaluation by default.
+func (BaseRule) AlertReqSubkeys(_ events.Event) bool { return true }
 
 // server wraps a Plugin and serves the gRPC RuleServer interface.
 type server struct {
@@ -125,6 +144,7 @@ func (p *pluginImpl) GRPCClient(_ context.Context, _ *plugin.GRPCBroker, c *grpc
 	return rpc_rules.NewRuleClient(c), nil
 }
 
+// Serve starts a rule plugin process with the rules gRPC contract.
 func Serve(r Plugin) {
 	os.Setenv("GODEBUG", "madvdontneed=1")
 	plugin.Serve(&plugin.ServeConfig{

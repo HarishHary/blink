@@ -20,8 +20,7 @@ func DefaultSubKeysInEvent(rule *RuleMetadata, event events.Event) bool {
 	return true
 }
 
-// RulesForLogTypeIn returns the enabled rules in the slice that apply to logType. An empty
-// log_types list means the rule applies to all log types.
+// RulesForLogTypeIn returns enabled rules that apply to the given log type.
 func RulesForLogTypeIn(rules []*RuleMetadata, logType string) []*RuleMetadata {
 	var result []*RuleMetadata
 	for _, cfg := range rules {

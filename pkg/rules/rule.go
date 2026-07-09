@@ -11,9 +11,6 @@ import (
 )
 
 // EventResult is the per-event outcome returned by Rule.Evaluate.
-// Fields beyond Matched are populated only when the plugin implements the
-// corresponding optional capability interface (Titler, Describer, etc.).
-// An empty/zero field means "use the YAML-configured default".
 type EventResult struct {
 	Matched     bool
 	Title       string
@@ -30,7 +27,7 @@ type Observable struct {
 	Aggregation bool   `yaml:"aggregation"`
 }
 
-// RuleMetadata is the in-memory representation of a rule YAML sidecar file.
+// RuleMetadata is the in-memory representation of a rule YAML sidecar.
 type RuleMetadata struct {
 	plugin.PluginMetadata `yaml:",inline"`
 
@@ -71,9 +68,7 @@ type RuleMetadata struct {
 	RiskScore       scoring.RiskScore  `yaml:"-"`
 }
 
-// Load reads and validates a single YAML sidecar file, returning a *RuleMetadata
-
-// New constructs a RuleMetadata from already-parsed field values (e.g. from a proto payload).
+// NewRuleMetadata resolves derived scoring fields on an already-parsed RuleMetadata.
 func NewRuleMetadata(c RuleMetadata) (*RuleMetadata, error) {
 	if err := c.resolveScoring(); err != nil {
 		return nil, err
@@ -107,12 +102,12 @@ func (c *RuleMetadata) resolveScoring() error {
 	return nil
 }
 
+// MergeWindowMins returns the configured merge window as a duration.
 func (c *RuleMetadata) MergeWindowMins() time.Duration {
 	return time.Duration(c.MergeWindowMinsField) * time.Minute
 }
 
-// Rule is the full interface for live rule plugins: config accessor + batch evaluation.
-// All rules receive a slice of events and return one EvalResult per event.
+// Rule is the host-side interface for evaluating a batch of events.
 type Rule interface {
 	Evaluate(ctx context.Context, evts []events.Event) ([]EventResult, errors.Error)
 

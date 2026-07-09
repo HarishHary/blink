@@ -12,17 +12,17 @@ import (
 	"github.com/harishhary/blink/internal/plugin"
 )
 
-// ValidationError is an alias so callers in this package use the short name.
+// ValidationError aliases config.ValidationError for rules callers.
 type ValidationError = config.ValidationError
 
 var semverRE = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+`)
 
-// Loader implements config.Loader[*RuleMetadata] for rules.
-// Embed config.BaseLoader to inherit default Parse, Validate, and CrossValidate.
+// Loader parses and validates rule metadata.
 type Loader struct {
 	config.BaseLoader[RuleMetadata, *RuleMetadata]
 }
 
+// Parse loads rule metadata from a YAML sidecar on disk.
 func (r Loader) Parse(path string) (*RuleMetadata, error) {
 	cfg, err := r.BaseLoader.Parse(path)
 	if err != nil {
@@ -34,9 +34,7 @@ func (r Loader) Parse(path string) (*RuleMetadata, error) {
 	return cfg, nil
 }
 
-// ParseSpec is the disk-less counterpart to Parse for snapshot-sourced rules: it
-// unmarshals the spec and injects name via the BaseLoader default, then applies the
-// same rule-specific scoring resolution Parse does.
+// ParseSpec loads rule metadata from a snapshot spec payload.
 func (r Loader) ParseSpec(name string, spec []byte) (*RuleMetadata, error) {
 	cfg, err := r.BaseLoader.ParseSpec(name, spec)
 	if err != nil {
@@ -48,8 +46,7 @@ func (r Loader) ParseSpec(name string, spec []byte) (*RuleMetadata, error) {
 	return cfg, nil
 }
 
-// Validate extends the common structural checks with rule-specific field validation
-// (required id, required version, semver format).
+// Validate applies rule-specific validation on top of the shared loader checks.
 func (r Loader) Validate(items []*RuleMetadata, binaries []string) []ValidationError {
 	var errs []ValidationError
 	for _, cfg := range items {
@@ -73,14 +70,10 @@ func (r Loader) Validate(items []*RuleMetadata, binaries []string) []ValidationE
 	return errs
 }
 
-// SnapshotConfig is the rules instantiation of config.SnapshotConfig: a snapshot adapted into the
-// data plane's rule catalog + DesiredConfig, fed by any SnapshotSource (a SnapshotReader over Kafka
-// or a LocalReader over disk).
+// SnapshotConfig adapts snapshots into the rules catalog and desired state.
 type SnapshotConfig = config.SnapshotConfig[*RuleMetadata]
 
-// NewSnapshotConfig builds a rules SnapshotConfig reading from src - a SnapshotReader (Kafka) in
-// production, a LocalReader (disk) in dev mode, or a fake in tests - parsing each elected
-// artifact's spec with Loader (unmarshal + name injection + scoring resolution).
+// NewSnapshotConfig builds a SnapshotConfig backed by the given snapshot source.
 func NewSnapshotConfig(logger *logger.Logger, src plugin.SnapshotSource) *SnapshotConfig {
 	return config.NewSnapshotConfig[*RuleMetadata](logger, src, Loader{})
 }
