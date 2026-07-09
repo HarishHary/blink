@@ -40,7 +40,6 @@ type formatChunkResult struct {
 //   - removed=true: plugin deregistered, caller should drop permanently.
 //   - outs/errs are per-alert (same length as alertBatch) on success.
 func (p *Pool) Format(ctx context.Context, formatterID string, alerts []*alts.Alert, canaryHashKey string) (outs []map[string]any, absent bool, removed bool, errs []errors.Error) {
-	// Shadow candidate (if any): separate fan-out at its own max_procs, results dropped.
 	p.shadowFormat(ctx, formatterID, alerts)
 	k := p.ServingPoolSize(formatterID, canaryHashKey)
 	parts := pools.ShardConcurrent(alerts, k, func(chunk []*alts.Alert) formatChunkResult {
