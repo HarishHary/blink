@@ -8,6 +8,7 @@ import (
 	"github.com/harishhary/blink/pkg/formatters/rpc_formatters"
 )
 
+// NewAdapter builds the PluginAdapter for the formatters plugin type.
 func NewAdapter(cfg config.Source[*FormatterMetadata]) *plugin.PluginAdapter[Formatter] {
 	return &plugin.PluginAdapter[Formatter]{
 		Key:    "formatter",

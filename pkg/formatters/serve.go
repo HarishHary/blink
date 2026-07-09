@@ -15,14 +15,17 @@ import (
 	"github.com/harishhary/blink/pkg/formatters/rpc_formatters"
 )
 
+// MagicValue is the formatter plugin handshake cookie value.
 const MagicValue = "formatter_v1"
 
+// Plugin is the interface formatter plugin binaries must implement.
 type Plugin interface {
 	Init() error
 	Format(ctx context.Context, alert alerts.Alert) (map[string]any, errors.Error)
 	Shutdown() error
 }
 
+// BaseFormatter provides no-op Init and Shutdown defaults.
 type BaseFormatter struct{}
 
 func (BaseFormatter) Init() error     { return nil }
@@ -79,6 +82,7 @@ func (p *pluginImpl) GRPCClient(_ context.Context, _ *plugin.GRPCBroker, c *grpc
 	return rpc_formatters.NewFormatterClient(c), nil
 }
 
+// Serve starts the formatter plugin gRPC server.
 func Serve(f Plugin) {
 	os.Setenv("GODEBUG", "madvdontneed=1")
 	plugin.Serve(&plugin.ServeConfig{

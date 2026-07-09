@@ -13,6 +13,7 @@ import (
 	alts "github.com/harishhary/blink/pkg/alerts"
 )
 
+// Pool routes enrichment calls across the live enrichment process pool.
 type Pool struct {
 	*pools.ProcessPool[Enrichment]
 }
@@ -54,7 +55,9 @@ func (p *Pool) Enrich(ctx context.Context, enrichmentID string, alerts []*alts.A
 			return true, false, nil
 		}
 		if part.callErr != nil {
-			return false, false, []errors.Error{part.callErr}
+			for i := range part.errs {
+				part.errs[i] = part.callErr
+			}
 		}
 	}
 
@@ -86,7 +89,7 @@ func (p *Pool) enrichChunk(ctx context.Context, enrichmentID string, altsChunk [
 		if stderrors.Is(err, pools.ErrPluginRemoved) {
 			return enrichChunkResult{removed: true}
 		}
-		return enrichChunkResult{callErr: errors.NewE(err)}
+		return enrichChunkResult{errs: perErrs, callErr: errors.NewE(err)}
 	}
 	return enrichChunkResult{errs: perErrs}
 }

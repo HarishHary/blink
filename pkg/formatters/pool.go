@@ -13,6 +13,7 @@ import (
 	alts "github.com/harishhary/blink/pkg/alerts"
 )
 
+// Pool routes formatter calls across the live formatter process pool.
 type Pool struct {
 	*pools.ProcessPool[Formatter]
 }
@@ -55,7 +56,9 @@ func (p *Pool) Format(ctx context.Context, formatterID string, alerts []*alts.Al
 			return nil, true, false, nil
 		}
 		if part.callErr != nil {
-			return nil, false, false, []errors.Error{part.callErr}
+			for i := range part.errs {
+				part.errs[i] = part.callErr
+			}
 		}
 	}
 
@@ -93,7 +96,7 @@ func (p *Pool) formatChunk(ctx context.Context, formatterID string, altsChunk []
 		if stderrors.Is(err, pools.ErrPluginRemoved) {
 			return formatChunkResult{removed: true}
 		}
-		return formatChunkResult{callErr: errors.NewE(err)}
+		return formatChunkResult{outs: outs, errs: perErrs, callErr: errors.NewE(err)}
 	}
 	return formatChunkResult{outs: outs, errs: perErrs}
 }

@@ -13,6 +13,7 @@ type FormatterMetadata struct {
 	plugin.PluginMetadata `yaml:",inline"`
 }
 
+// Formatter formats alert batches and exposes its live sidecar metadata.
 type Formatter interface {
 	plugin.Syncable
 	Format(ctx context.Context, alerts []*alerts.Alert) ([]map[string]any, errors.Error)

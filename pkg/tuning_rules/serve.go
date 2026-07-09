@@ -79,6 +79,7 @@ func (p *pluginImpl) GRPCClient(_ context.Context, _ *plugin.GRPCBroker, c *grpc
 	return rpc_tuning_rules.NewTuningRuleClient(c), nil
 }
 
+// Serve starts the plugin RPC server for a tuning rule binary.
 func Serve(r Plugin) {
 	os.Setenv("GODEBUG", "madvdontneed=1")
 	plugin.Serve(&plugin.ServeConfig{

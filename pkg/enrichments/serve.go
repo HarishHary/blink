@@ -15,26 +15,18 @@ import (
 	"github.com/harishhary/blink/pkg/enrichments/rpc_enrichments"
 )
 
-// MagicValue is this plugin type's cookie value; the shared cookie key and
-// protocol version live in internal/handshake.
+// MagicValue is the enrichment plugin handshake cookie value.
 const MagicValue = "enrichment_v1"
 
-// Plugin is the interface that all enrichment plugin binaries must implement.
-// Embed sdk.BaseEnrichment to get no-op defaults for Init and Shutdown.
-//
-// All static metadata (name, id, enabled, depends_on, etc.) lives in the YAML
-// sidecar file alongside the binary - the subprocess owns only enrichment logic.
+// Plugin is the interface enrichment plugin binaries must implement.
 type Plugin interface {
-	// Init is called once after the plugin connects, before any Enrich calls.
 	Init() error
-	// Enrich enriches the alert event fields and returns the modified fields.
+	// Enrich returns enrichment fields for a single alert.
 	Enrich(ctx context.Context, alert alerts.Alert) (map[string]any, errors.Error)
-	// Shutdown is called before the plugin exits. Release any held resources.
 	Shutdown() error
 }
 
-// BaseEnrichment provides no-op defaults for Init and Shutdown.
-// Embed in your enrichment struct to avoid implementing them when not needed.
+// BaseEnrichment provides no-op Init and Shutdown defaults.
 type BaseEnrichment struct{}
 
 func (BaseEnrichment) Init() error     { return nil }
@@ -91,6 +83,7 @@ func (p *pluginImpl) GRPCClient(_ context.Context, _ *plugin.GRPCBroker, c *grpc
 	return rpc_enrichments.NewEnrichmentClient(c), nil
 }
 
+// Serve starts the enrichment plugin gRPC server.
 func Serve(e Plugin) {
 	os.Setenv("GODEBUG", "madvdontneed=1")
 	plugin.Serve(&plugin.ServeConfig{

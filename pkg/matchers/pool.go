@@ -13,6 +13,7 @@ import (
 	evts "github.com/harishhary/blink/pkg/events"
 )
 
+// Pool routes matcher calls across the live matcher process pool.
 type Pool struct {
 	*pools.ProcessPool[Matcher]
 }

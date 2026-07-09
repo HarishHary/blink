@@ -14,14 +14,17 @@ import (
 	"github.com/harishhary/blink/pkg/matchers/rpc_matchers"
 )
 
+// MagicValue is the matcher plugin handshake cookie value.
 const MagicValue = "matcher_v1"
 
+// Plugin is the interface matcher plugin binaries must implement.
 type Plugin interface {
 	Init() error
 	Match(ctx context.Context, event events.Event) (bool, errors.Error)
 	Shutdown() error
 }
 
+// BaseMatcher provides no-op Init and Shutdown defaults.
 type BaseMatcher struct{}
 
 func (BaseMatcher) Init() error     { return nil }
@@ -71,6 +74,7 @@ func (p *pluginImpl) GRPCClient(_ context.Context, _ *plugin.GRPCBroker, c *grpc
 	return rpc_matchers.NewMatcherClient(c), nil
 }
 
+// Serve starts the matcher plugin gRPC server.
 func Serve(m Plugin) {
 	os.Setenv("GODEBUG", "madvdontneed=1")
 	plugin.Serve(&plugin.ServeConfig{
