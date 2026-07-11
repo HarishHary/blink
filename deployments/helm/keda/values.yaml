@@ -1,0 +1,23 @@
+kafka:
+  brokers: blink-kafka-cluster-kafka-bootstrap.kafka:9092
+
+# Enabled log types come from global.logTypes. Override scaler settings per type here.
+logTypeDefaults:
+  matcher:
+    minReplicas: 1
+    maxReplicas: 6
+    lagThreshold: "100"
+  executor:
+    minReplicas: 1
+    maxReplicas: 12
+    lagThreshold: "100"
+
+logTypeOverrides: {}
+
+# Shared-stage scaler capacity. Topology and names come from global.sharedStages.
+sharedStageDefaults:
+  minReplicas: 1
+  maxReplicas: 6
+  lagThreshold: "100"
+
+sharedStageOverrides: {}

@@ -19,7 +19,7 @@ events
 
 A separate control plane (`cmd/controller`) reconciles each plugin type's YAML config against a backing store and publishes the effective desired state as **per-ID keyed, log-compacted Kafka snapshots**. Every pipeline pod consumes its type's snapshot and reconciles its plugin subprocesses - no pod reads plugin config off local disk.
 
-Both planes run the **same reaction loop**: a *source* assembles a `Snapshot` and fires a coalescing signal; a *subscriber* running alongside it re-reads the latest snapshot and re-syncs.
+Both planes run the **same reaction loop**: a _source_ assembles a `Snapshot` and fires a coalescing signal; a _subscriber_ running alongside it re-reads the latest snapshot and re-syncs.
 
 ```
 YAML edit -▶ LocalReader --elect--▶ PluginController --▶ ═══ Kafka snapshot topic ═══
@@ -37,14 +37,14 @@ Five plugin types - `rules`, `matchers`, `tuning_rules`, `enrichments`, `formatt
 
 ## Layout
 
-| Path           | What                                                                                    |
-| -------------- | --------------------------------------------------------------------------------------- |
-| `cmd/`         | the eight services (the seven pipeline stages + `controller`)                           |
-| `internal/`    | Kafka broker, control plane, plugin runtime, process pools, config, backends            |
-| `pkg/`         | domain types (`events`, `alerts`, `scoring`) + the per-type plugin SDKs                 |
-| `deployments/` | Kubernetes: Kafka cluster + topics, per-service manifests, KEDA autoscaling, Helm chart |
-| `examples/`    | sample plugin configs                                                                   |
-| `docs/`        | architecture & internals (below)                                                        |
+| Path           | What                                                                                 |
+| -------------- | ------------------------------------------------------------------------------------ |
+| `cmd/`         | the eight services (the seven pipeline stages + `controller`)                        |
+| `internal/`    | Kafka broker, control plane, plugin runtime, process pools, config, backends         |
+| `pkg/`         | domain types (`events`, `alerts`, `scoring`) + the per-type plugin SDKs              |
+| `deployments/` | Kubernetes Helm charts: Kafka cluster + topics, Blink services, and KEDA autoscaling |
+| `examples/`    | sample plugin configs                                                                |
+| `docs/`        | architecture & internals (below)                                                     |
 
 ## Documentation
 
@@ -59,3 +59,10 @@ Five plugin types - `rules`, `matchers`, `tuning_rules`, `enrichments`, `formatt
 - **[DEVELOPMENT.md](DEVELOPMENT.md)** - prerequisites, local setup, common commands.
 - **[deployments/README.md](deployments/README.md)** - running on Kubernetes (Podman/Minikube).
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** - how to contribute.
+
+Kubernetes charts share `deployments/helm/values.yaml`: `global.logTypes` controls
+per-log-type matcher/executor resources, while `global.sharedStages` defines the
+shared alert-stage Deployment, topic, group, optional DLQ, and optional scaler names.
+`withDLQ` and `withScaler` control conditional generation; merger and dispatcher
+DLQs remain disabled pending runtime support. See
+[deployments/README.md](deployments/README.md) for the complete derived-name table.

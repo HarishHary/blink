@@ -1,0 +1,6 @@
+apiVersion: v2
+name: keda
+description: Blink KEDA Kafka lag scalers
+type: application
+version: 0.1.0
+appVersion: "2"

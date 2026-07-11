@@ -1,0 +1,27 @@
+# Canonical enabled log types for all independent Blink Helm charts.
+global:
+  logTypes:
+    application: {}
+    # authentication: {}
+  # Shared pipeline topology consumed by the Kafka, Blink, and KEDA charts.
+  sharedStages:
+    merger:
+      workload: alert-merger
+      withDLQ: false
+      withScaler: false
+    tuner:
+      workload: rule-tuner
+      withDLQ: true
+      withScaler: true
+    enricher:
+      workload: alert-enricher
+      withDLQ: true
+      withScaler: true
+    formatter:
+      workload: alert-formatter
+      withDLQ: true
+      withScaler: true
+    dispatcher:
+      workload: alert-dispatcher
+      withDLQ: false
+      withScaler: true

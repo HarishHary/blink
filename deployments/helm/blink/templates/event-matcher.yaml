@@ -1,0 +1,80 @@
+{{- $global := .Values.global | default dict }}
+{{- $logTypes := required "global.logTypes is required; pass deployments/helm/values.yaml" (get $global "logTypes") }}
+{{- $logTypeOverrides := .Values.logTypeOverrides | default dict }}
+{{- range $logTypeName, $_ := $logTypes }}
+{{- $overrides := get $logTypeOverrides $logTypeName | default dict }}
+{{- $logType := include "blink.logTypeConfig" (dict "root" $ "overrides" $overrides) | fromYaml }}
+{{- $matcherName := include "blink.matcherName" $logTypeName }}
+{{- $executorTopic := include "blink.executorTopic" $logTypeName }}
+{{- $matcherTopic := include "blink.matcherTopic" $logTypeName }}
+{{- $matcherGroup := include "blink.matcherGroup" $logTypeName }}
+---
+# event-matcher-{{ $logTypeName }}
+# Pre-filters raw events by matcher plugins before rule execution.
+# Reads from {{ $matcherTopic }}, writes matched events to {{ $executorTopic }}.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $matcherName }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    app: {{ $matcherName }}
+    log-type: {{ $logTypeName }}
+    {{- include "blink.labels" $ | nindent 4 }}
+spec:
+  replicas: {{ $logType.matcher.replicas }}
+  selector:
+    matchLabels:
+      app: {{ $matcherName }}
+  template:
+    metadata:
+      labels:
+        app: {{ $matcherName }}
+        log-type: {{ $logTypeName }}
+    spec:
+      containers:
+        - name: event-matcher
+          image: {{ include "blink.image" (dict "registry" $.Values.image.registry "name" "blink-event-matcher" "tag" $.Values.image.tag) }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          command: ["/bin/blink-event-matcher"]
+          envFrom:
+            {{- include "blink.envFrom" $ | nindent 12 }}
+          env:
+            - name: APP_NAME
+              value: {{ $matcherName | quote }}
+            - name: LOG_TYPE
+              value: {{ $logTypeName | quote }}
+            - name: KAFKA_TOPIC_MATCHER
+              value: {{ $matcherTopic | quote }}
+            - name: KAFKA_GROUP_MATCHER
+              value: {{ $matcherGroup | quote }}
+            # event_matcher writes matched events into the executor topic for this log type.
+            - name: KAFKA_TOPIC_EXEC
+              value: {{ $executorTopic | quote }}
+          ports:
+            - name: http
+              containerPort: 8080
+          {{- include "blink.probes" $ | nindent 10 }}
+          volumeMounts:
+            {{- include "blink.pluginVolumeMount" $ | nindent 12 }}
+          resources:
+            {{- toYaml $logType.matcher.resources | nindent 12 }}
+      volumes:
+        {{- include "blink.pluginVolume" $ | nindent 8 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $matcherName }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    app: {{ $matcherName }}
+    {{- include "blink.labels" $ | nindent 4 }}
+spec:
+  selector:
+    app: {{ $matcherName }}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+{{- end }}

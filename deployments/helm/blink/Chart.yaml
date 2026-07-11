@@ -1,0 +1,11 @@
+apiVersion: v2
+name: blink
+description: Blink - event-driven alert detection and processing engine
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - security
+  - siem
+  - alert
+  - detection

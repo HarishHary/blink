@@ -1,0 +1,55 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blink-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: blink-controller
+    {{- include "blink.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.controller.replicas }}
+  selector:
+    matchLabels:
+      app: blink-controller
+  template:
+    metadata:
+      labels:
+        app: blink-controller
+    spec:
+      containers:
+        - name: controller
+          image: {{ include "blink.image" (dict "registry" .Values.image.registry "name" .Values.controller.image "tag" .Values.image.tag) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/bin/blink-controller"]
+          envFrom:
+            {{- include "blink.envFrom" . | nindent 12 }}
+          env:
+            - name: APP_NAME
+              value: "controller"
+          ports:
+            - name: http
+              containerPort: 8080
+          {{- include "blink.probes" . | nindent 10 }}
+          volumeMounts:
+            {{- include "blink.pluginVolumeMount" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.controller.resources | nindent 12 }}
+      volumes:
+        {{- include "blink.pluginVolume" . | nindent 8 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: blink-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: blink-controller
+    {{- include "blink.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: blink-controller
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

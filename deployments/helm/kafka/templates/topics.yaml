@@ -1,0 +1,74 @@
+{{- $global := .Values.global | default dict }}
+{{- $logTypes := required "global.logTypes is required; pass deployments/helm/values.yaml" (get $global "logTypes") }}
+{{- $logTypeOverrides := .Values.logTypeOverrides | default dict }}
+{{- range $logTypeName, $_ := $logTypes }}
+{{- $overrides := get $logTypeOverrides $logTypeName | default dict }}
+{{- $logType := include "kafka.logTypeConfig" (dict "root" $ "overrides" $overrides) | fromYaml }}
+{{- range $topic := list (dict "name" (include "kafka.matcherTopic" $logTypeName) "config" $logType.matcher.config "partitions" $logType.matcher.partitions "replicas" $logType.matcher.replicas) (dict "name" (include "kafka.executorTopic" $logTypeName) "config" $logType.executor.config "partitions" $logType.executor.partitions "replicas" $logType.executor.replicas) }}
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: {{ $topic.name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    strimzi.io/cluster: {{ $.Values.kafka.clusterName }}
+spec:
+  partitions: {{ $topic.partitions }}
+  replicas: {{ $topic.replicas }}
+  config:
+    {{- toYaml $topic.config | nindent 4 }}
+{{- end }}
+{{- end }}
+{{- $sharedStages := required "global.sharedStages is required; pass deployments/helm/values.yaml" (get $global "sharedStages") }}
+{{- $sharedStageOverrides := .Values.sharedStageOverrides | default dict }}
+{{- range $stageName, $_ := $sharedStages }}
+{{- $stage := include "kafka.sharedStage" (dict "root" $ "stage" $stageName) | fromYaml }}
+{{- $overrides := get $sharedStageOverrides $stageName | default dict }}
+{{- $config := include "kafka.sharedStageConfig" (dict "root" $ "overrides" $overrides) | fromYaml }}
+{{- range $topic := list (dict "name" (include "kafka.stageTopic" $stageName) "config" $config.primary.config "partitions" $config.primary.partitions "replicas" $config.primary.replicas) }}
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: {{ $topic.name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    strimzi.io/cluster: {{ $.Values.kafka.clusterName }}
+spec:
+  partitions: {{ $topic.partitions }}
+  replicas: {{ $topic.replicas }}
+  config:
+    {{- toYaml $topic.config | nindent 4 }}
+{{- end }}
+{{- if $stage.withDLQ }}
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: {{ include "kafka.stageDLQTopic" $stageName }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    strimzi.io/cluster: {{ $.Values.kafka.clusterName }}
+spec:
+  partitions: {{ $config.dlq.partitions }}
+  replicas: {{ $config.dlq.replicas }}
+  config:
+    {{- toYaml $config.dlq.config | nindent 4 }}
+{{- end }}
+{{- end }}
+{{- range $type := list "rule" "matcher" "tuning" "formatter" "enrichment" }}
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: {{ include "kafka.snapshotTopic" $type }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    strimzi.io/cluster: {{ $.Values.kafka.clusterName }}
+spec:
+  partitions: {{ $.Values.snapshotTopic.partitions }}
+  replicas: {{ $.Values.snapshotTopic.replicas }}
+  config:
+    {{- toYaml $.Values.snapshotTopic.config | nindent 4 }}
+{{- end }}

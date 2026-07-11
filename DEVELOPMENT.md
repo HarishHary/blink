@@ -1,18 +1,18 @@
 # Development
 
-This guide contains useful information for developing on the Blink project. For *what* Blink
+This guide contains useful information for developing on the Blink project. For _what_ Blink
 is and how messages flow, start with [README.md](README.md) and
 [docs/internals/message-flow.md](docs/internals/message-flow.md).
 
 - [Development](#development)
-  - [Overview](#overview)
-  - [Prerequisites](#prerequisites)
-  - [Components](#components)
-  - [Common commands](#common-commands)
-  - [Running on Kubernetes](#running-on-kubernetes)
-  - [IDEs \& Dev Containers](#ides-dev-containers)
-  - [Formatting \& hooks](#formatting-hooks)
-  - [Contributing](#contributing)
+    - [Overview](#overview)
+    - [Prerequisites](#prerequisites)
+    - [Components](#components)
+    - [Common commands](#common-commands)
+    - [Running on Kubernetes](#running-on-kubernetes)
+    - [IDEs \& Dev Containers](#ides-dev-containers)
+    - [Formatting \& hooks](#formatting-hooks)
+    - [Contributing](#contributing)
 
 ## Overview
 
@@ -40,12 +40,12 @@ subscribe → signal → re-read → re-sync loop - see
 | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `cmd/`                                                                           | the eight services: `event_matcher`, `rule_executor`, `alert_merger`, `rule_tuner`, `alert_enricher`, `alert_formatter`, `alert_dispatcher`, and the control plane `controller` |
 | `internal/brokers`                                                               | Kafka broker abstraction (`Reader`/`Writer`/`Broker`); also an Event Hubs implementation                                                                                        |
-| `internal/controller`                                                            | control plane: `LocalReader[T]` (disk parse+elect → `Snapshot`), `PluginController[T]` (writer), `SnapshotReader` (per-pod reader)                                                                                             |
+| `internal/controller`                                                            | control plane: `LocalReader[T]` (disk parse+elect → `Snapshot`), `PluginController[T]` (writer), `SnapshotReader` (per-pod reader)                                              |
 | `internal/plugin`, `internal/pools`                                              | generic plugin runtime (`PluginExecutor[T]`) and process pools (`ProcessPool[T]`)                                                                                               |
-| `internal/config`, `internal/services`, `internal/backends`, `internal/snapshot` | plugin config `Loader[T]`/`Source[T]`/`SnapshotConfig[T]`, service runner/config loader, persistence adapters, snapshot wire model                                                                                    |
+| `internal/config`, `internal/services`, `internal/backends`, `internal/snapshot` | plugin config `Loader[T]`/`Source[T]`/`SnapshotConfig[T]`, service runner/config loader, persistence adapters, snapshot wire model                                              |
 | `pkg/{events,alerts,scoring}`                                                    | domain types                                                                                                                                                                    |
 | `pkg/{rules,matchers,tuning_rules,enrichments,formatters}`                       | per-type plugin interfaces, RPC, and SDKs                                                                                                                                       |
-| `deployments/`                                                                   | Kubernetes: `kafka/` (cluster + topics), `blink/` (per-service manifests + config), `keda/` (autoscaling), `helm/` (chart)                                                      |
+| `deployments/`                                                                   | Kubernetes Helm charts: `helm/kafka/` (cluster + topics), `helm/blink/` (services + config), `helm/keda/` (Kafka-lag scalers)                                                   |
 | `examples/`                                                                      | sample plugin configs, one directory per plugin type                                                                                                                            |
 | `docs/`                                                                          | architecture & internals - `docs/internals/message-flow.md` is the message-schema reference                                                                                     |
 
@@ -68,15 +68,14 @@ toolchain must be on `PATH`. If a test fails with a missing-binary error, look f
 ## Running on Kubernetes
 
 Local clusters run on Podman or Minikube. See **[deployments/README.md](deployments/README.md)**
-for the full prerequisites and apply sequence; in outline:
-
-```bash
-kubectl apply -f deployments/kafka/    # Kafka cluster + topics
-kubectl apply -f deployments/blink/    # services + shared config
-kubectl apply -f deployments/keda/     # autoscaling (optional)
-```
-
-A Helm chart is also available under `deployments/helm/blink`.
+for the Strimzi and KEDA operator prerequisites, chart validation, and install sequence.
+Install the independent Helm charts in order: `deployments/helm/kafka`, then
+`deployments/helm/blink`, then `deployments/helm/keda`; every chart command passes
+`-f deployments/helm/values.yaml`, where `global.logTypes` and the shared alert-stage
+topology (`global.sharedStages`) are defined once. `withDLQ` conditionally creates a
+stage DLQ and `withScaler` conditionally creates its KEDA ScaledObject; merger and
+dispatcher DLQs remain disabled pending runtime support. See the derived names and
+the canonical commands in [deployments/README.md](deployments/README.md).
 
 ## IDEs & Dev Containers
 

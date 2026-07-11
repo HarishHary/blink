@@ -1,0 +1,60 @@
+{{- $stage := include "blink.sharedStage" (dict "root" . "stage" "enricher") | fromYaml }}
+{{- $sharedStageOverrides := .Values.sharedStageOverrides | default dict }}
+{{- $overrides := get $sharedStageOverrides "enricher" | default dict }}
+{{- $config := include "blink.sharedStageConfig" (dict "root" . "overrides" $overrides) | fromYaml }}
+{{- $workload := required "global.sharedStages.enricher.workload is required" $stage.workload }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $workload }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ $workload }}
+    {{- include "blink.labels" . | nindent 4 }}
+spec:
+  replicas: {{ $config.replicas }}
+  selector:
+    matchLabels:
+      app: {{ $workload }}
+  template:
+    metadata:
+      labels:
+        app: {{ $workload }}
+    spec:
+      containers:
+        - name: alert-enricher
+          image: {{ include "blink.image" (dict "registry" .Values.image.registry "name" "blink-alert-enricher" "tag" .Values.image.tag) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/bin/blink-alert-enricher"]
+          envFrom:
+            {{- include "blink.envFrom" . | nindent 12 }}
+          env:
+            - name: APP_NAME
+              value: "alert-enricher"
+          ports:
+            - name: http
+              containerPort: 8080
+          {{- include "blink.probes" . | nindent 10 }}
+          volumeMounts:
+            {{- include "blink.pluginVolumeMount" . | nindent 12 }}
+          resources:
+            {{- toYaml $config.resources | nindent 12 }}
+      volumes:
+        {{- include "blink.pluginVolume" . | nindent 8 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $workload }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ $workload }}
+    {{- include "blink.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: {{ $workload }}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
