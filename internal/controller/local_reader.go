@@ -48,7 +48,6 @@ type binaryFile struct {
 // parse keeps the last-good entry, never tombstoning a running plugin).
 type LocalReader[T plugin.Syncable] struct {
 	logger   *logger.Logger
-	name     string                            // plugin-type label used in logs
 	dir      string                            // sidecar directory to watch
 	loader   config.Loader[T]                  // parses one YAML sidecar into T
 	snapshot atomic.Pointer[snapshot.Snapshot] // elected snapshot, wait-free (for Snapshot())
@@ -68,11 +67,9 @@ type LocalReader[T plugin.Syncable] struct {
 }
 
 // NewLocalReader builds a LocalReader that watches dir for YAML sidecars (parsed by loader).
-// name is the short plugin-type label used in logs.
-func NewLocalReader[T plugin.Syncable](log *logger.Logger, name, dir string, loader config.Loader[T]) *LocalReader[T] {
+func NewLocalReader[T plugin.Syncable](logger *logger.Logger, dir string, loader config.Loader[T]) *LocalReader[T] {
 	r := &LocalReader[T]{
-		logger:   log,
-		name:     name,
+		logger:   logger,
 		dir:      dir,
 		loader:   loader,
 		cache:    make(map[string]parsedFile[T]),
@@ -275,7 +272,7 @@ func (r *LocalReader[T]) reelect() (publish bool) {
 	// over the whole catalog (cheap - no marshal). The config still publishes; group-policy election
 	// and the controller's carry-forward decide what actually runs.
 	for _, ve := range r.loader.Validate(all, binaries) {
-		r.logger.ErrorF("local-reader: %s validate: %v", r.name, ve)
+		r.logger.ErrorF("local-reader: validate: %v", ve)
 	}
 
 	// Affected IDs: the old ID of every changed/deleted path (that group lost/changed a file) plus

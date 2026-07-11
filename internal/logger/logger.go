@@ -2,91 +2,50 @@ package logger
 
 import (
 	"fmt"
-	"log"
+	"io"
+	"log/slog"
 	"os"
-	"time"
 
 	"github.com/harishhary/blink/internal/errors"
 )
 
-type Environment = int
-
-var EnvironmentEnum = struct {
-	dev         Environment
-	staging     Environment
-	integration Environment
-	prod        Environment
-}{
-	dev:         0,
-	staging:     1,
-	integration: 2,
-	prod:        3,
-}
-
-type ILogger interface {
-	Debug(message string, v ...any)
-	Info(message string, v ...any)
-	Error(err errors.Error)
-	ErrorF(message string, v ...any)
-}
-
+// Logger writes structured JSON logs. New supplies the service context shared by
+// all derived loggers.
 type Logger struct {
-	environment Environment
-	logger      *log.Logger
+	logger *slog.Logger
 }
 
-func New(prefix string, environment string) *Logger {
-	var env = EnvironmentEnum.integration
-	switch {
-	case environment == "dev":
-		env = EnvironmentEnum.dev
-	case environment == "integration":
-		env = EnvironmentEnum.integration
-	case environment == "staging":
-		env = EnvironmentEnum.staging
-	case environment == "prod":
-		env = EnvironmentEnum.prod
-	default:
-		env = EnvironmentEnum.integration
+func New(service string, environment string) *Logger {
+	return newLogger(os.Stdout, service, environment)
+}
+
+func newLogger(output io.Writer, service string, environment string) *Logger {
+	level := slog.LevelInfo
+	if environment == "dev" {
+		level = slog.LevelDebug
 	}
 	return &Logger{
-		environment: env,
-		logger:      log.New(os.Stdout, fmt.Sprintf("[%s]", prefix), 0),
+		logger: slog.New(slog.NewJSONHandler(output, &slog.HandlerOptions{Level: level})).With("service", service),
 	}
+}
+
+// With returns an immutable child logger that includes args on every record.
+func (log *Logger) With(args ...any) *Logger {
+	return &Logger{logger: log.logger.With(args...)}
 }
 
 func (log *Logger) Debug(message string, v ...any) {
-	if log.environment > 0 {
-		return
-	}
-
-	msg := fmt.Sprintf(message, v...)
-	log.logger.Printf("[%s][\033[1;35mDEBUG\033[0m] %s", time.Now().Format("2006/01/02 - 15:04:05"), msg)
+	log.logger.Debug(fmt.Sprintf(message, v...))
 }
 
 func (log *Logger) Info(message string, v ...any) {
-	if log.environment > 1 {
-		return
-	}
-
-	msg := fmt.Sprintf(message, v...)
-	log.logger.Printf("[%s][\033[1;36mINFO\033[0m] %s", time.Now().Format("2006/01/02 - 15:04:05"), msg)
+	log.logger.Info(fmt.Sprintf(message, v...))
 }
 
 func (log *Logger) Error(err errors.Error) {
-	if log.environment > 1 {
-		return
-	}
-
-	msg := err.Error()
-	log.logger.Printf("[%s][\033[1;31mERROR\033[0m] %s", time.Now().Format("2006/01/02 - 15:04:05"), msg)
+	log.logger.Error(err.Error())
 }
 
 func (log *Logger) ErrorF(message string, v ...any) {
-	if log.environment > 1 {
-		return
-	}
-
-	msg := fmt.Sprintf(message, v...)
-	log.logger.Printf("[%s][\033[1;31mERROR\033[0m] %s", time.Now().Format("2006/01/02 - 15:04:05"), msg)
+	log.logger.Error(fmt.Sprintf(message, v...))
 }
