@@ -1,0 +1,135 @@
+image:
+  registry: "localhost"
+  pullPolicy: Never
+  tag: latest
+
+kafka:
+  brokers: "blink-kafka-cluster-kafka-bootstrap.kafka:9092"
+
+# Plugin volume mounted into every service pod.
+# Switch to pvc for production (shared ReadWriteMany PVC).
+plugins:
+  volume:
+    hostPath:
+      path: /blink/plugins
+      type: Directory
+
+# ---------------------------------------------------------------------------
+# Per-log-type pipeline stages: event_matcher + rule_executor. Enabled log types
+# come from global.logTypes; defaults are merged with chart-local overrides.
+# ---------------------------------------------------------------------------
+logTypeDefaults:
+  matcher:
+    replicas: 2
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "256Mi"
+  executor:
+    replicas: 2
+    batchSize: "50"
+    concurrency: "4"
+    timeoutSec: "10"
+    resources:
+      requests:
+        cpu: "200m"
+        memory: "256Mi"
+      limits:
+        cpu: "1000m"
+        memory: "512Mi"
+
+logTypeOverrides: {}
+
+# Shared-stage workload capacity. Topology and names come from global.sharedStages.
+sharedStageDefaults: {}
+
+sharedStageOverrides:
+  # alert_merger groups related alerts before tuning.
+  # replicas ≤ partition count of the merger primary topic (key-partitioned by MergePartitionKey).
+  merger:
+    replicas: 1
+    # maxGroups: cap on live merge groups per replica; 0 = unlimited.
+    maxGroups: 10000
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "256Mi"
+      limits:
+        cpu: "200m"
+        memory: "512Mi"
+  tuner:
+    replicas: 2
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "256Mi"
+  enricher:
+    replicas: 2
+    resources:
+      requests:
+        cpu: "200m"
+        memory: "256Mi"
+      limits:
+        cpu: "1000m"
+        memory: "512Mi"
+  formatter:
+    replicas: 2
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "256Mi"
+  dispatcher:
+    replicas: 2
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "256Mi"
+
+# ---------------------------------------------------------------------------
+# Control plane: publishes log-compacted plugin configuration snapshots.
+# ---------------------------------------------------------------------------
+controller:
+  image: blink-controller
+  replicas: 1
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "256Mi"
+
+# ---------------------------------------------------------------------------
+# Shared ConfigMap values
+# ---------------------------------------------------------------------------
+config:
+  appStackEnvironment: "prod"
+  tenant: "default"
+  domain: "blink.local"
+  pluginDirs:
+    rules: "/plugins/rules"
+    matchers: "/plugins/matchers"
+    tuner: "/plugins/tuning_rules"
+    enricher: "/plugins/enrichments"
+    formatter: "/plugins/formatters"
+    dispatcher: "/plugins/dispatchers"
+
+# ---------------------------------------------------------------------------
+# Auth Secret - override in production via --set or external secret manager.
+# ---------------------------------------------------------------------------
+auth:
+  product: "blink"
+  auth0Audience: "https://api.example.com"
+  auth0Issuer: "https://example.auth0.com/"

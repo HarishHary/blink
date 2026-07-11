@@ -1,0 +1,56 @@
+{{- $global := .Values.global | default dict }}
+{{- $logTypes := required "global.logTypes is required; pass deployments/helm/values.yaml" (get $global "logTypes") }}
+{{- $logTypeOverrides := .Values.logTypeOverrides | default dict }}
+{{- range $logTypeName, $_ := $logTypes }}
+{{- $overrides := get $logTypeOverrides $logTypeName | default dict }}
+{{- $logType := include "keda.logTypeConfig" (dict "root" $ "overrides" $overrides) | fromYaml }}
+{{- range $scaler := list (dict "name" (include "keda.matcherScalerName" $logTypeName) "targetName" (include "keda.matcherName" $logTypeName) "consumerGroup" (include "keda.matcherGroup" $logTypeName) "topic" (include "keda.matcherTopic" $logTypeName) "config" $logType.matcher) (dict "name" (include "keda.executorScalerName" $logTypeName) "targetName" (include "keda.executorName" $logTypeName) "consumerGroup" (include "keda.executorGroup" $logTypeName) "topic" (include "keda.executorTopic" $logTypeName) "config" $logType.executor) }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ $scaler.name }}
+  namespace: {{ $.Release.Namespace }}
+spec:
+  scaleTargetRef:
+    name: {{ $scaler.targetName }}
+  minReplicaCount: {{ $scaler.config.minReplicas }}
+  maxReplicaCount: {{ $scaler.config.maxReplicas }}
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: {{ $.Values.kafka.brokers }}
+        consumerGroup: {{ $scaler.consumerGroup }}
+        topic: {{ $scaler.topic }}
+        lagThreshold: {{ $scaler.config.lagThreshold | quote }}
+        offsetResetPolicy: latest
+{{- end }}
+{{- end }}
+{{- $sharedStages := required "global.sharedStages is required; pass deployments/helm/values.yaml" (get $global "sharedStages") }}
+{{- $sharedStageOverrides := .Values.sharedStageOverrides | default dict }}
+{{- range $stageName, $_ := $sharedStages }}
+{{- $stage := include "keda.sharedStage" (dict "root" $ "stage" $stageName) | fromYaml }}
+{{- if $stage.withScaler }}
+{{- $overrides := get $sharedStageOverrides $stageName | default dict }}
+{{- $config := include "keda.sharedStageConfig" (dict "root" $ "overrides" $overrides) | fromYaml }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "keda.scalerName" $stage.workload }}
+  namespace: {{ $.Release.Namespace }}
+spec:
+  scaleTargetRef:
+    name: {{ $stage.workload }}
+  minReplicaCount: {{ $config.minReplicas }}
+  maxReplicaCount: {{ $config.maxReplicas }}
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: {{ $.Values.kafka.brokers }}
+        consumerGroup: {{ include "keda.stageGroup" $stageName }}
+        topic: {{ include "keda.stageTopic" $stageName }}
+        lagThreshold: {{ $config.lagThreshold | quote }}
+        offsetResetPolicy: latest
+{{- end }}
+{{- end }}

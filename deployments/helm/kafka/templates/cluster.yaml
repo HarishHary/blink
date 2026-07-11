@@ -1,33 +1,32 @@
----
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaNodePool
 metadata:
-  name: blink-kafka-dual-role
-  namespace: kafka
+  name: {{ .Values.kafka.nodePool.name }}
+  namespace: {{ .Release.Namespace }}
   labels:
-    strimzi.io/cluster: blink-kafka-cluster
+    strimzi.io/cluster: {{ .Values.kafka.clusterName }}
 spec:
-  replicas: 1
+  replicas: {{ .Values.kafka.nodePool.replicas }}
   roles:
-  - controller
-  - broker
+    - controller
+    - broker
   storage:
     type: jbod
     volumes:
-    - id: 0
-      type: persistent-claim
-      size: 100Gi
-      kraftMetadata: shared
+      - id: 0
+        type: persistent-claim
+        size: {{ .Values.kafka.nodePool.storage.size }}
+        kraftMetadata: shared
 ---
 apiVersion: kafka.strimzi.io/v1
 kind: Kafka
 metadata:
-  name: blink-kafka-cluster
-  namespace: kafka
+  name: {{ .Values.kafka.clusterName }}
+  namespace: {{ .Release.Namespace }}
 spec:
   kafka:
-    version: 4.2.0
-    metadataVersion: 4.2-IV1
+    version: {{ .Values.kafka.version }}
+    metadataVersion: {{ .Values.kafka.metadataVersion }}
     listeners:
       - name: plain
         port: 9092
