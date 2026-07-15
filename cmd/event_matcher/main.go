@@ -38,28 +38,28 @@ func main() {
 	}
 	cfg.Config.Broker = brokers.NewKafkaBroker(cfg.Kafka)
 	b := cfg.Config.Broker
+	rootLogger := logger.New("event-matcher", cfg.Env)
 
-	// Matcher snapshot: the sole source of matcher config in the data plane - drives which
-	// subprocesses run AND their metadata + rollout (via matcherCfg). No local YAML.
-	matcherSnap := controller.NewSnapshotReader(logger.New("matcher-snapshot", "dev"), b.NewBroadcastReader(cfg.MatcherSnapshotTopic))
+	// Matcher snapshot: the sole source of matcher config in the data plane
+	matcherSnap := controller.NewSnapshotReader(rootLogger.With("component", "matcher_snapshot"), b.NewBroadcastReader(cfg.MatcherSnapshotTopic))
 	matcherSnapSvc := services.NewManagedService("matcher-snapshot-sync", matcherSnap)
-	matcherCfg := matchers.NewSnapshotConfig(logger.New("matcher-config", "dev"), matcherSnap)
 
-	// Rule snapshot: the rollout authority. The matcher derives candidate rules per log_type
-	// from this - no RULE_CONFIG_DIR, no duplicate rule-YAML mount.
-	ruleSnap := controller.NewSnapshotReader(logger.New("rule-snapshot", "dev"), b.NewBroadcastReader(cfg.RuleSnapshotTopic))
+	// Rule snapshot: the sole source of rule config in the data plane
+	ruleSnap := controller.NewSnapshotReader(rootLogger.With("component", "rule_snapshot"), b.NewBroadcastReader(cfg.RuleSnapshotTopic))
 	ruleSnapSvc := services.NewManagedService("rule-snapshot-sync", ruleSnap)
-	ruleCfg := rules.NewSnapshotConfig(logger.New("rule-config", "dev"), ruleSnap)
 
+	// Matcher Plugin Executor: runs the matcher plugins based on the matcher snapshot
+	matcherCfg := matchers.NewSnapshotConfig(rootLogger.With("component", "matcher_config"), matcherSnap)
 	matcherPool := matchers.NewPool(matcherCfg, 0)
+	pluginExector := matchers.NewPluginExecutor(rootLogger.With("component", "plugin_executor"), matcherPool.Sync, cfg.MatcherPluginDir, matcherSnap, matcherCfg)
+	pluginExectorSvc := services.NewManagedService("event-matcher-sync", pluginExector)
 
-	pluginMgr := matchers.NewPluginExecutor(logger.New("event-matcher", "dev"), matcherPool.Sync, cfg.MatcherPluginDir, matcherSnap, matcherCfg)
-	syncSvc := services.NewManagedService("event-matcher-sync", pluginMgr)
+	// Rule Config: to select rules for the event matcher based on the rule log type
+	ruleCfg := rules.NewSnapshotConfig(rootLogger.With("component", "rule_config"), ruleSnap)
+	event_matcherSvc := matcher.NewService(rootLogger.With("component", "service"), cfg.Config, matcherPool, ruleCfg)
 
-	matcherSvc := matcher.NewService(cfg.Config, matcherPool, ruleCfg)
-
-	// Readiness: ready only once BOTH control-plane inputs have arrived - the matcher
-	// plugins to run and the rule rollout to apply.
+	// Readiness: ready only once BOTH control-plane inputs have arrived
+	// FIXME: Wait for the pluginExecutor to be ready as well
 	ready := func() bool { return matcherSnap.Ready() && ruleSnap.Ready() }
 	go services.ServeHealth(":8080", ready)
 
@@ -67,8 +67,8 @@ func main() {
 	runner.Register(
 		matcherSnapSvc,
 		ruleSnapSvc,
-		syncSvc,
-		matcherSvc,
+		pluginExectorSvc,
+		event_matcherSvc,
 	)
 	runner.Run(ctx)
 	log.Println("Shutting down event-matcher")

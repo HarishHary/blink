@@ -83,7 +83,7 @@ func addController[T plugin.Syncable](
 	readerSvc := services.NewManagedService(name+"config-reader", reader)
 
 	ctrl := controller.NewPluginController(rootLogger.With("plugin_type", name, "component", "plugin_controller"), db, reader, writer)
-	ctrlSvc := services.NewManagedService(name+"-controller-sync", ctrl)
+	ctrlSvc := services.NewManagedService(name+"-controller", ctrl)
 
 	runner.Register(
 		readerSvc,

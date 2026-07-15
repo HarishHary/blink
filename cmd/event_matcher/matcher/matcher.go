@@ -53,9 +53,9 @@ type Config struct {
 	ExecTopic    string `env:"KAFKA_TOPIC_EXEC"`
 }
 
-func NewService(c Config, pool *matchers.Pool, ruleCfg *rules.SnapshotConfig) *Service {
+func NewService(logger *logger.Logger, c Config, pool *matchers.Pool, ruleCfg *rules.SnapshotConfig) *Service {
 	return &Service{
-		Logger:  logger.New("event-matcher", "dev"),
+		Logger:  logger,
 		reader:  c.Broker.NewReader(c.MatcherTopic, c.MatcherGroup),
 		writer:  c.Broker.NewWriter(c.ExecTopic),
 		ruleCfg: ruleCfg,
