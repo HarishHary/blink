@@ -58,9 +58,18 @@ func (pp *ProcessPool[T]) CallShadow(ctx context.Context, id string, fn func(con
 	if altPool == nil {
 		return
 	}
-	// Detach from caller ctx: prod may return (and its deadline expire) before this goroutine runs.
+	// Detach from caller cancellation, but retain its deadline so the shadow call
+	// cannot outlive the bounded production attempt that spawned it.
+	deadline, hasDeadline := ctx.Deadline()
 	shadowCtx := context.WithoutCancel(ctx)
+	var cancel context.CancelFunc
+	if hasDeadline {
+		shadowCtx, cancel = context.WithDeadline(shadowCtx, deadline)
+	}
 	go func() {
+		if cancel != nil {
+			defer cancel()
+		}
 		plugin, err := altPool.Acquire(shadowCtx)
 		if err != nil {
 			log.Printf("processpool: shadow acquire failed for %s: %v", id, err)
