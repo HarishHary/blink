@@ -6,6 +6,7 @@ import (
 
 	"github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/structpb"
 
@@ -91,18 +92,23 @@ func (s *server) Init(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, erro
 }
 
 func (s *server) EvaluateBatch(ctx context.Context, req *rpc_rules.EvaluateBatchRequest) (*rpc_rules.EvaluateBatchResponse, error) {
-	results := make([]*rpc_rules.EventResult, 0, len(req.GetEvents()))
-	for _, ev := range req.GetEvents() {
+	results := make([]*rpc_rules.EventResult, len(req.GetEvents()))
+	errs := make([]string, len(req.GetEvents()))
+	for i, ev := range req.GetEvents() {
 		event := events.Event(ev.AsMap())
 
 		if !s.rule.AlertReqSubkeys(event) {
-			results = append(results, &rpc_rules.EventResult{Matched: false})
+			results[i] = &rpc_rules.EventResult{Matched: false}
 			continue
 		}
 
 		matched, err := s.rule.Evaluate(ctx, event)
 		if err != nil {
-			return nil, err
+			if status := errors.PluginErrorStatus(err); status.Code() != codes.InvalidArgument {
+				return nil, status.Err()
+			}
+			errs[i] = err.Error()
+			continue
 		}
 
 		result := &rpc_rules.EventResult{Matched: matched}
@@ -117,9 +123,9 @@ func (s *server) EvaluateBatch(ctx context.Context, req *rpc_rules.EvaluateBatch
 				}
 			}
 		}
-		results = append(results, result)
+		results[i] = result
 	}
-	return &rpc_rules.EvaluateBatchResponse{Results: results}, nil
+	return &rpc_rules.EvaluateBatchResponse{Results: results, Errors: errs}, nil
 }
 
 func (s *server) Ping(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {

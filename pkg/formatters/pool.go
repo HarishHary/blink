@@ -2,7 +2,6 @@ package formatters
 
 import (
 	"context"
-	stderrors "errors"
 	"time"
 
 	"github.com/harishhary/blink/internal/config"
@@ -26,87 +25,63 @@ func NewPool(cfg config.Source[*FormatterMetadata], drainTimeout time.Duration) 
 	}
 }
 
-type formatChunkResult struct {
-	outs    []map[string]any
-	absent  bool
-	removed bool
-	errs    []errors.Error // per-alert (aligned with the chunk)
-	callErr errors.Error   // whole-call failure (not per-alert)
-}
-
 // FormatResult holds the batch-level result from formatting alerts.
 type FormatResult struct {
 	Outs    []map[string]any
-	Absent  bool
-	Removed bool
 	Errs    []errors.Error // per-alert (aligned with Outs)
+	CallErr errors.Error   // whole-call failure; never alert-scoped
 }
 
 // Format runs the formatter identified by id against all alerts. When the routed pool has
 // max_procs > 1 the alerts are sharded into that many contiguous chunks formatted concurrently
 // (each on its own subprocess) and the per-alert outs/errs are concatenated in original order.
-//   - absent=true: plugin transiently missing, caller should dead-letter.
-//   - removed=true: plugin deregistered, caller should drop permanently.
 //   - outs/errs are per-alert (same length as alertBatch) on success.
 func (p *Pool) Format(ctx context.Context, formatterID string, alerts []*alts.Alert, canaryHashKey string) FormatResult {
 	p.shadowFormat(ctx, formatterID, alerts)
 	k := p.ServingPoolSize(formatterID, canaryHashKey)
-	parts := pools.ShardConcurrent(alerts, k, func(chunk []*alts.Alert) formatChunkResult {
+	parts := pools.ShardConcurrent(alerts, k, func(chunk []*alts.Alert) FormatResult {
 		return p.formatChunk(ctx, formatterID, chunk, canaryHashKey)
 	})
-
-	// Pool-level conditions apply to the whole batch (every shard hit the same routed pool).
-	for _, part := range parts {
-		if part.removed {
-			return FormatResult{Removed: true}
-		}
-		if part.absent {
-			return FormatResult{Absent: true}
-		}
-		if part.callErr != nil {
-			for i := range part.errs {
-				part.errs[i] = part.callErr
-			}
-		}
+	result := FormatResult{
+		Outs: make([]map[string]any, 0, len(alerts)),
+		Errs: make([]errors.Error, 0, len(alerts)),
 	}
-
-	outs := make([]map[string]any, 0, len(alerts))
-	errs := make([]errors.Error, 0, len(alerts))
 	for _, part := range parts {
-		outs = append(outs, part.outs...)
-		errs = append(errs, part.errs...)
+		if part.CallErr != nil {
+			return FormatResult{CallErr: part.CallErr}
+		}
+		result.Outs = append(result.Outs, part.Outs...)
+		result.Errs = append(result.Errs, part.Errs...)
 	}
-	return FormatResult{Outs: outs, Errs: errs}
+	return result
 }
 
-func (p *Pool) formatChunk(ctx context.Context, formatterID string, altsChunk []*alts.Alert, canaryHashKey string) formatChunkResult {
+func (p *Pool) formatChunk(ctx context.Context, formatterID string, altsChunk []*alts.Alert, canaryHashKey string) FormatResult {
 	outs := make([]map[string]any, len(altsChunk))
 	perErrs := make([]errors.Error, len(altsChunk))
 	prodFn := func(callCtx context.Context, f Formatter) error {
 		if !f.FormatterMetadata().Enabled {
 			return nil
 		}
-		batchOuts, e := f.Format(callCtx, altsChunk)
-		if e != nil {
-			for i := range perErrs {
-				perErrs[i] = e
-			}
-			return nil
+		batchResult := f.FormatBatch(callCtx, altsChunk)
+		if batchResult.CallErr != nil {
+			return batchResult.CallErr
 		}
-		copy(outs, batchOuts)
+		if len(batchResult.Outs) != len(altsChunk) {
+			return &errors.ResultCardinalityError{PluginKind: "formatter", PluginID: formatterID, Field: "results", Expected: len(altsChunk), Actual: len(batchResult.Outs)}
+		}
+		if len(batchResult.Errs) != len(altsChunk) {
+			return &errors.ResultCardinalityError{PluginKind: "formatter", PluginID: formatterID, Field: "errors", Expected: len(altsChunk), Actual: len(batchResult.Errs)}
+		}
+		copy(outs, batchResult.Outs)
+		copy(perErrs, batchResult.Errs)
 		return nil
 	}
 	err := p.Call(ctx, formatterID, canaryHashKey, prodFn)
 	if err != nil {
-		if stderrors.Is(err, pools.ErrPluginNotFound) {
-			return formatChunkResult{absent: true}
-		}
-		if stderrors.Is(err, pools.ErrPluginRemoved) {
-			return formatChunkResult{removed: true}
-		}
-		return formatChunkResult{outs: outs, errs: perErrs, callErr: errors.NewE(err)}
+		return FormatResult{CallErr: errors.NewE(err)}
 	}
-	return formatChunkResult{outs: outs, errs: perErrs}
+	return FormatResult{Outs: outs, Errs: perErrs}
 }
 
 // shadowFormat fans the full batch out to the shadow candidate (if formatterID is in shadow mode) at
@@ -122,8 +97,16 @@ func (p *Pool) shadowFormat(ctx context.Context, formatterID string, alerts []*a
 			if !f.FormatterMetadata().Enabled {
 				return nil
 			}
-			_, e := f.Format(callCtx, altsChunk)
-			return e
+			result := f.FormatBatch(callCtx, altsChunk)
+			if result.CallErr != nil {
+				return result.CallErr
+			}
+			for _, err := range result.Errs {
+				if err != nil {
+					return err
+				}
+			}
+			return nil
 		})
 	}
 }

@@ -69,7 +69,8 @@ func (x *FormatBatchRequest) GetAlerts() []*pb.Alert {
 
 type FormatBatchResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	ResultJson    [][]byte               `protobuf:"bytes,1,rep,name=result_json,json=resultJson,proto3" json:"result_json,omitempty"`
+	ResultJson    [][]byte               `protobuf:"bytes,1,rep,name=result_json,json=resultJson,proto3" json:"result_json,omitempty"` // one JSON-encoded map[string]any per alert
+	Errors        []string               `protobuf:"bytes,2,rep,name=errors,proto3" json:"errors,omitempty"`                           // one item error string per alert
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -111,6 +112,13 @@ func (x *FormatBatchResponse) GetResultJson() [][]byte {
 	return nil
 }
 
+func (x *FormatBatchResponse) GetErrors() []string {
+	if x != nil {
+		return x.Errors
+	}
+	return nil
+}
+
 var File_pkg_formatters_rpc_formatters_formatter_proto protoreflect.FileDescriptor
 
 const file_pkg_formatters_rpc_formatters_formatter_proto_rawDesc = "" +
@@ -118,10 +126,11 @@ const file_pkg_formatters_rpc_formatters_formatter_proto_rawDesc = "" +
 	"-pkg/formatters/rpc_formatters/formatter.proto\x12\n" +
 	"formatters\x1a\x1bgoogle/protobuf/empty.proto\x1a\x19pkg/alerts/pb/alert.proto\";\n" +
 	"\x12FormatBatchRequest\x12%\n" +
-	"\x06alerts\x18\x01 \x03(\v2\r.alerts.AlertR\x06alerts\"6\n" +
+	"\x06alerts\x18\x01 \x03(\v2\r.alerts.AlertR\x06alerts\"N\n" +
 	"\x13FormatBatchResponse\x12\x1f\n" +
 	"\vresult_json\x18\x01 \x03(\fR\n" +
-	"resultJson2\x87\x02\n" +
+	"resultJson\x12\x16\n" +
+	"\x06errors\x18\x02 \x03(\tR\x06errors2\x87\x02\n" +
 	"\tFormatter\x12N\n" +
 	"\vFormatBatch\x12\x1e.formatters.FormatBatchRequest\x1a\x1f.formatters.FormatBatchResponse\x126\n" +
 	"\x04Init\x12\x16.google.protobuf.Empty\x1a\x16.google.protobuf.Empty\x12:\n" +

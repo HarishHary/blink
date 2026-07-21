@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/events"
 	"github.com/harishhary/blink/pkg/scoring"
@@ -109,7 +108,7 @@ func (c *RuleMetadata) MergeWindowMins() time.Duration {
 
 // Rule is the host-side interface for evaluating a batch of events.
 type Rule interface {
-	Evaluate(ctx context.Context, evts []events.Event) ([]EventResult, errors.Error)
+	EvaluateBatch(ctx context.Context, evts []events.Event) EvaluateResult
 
 	plugin.Syncable
 	RuleMetadata() *RuleMetadata

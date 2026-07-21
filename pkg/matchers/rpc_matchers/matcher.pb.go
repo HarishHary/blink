@@ -69,7 +69,8 @@ func (x *MatchBatchRequest) GetEvents() []*structpb.Struct {
 
 type MatchBatchResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Matched       []bool                 `protobuf:"varint,1,rep,packed,name=matched,proto3" json:"matched,omitempty"`
+	Results       []bool                 `protobuf:"varint,1,rep,packed,name=results,proto3" json:"results,omitempty"`
+	Errors        []string               `protobuf:"bytes,2,rep,name=errors,proto3" json:"errors,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -104,9 +105,16 @@ func (*MatchBatchResponse) Descriptor() ([]byte, []int) {
 	return file_pkg_matchers_rpc_matchers_matcher_proto_rawDescGZIP(), []int{1}
 }
 
-func (x *MatchBatchResponse) GetMatched() []bool {
+func (x *MatchBatchResponse) GetResults() []bool {
 	if x != nil {
-		return x.Matched
+		return x.Results
+	}
+	return nil
+}
+
+func (x *MatchBatchResponse) GetErrors() []string {
+	if x != nil {
+		return x.Errors
 	}
 	return nil
 }
@@ -117,9 +125,10 @@ const file_pkg_matchers_rpc_matchers_matcher_proto_rawDesc = "" +
 	"\n" +
 	"'pkg/matchers/rpc_matchers/matcher.proto\x12\bmatchers\x1a\x1bgoogle/protobuf/empty.proto\x1a\x1cgoogle/protobuf/struct.proto\"D\n" +
 	"\x11MatchBatchRequest\x12/\n" +
-	"\x06events\x18\x01 \x03(\v2\x17.google.protobuf.StructR\x06events\".\n" +
+	"\x06events\x18\x01 \x03(\v2\x17.google.protobuf.StructR\x06events\"F\n" +
 	"\x12MatchBatchResponse\x12\x18\n" +
-	"\amatched\x18\x01 \x03(\bR\amatched2\xfe\x01\n" +
+	"\aresults\x18\x01 \x03(\bR\aresults\x12\x16\n" +
+	"\x06errors\x18\x02 \x03(\tR\x06errors2\xfe\x01\n" +
 	"\aMatcher\x12G\n" +
 	"\n" +
 	"MatchBatch\x12\x1b.matchers.MatchBatchRequest\x1a\x1c.matchers.MatchBatchResponse\x126\n" +

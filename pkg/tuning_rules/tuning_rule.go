@@ -3,7 +3,6 @@ package tuning_rules
 import (
 	"context"
 
-	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/alerts"
 	"github.com/harishhary/blink/pkg/scoring"
@@ -34,7 +33,7 @@ const (
 
 // TuningRule is the host-side runtime interface for a live tuning-rule plugin.
 type TuningRule interface {
-	Tune(ctx context.Context, alerts []alerts.Alert) ([]bool, errors.Error)
+	TuneBatch(ctx context.Context, alerts []alerts.Alert) TuneResult
 
 	plugin.Syncable
 	TuningRuleMetadata() *TuningRuleMetadata

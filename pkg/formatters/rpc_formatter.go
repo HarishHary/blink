@@ -3,6 +3,7 @@ package formatters
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/harishhary/blink/internal/config"
 	"github.com/harishhary/blink/internal/errors"
@@ -53,26 +54,44 @@ func (f *rpcFormatter) Metadata() plugin.PluginMetadata {
 
 func (f *rpcFormatter) Checksum() string { return f.checksum }
 
-func (f *rpcFormatter) Format(ctx context.Context, batch []*alerts.Alert) ([]map[string]any, errors.Error) {
+func (f *rpcFormatter) FormatBatch(ctx context.Context, batch []*alerts.Alert) FormatResult {
 	pbAlerts := make([]*pb.Alert, 0, len(batch))
 	for _, a := range batch {
 		pa, err := alerts.AlertToProto(a)
 		if err != nil {
-			return nil, errors.NewE(err)
+			return FormatResult{CallErr: errors.NewE(err)}
 		}
 		pbAlerts = append(pbAlerts, pa)
 	}
 	resp, err := f.client.FormatBatch(ctx, &rpc_formatters.FormatBatchRequest{Alerts: pbAlerts})
 	if err != nil {
-		return nil, errors.NewE(err)
+		return FormatResult{CallErr: errors.NewE(err)}
 	}
-	results := make([]map[string]any, len(resp.GetResultJson()))
+	if resp == nil {
+		return FormatResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "formatter", PluginID: f.fileName, Field: "response", Expected: 1})}
+	}
+	if len(resp.GetResultJson()) != len(batch) {
+		return FormatResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "formatter", PluginID: f.fileName, Field: "results", Expected: len(batch), Actual: len(resp.GetResultJson())})}
+	}
+	if len(resp.GetErrors()) != len(batch) {
+		return FormatResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "formatter", PluginID: f.fileName, Field: "errors", Expected: len(batch), Actual: len(resp.GetErrors())})}
+	}
+	results := make([]map[string]any, len(batch))
+	perErrs := make([]errors.Error, len(batch))
+	for i, message := range resp.GetErrors() {
+		if message != "" {
+			perErrs[i] = errors.New(message)
+		}
+	}
 	for i, raw := range resp.GetResultJson() {
+		if perErrs[i] != nil {
+			continue
+		}
 		var result map[string]any
 		if err := json.Unmarshal(raw, &result); err != nil {
-			return nil, errors.NewE(err)
+			return FormatResult{CallErr: errors.NewE(fmt.Errorf("decode formatter %q result for alert %q: %w", f.fileName, batch[i].Id, err))}
 		}
 		results[i] = result
 	}
-	return results, nil
+	return FormatResult{Outs: results, Errs: perErrs}
 }

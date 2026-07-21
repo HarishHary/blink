@@ -7,6 +7,7 @@ import (
 
 	"github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/harishhary/blink/internal/errors"
@@ -42,23 +43,30 @@ func (s *server) Init(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, erro
 }
 
 func (s *server) EnrichBatch(ctx context.Context, req *rpc_enrichments.EnrichBatchRequest) (*rpc_enrichments.EnrichBatchResponse, error) {
-	results := make([][]byte, 0, len(req.GetAlerts()))
-	for _, pa := range req.GetAlerts() {
+	results := make([][]byte, len(req.GetAlerts()))
+	errs := make([]string, len(req.GetAlerts()))
+	for i, pa := range req.GetAlerts() {
 		alert, err := alerts.ProtoToAlert(pa)
 		if err != nil {
-			return nil, err
+			errs[i] = err.Error()
+			continue
 		}
 		enriched, err := s.enrichment.Enrich(ctx, *alert)
 		if err != nil {
-			return nil, err
+			if status := errors.PluginErrorStatus(err); status.Code() != codes.InvalidArgument {
+				return nil, status.Err()
+			}
+			errs[i] = err.Error()
+			continue
 		}
-		b, err2 := json.Marshal(enriched)
-		if err2 != nil {
-			return nil, err2
+		b, err := json.Marshal(enriched)
+		if err != nil {
+			errs[i] = err.Error()
+			continue
 		}
-		results = append(results, b)
+		results[i] = b
 	}
-	return &rpc_enrichments.EnrichBatchResponse{ResultJson: results}, nil
+	return &rpc_enrichments.EnrichBatchResponse{ResultJson: results, Errors: errs}, nil
 }
 
 func (s *server) Ping(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {

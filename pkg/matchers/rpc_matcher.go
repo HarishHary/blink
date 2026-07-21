@@ -8,7 +8,7 @@ import (
 	"github.com/harishhary/blink/internal/config"
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/plugin"
-	"github.com/harishhary/blink/pkg/events"
+	evts "github.com/harishhary/blink/pkg/events"
 	"github.com/harishhary/blink/pkg/matchers/rpc_matchers"
 )
 
@@ -53,18 +53,33 @@ func (r *rpcMatcher) Metadata() plugin.PluginMetadata {
 
 func (r *rpcMatcher) Checksum() string { return r.checksum }
 
-func (r *rpcMatcher) Match(ctx context.Context, evts []events.Event) ([]bool, errors.Error) {
-	protoEvents := make([]*structpb.Struct, 0, len(evts))
-	for _, ev := range evts {
-		s, err := structpb.NewStruct(ev)
+func (r *rpcMatcher) MatchBatch(ctx context.Context, events []evts.Event) MatchResult {
+	protoEvents := make([]*structpb.Struct, 0, len(events))
+	for _, event := range events {
+		s, err := structpb.NewStruct(event)
 		if err != nil {
-			return nil, errors.NewE(err)
+			return MatchResult{CallErr: errors.NewE(err)}
 		}
 		protoEvents = append(protoEvents, s)
 	}
 	resp, err := r.client.MatchBatch(ctx, &rpc_matchers.MatchBatchRequest{Events: protoEvents})
 	if err != nil {
-		return nil, errors.NewE(err)
+		return MatchResult{CallErr: errors.NewE(err)}
 	}
-	return resp.GetMatched(), nil
+	if resp == nil {
+		return MatchResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "matcher", PluginID: r.fileName, Field: "response", Expected: 1})}
+	}
+	if len(resp.GetResults()) != len(events) {
+		return MatchResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "matcher", PluginID: r.fileName, Field: "results", Expected: len(events), Actual: len(resp.GetResults())})}
+	}
+	if len(resp.GetErrors()) != len(events) {
+		return MatchResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "matcher", PluginID: r.fileName, Field: "errors", Expected: len(events), Actual: len(resp.GetErrors())})}
+	}
+	perErrs := make([]errors.Error, len(events))
+	for i, message := range resp.GetErrors() {
+		if message != "" {
+			perErrs[i] = errors.New(message)
+		}
+	}
+	return MatchResult{Results: resp.GetResults(), Errs: perErrs}
 }

@@ -155,7 +155,8 @@ func (x *EventResult) GetMergeByKeys() []string {
 
 type EvaluateBatchResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Results       []*EventResult         `protobuf:"bytes,2,rep,name=results,proto3" json:"results,omitempty"`
+	Results       []*EventResult         `protobuf:"bytes,1,rep,name=results,proto3" json:"results,omitempty"`
+	Errors        []string               `protobuf:"bytes,2,rep,name=errors,proto3" json:"errors,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -197,6 +198,13 @@ func (x *EvaluateBatchResponse) GetResults() []*EventResult {
 	return nil
 }
 
+func (x *EvaluateBatchResponse) GetErrors() []string {
+	if x != nil {
+		return x.Errors
+	}
+	return nil
+}
+
 var File_pkg_rules_rpc_rules_rule_proto protoreflect.FileDescriptor
 
 const file_pkg_rules_rpc_rules_rule_proto_rawDesc = "" +
@@ -210,9 +218,10 @@ const file_pkg_rules_rpc_rules_rule_proto_rawDesc = "" +
 	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\x1a\n" +
 	"\bseverity\x18\x04 \x01(\tR\bseverity\x121\n" +
 	"\acontext\x18\x05 \x01(\v2\x17.google.protobuf.StructR\acontext\x12\"\n" +
-	"\rmerge_by_keys\x18\x06 \x03(\tR\vmergeByKeys\"E\n" +
+	"\rmerge_by_keys\x18\x06 \x03(\tR\vmergeByKeys\"]\n" +
 	"\x15EvaluateBatchResponse\x12,\n" +
-	"\aresults\x18\x02 \x03(\v2\x12.rules.EventResultR\aresults2\xfe\x01\n" +
+	"\aresults\x18\x01 \x03(\v2\x12.rules.EventResultR\aresults\x12\x16\n" +
+	"\x06errors\x18\x02 \x03(\tR\x06errors2\xfe\x01\n" +
 	"\x04Rule\x12J\n" +
 	"\rEvaluateBatch\x12\x1b.rules.EvaluateBatchRequest\x1a\x1c.rules.EvaluateBatchResponse\x126\n" +
 	"\x04Init\x12\x16.google.protobuf.Empty\x1a\x16.google.protobuf.Empty\x12:\n" +

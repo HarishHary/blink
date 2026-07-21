@@ -2,7 +2,6 @@ package enrichments
 
 import (
 	"context"
-	stderrors "errors"
 	"time"
 
 	"github.com/harishhary/blink/internal/config"
@@ -26,79 +25,55 @@ func NewPool(cfg config.Source[*EnrichmentMetadata], drainTimeout time.Duration)
 	}
 }
 
-type enrichChunkResult struct {
-	absent  bool
-	removed bool
-	errs    []errors.Error // per-alert (aligned with the chunk)
-	callErr errors.Error   // whole-call failure (not per-alert)
-}
-
 // EnrichResult holds the batch-level result from enriching alerts.
 type EnrichResult struct {
-	Absent  bool
-	Removed bool
 	Errs    []errors.Error // per-alert (aligned with the input alerts)
+	CallErr errors.Error   // whole-call failure; never alert-scoped
 }
 
 // Enrich calls enrichmentID with all alerts. When the routed pool has max_procs > 1 the alerts are
 // sharded into that many contiguous chunks enriched concurrently (each on its own subprocess); the
 // chunks are DISJOINT, so no two shards ever touch the same *Alert. Per-alert errs are concatenated
-// in original order. absent/removed refer to the plugin state.
+// in original order.
 func (p *Pool) Enrich(ctx context.Context, enrichmentID string, alerts []*alts.Alert, canaryHashKey string) EnrichResult {
 	// Shadow candidate (if any): separate fan-out at its own max_procs on CLONED alerts (Enrich writes),
 	// fired before the production path so the clone reads complete before prod mutates. Results dropped.
 	p.shadowEnrich(ctx, enrichmentID, alerts)
 	k := p.ServingPoolSize(enrichmentID, canaryHashKey)
-	parts := pools.ShardConcurrent(alerts, k, func(altsChunk []*alts.Alert) enrichChunkResult {
+	parts := pools.ShardConcurrent(alerts, k, func(altsChunk []*alts.Alert) EnrichResult {
 		return p.enrichChunk(ctx, enrichmentID, altsChunk, canaryHashKey)
 	})
-
-	// Pool-level conditions apply to the whole batch (every shard hit the same routed pool).
+	result := EnrichResult{Errs: make([]errors.Error, 0, len(alerts))}
 	for _, part := range parts {
-		if part.removed {
-			return EnrichResult{Removed: true}
+		if part.CallErr != nil {
+			return EnrichResult{CallErr: part.CallErr}
 		}
-		if part.absent {
-			return EnrichResult{Absent: true}
-		}
-		if part.callErr != nil {
-			for i := range part.errs {
-				part.errs[i] = part.callErr
-			}
-		}
+		result.Errs = append(result.Errs, part.Errs...)
 	}
-
-	errs := make([]errors.Error, 0, len(alerts))
-	for _, part := range parts {
-		errs = append(errs, part.errs...)
-	}
-	return EnrichResult{Errs: errs}
+	return result
 }
 
-func (p *Pool) enrichChunk(ctx context.Context, enrichmentID string, altsChunk []*alts.Alert, canaryHashKey string) enrichChunkResult {
+func (p *Pool) enrichChunk(ctx context.Context, enrichmentID string, altsChunk []*alts.Alert, canaryHashKey string) EnrichResult {
 	perErrs := make([]errors.Error, len(altsChunk))
 	prodFn := func(callCtx context.Context, e Enrichment) error {
 		if !e.EnrichmentMetadata().Enabled {
 			return nil
 		}
-		if err := e.Enrich(callCtx, altsChunk); err != nil {
-			for i := range perErrs {
-				perErrs[i] = errors.NewE(err)
-			}
+		batchResult := e.EnrichBatch(callCtx, altsChunk)
+		if batchResult.CallErr != nil {
+			return batchResult.CallErr
 		}
+		if len(batchResult.Errs) != len(altsChunk) {
+			return &errors.ResultCardinalityError{PluginKind: "enrichment", PluginID: enrichmentID, Field: "errors", Expected: len(altsChunk), Actual: len(batchResult.Errs)}
+		}
+		copy(perErrs, batchResult.Errs)
 		return nil
 	}
 	err := p.Call(ctx, enrichmentID, canaryHashKey, prodFn)
 	if err != nil {
-		if stderrors.Is(err, pools.ErrPluginNotFound) {
-			return enrichChunkResult{absent: true}
-		}
-		if stderrors.Is(err, pools.ErrPluginRemoved) {
-			return enrichChunkResult{removed: true}
-		}
-		return enrichChunkResult{errs: perErrs, callErr: errors.NewE(err)}
+		return EnrichResult{CallErr: errors.NewE(err)}
 	}
-	return enrichChunkResult{errs: perErrs}
+	return EnrichResult{Errs: perErrs}
 }
 
 // shadowEnrich fans the full batch out to the shadow candidate (if enrichmentID is in shadow mode) at
@@ -116,7 +91,15 @@ func (p *Pool) shadowEnrich(ctx context.Context, enrichmentID string, alerts []*
 			if !e.EnrichmentMetadata().Enabled {
 				return nil
 			}
-			_ = e.Enrich(callCtx, shadowAlerts)
+			result := e.EnrichBatch(callCtx, shadowAlerts)
+			if result.CallErr != nil {
+				return result.CallErr
+			}
+			for _, err := range result.Errs {
+				if err != nil {
+					return err
+				}
+			}
 			return nil
 		})
 	}

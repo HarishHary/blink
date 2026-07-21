@@ -7,7 +7,10 @@ import "google/protobuf/struct.proto";
 
 message MatchBatchRequest  { repeated google.protobuf.Struct events = 1; }
 
-message MatchBatchResponse { repeated bool  matched = 1; }
+message MatchBatchResponse {
+  repeated bool results = 1;
+  repeated string errors = 2;
+}
 
 service Matcher {
   rpc MatchBatch(MatchBatchRequest)   returns (MatchBatchResponse);

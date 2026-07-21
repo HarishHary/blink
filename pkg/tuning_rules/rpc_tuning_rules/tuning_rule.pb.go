@@ -70,6 +70,7 @@ func (x *TuneBatchRequest) GetAlerts() []*pb.Alert {
 type TuneBatchResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Applies       []bool                 `protobuf:"varint,1,rep,packed,name=applies,proto3" json:"applies,omitempty"`
+	Errors        []string               `protobuf:"bytes,2,rep,name=errors,proto3" json:"errors,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -111,15 +112,23 @@ func (x *TuneBatchResponse) GetApplies() []bool {
 	return nil
 }
 
+func (x *TuneBatchResponse) GetErrors() []string {
+	if x != nil {
+		return x.Errors
+	}
+	return nil
+}
+
 var File_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto protoreflect.FileDescriptor
 
 const file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_rawDesc = "" +
 	"\n" +
 	"3pkg/tuning_rules/rpc_tuning_rules/tuning_rule.proto\x12\ftuning_rules\x1a\x1bgoogle/protobuf/empty.proto\x1a\x19pkg/alerts/pb/alert.proto\"9\n" +
 	"\x10TuneBatchRequest\x12%\n" +
-	"\x06alerts\x18\x01 \x03(\v2\r.alerts.AlertR\x06alerts\"-\n" +
+	"\x06alerts\x18\x01 \x03(\v2\r.alerts.AlertR\x06alerts\"E\n" +
 	"\x11TuneBatchResponse\x12\x18\n" +
-	"\aapplies\x18\x01 \x03(\bR\aapplies2\x86\x02\n" +
+	"\aapplies\x18\x01 \x03(\bR\aapplies\x12\x16\n" +
+	"\x06errors\x18\x02 \x03(\tR\x06errors2\x86\x02\n" +
 	"\n" +
 	"TuningRule\x12L\n" +
 	"\tTuneBatch\x12\x1e.tuning_rules.TuneBatchRequest\x1a\x1f.tuning_rules.TuneBatchResponse\x126\n" +

@@ -2,7 +2,6 @@ package tuning_rules
 
 import (
 	"context"
-	stderrors "errors"
 	"time"
 
 	"github.com/harishhary/blink/internal/config"
@@ -26,102 +25,66 @@ func NewPool(cfg config.Source[*TuningRuleMetadata], drainTimeout time.Duration)
 	}
 }
 
-type tuneChunkResult struct {
-	ruleType   RuleType
-	confidence scoring.Confidence
-	applies    []bool
-	absent     bool
-	removed    bool
-	errs       []errors.Error // per-alert (aligned with the chunk)
-	callErr    errors.Error   // whole-call failure (not per-alert)
-}
-
 // TuneResult holds the batch-level result from tuning alerts.
 type TuneResult struct {
 	RuleType   RuleType
 	Confidence scoring.Confidence
 	Applies    []bool
-	Absent     bool
-	Removed    bool
 	Errs       []errors.Error // per-alert (aligned with Applies)
+	CallErr    errors.Error   // whole-call failure; never alert-scoped
 }
 
-// Tune runs tuningRuleID across the batch and returns metadata, per-alert apply results, pool state flags, and per-alert errors.
+// Tune runs tuningRuleID across the batch and returns metadata, per-alert apply results, and per-alert errors.
 func (p *Pool) Tune(ctx context.Context, tuningRuleID string, alerts []alts.Alert, canaryHashKey string) TuneResult {
 	p.shadowTune(ctx, tuningRuleID, alerts)
 	k := p.ServingPoolSize(tuningRuleID, canaryHashKey)
-	parts := pools.ShardConcurrent(alerts, k, func(altsChunk []alts.Alert) tuneChunkResult {
-		return p.tuneChunk(ctx, tuningRuleID, altsChunk, canaryHashKey)
+	parts := pools.ShardConcurrent(alerts, k, func(alertChunk []alts.Alert) TuneResult {
+		return p.tuneChunk(ctx, tuningRuleID, alertChunk, canaryHashKey)
 	})
-
-	for _, part := range parts {
-		if part.removed {
-			return TuneResult{Removed: true}
-		}
-		if part.absent {
-			return TuneResult{Absent: true}
-		}
-		if part.callErr != nil {
-			for i := range part.errs {
-				part.errs[i] = part.callErr
-			}
-		}
+	result := TuneResult{
+		Applies: make([]bool, 0, len(alerts)),
+		Errs:    make([]errors.Error, 0, len(alerts)),
 	}
-
-	var ruleType RuleType
-	var confidence scoring.Confidence
-	applies := make([]bool, 0, len(alerts))
-	errs := make([]errors.Error, 0, len(alerts))
-	metadataSet := false
-	for _, part := range parts {
-		if !metadataSet && part.callErr == nil {
-			ruleType = part.ruleType
-			confidence = part.confidence
-			metadataSet = true
+	for i, part := range parts {
+		if part.CallErr != nil {
+			return TuneResult{CallErr: part.CallErr}
 		}
-		applies = append(applies, part.applies...)
-		errs = append(errs, part.errs...)
+		if i == 0 {
+			result.RuleType = part.RuleType
+			result.Confidence = part.Confidence
+		}
+		result.Applies = append(result.Applies, part.Applies...)
+		result.Errs = append(result.Errs, part.Errs...)
 	}
-	return TuneResult{RuleType: ruleType, Confidence: confidence, Applies: applies, Errs: errs}
+	return result
 }
 
-func (p *Pool) tuneChunk(ctx context.Context, tuningRuleID string, altsChunk []alts.Alert, canaryHashKey string) tuneChunkResult {
-	var res tuneChunkResult
-	res.applies = make([]bool, len(altsChunk))
-	res.errs = make([]errors.Error, len(altsChunk))
+func (p *Pool) tuneChunk(ctx context.Context, tuningRuleID string, alertChunk []alts.Alert, canaryHashKey string) TuneResult {
+	res := TuneResult{Applies: make([]bool, len(alertChunk)), Errs: make([]errors.Error, len(alertChunk))}
 	prodFn := func(callCtx context.Context, t TuningRule) error {
 		md := t.TuningRuleMetadata()
 		if !md.Enabled {
 			return nil
 		}
-		res.ruleType = md.RuleType
-		res.confidence = md.Confidence
-		batchApplies, e := t.Tune(callCtx, altsChunk)
-		if e != nil {
-			for i := range res.errs {
-				res.errs[i] = e
-			}
-			return nil
+		res.RuleType = md.RuleType
+		res.Confidence = md.Confidence
+		batchResult := t.TuneBatch(callCtx, alertChunk)
+		if batchResult.CallErr != nil {
+			return batchResult.CallErr
 		}
-		if len(batchApplies) != len(altsChunk) {
-			e := errors.NewF("tuning rule %s returned %d results for %d alerts", tuningRuleID, len(batchApplies), len(altsChunk))
-			for i := range res.errs {
-				res.errs[i] = e
-			}
-			return nil
+		if len(batchResult.Applies) != len(alertChunk) {
+			return &errors.ResultCardinalityError{PluginKind: "tuning rule", PluginID: tuningRuleID, Field: "applies", Expected: len(alertChunk), Actual: len(batchResult.Applies)}
 		}
-		copy(res.applies, batchApplies)
+		if len(batchResult.Errs) != len(alertChunk) {
+			return &errors.ResultCardinalityError{PluginKind: "tuning rule", PluginID: tuningRuleID, Field: "errors", Expected: len(alertChunk), Actual: len(batchResult.Errs)}
+		}
+		copy(res.Applies, batchResult.Applies)
+		copy(res.Errs, batchResult.Errs)
 		return nil
 	}
 	err := p.Call(ctx, tuningRuleID, canaryHashKey, prodFn)
 	if err != nil {
-		if stderrors.Is(err, pools.ErrPluginNotFound) {
-			return tuneChunkResult{absent: true}
-		}
-		if stderrors.Is(err, pools.ErrPluginRemoved) {
-			return tuneChunkResult{removed: true}
-		}
-		return tuneChunkResult{applies: res.applies, errs: res.errs, callErr: errors.NewE(err)}
+		return TuneResult{CallErr: errors.NewE(err)}
 	}
 	return res
 }
@@ -132,13 +95,21 @@ func (p *Pool) shadowTune(ctx context.Context, tuningRuleID string, alerts []alt
 	if sk == 0 || len(alerts) == 0 {
 		return
 	}
-	for _, altsChunk := range pools.ShardSlice(alerts, sk) {
+	for _, alertChunk := range pools.ShardSlice(alerts, sk) {
 		p.CallShadow(ctx, tuningRuleID, func(callCtx context.Context, t TuningRule) error {
 			if !t.TuningRuleMetadata().Enabled {
 				return nil
 			}
-			_, e := t.Tune(callCtx, altsChunk)
-			return e
+			result := t.TuneBatch(callCtx, alertChunk)
+			if result.CallErr != nil {
+				return result.CallErr
+			}
+			for _, err := range result.Errs {
+				if err != nil {
+					return err
+				}
+			}
+			return nil
 		})
 	}
 }

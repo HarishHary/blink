@@ -2,7 +2,6 @@ package matchers
 
 import (
 	"context"
-	stderrors "errors"
 	"time"
 
 	"github.com/harishhary/blink/internal/config"
@@ -27,20 +26,11 @@ func NewPool(cfg config.Source[*MatcherMetadata], drainTimeout time.Duration) *P
 	}
 }
 
-type matchChunkResult struct {
-	result  []bool
-	absent  bool
-	removed bool
-	errs    []errors.Error // per-event plugin Match failures, aligned with the chunk
-	callErr errors.Error   // whole-call failure (not plugin Match result)
-}
-
-// MatchResult holds the batch-level result from matching events.
+// MatchResult holds the result from matching events.
 type MatchResult struct {
 	Results []bool
-	Absent  bool
-	Removed bool
 	Errs    []errors.Error // per-event (aligned with Results)
+	CallErr errors.Error   // whole-call failure; never record-scoped
 }
 
 // Match runs matcher matcherID against every event and returns one bool per event in input order
@@ -56,37 +46,26 @@ type MatchResult struct {
 func (p *Pool) Match(ctx context.Context, matcherID string, events []evts.Event, canaryHashKey string) MatchResult {
 	p.shadowMatch(ctx, matcherID, events)
 	k := p.ServingPoolSize(matcherID, canaryHashKey)
-	parts := pools.ShardConcurrent(events, k, func(chunk []evts.Event) matchChunkResult {
+	parts := pools.ShardConcurrent(events, k, func(chunk []evts.Event) MatchResult {
 		return p.matchChunk(ctx, matcherID, chunk, canaryHashKey)
 	})
-
-	// Pool-level conditions apply to the whole batch (every shard hit the same routed pool).
-	for _, part := range parts {
-		if part.removed {
-			return MatchResult{Removed: true}
-		}
-		if part.absent {
-			return MatchResult{Absent: true}
-		}
-		if part.callErr != nil {
-			for i := range part.errs {
-				part.errs[i] = part.callErr
-			}
-		}
+	result := MatchResult{
+		Results: make([]bool, 0, len(events)),
+		Errs:    make([]errors.Error, 0, len(events)),
 	}
-
-	results := make([]bool, 0, len(events))
-	errs := make([]errors.Error, 0, len(events))
 	for _, part := range parts {
-		results = append(results, part.result...)
-		errs = append(errs, part.errs...)
+		if part.CallErr != nil {
+			return MatchResult{CallErr: part.CallErr}
+		}
+		result.Results = append(result.Results, part.Results...)
+		result.Errs = append(result.Errs, part.Errs...)
 	}
-	return MatchResult{Results: results, Errs: errs}
+	return result
 }
 
 // matchChunk is one production call: it matches a single shard on the serving pool (stable, or the
 // canary slice - decided inside Call). A disabled matcher returns all-true.
-func (p *Pool) matchChunk(ctx context.Context, matcherID string, eventChunk []evts.Event, canaryHashKey string) matchChunkResult {
+func (p *Pool) matchChunk(ctx context.Context, matcherID string, eventChunk []evts.Event, canaryHashKey string) MatchResult {
 	results := make([]bool, len(eventChunk))
 	perErrs := make([]errors.Error, len(eventChunk))
 	prodFn := func(callCtx context.Context, m Matcher) error {
@@ -96,34 +75,25 @@ func (p *Pool) matchChunk(ctx context.Context, matcherID string, eventChunk []ev
 			}
 			return nil
 		}
-		batchResults, e := m.Match(callCtx, eventChunk)
-		if e != nil {
-			for i := range perErrs {
-				perErrs[i] = e
-			}
-			return nil
+		batchResult := m.MatchBatch(callCtx, eventChunk)
+		if batchResult.CallErr != nil {
+			return batchResult.CallErr
 		}
-		if len(batchResults) != len(eventChunk) {
-			e := errors.NewF("matcher %s returned %d results for %d events", matcherID, len(batchResults), len(eventChunk))
-			for i := range perErrs {
-				perErrs[i] = e
-			}
-			return nil
+		if len(batchResult.Results) != len(eventChunk) {
+			return &errors.ResultCardinalityError{PluginKind: "matcher", PluginID: matcherID, Field: "results", Expected: len(eventChunk), Actual: len(batchResult.Results)}
 		}
-		copy(results, batchResults)
+		if len(batchResult.Errs) != len(eventChunk) {
+			return &errors.ResultCardinalityError{PluginKind: "matcher", PluginID: matcherID, Field: "errors", Expected: len(eventChunk), Actual: len(batchResult.Errs)}
+		}
+		copy(results, batchResult.Results)
+		copy(perErrs, batchResult.Errs)
 		return nil
 	}
 	err := p.Call(ctx, matcherID, canaryHashKey, prodFn)
 	if err != nil {
-		if stderrors.Is(err, pools.ErrPluginNotFound) {
-			return matchChunkResult{absent: true}
-		}
-		if stderrors.Is(err, pools.ErrPluginRemoved) {
-			return matchChunkResult{removed: true}
-		}
-		return matchChunkResult{result: results, errs: perErrs, callErr: errors.NewE(err)}
+		return MatchResult{CallErr: errors.NewE(err)}
 	}
-	return matchChunkResult{result: results, errs: perErrs}
+	return MatchResult{Results: results, Errs: perErrs}
 }
 
 // shadowMatch fans the full batch out to the shadow candidate (if matcherID is in shadow mode) at its
@@ -139,8 +109,16 @@ func (p *Pool) shadowMatch(ctx context.Context, matcherID string, events []evts.
 			if !m.MatcherMetadata().Enabled {
 				return nil
 			}
-			_, e := m.Match(callCtx, chunk)
-			return e
+			result := m.MatchBatch(callCtx, chunk)
+			if result.CallErr != nil {
+				return result.CallErr
+			}
+			for _, err := range result.Errs {
+				if err != nil {
+					return err
+				}
+			}
+			return nil
 		})
 	}
 }

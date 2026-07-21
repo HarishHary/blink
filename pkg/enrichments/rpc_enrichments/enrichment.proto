@@ -7,7 +7,10 @@ import "pkg/alerts/pb/alert.proto";
 
 message EnrichBatchRequest  { repeated alerts.Alert alerts = 1; } // structured alerts.Alert per alert
 
-message EnrichBatchResponse { repeated bytes result_json = 1; } // one JSON-encoded map[string]any per alert
+message EnrichBatchResponse {
+  repeated bytes result_json = 1;
+  repeated string errors = 2;
+}
 
 service Enrichment {
   rpc EnrichBatch(EnrichBatchRequest) returns (EnrichBatchResponse);

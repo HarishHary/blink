@@ -7,7 +7,10 @@ import "pkg/alerts/pb/alert.proto";
 
 message FormatBatchRequest  { repeated alerts.Alert alerts = 1; } // structured alerts.Alert per alert
 
-message FormatBatchResponse { repeated bytes result_json = 1; } // one JSON-encoded map[string]any per alert
+message FormatBatchResponse {
+  repeated bytes result_json = 1; // one JSON-encoded map[string]any per alert
+  repeated string errors = 2; // one item error string per alert
+}
 
 service Formatter {
   rpc FormatBatch(FormatBatchRequest) returns (FormatBatchResponse);
