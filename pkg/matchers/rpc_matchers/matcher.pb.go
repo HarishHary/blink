@@ -67,17 +67,68 @@ func (x *MatchBatchRequest) GetEvents() []*structpb.Struct {
 	return nil
 }
 
+type MatchItem struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Matched       bool                   `protobuf:"varint,1,opt,name=matched,proto3" json:"matched,omitempty"`
+	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MatchItem) Reset() {
+	*x = MatchItem{}
+	mi := &file_pkg_matchers_rpc_matchers_matcher_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MatchItem) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MatchItem) ProtoMessage() {}
+
+func (x *MatchItem) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_matchers_rpc_matchers_matcher_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MatchItem.ProtoReflect.Descriptor instead.
+func (*MatchItem) Descriptor() ([]byte, []int) {
+	return file_pkg_matchers_rpc_matchers_matcher_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *MatchItem) GetMatched() bool {
+	if x != nil {
+		return x.Matched
+	}
+	return false
+}
+
+func (x *MatchItem) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 type MatchBatchResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Results       []bool                 `protobuf:"varint,1,rep,packed,name=results,proto3" json:"results,omitempty"`
-	Errors        []string               `protobuf:"bytes,2,rep,name=errors,proto3" json:"errors,omitempty"`
+	Items         []*MatchItem           `protobuf:"bytes,1,rep,name=items,proto3" json:"items,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *MatchBatchResponse) Reset() {
 	*x = MatchBatchResponse{}
-	mi := &file_pkg_matchers_rpc_matchers_matcher_proto_msgTypes[1]
+	mi := &file_pkg_matchers_rpc_matchers_matcher_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -89,7 +140,7 @@ func (x *MatchBatchResponse) String() string {
 func (*MatchBatchResponse) ProtoMessage() {}
 
 func (x *MatchBatchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_matchers_rpc_matchers_matcher_proto_msgTypes[1]
+	mi := &file_pkg_matchers_rpc_matchers_matcher_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -102,19 +153,12 @@ func (x *MatchBatchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MatchBatchResponse.ProtoReflect.Descriptor instead.
 func (*MatchBatchResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_matchers_rpc_matchers_matcher_proto_rawDescGZIP(), []int{1}
+	return file_pkg_matchers_rpc_matchers_matcher_proto_rawDescGZIP(), []int{2}
 }
 
-func (x *MatchBatchResponse) GetResults() []bool {
+func (x *MatchBatchResponse) GetItems() []*MatchItem {
 	if x != nil {
-		return x.Results
-	}
-	return nil
-}
-
-func (x *MatchBatchResponse) GetErrors() []string {
-	if x != nil {
-		return x.Errors
+		return x.Items
 	}
 	return nil
 }
@@ -125,10 +169,12 @@ const file_pkg_matchers_rpc_matchers_matcher_proto_rawDesc = "" +
 	"\n" +
 	"'pkg/matchers/rpc_matchers/matcher.proto\x12\bmatchers\x1a\x1bgoogle/protobuf/empty.proto\x1a\x1cgoogle/protobuf/struct.proto\"D\n" +
 	"\x11MatchBatchRequest\x12/\n" +
-	"\x06events\x18\x01 \x03(\v2\x17.google.protobuf.StructR\x06events\"F\n" +
-	"\x12MatchBatchResponse\x12\x18\n" +
-	"\aresults\x18\x01 \x03(\bR\aresults\x12\x16\n" +
-	"\x06errors\x18\x02 \x03(\tR\x06errors2\xfe\x01\n" +
+	"\x06events\x18\x01 \x03(\v2\x17.google.protobuf.StructR\x06events\";\n" +
+	"\tMatchItem\x12\x18\n" +
+	"\amatched\x18\x01 \x01(\bR\amatched\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"?\n" +
+	"\x12MatchBatchResponse\x12)\n" +
+	"\x05items\x18\x01 \x03(\v2\x13.matchers.MatchItemR\x05items2\xfe\x01\n" +
 	"\aMatcher\x12G\n" +
 	"\n" +
 	"MatchBatch\x12\x1b.matchers.MatchBatchRequest\x1a\x1c.matchers.MatchBatchResponse\x126\n" +
@@ -148,28 +194,30 @@ func file_pkg_matchers_rpc_matchers_matcher_proto_rawDescGZIP() []byte {
 	return file_pkg_matchers_rpc_matchers_matcher_proto_rawDescData
 }
 
-var file_pkg_matchers_rpc_matchers_matcher_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_pkg_matchers_rpc_matchers_matcher_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_pkg_matchers_rpc_matchers_matcher_proto_goTypes = []any{
 	(*MatchBatchRequest)(nil),  // 0: matchers.MatchBatchRequest
-	(*MatchBatchResponse)(nil), // 1: matchers.MatchBatchResponse
-	(*structpb.Struct)(nil),    // 2: google.protobuf.Struct
-	(*emptypb.Empty)(nil),      // 3: google.protobuf.Empty
+	(*MatchItem)(nil),          // 1: matchers.MatchItem
+	(*MatchBatchResponse)(nil), // 2: matchers.MatchBatchResponse
+	(*structpb.Struct)(nil),    // 3: google.protobuf.Struct
+	(*emptypb.Empty)(nil),      // 4: google.protobuf.Empty
 }
 var file_pkg_matchers_rpc_matchers_matcher_proto_depIdxs = []int32{
-	2, // 0: matchers.MatchBatchRequest.events:type_name -> google.protobuf.Struct
-	0, // 1: matchers.Matcher.MatchBatch:input_type -> matchers.MatchBatchRequest
-	3, // 2: matchers.Matcher.Init:input_type -> google.protobuf.Empty
-	3, // 3: matchers.Matcher.Shutdown:input_type -> google.protobuf.Empty
-	3, // 4: matchers.Matcher.Ping:input_type -> google.protobuf.Empty
-	1, // 5: matchers.Matcher.MatchBatch:output_type -> matchers.MatchBatchResponse
-	3, // 6: matchers.Matcher.Init:output_type -> google.protobuf.Empty
-	3, // 7: matchers.Matcher.Shutdown:output_type -> google.protobuf.Empty
-	3, // 8: matchers.Matcher.Ping:output_type -> google.protobuf.Empty
-	5, // [5:9] is the sub-list for method output_type
-	1, // [1:5] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	3, // 0: matchers.MatchBatchRequest.events:type_name -> google.protobuf.Struct
+	1, // 1: matchers.MatchBatchResponse.items:type_name -> matchers.MatchItem
+	0, // 2: matchers.Matcher.MatchBatch:input_type -> matchers.MatchBatchRequest
+	4, // 3: matchers.Matcher.Init:input_type -> google.protobuf.Empty
+	4, // 4: matchers.Matcher.Shutdown:input_type -> google.protobuf.Empty
+	4, // 5: matchers.Matcher.Ping:input_type -> google.protobuf.Empty
+	2, // 6: matchers.Matcher.MatchBatch:output_type -> matchers.MatchBatchResponse
+	4, // 7: matchers.Matcher.Init:output_type -> google.protobuf.Empty
+	4, // 8: matchers.Matcher.Shutdown:output_type -> google.protobuf.Empty
+	4, // 9: matchers.Matcher.Ping:output_type -> google.protobuf.Empty
+	6, // [6:10] is the sub-list for method output_type
+	2, // [2:6] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_pkg_matchers_rpc_matchers_matcher_proto_init() }
@@ -183,7 +231,7 @@ func file_pkg_matchers_rpc_matchers_matcher_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_matchers_rpc_matchers_matcher_proto_rawDesc), len(file_pkg_matchers_rpc_matchers_matcher_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   3,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

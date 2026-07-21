@@ -69,17 +69,15 @@ func (r *rpcMatcher) MatchBatch(ctx context.Context, events []evts.Event) MatchR
 	if resp == nil {
 		return MatchResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "matcher", PluginID: r.fileName, Field: "response", Expected: 1})}
 	}
-	if len(resp.GetResults()) != len(events) {
-		return MatchResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "matcher", PluginID: r.fileName, Field: "results", Expected: len(events), Actual: len(resp.GetResults())})}
+	if len(resp.GetItems()) != len(events) {
+		return MatchResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "matcher", PluginID: r.fileName, Field: "items", Expected: len(events), Actual: len(resp.GetItems())})}
 	}
-	if len(resp.GetErrors()) != len(events) {
-		return MatchResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "matcher", PluginID: r.fileName, Field: "errors", Expected: len(events), Actual: len(resp.GetErrors())})}
-	}
-	perErrs := make([]errors.Error, len(events))
-	for i, message := range resp.GetErrors() {
-		if message != "" {
-			perErrs[i] = errors.New(message)
+	items := make([]MatchItem, len(events))
+	for i, item := range resp.GetItems() {
+		items[i].Matched = item.GetMatched()
+		if item.GetError() != "" {
+			items[i].Err = errors.New(item.GetError())
 		}
 	}
-	return MatchResult{Results: resp.GetResults(), Errs: perErrs}
+	return MatchResult{Items: items}
 }

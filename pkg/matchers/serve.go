@@ -41,21 +41,22 @@ func (s *server) Init(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, erro
 }
 
 func (s *server) MatchBatch(ctx context.Context, req *rpc_matchers.MatchBatchRequest) (*rpc_matchers.MatchBatchResponse, error) {
-	results := make([]bool, len(req.GetEvents()))
-	errs := make([]string, len(req.GetEvents()))
+	items := make([]*rpc_matchers.MatchItem, len(req.GetEvents()))
 	for i, ev := range req.GetEvents() {
+		item := &rpc_matchers.MatchItem{}
+		items[i] = item
 		event := events.Event(ev.AsMap())
 		matched, err := s.matcher.Match(ctx, event)
 		if err != nil {
 			if s := errors.PluginErrorStatus(err); s.Code() != codes.InvalidArgument {
 				return nil, s.Err()
 			}
-			errs[i] = err.Error()
+			item.Error = err.Error()
 			continue
 		}
-		results[i] = matched
+		item.Matched = matched
 	}
-	return &rpc_matchers.MatchBatchResponse{Results: results, Errors: errs}, nil
+	return &rpc_matchers.MatchBatchResponse{Items: items}, nil
 }
 
 func (s *server) Ping(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {

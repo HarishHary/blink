@@ -2,6 +2,7 @@ package enrichments
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/harishhary/blink/internal/config"
@@ -35,25 +36,71 @@ type EnrichResult struct {
 // sharded into that many contiguous chunks enriched concurrently (each on its own subprocess); the
 // chunks are DISJOINT, so no two shards ever touch the same *Alert. Per-alert errs are concatenated
 // in original order.
-func (p *Pool) Enrich(ctx context.Context, enrichmentID string, alerts []*alts.Alert, canaryHashKey string) EnrichResult {
+func (p *Pool) Enrich(ctx context.Context, enrichmentID string, alerts []*alts.Alert) EnrichResult {
 	// Shadow candidate (if any): separate fan-out at its own max_procs on CLONED alerts (Enrich writes),
 	// fired before the production path so the clone reads complete before prod mutates. Results dropped.
 	p.shadowEnrich(ctx, enrichmentID, alerts)
-	k := p.ServingPoolSize(enrichmentID, canaryHashKey)
-	parts := pools.ShardConcurrent(alerts, k, func(altsChunk []*alts.Alert) EnrichResult {
-		return p.enrichChunk(ctx, enrichmentID, altsChunk, canaryHashKey)
-	})
-	result := EnrichResult{Errs: make([]errors.Error, 0, len(alerts))}
-	for _, part := range parts {
+
+	type routeGroup struct {
+		rolloutKey string
+		indexes    []int
+		alerts     []*alts.Alert
+	}
+	groups := make([]routeGroup, 0)
+	groupIndexByBucket := make(map[uint32]int)
+	for i, alert := range alerts {
+		rolloutKey := pools.TenantRolloutKey(alert.Event["tenant_id"])
+		bucket := pools.RolloutBucket(rolloutKey)
+		groupIndex, ok := groupIndexByBucket[bucket]
+		if !ok {
+			groupIndex = len(groups)
+			groupIndexByBucket[bucket] = groupIndex
+			groups = append(groups, routeGroup{rolloutKey: rolloutKey})
+		}
+		groups[groupIndex].indexes = append(groups[groupIndex].indexes, i)
+		groups[groupIndex].alerts = append(groups[groupIndex].alerts, alert)
+	}
+
+	parts := make([]EnrichResult, len(groups))
+	var wg sync.WaitGroup
+	for i, group := range groups {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			k := p.ServingPoolSize(enrichmentID, group.rolloutKey)
+			shards := pools.ShardConcurrent(group.alerts, k, func(alertChunk []*alts.Alert) EnrichResult {
+				return p.enrichChunk(ctx, enrichmentID, alertChunk, group.rolloutKey)
+			})
+			part := EnrichResult{Errs: make([]errors.Error, 0, len(group.alerts))}
+			for _, shard := range shards {
+				if shard.CallErr != nil {
+					parts[i] = EnrichResult{CallErr: shard.CallErr}
+					return
+				}
+				part.Errs = append(part.Errs, shard.Errs...)
+			}
+			parts[i] = part
+		}(i)
+	}
+	wg.Wait()
+
+	result := EnrichResult{Errs: make([]errors.Error, len(alerts))}
+	for i, part := range parts {
 		if part.CallErr != nil {
 			return EnrichResult{CallErr: part.CallErr}
 		}
-		result.Errs = append(result.Errs, part.Errs...)
+		group := groups[i]
+		if len(part.Errs) != len(group.indexes) {
+			return EnrichResult{CallErr: errors.NewF("enrichment %s returned invalid routed result shape", enrichmentID)}
+		}
+		for j, inputIndex := range group.indexes {
+			result.Errs[inputIndex] = part.Errs[j]
+		}
 	}
 	return result
 }
 
-func (p *Pool) enrichChunk(ctx context.Context, enrichmentID string, altsChunk []*alts.Alert, canaryHashKey string) EnrichResult {
+func (p *Pool) enrichChunk(ctx context.Context, enrichmentID string, altsChunk []*alts.Alert, rolloutKey string) EnrichResult {
 	perErrs := make([]errors.Error, len(altsChunk))
 	prodFn := func(callCtx context.Context, e Enrichment) error {
 		if !e.EnrichmentMetadata().Enabled {
@@ -69,7 +116,7 @@ func (p *Pool) enrichChunk(ctx context.Context, enrichmentID string, altsChunk [
 		copy(perErrs, batchResult.Errs)
 		return nil
 	}
-	err := p.Call(ctx, enrichmentID, canaryHashKey, prodFn)
+	err := p.Call(ctx, enrichmentID, rolloutKey, prodFn)
 	if err != nil {
 		return EnrichResult{CallErr: errors.NewE(err)}
 	}

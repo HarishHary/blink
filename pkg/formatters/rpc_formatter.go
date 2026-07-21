@@ -70,28 +70,22 @@ func (f *rpcFormatter) FormatBatch(ctx context.Context, batch []*alerts.Alert) F
 	if resp == nil {
 		return FormatResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "formatter", PluginID: f.fileName, Field: "response", Expected: 1})}
 	}
-	if len(resp.GetResultJson()) != len(batch) {
-		return FormatResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "formatter", PluginID: f.fileName, Field: "results", Expected: len(batch), Actual: len(resp.GetResultJson())})}
+	if len(resp.GetItems()) != len(batch) {
+		return FormatResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "formatter", PluginID: f.fileName, Field: "items", Expected: len(batch), Actual: len(resp.GetItems())})}
 	}
-	if len(resp.GetErrors()) != len(batch) {
-		return FormatResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "formatter", PluginID: f.fileName, Field: "errors", Expected: len(batch), Actual: len(resp.GetErrors())})}
-	}
-	results := make([]map[string]any, len(batch))
-	perErrs := make([]errors.Error, len(batch))
-	for i, message := range resp.GetErrors() {
-		if message != "" {
-			perErrs[i] = errors.New(message)
+	items := make([]FormatItem, len(batch))
+	for i, item := range resp.GetItems() {
+		if item.GetError() != "" {
+			items[i].Err = errors.New(item.GetError())
 		}
-	}
-	for i, raw := range resp.GetResultJson() {
-		if perErrs[i] != nil {
+		if items[i].Err != nil {
 			continue
 		}
 		var result map[string]any
-		if err := json.Unmarshal(raw, &result); err != nil {
+		if err := json.Unmarshal(item.GetResultJson(), &result); err != nil {
 			return FormatResult{CallErr: errors.NewE(fmt.Errorf("decode formatter %q result for alert %q: %w", f.fileName, batch[i].Id, err))}
 		}
-		results[i] = result
+		items[i].Output = result
 	}
-	return FormatResult{Outs: results, Errs: perErrs}
+	return FormatResult{Items: items}
 }

@@ -92,13 +92,13 @@ func (s *server) Init(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, erro
 }
 
 func (s *server) EvaluateBatch(ctx context.Context, req *rpc_rules.EvaluateBatchRequest) (*rpc_rules.EvaluateBatchResponse, error) {
-	results := make([]*rpc_rules.EventResult, len(req.GetEvents()))
-	errs := make([]string, len(req.GetEvents()))
+	items := make([]*rpc_rules.EvaluateItem, len(req.GetEvents()))
 	for i, ev := range req.GetEvents() {
+		item := &rpc_rules.EvaluateItem{}
+		items[i] = item
 		event := events.Event(ev.AsMap())
 
 		if !s.rule.AlertReqSubkeys(event) {
-			results[i] = &rpc_rules.EventResult{Matched: false}
 			continue
 		}
 
@@ -107,25 +107,24 @@ func (s *server) EvaluateBatch(ctx context.Context, req *rpc_rules.EvaluateBatch
 			if status := errors.PluginErrorStatus(err); status.Code() != codes.InvalidArgument {
 				return nil, status.Err()
 			}
-			errs[i] = err.Error()
+			item.Error = err.Error()
 			continue
 		}
 
-		result := &rpc_rules.EventResult{Matched: matched}
+		item.Matched = matched
 		if matched {
-			result.Title = s.rule.AlertTitle(event)
-			result.Description = s.rule.AlertDescription(event)
-			result.Severity = s.rule.AlertSeverity(event)
-			result.MergeByKeys = s.rule.AlertMergeByKeys(event)
+			item.Title = s.rule.AlertTitle(event)
+			item.Description = s.rule.AlertDescription(event)
+			item.Severity = s.rule.AlertSeverity(event)
+			item.MergeByKeys = s.rule.AlertMergeByKeys(event)
 			if c := s.rule.AlertContext(event); len(c) > 0 {
 				if st, err := structpb.NewStruct(c); err == nil {
-					result.Context = st
+					item.Context = st
 				}
 			}
 		}
-		results[i] = result
 	}
-	return &rpc_rules.EvaluateBatchResponse{Results: results, Errors: errs}, nil
+	return &rpc_rules.EvaluateBatchResponse{Items: items}, nil
 }
 
 func (s *server) Ping(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {

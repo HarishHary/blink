@@ -43,9 +43,10 @@ func (s *server) Init(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, erro
 }
 
 func (s *server) TuneBatch(ctx context.Context, req *rpc_tuning_rules.TuneBatchRequest) (*rpc_tuning_rules.TuneBatchResponse, error) {
-	results := make([]bool, len(req.GetAlerts()))
-	errs := make([]string, len(req.GetAlerts()))
+	items := make([]*rpc_tuning_rules.TuneItem, len(req.GetAlerts()))
 	for i, pa := range req.GetAlerts() {
+		item := &rpc_tuning_rules.TuneItem{}
+		items[i] = item
 		alert, err := alerts.ProtoToAlert(pa)
 		if err != nil {
 			return nil, errors.PluginErrorStatus(err).Err()
@@ -55,12 +56,12 @@ func (s *server) TuneBatch(ctx context.Context, req *rpc_tuning_rules.TuneBatchR
 			if s := errors.PluginErrorStatus(err); s.Code() != codes.InvalidArgument {
 				return nil, s.Err()
 			}
-			errs[i] = err.Error()
+			item.Error = err.Error()
 			continue
 		}
-		results[i] = applies
+		item.Applies = applies
 	}
-	return &rpc_tuning_rules.TuneBatchResponse{Applies: results, Errors: errs}, nil
+	return &rpc_tuning_rules.TuneBatchResponse{Items: items}, nil
 }
 
 func (s *server) Ping(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {

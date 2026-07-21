@@ -43,12 +43,13 @@ func (s *server) Init(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, erro
 }
 
 func (s *server) EnrichBatch(ctx context.Context, req *rpc_enrichments.EnrichBatchRequest) (*rpc_enrichments.EnrichBatchResponse, error) {
-	results := make([][]byte, len(req.GetAlerts()))
-	errs := make([]string, len(req.GetAlerts()))
+	items := make([]*rpc_enrichments.EnrichItem, len(req.GetAlerts()))
 	for i, pa := range req.GetAlerts() {
+		item := &rpc_enrichments.EnrichItem{}
+		items[i] = item
 		alert, err := alerts.ProtoToAlert(pa)
 		if err != nil {
-			errs[i] = err.Error()
+			item.Error = err.Error()
 			continue
 		}
 		enriched, err := s.enrichment.Enrich(ctx, *alert)
@@ -56,17 +57,17 @@ func (s *server) EnrichBatch(ctx context.Context, req *rpc_enrichments.EnrichBat
 			if status := errors.PluginErrorStatus(err); status.Code() != codes.InvalidArgument {
 				return nil, status.Err()
 			}
-			errs[i] = err.Error()
+			item.Error = err.Error()
 			continue
 		}
 		b, err := json.Marshal(enriched)
 		if err != nil {
-			errs[i] = err.Error()
+			item.Error = err.Error()
 			continue
 		}
-		results[i] = b
+		item.ResultJson = b
 	}
-	return &rpc_enrichments.EnrichBatchResponse{ResultJson: results, Errors: errs}, nil
+	return &rpc_enrichments.EnrichBatchResponse{Items: items}, nil
 }
 
 func (s *server) Ping(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {

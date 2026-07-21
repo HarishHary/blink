@@ -7,20 +7,20 @@ import "google/protobuf/struct.proto";
 
 message EvaluateBatchRequest { repeated google.protobuf.Struct events = 1; }
 
-// EventResult carries the match outcome and any optional per-event overrides.
+// EvaluateItem carries the match outcome, optional per-event overrides, and item error.
 // Empty string / nil fields mean "use YAML default".
-message EventResult {
+message EvaluateItem {
   bool                   matched       = 1;
   string                 title         = 2;
   string                 description   = 3;
   string                 severity      = 4; // "info|low|medium|high|critical"; "" = YAML default
   google.protobuf.Struct context       = 5; // per-event context map; nil = YAML default
   repeated string        merge_by_keys = 6; // empty = use YAML merge_by_keys
+  string                 error         = 7;
 }
 
 message EvaluateBatchResponse {
-  repeated EventResult results = 1;
-  repeated string errors = 2;
+  repeated EvaluateItem items = 1;
 }
 
 service Rule {

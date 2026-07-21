@@ -4,19 +4,21 @@ import (
 	"context"
 	"time"
 
+	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/events"
 	"github.com/harishhary/blink/pkg/scoring"
 )
 
-// EventResult is the per-event outcome returned by Rule.Evaluate.
-type EventResult struct {
+// EvaluateItem holds one event's rule evaluation outcome.
+type EvaluateItem struct {
 	Matched     bool
 	Title       string
 	Description string
 	Severity    string         // "" = no override; "info"/"low"/"medium"/"high"/"critical" = override
 	Context     map[string]any // extra key-value pairs merged into alert.Event
 	MergeByKeys []string       // overrides YAML merge_by_keys when non-nil
+	Err         errors.Error
 }
 
 // Observable describes one observable field that a rule can surface in an alert.

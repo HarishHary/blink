@@ -42,12 +42,13 @@ func (s *server) Init(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, erro
 }
 
 func (s *server) FormatBatch(ctx context.Context, req *rpc_formatters.FormatBatchRequest) (*rpc_formatters.FormatBatchResponse, error) {
-	results := make([][]byte, len(req.GetAlerts()))
-	errs := make([]string, len(req.GetAlerts()))
+	items := make([]*rpc_formatters.FormatItem, len(req.GetAlerts()))
 	for i, pa := range req.GetAlerts() {
+		item := &rpc_formatters.FormatItem{}
+		items[i] = item
 		alert, err := alerts.ProtoToAlert(pa)
 		if err != nil {
-			errs[i] = err.Error()
+			item.Error = err.Error()
 			continue
 		}
 		result, err := s.formatter.Format(ctx, *alert)
@@ -55,17 +56,17 @@ func (s *server) FormatBatch(ctx context.Context, req *rpc_formatters.FormatBatc
 			if status := errors.PluginErrorStatus(err); status.Code() != codes.InvalidArgument {
 				return nil, status.Err()
 			}
-			errs[i] = err.Error()
+			item.Error = err.Error()
 			continue
 		}
 		b, err := json.Marshal(result)
 		if err != nil {
-			errs[i] = err.Error()
+			item.Error = err.Error()
 			continue
 		}
-		results[i] = b
+		item.ResultJson = b
 	}
-	return &rpc_formatters.FormatBatchResponse{ResultJson: results, Errors: errs}, nil
+	return &rpc_formatters.FormatBatchResponse{Items: items}, nil
 }
 
 func (s *server) Ping(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {

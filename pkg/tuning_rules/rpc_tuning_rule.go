@@ -71,17 +71,15 @@ func (r *rpcTuningRule) TuneBatch(ctx context.Context, batch []alerts.Alert) Tun
 	if resp == nil {
 		return TuneResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "tuning rule", PluginID: r.fileName, Field: "response", Expected: 1})}
 	}
-	if len(resp.GetApplies()) != len(batch) {
-		return TuneResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "tuning rule", PluginID: r.fileName, Field: "applies", Expected: len(batch), Actual: len(resp.GetApplies())})}
+	if len(resp.GetItems()) != len(batch) {
+		return TuneResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "tuning rule", PluginID: r.fileName, Field: "items", Expected: len(batch), Actual: len(resp.GetItems())})}
 	}
-	if len(resp.GetErrors()) != len(batch) {
-		return TuneResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "tuning rule", PluginID: r.fileName, Field: "errors", Expected: len(batch), Actual: len(resp.GetErrors())})}
-	}
-	perErrs := make([]errors.Error, len(batch))
-	for i, message := range resp.GetErrors() {
-		if message != "" {
-			perErrs[i] = errors.New(message)
+	items := make([]TuneItem, len(batch))
+	for i, item := range resp.GetItems() {
+		items[i].Applies = item.GetApplies()
+		if item.GetError() != "" {
+			items[i].Err = errors.New(item.GetError())
 		}
 	}
-	return TuneResult{Applies: resp.GetApplies(), Errs: perErrs}
+	return TuneResult{Items: items}
 }
