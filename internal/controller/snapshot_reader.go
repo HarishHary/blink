@@ -41,7 +41,7 @@ var snapshotAppliedGeneration = promauto.NewGauge(prometheus.GaugeOpts{
 
 // SnapshotReader is the read end of the controller's one-writer/many-readers split: it consumes the
 // per-ID keyed, log-compacted topic (upserts + tombstones), assembles the desired-state Snapshot, and
-// signals watchers on change. A cold reader replays the compacted set and goes Ready once drained (Lag()==0).
+// signals watchers on change. A cold reader replays the compacted set and goes Ready once drained (ReadLag()==0).
 type SnapshotReader struct {
 	logger     *logger.Logger
 	reader     brokers.Reader
@@ -115,11 +115,11 @@ func (r *SnapshotReader) Start(ctx context.Context) error {
 				return nil // clean shutdown
 			}
 			if !r.ready.Load() && errors.Is(err, context.DeadlineExceeded) {
-				r.checkCaughtUp(ctx) // lull: confirm Lag()==0 and go ready
+				r.checkCaughtUp(ctx) // lull: confirm ReadLag()==0 and go ready
 				continue
 			}
 			// Bounded, ctx-aware backoff so a persistent read error doesn't spin the CPU or flood logs; reset on success.
-			r.logger.ErrorF("snapshot-reader: kafka read: %v (retry in %v)", err, backoff)
+			r.logger.ErrorF("snapshot-reader: broker read: %v (retry in %v)", err, backoff)
 			select {
 			case <-ctx.Done():
 				return nil
@@ -183,10 +183,10 @@ func (r *SnapshotReader) apply(msg brokers.Message) bool {
 	return true
 }
 
-// checkCaughtUp confirms the backlog is drained (Lag()==0) and, if so, assembles the first snapshot,
+// checkCaughtUp confirms the backlog is drained (ReadLag()==0) and, if so, assembles the first snapshot,
 // flips Ready, and signals watchers. Lag round-trips to the broker, so it's called only on a read lull.
 func (r *SnapshotReader) checkCaughtUp(ctx context.Context) {
-	lag, err := r.reader.Lag(ctx)
+	lag, err := r.reader.ReadLag(ctx)
 	if err != nil {
 		r.logger.ErrorF("snapshot-reader: lag: %v", err)
 		return

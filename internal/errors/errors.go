@@ -1,7 +1,9 @@
 package errors
 
 import (
+	"context"
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
 	"runtime"
 	"strings"
@@ -11,6 +13,57 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// PluginErrorStatus classifies a plugin callback error for a batch RPC. Plain
+// errors are record-scoped; context and explicit non-InvalidArgument statuses
+// fail the RPC call. BaseError's synthetic Internal status is not explicit.
+func PluginErrorStatus(err error) *status.Status {
+	if err == nil {
+		return status.New(codes.OK, "")
+	}
+	if stderrors.Is(err, context.Canceled) || stderrors.Is(err, context.DeadlineExceeded) {
+		return status.FromContextError(err)
+	}
+
+	var record *status.Status
+	var visit func(error) *status.Status
+	visit = func(err error) *status.Status {
+		if err == nil {
+			return nil
+		}
+		if provider, ok := err.(interface{ GRPCStatus() *status.Status }); ok {
+			if s := provider.GRPCStatus(); s != nil && s.Code() != codes.OK && !(isBaseError(err) && s.Code() == codes.Internal) {
+				if s.Code() != codes.InvalidArgument {
+					return s
+				}
+				record = s
+			}
+		}
+		if wrapped, ok := err.(interface{ Unwrap() []error }); ok {
+			for _, cause := range wrapped.Unwrap() {
+				if s := visit(cause); s != nil {
+					return s
+				}
+			}
+		}
+		if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+			return visit(wrapped.Unwrap())
+		}
+		return nil
+	}
+	if s := visit(err); s != nil {
+		return s
+	}
+	if record != nil {
+		return record
+	}
+	return status.New(codes.InvalidArgument, err.Error())
+}
+
+func isBaseError(err error) bool {
+	_, ok := err.(*BaseError)
+	return ok
+}
+
 type Error interface {
 	WithContext(context ...any)
 	Error() string
@@ -19,11 +72,30 @@ type Error interface {
 	CorrelationID() string
 }
 
+// ResultCardinalityError reports a plugin batch response whose shape does not
+// match its request.
+type ResultCardinalityError struct {
+	PluginKind string
+	PluginID   string
+	Field      string
+	Expected   int
+	Actual     int
+}
+
+func (err *ResultCardinalityError) Error() string {
+	field := err.Field
+	if field == "" {
+		field = "results"
+	}
+	return fmt.Sprintf("%s %s returned %d %s for %d items", err.PluginKind, err.PluginID, err.Actual, field, err.Expected)
+}
+
 type BaseError struct {
 	message       any    `json:"-"`
 	context       []any  `json:"-"`
 	correlationID string `json:"-"`
 	wrapped       Error  `json:"-"`
+	cause         error  `json:"-"`
 	file          string `json:"-"`
 	line          int    `json:"-"`
 }
@@ -55,7 +127,9 @@ func NewE(err error) Error {
 		if !ok {
 			file = "???"
 		}
-		return newBase(err.Error(), file, line)
+		base := newBase(err.Error(), file, line)
+		base.cause = err
+		return base
 	}
 }
 
@@ -74,6 +148,18 @@ func (err *BaseError) WithContext(context ...any) {
 func (err *BaseError) Wrap(other Error) {
 	err.correlationID = other.CorrelationID()
 	err.wrapped = other
+}
+
+// Unwrap returns the displayed wrapped error followed by the original cause.
+func (err *BaseError) Unwrap() []error {
+	var unwrapped []error
+	if err.wrapped != nil {
+		unwrapped = append(unwrapped, err.wrapped)
+	}
+	if err.cause != nil {
+		unwrapped = append(unwrapped, err.cause)
+	}
+	return unwrapped
 }
 
 func (err *BaseError) CorrelationID() string {
@@ -103,6 +189,11 @@ func (err *BaseError) MarshalJSON() ([]byte, error) {
 }
 
 func (err *BaseError) GRPCStatus() *status.Status {
+	if err.cause != nil {
+		if cause, ok := status.FromError(err.cause); ok {
+			return cause
+		}
+	}
 	data, _ := json.Marshal(err)
 	return status.New(codes.Internal, string(data))
 }

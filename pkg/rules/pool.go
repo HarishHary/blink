@@ -2,7 +2,7 @@ package rules
 
 import (
 	"context"
-	stderrors "errors"
+	"sync"
 	"time"
 
 	"github.com/harishhary/blink/internal/config"
@@ -18,20 +18,10 @@ type Pool struct {
 	*pools.ProcessPool[Rule]
 }
 
-type evaluateChunkResult struct {
-	results []EventResult
-	absent  bool
-	removed bool
-	errs    []errors.Error // per-event (aligned with the chunk)
-	callErr errors.Error   // whole-call failure (not per-event)
-}
-
-// EvaluateResult holds the batch-level result from evaluating a rule.
+// EvaluateResult holds the result from evaluating events.
 type EvaluateResult struct {
-	Results []EventResult
-	Absent  bool
-	Removed bool
-	Errs    []errors.Error // per-event (aligned with Results)
+	Items   []EvaluateItem
+	CallErr errors.Error // whole-call failure; never record-scoped
 }
 
 // NewPool builds a rule process pool.
@@ -42,74 +32,92 @@ func NewPool(cfg config.Source[*RuleMetadata], drainTimeout time.Duration) *Pool
 }
 
 // Evaluate runs a batch of events against the named rule.
-func (p *Pool) Evaluate(ctx context.Context, ruleID string, events []evts.Event, canaryHashKey string) EvaluateResult {
+func (p *Pool) Evaluate(ctx context.Context, ruleID string, events []evts.Event) EvaluateResult {
 	p.shadowEvaluate(ctx, ruleID, events)
-	k := p.ServingPoolSize(ruleID, canaryHashKey)
-	parts := pools.ShardConcurrent(events, k, func(chunk []evts.Event) evaluateChunkResult {
-		return p.evaluateChunk(ctx, ruleID, chunk, canaryHashKey)
-	})
 
-	for _, part := range parts {
-		if part.removed {
-			return EvaluateResult{Removed: true}
+	type routeGroup struct {
+		rolloutKey string
+		indexes    []int
+		events     []evts.Event
+	}
+	groups := make([]routeGroup, 0)
+	groupIndexByBucket := make(map[uint32]int)
+	for i, event := range events {
+		rolloutKey := pools.NormalizeRolloutKey(event["tenant_id"])
+		bucket := pools.RolloutBucket(rolloutKey)
+		groupIndex, ok := groupIndexByBucket[bucket]
+		if !ok {
+			groupIndex = len(groups)
+			groupIndexByBucket[bucket] = groupIndex
+			groups = append(groups, routeGroup{rolloutKey: rolloutKey})
 		}
-		if part.absent {
-			return EvaluateResult{Absent: true}
-		}
-		if part.callErr != nil {
-			for i := range part.errs {
-				part.errs[i] = part.callErr
+		groups[groupIndex].indexes = append(groups[groupIndex].indexes, i)
+		groups[groupIndex].events = append(groups[groupIndex].events, event)
+	}
+
+	parts := make([]EvaluateResult, len(groups))
+	var wg sync.WaitGroup
+	for i, group := range groups {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			k := p.ServingPoolSize(ruleID, group.rolloutKey)
+			shards := pools.ShardConcurrent(group.events, k, func(chunk []evts.Event) EvaluateResult {
+				return p.evaluateChunk(ctx, ruleID, chunk, group.rolloutKey)
+			})
+			part := EvaluateResult{Items: make([]EvaluateItem, 0, len(group.events))}
+			for _, shard := range shards {
+				if shard.CallErr != nil {
+					parts[i] = EvaluateResult{CallErr: shard.CallErr}
+					return
+				}
+				part.Items = append(part.Items, shard.Items...)
 			}
+			parts[i] = part
+		}(i)
+	}
+	wg.Wait()
+
+	result := EvaluateResult{Items: make([]EvaluateItem, len(events))}
+	for i, part := range parts {
+		if part.CallErr != nil {
+			return EvaluateResult{CallErr: part.CallErr}
+		}
+		group := groups[i]
+		if len(part.Items) != len(group.indexes) {
+			return EvaluateResult{CallErr: errors.NewF("rule %s returned invalid routed result shape", ruleID)}
+		}
+		for j, inputIndex := range group.indexes {
+			result.Items[inputIndex] = part.Items[j]
 		}
 	}
-
-	results := make([]EventResult, 0, len(events))
-	errs := make([]errors.Error, 0, len(events))
-	for _, part := range parts {
-		results = append(results, part.results...)
-		errs = append(errs, part.errs...)
-	}
-	return EvaluateResult{Results: results, Errs: errs}
+	return result
 }
 
 // evaluateChunk is one production pool call: it acquires a subprocess (stable, or the canary candidate
 // for the hashed slice) and evaluates evts against ruleID. The shadow candidate is driven separately by
 // shadowEvaluate.
-func (p *Pool) evaluateChunk(ctx context.Context, ruleID string, eventsChunk []evts.Event, canaryHashKey string) evaluateChunkResult {
-	results := make([]EventResult, len(eventsChunk))
-	perErrs := make([]errors.Error, len(eventsChunk))
+func (p *Pool) evaluateChunk(ctx context.Context, ruleID string, eventsChunk []evts.Event, rolloutKey string) EvaluateResult {
+	items := make([]EvaluateItem, len(eventsChunk))
 	prodFn := func(callCtx context.Context, r Rule) error {
 		if !r.RuleMetadata().Enabled {
 			return nil
 		}
-		batchResults, e := r.Evaluate(callCtx, eventsChunk)
-		if e != nil {
-			for i := range perErrs {
-				perErrs[i] = e
-			}
-			return nil
+		batchResult := r.EvaluateBatch(callCtx, eventsChunk)
+		if batchResult.CallErr != nil {
+			return batchResult.CallErr
 		}
-		if len(batchResults) != len(eventsChunk) {
-			e := errors.NewF("rule %s returned %d results for %d events", ruleID, len(batchResults), len(eventsChunk))
-			for i := range perErrs {
-				perErrs[i] = e
-			}
-			return nil
+		if len(batchResult.Items) != len(eventsChunk) {
+			return &errors.ResultCardinalityError{PluginKind: "rule", PluginID: ruleID, Field: "items", Expected: len(eventsChunk), Actual: len(batchResult.Items)}
 		}
-		copy(results, batchResults)
+		copy(items, batchResult.Items)
 		return nil
 	}
-	err := p.Call(ctx, ruleID, canaryHashKey, prodFn)
+	err := p.Call(ctx, ruleID, rolloutKey, prodFn)
 	if err != nil {
-		if stderrors.Is(err, pools.ErrPluginNotFound) {
-			return evaluateChunkResult{absent: true}
-		}
-		if stderrors.Is(err, pools.ErrPluginRemoved) {
-			return evaluateChunkResult{removed: true}
-		}
-		return evaluateChunkResult{results: results, errs: perErrs, callErr: errors.NewE(err)}
+		return EvaluateResult{CallErr: errors.NewE(err)}
 	}
-	return evaluateChunkResult{results: results, errs: perErrs}
+	return EvaluateResult{Items: items}
 }
 
 // shadowEvaluate fans the full batch out to the shadow candidate (if ruleID is in shadow mode) at the
@@ -125,8 +133,16 @@ func (p *Pool) shadowEvaluate(ctx context.Context, ruleID string, events []evts.
 			if !r.RuleMetadata().Enabled {
 				return nil
 			}
-			_, e := r.Evaluate(callCtx, evtsChunk)
-			return e
+			result := r.EvaluateBatch(callCtx, evtsChunk)
+			if result.CallErr != nil {
+				return result.CallErr
+			}
+			for _, item := range result.Items {
+				if item.Err != nil {
+					return item.Err
+				}
+			}
+			return nil
 		})
 	}
 }

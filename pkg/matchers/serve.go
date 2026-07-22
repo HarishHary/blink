@@ -6,6 +6,7 @@ import (
 
 	"github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/harishhary/blink/internal/errors"
@@ -40,16 +41,22 @@ func (s *server) Init(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, erro
 }
 
 func (s *server) MatchBatch(ctx context.Context, req *rpc_matchers.MatchBatchRequest) (*rpc_matchers.MatchBatchResponse, error) {
-	results := make([]bool, 0, len(req.GetEvents()))
-	for _, ev := range req.GetEvents() {
+	items := make([]*rpc_matchers.MatchItem, len(req.GetEvents()))
+	for i, ev := range req.GetEvents() {
+		item := &rpc_matchers.MatchItem{}
+		items[i] = item
 		event := events.Event(ev.AsMap())
 		matched, err := s.matcher.Match(ctx, event)
 		if err != nil {
-			return nil, err
+			if s := errors.PluginErrorStatus(err); s.Code() != codes.InvalidArgument {
+				return nil, s.Err()
+			}
+			item.Error = err.Error()
+			continue
 		}
-		results = append(results, matched)
+		item.Matched = matched
 	}
-	return &rpc_matchers.MatchBatchResponse{Matched: results}, nil
+	return &rpc_matchers.MatchBatchResponse{Items: items}, nil
 }
 
 func (s *server) Ping(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {

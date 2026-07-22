@@ -1,6 +1,5 @@
 syntax = "proto3";
 package alerts;
-
 import "google/protobuf/struct.proto";
 
 option go_package = "github.com/harishhary/blink/pkg/alerts/pb";

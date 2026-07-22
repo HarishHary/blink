@@ -7,7 +7,14 @@ import "pkg/alerts/pb/alert.proto";
 
 message TuneBatchRequest  { repeated alerts.Alert alerts = 1; } // structured alerts.Alert per alert
 
-message TuneBatchResponse { repeated bool applies = 1; } // one result per alert
+message TuneItem {
+  bool applies = 1;
+  string error = 2;
+}
+
+message TuneBatchResponse {
+  repeated TuneItem items = 1;
+}
 
 service TuningRule {
   rpc TuneBatch(TuneBatchRequest)     returns (TuneBatchResponse);

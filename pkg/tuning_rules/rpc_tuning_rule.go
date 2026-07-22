@@ -55,18 +55,31 @@ func (r *rpcTuningRule) Metadata() plugin.PluginMetadata {
 func (r *rpcTuningRule) Checksum() string { return r.checksum }
 
 // Tune converts alerts to protobufs, invokes the RPC batch method, and returns per-alert apply decisions.
-func (r *rpcTuningRule) Tune(ctx context.Context, batch []alerts.Alert) ([]bool, errors.Error) {
+func (r *rpcTuningRule) TuneBatch(ctx context.Context, batch []alerts.Alert) TuneResult {
 	pbAlerts := make([]*pb.Alert, 0, len(batch))
 	for i := range batch {
 		pa, err := alerts.AlertToProto(&batch[i])
 		if err != nil {
-			return nil, errors.NewE(err)
+			return TuneResult{CallErr: errors.NewE(err)}
 		}
 		pbAlerts = append(pbAlerts, pa)
 	}
 	resp, err := r.client.TuneBatch(ctx, &rpc_tuning_rules.TuneBatchRequest{Alerts: pbAlerts})
 	if err != nil {
-		return nil, errors.NewE(err)
+		return TuneResult{CallErr: errors.NewE(err)}
 	}
-	return resp.GetApplies(), nil
+	if resp == nil {
+		return TuneResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "tuning rule", PluginID: r.fileName, Field: "response", Expected: 1})}
+	}
+	if len(resp.GetItems()) != len(batch) {
+		return TuneResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "tuning rule", PluginID: r.fileName, Field: "items", Expected: len(batch), Actual: len(resp.GetItems())})}
+	}
+	items := make([]TuneItem, len(batch))
+	for i, item := range resp.GetItems() {
+		items[i].Applies = item.GetApplies()
+		if item.GetError() != "" {
+			items[i].Err = errors.New(item.GetError())
+		}
+	}
+	return TuneResult{Items: items}
 }

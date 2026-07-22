@@ -7,6 +7,7 @@ import (
 
 	"github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/harishhary/blink/internal/errors"
@@ -41,23 +42,31 @@ func (s *server) Init(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, erro
 }
 
 func (s *server) FormatBatch(ctx context.Context, req *rpc_formatters.FormatBatchRequest) (*rpc_formatters.FormatBatchResponse, error) {
-	results := make([][]byte, 0, len(req.GetAlerts()))
-	for _, pa := range req.GetAlerts() {
+	items := make([]*rpc_formatters.FormatItem, len(req.GetAlerts()))
+	for i, pa := range req.GetAlerts() {
+		item := &rpc_formatters.FormatItem{}
+		items[i] = item
 		alert, err := alerts.ProtoToAlert(pa)
 		if err != nil {
-			return nil, err
+			item.Error = err.Error()
+			continue
 		}
 		result, err := s.formatter.Format(ctx, *alert)
 		if err != nil {
-			return nil, err
+			if status := errors.PluginErrorStatus(err); status.Code() != codes.InvalidArgument {
+				return nil, status.Err()
+			}
+			item.Error = err.Error()
+			continue
 		}
-		b, err2 := json.Marshal(result)
-		if err2 != nil {
-			return nil, err2
+		b, err := json.Marshal(result)
+		if err != nil {
+			item.Error = err.Error()
+			continue
 		}
-		results = append(results, b)
+		item.ResultJson = b
 	}
-	return &rpc_formatters.FormatBatchResponse{ResultJson: results}, nil
+	return &rpc_formatters.FormatBatchResponse{Items: items}, nil
 }
 
 func (s *server) Ping(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {

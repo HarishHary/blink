@@ -3,19 +3,15 @@ package pools
 import (
 	"context"
 	"fmt"
-	"hash/fnv"
 	"log"
 )
-
-// DefaultCanaryHashKey is the call-site key used for consistent-hash canary rollout.
-var DefaultCanaryHashKey = "tenant_id"
 
 // Call serves the caller's result from the routed pool; CallShadow mirrors to the shadow candidate in the
 // background (dropped). All rollout-mode logic lives here, so the plugin pools stay mode-agnostic:
 //
 //	blue-green -> Call: stable  |  canary -> Call: candidate for the hashed slice, else stable
 //	shadow     -> Call: stable  +  CallShadow: candidate (dropped)
-func (pp *ProcessPool[T]) Call(ctx context.Context, id, hashKey string, fn func(context.Context, T) error) error {
+func (pp *ProcessPool[T]) Call(ctx context.Context, id, rolloutKey string, fn func(context.Context, T) error) error {
 	// Snapshot state under a short RLock; user code runs after release so plugin latency never blocks mutations.
 	pp.mu.RLock()
 	key, ok := pp.active[id]
@@ -39,7 +35,7 @@ func (pp *ProcessPool[T]) Call(ctx context.Context, id, hashKey string, fn func(
 		return fmt.Errorf("processpool: pool %s not found", key)
 	}
 	if mode == RolloutModeCanary {
-		candidatePool := servingPool(hashKey, rolloutPct, prodPool, altPool)
+		candidatePool := servingPool(rolloutKey, rolloutPct, prodPool, altPool)
 		return pp.callPool(ctx, candidatePool, fn)
 	}
 	return pp.callPool(ctx, prodPool, fn)
@@ -58,9 +54,18 @@ func (pp *ProcessPool[T]) CallShadow(ctx context.Context, id string, fn func(con
 	if altPool == nil {
 		return
 	}
-	// Detach from caller ctx: prod may return (and its deadline expire) before this goroutine runs.
+	// Detach from caller cancellation, but retain its deadline so the shadow call
+	// cannot outlive the bounded production attempt that spawned it.
+	deadline, hasDeadline := ctx.Deadline()
 	shadowCtx := context.WithoutCancel(ctx)
+	var cancel context.CancelFunc
+	if hasDeadline {
+		shadowCtx, cancel = context.WithDeadline(shadowCtx, deadline)
+	}
 	go func() {
+		if cancel != nil {
+			defer cancel()
+		}
 		plugin, err := altPool.Acquire(shadowCtx)
 		if err != nil {
 			log.Printf("processpool: shadow acquire failed for %s: %v", id, err)
@@ -84,17 +89,10 @@ func (pp *ProcessPool[T]) findAltPool(id string) *VersionedPool[T] {
 	return nil
 }
 
-// servingPool returns altPool when hashKey hashes within rolloutPct (and altPool exists), else prodPool.
+// servingPool returns altPool when rolloutKey hashes within rolloutPct (and altPool exists), else prodPool.
 // Single source of the canary decision, shared by Call and ServingPoolSize so the two never disagree.
-func servingPool[T any](hashKey string, rolloutPct float64, prodPool, altPool *VersionedPool[T]) *VersionedPool[T] {
-	if hashKey == "" {
-		hashKey = DefaultCanaryHashKey
-	}
-	h := fnv.New32a()
-	h.Write([]byte(hashKey))
-	pct := float64(h.Sum32()%100) + 1 // 1–100
-
-	if pct <= rolloutPct && altPool != nil {
+func servingPool[T any](rolloutKey string, rolloutPct float64, prodPool, altPool *VersionedPool[T]) *VersionedPool[T] {
+	if float64(RolloutBucket(rolloutKey)) <= rolloutPct && altPool != nil {
 		return altPool
 	}
 	return prodPool
@@ -116,7 +114,7 @@ func (pp *ProcessPool[T]) callPool(ctx context.Context, pool *VersionedPool[T], 
 // ponytail: this and the real Call resolve rollout under separate RLocks, so a Promote/Register landing
 // in between can make K track a pool the batch no longer routes to. Harmless - K only sets shard count,
 // so a transient mismatch just over/under-shards one batch and self-corrects on the next.
-func (pp *ProcessPool[T]) ServingPoolSize(id, hashKey string) int {
+func (pp *ProcessPool[T]) ServingPoolSize(id, rolloutKey string) int {
 	pp.mu.RLock()
 	defer pp.mu.RUnlock()
 	key, ok := pp.active[id]
@@ -130,7 +128,7 @@ func (pp *ProcessPool[T]) ServingPoolSize(id, hashKey string) int {
 		if altPool == nil {
 			return 0
 		}
-		pool = servingPool(hashKey, pct, stablePool, altPool)
+		pool = servingPool(rolloutKey, pct, stablePool, altPool)
 	}
 	if pool == nil {
 		return 0

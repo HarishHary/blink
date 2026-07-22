@@ -10,14 +10,15 @@ import (
 	"github.com/harishhary/blink/pkg/scoring"
 )
 
-// EventResult is the per-event outcome returned by Rule.Evaluate.
-type EventResult struct {
+// EvaluateItem holds one event's rule evaluation outcome.
+type EvaluateItem struct {
 	Matched     bool
 	Title       string
 	Description string
 	Severity    string         // "" = no override; "info"/"low"/"medium"/"high"/"critical" = override
 	Context     map[string]any // extra key-value pairs merged into alert.Event
 	MergeByKeys []string       // overrides YAML merge_by_keys when non-nil
+	Err         errors.Error
 }
 
 // Observable describes one observable field that a rule can surface in an alert.
@@ -109,7 +110,7 @@ func (c *RuleMetadata) MergeWindowMins() time.Duration {
 
 // Rule is the host-side interface for evaluating a batch of events.
 type Rule interface {
-	Evaluate(ctx context.Context, evts []events.Event) ([]EventResult, errors.Error)
+	EvaluateBatch(ctx context.Context, evts []events.Event) EvaluateResult
 
 	plugin.Syncable
 	RuleMetadata() *RuleMetadata

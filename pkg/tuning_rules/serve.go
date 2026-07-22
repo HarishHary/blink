@@ -6,6 +6,7 @@ import (
 
 	"github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/harishhary/blink/internal/errors"
@@ -42,19 +43,25 @@ func (s *server) Init(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, erro
 }
 
 func (s *server) TuneBatch(ctx context.Context, req *rpc_tuning_rules.TuneBatchRequest) (*rpc_tuning_rules.TuneBatchResponse, error) {
-	results := make([]bool, 0, len(req.GetAlerts()))
-	for _, pa := range req.GetAlerts() {
+	items := make([]*rpc_tuning_rules.TuneItem, len(req.GetAlerts()))
+	for i, pa := range req.GetAlerts() {
+		item := &rpc_tuning_rules.TuneItem{}
+		items[i] = item
 		alert, err := alerts.ProtoToAlert(pa)
 		if err != nil {
-			return nil, err
+			return nil, errors.PluginErrorStatus(err).Err()
 		}
 		applies, err := s.rule.Tune(ctx, *alert)
 		if err != nil {
-			return nil, err
+			if s := errors.PluginErrorStatus(err); s.Code() != codes.InvalidArgument {
+				return nil, s.Err()
+			}
+			item.Error = err.Error()
+			continue
 		}
-		results = append(results, applies)
+		item.Applies = applies
 	}
-	return &rpc_tuning_rules.TuneBatchResponse{Applies: results}, nil
+	return &rpc_tuning_rules.TuneBatchResponse{Items: items}, nil
 }
 
 func (s *server) Ping(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {

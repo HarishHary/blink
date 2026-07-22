@@ -21,7 +21,7 @@ import (
 	"github.com/harishhary/blink/pkg/tuning_rules"
 )
 
-type ControllerConfig struct {
+type controllerConfig struct {
 	services.Common
 	RuleSnapshotTopic       string `env:"KAFKA_TOPIC_RULE_SNAPSHOT"`
 	MatcherSnapshotTopic    string `env:"KAFKA_TOPIC_MATCHER_SNAPSHOT"`
@@ -42,7 +42,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	var cfg ControllerConfig
+	var cfg controllerConfig
 	if err := services.LoadFromEnvironment(&cfg); err != nil {
 		log.Fatalf("config: %v", err)
 	}
@@ -83,7 +83,7 @@ func addController[T plugin.Syncable](
 	readerSvc := services.NewManagedService(name+"config-reader", reader)
 
 	ctrl := controller.NewPluginController(rootLogger.With("plugin_type", name, "component", "plugin_controller"), db, reader, writer)
-	ctrlSvc := services.NewManagedService(name+"-controller-sync", ctrl)
+	ctrlSvc := services.NewManagedService(name+"-controller", ctrl)
 
 	runner.Register(
 		readerSvc,

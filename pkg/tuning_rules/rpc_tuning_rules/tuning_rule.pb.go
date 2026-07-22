@@ -67,16 +67,68 @@ func (x *TuneBatchRequest) GetAlerts() []*pb.Alert {
 	return nil
 }
 
+type TuneItem struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Applies       bool                   `protobuf:"varint,1,opt,name=applies,proto3" json:"applies,omitempty"`
+	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TuneItem) Reset() {
+	*x = TuneItem{}
+	mi := &file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TuneItem) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TuneItem) ProtoMessage() {}
+
+func (x *TuneItem) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TuneItem.ProtoReflect.Descriptor instead.
+func (*TuneItem) Descriptor() ([]byte, []int) {
+	return file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *TuneItem) GetApplies() bool {
+	if x != nil {
+		return x.Applies
+	}
+	return false
+}
+
+func (x *TuneItem) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 type TuneBatchResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Applies       []bool                 `protobuf:"varint,1,rep,packed,name=applies,proto3" json:"applies,omitempty"`
+	Items         []*TuneItem            `protobuf:"bytes,1,rep,name=items,proto3" json:"items,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TuneBatchResponse) Reset() {
 	*x = TuneBatchResponse{}
-	mi := &file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_msgTypes[1]
+	mi := &file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -88,7 +140,7 @@ func (x *TuneBatchResponse) String() string {
 func (*TuneBatchResponse) ProtoMessage() {}
 
 func (x *TuneBatchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_msgTypes[1]
+	mi := &file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -101,12 +153,12 @@ func (x *TuneBatchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TuneBatchResponse.ProtoReflect.Descriptor instead.
 func (*TuneBatchResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_rawDescGZIP(), []int{1}
+	return file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_rawDescGZIP(), []int{2}
 }
 
-func (x *TuneBatchResponse) GetApplies() []bool {
+func (x *TuneBatchResponse) GetItems() []*TuneItem {
 	if x != nil {
-		return x.Applies
+		return x.Items
 	}
 	return nil
 }
@@ -117,9 +169,12 @@ const file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_rawDesc = "" +
 	"\n" +
 	"3pkg/tuning_rules/rpc_tuning_rules/tuning_rule.proto\x12\ftuning_rules\x1a\x1bgoogle/protobuf/empty.proto\x1a\x19pkg/alerts/pb/alert.proto\"9\n" +
 	"\x10TuneBatchRequest\x12%\n" +
-	"\x06alerts\x18\x01 \x03(\v2\r.alerts.AlertR\x06alerts\"-\n" +
-	"\x11TuneBatchResponse\x12\x18\n" +
-	"\aapplies\x18\x01 \x03(\bR\aapplies2\x86\x02\n" +
+	"\x06alerts\x18\x01 \x03(\v2\r.alerts.AlertR\x06alerts\":\n" +
+	"\bTuneItem\x12\x18\n" +
+	"\aapplies\x18\x01 \x01(\bR\aapplies\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"A\n" +
+	"\x11TuneBatchResponse\x12,\n" +
+	"\x05items\x18\x01 \x03(\v2\x16.tuning_rules.TuneItemR\x05items2\x86\x02\n" +
 	"\n" +
 	"TuningRule\x12L\n" +
 	"\tTuneBatch\x12\x1e.tuning_rules.TuneBatchRequest\x1a\x1f.tuning_rules.TuneBatchResponse\x126\n" +
@@ -139,28 +194,30 @@ func file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_rawDescGZIP() []by
 	return file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_rawDescData
 }
 
-var file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_goTypes = []any{
 	(*TuneBatchRequest)(nil),  // 0: tuning_rules.TuneBatchRequest
-	(*TuneBatchResponse)(nil), // 1: tuning_rules.TuneBatchResponse
-	(*pb.Alert)(nil),          // 2: alerts.Alert
-	(*emptypb.Empty)(nil),     // 3: google.protobuf.Empty
+	(*TuneItem)(nil),          // 1: tuning_rules.TuneItem
+	(*TuneBatchResponse)(nil), // 2: tuning_rules.TuneBatchResponse
+	(*pb.Alert)(nil),          // 3: alerts.Alert
+	(*emptypb.Empty)(nil),     // 4: google.protobuf.Empty
 }
 var file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_depIdxs = []int32{
-	2, // 0: tuning_rules.TuneBatchRequest.alerts:type_name -> alerts.Alert
-	0, // 1: tuning_rules.TuningRule.TuneBatch:input_type -> tuning_rules.TuneBatchRequest
-	3, // 2: tuning_rules.TuningRule.Init:input_type -> google.protobuf.Empty
-	3, // 3: tuning_rules.TuningRule.Shutdown:input_type -> google.protobuf.Empty
-	3, // 4: tuning_rules.TuningRule.Ping:input_type -> google.protobuf.Empty
-	1, // 5: tuning_rules.TuningRule.TuneBatch:output_type -> tuning_rules.TuneBatchResponse
-	3, // 6: tuning_rules.TuningRule.Init:output_type -> google.protobuf.Empty
-	3, // 7: tuning_rules.TuningRule.Shutdown:output_type -> google.protobuf.Empty
-	3, // 8: tuning_rules.TuningRule.Ping:output_type -> google.protobuf.Empty
-	5, // [5:9] is the sub-list for method output_type
-	1, // [1:5] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	3, // 0: tuning_rules.TuneBatchRequest.alerts:type_name -> alerts.Alert
+	1, // 1: tuning_rules.TuneBatchResponse.items:type_name -> tuning_rules.TuneItem
+	0, // 2: tuning_rules.TuningRule.TuneBatch:input_type -> tuning_rules.TuneBatchRequest
+	4, // 3: tuning_rules.TuningRule.Init:input_type -> google.protobuf.Empty
+	4, // 4: tuning_rules.TuningRule.Shutdown:input_type -> google.protobuf.Empty
+	4, // 5: tuning_rules.TuningRule.Ping:input_type -> google.protobuf.Empty
+	2, // 6: tuning_rules.TuningRule.TuneBatch:output_type -> tuning_rules.TuneBatchResponse
+	4, // 7: tuning_rules.TuningRule.Init:output_type -> google.protobuf.Empty
+	4, // 8: tuning_rules.TuningRule.Shutdown:output_type -> google.protobuf.Empty
+	4, // 9: tuning_rules.TuningRule.Ping:output_type -> google.protobuf.Empty
+	6, // [6:10] is the sub-list for method output_type
+	2, // [2:6] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_init() }
@@ -174,7 +231,7 @@ func file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_rawDesc), len(file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   3,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

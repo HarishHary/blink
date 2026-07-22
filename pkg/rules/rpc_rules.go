@@ -58,23 +58,29 @@ func (r *rpcRule) Metadata() plugin.PluginMetadata {
 func (r *rpcRule) Checksum() string { return r.checksum }
 
 // ctx carries the caller's deadline (e.g. the executor's per-event timeout).
-func (r *rpcRule) Evaluate(ctx context.Context, evts []events.Event) ([]EventResult, errors.Error) {
+func (r *rpcRule) EvaluateBatch(ctx context.Context, evts []events.Event) EvaluateResult {
 	protoEvents := make([]*structpb.Struct, 0, len(evts))
 	for _, ev := range evts {
 		s, err := structpb.NewStruct(ev)
 		if err != nil {
-			return nil, errors.NewE(err)
+			return EvaluateResult{CallErr: errors.NewE(err)}
 		}
 		protoEvents = append(protoEvents, s)
 	}
 	resp, err := r.client.EvaluateBatch(ctx, &rpc_rules.EvaluateBatchRequest{Events: protoEvents})
 	if err != nil {
-		return nil, errors.NewE(err)
+		return EvaluateResult{CallErr: errors.NewE(err)}
+	}
+	if resp == nil {
+		return EvaluateResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "rule", PluginID: r.fileName, Field: "response", Expected: 1})}
+	}
+	if len(resp.GetItems()) != len(evts) {
+		return EvaluateResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "rule", PluginID: r.fileName, Field: "items", Expected: len(evts), Actual: len(resp.GetItems())})}
 	}
 
-	out := make([]EventResult, len(resp.GetResults()))
-	for i, r := range resp.GetResults() {
-		res := EventResult{
+	items := make([]EvaluateItem, len(resp.GetItems()))
+	for i, r := range resp.GetItems() {
+		items[i] = EvaluateItem{
 			Matched:     r.GetMatched(),
 			Title:       r.GetTitle(),
 			Description: r.GetDescription(),
@@ -82,9 +88,11 @@ func (r *rpcRule) Evaluate(ctx context.Context, evts []events.Event) ([]EventRes
 			MergeByKeys: r.GetMergeByKeys(),
 		}
 		if c := r.GetContext(); c != nil {
-			res.Context = c.AsMap()
+			items[i].Context = c.AsMap()
 		}
-		out[i] = res
+		if r.GetError() != "" {
+			items[i].Err = errors.New(r.GetError())
+		}
 	}
-	return out, nil
+	return EvaluateResult{Items: items}
 }

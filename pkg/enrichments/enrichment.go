@@ -3,7 +3,6 @@ package enrichments
 import (
 	"context"
 
-	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/pkg/alerts"
 )
@@ -17,6 +16,6 @@ type EnrichmentMetadata struct {
 // Enrichment mutates alert batches and exposes its live sidecar metadata.
 type Enrichment interface {
 	plugin.Syncable
-	Enrich(ctx context.Context, alerts []*alerts.Alert) errors.Error
+	EnrichBatch(ctx context.Context, alerts []*alerts.Alert) EnrichResult
 	EnrichmentMetadata() *EnrichmentMetadata
 }

@@ -67,9 +67,9 @@ func (x *EvaluateBatchRequest) GetEvents() []*structpb.Struct {
 	return nil
 }
 
-// EventResult carries the match outcome and any optional per-event overrides.
+// EvaluateItem carries the match outcome, optional per-event overrides, and item error.
 // Empty string / nil fields mean "use YAML default".
-type EventResult struct {
+type EvaluateItem struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Matched       bool                   `protobuf:"varint,1,opt,name=matched,proto3" json:"matched,omitempty"`
 	Title         string                 `protobuf:"bytes,2,opt,name=title,proto3" json:"title,omitempty"`
@@ -77,24 +77,25 @@ type EventResult struct {
 	Severity      string                 `protobuf:"bytes,4,opt,name=severity,proto3" json:"severity,omitempty"`                            // "info|low|medium|high|critical"; "" = YAML default
 	Context       *structpb.Struct       `protobuf:"bytes,5,opt,name=context,proto3" json:"context,omitempty"`                              // per-event context map; nil = YAML default
 	MergeByKeys   []string               `protobuf:"bytes,6,rep,name=merge_by_keys,json=mergeByKeys,proto3" json:"merge_by_keys,omitempty"` // empty = use YAML merge_by_keys
+	Error         string                 `protobuf:"bytes,7,opt,name=error,proto3" json:"error,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *EventResult) Reset() {
-	*x = EventResult{}
+func (x *EvaluateItem) Reset() {
+	*x = EvaluateItem{}
 	mi := &file_pkg_rules_rpc_rules_rule_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *EventResult) String() string {
+func (x *EvaluateItem) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*EventResult) ProtoMessage() {}
+func (*EvaluateItem) ProtoMessage() {}
 
-func (x *EventResult) ProtoReflect() protoreflect.Message {
+func (x *EvaluateItem) ProtoReflect() protoreflect.Message {
 	mi := &file_pkg_rules_rpc_rules_rule_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -106,56 +107,63 @@ func (x *EventResult) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use EventResult.ProtoReflect.Descriptor instead.
-func (*EventResult) Descriptor() ([]byte, []int) {
+// Deprecated: Use EvaluateItem.ProtoReflect.Descriptor instead.
+func (*EvaluateItem) Descriptor() ([]byte, []int) {
 	return file_pkg_rules_rpc_rules_rule_proto_rawDescGZIP(), []int{1}
 }
 
-func (x *EventResult) GetMatched() bool {
+func (x *EvaluateItem) GetMatched() bool {
 	if x != nil {
 		return x.Matched
 	}
 	return false
 }
 
-func (x *EventResult) GetTitle() string {
+func (x *EvaluateItem) GetTitle() string {
 	if x != nil {
 		return x.Title
 	}
 	return ""
 }
 
-func (x *EventResult) GetDescription() string {
+func (x *EvaluateItem) GetDescription() string {
 	if x != nil {
 		return x.Description
 	}
 	return ""
 }
 
-func (x *EventResult) GetSeverity() string {
+func (x *EvaluateItem) GetSeverity() string {
 	if x != nil {
 		return x.Severity
 	}
 	return ""
 }
 
-func (x *EventResult) GetContext() *structpb.Struct {
+func (x *EvaluateItem) GetContext() *structpb.Struct {
 	if x != nil {
 		return x.Context
 	}
 	return nil
 }
 
-func (x *EventResult) GetMergeByKeys() []string {
+func (x *EvaluateItem) GetMergeByKeys() []string {
 	if x != nil {
 		return x.MergeByKeys
 	}
 	return nil
 }
 
+func (x *EvaluateItem) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 type EvaluateBatchResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Results       []*EventResult         `protobuf:"bytes,2,rep,name=results,proto3" json:"results,omitempty"`
+	Items         []*EvaluateItem        `protobuf:"bytes,1,rep,name=items,proto3" json:"items,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -190,9 +198,9 @@ func (*EvaluateBatchResponse) Descriptor() ([]byte, []int) {
 	return file_pkg_rules_rpc_rules_rule_proto_rawDescGZIP(), []int{2}
 }
 
-func (x *EvaluateBatchResponse) GetResults() []*EventResult {
+func (x *EvaluateBatchResponse) GetItems() []*EvaluateItem {
 	if x != nil {
-		return x.Results
+		return x.Items
 	}
 	return nil
 }
@@ -203,16 +211,17 @@ const file_pkg_rules_rpc_rules_rule_proto_rawDesc = "" +
 	"\n" +
 	"\x1epkg/rules/rpc_rules/rule.proto\x12\x05rules\x1a\x1bgoogle/protobuf/empty.proto\x1a\x1cgoogle/protobuf/struct.proto\"G\n" +
 	"\x14EvaluateBatchRequest\x12/\n" +
-	"\x06events\x18\x01 \x03(\v2\x17.google.protobuf.StructR\x06events\"\xd2\x01\n" +
-	"\vEventResult\x12\x18\n" +
+	"\x06events\x18\x01 \x03(\v2\x17.google.protobuf.StructR\x06events\"\xe9\x01\n" +
+	"\fEvaluateItem\x12\x18\n" +
 	"\amatched\x18\x01 \x01(\bR\amatched\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12 \n" +
 	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\x1a\n" +
 	"\bseverity\x18\x04 \x01(\tR\bseverity\x121\n" +
 	"\acontext\x18\x05 \x01(\v2\x17.google.protobuf.StructR\acontext\x12\"\n" +
-	"\rmerge_by_keys\x18\x06 \x03(\tR\vmergeByKeys\"E\n" +
-	"\x15EvaluateBatchResponse\x12,\n" +
-	"\aresults\x18\x02 \x03(\v2\x12.rules.EventResultR\aresults2\xfe\x01\n" +
+	"\rmerge_by_keys\x18\x06 \x03(\tR\vmergeByKeys\x12\x14\n" +
+	"\x05error\x18\a \x01(\tR\x05error\"B\n" +
+	"\x15EvaluateBatchResponse\x12)\n" +
+	"\x05items\x18\x01 \x03(\v2\x13.rules.EvaluateItemR\x05items2\xfe\x01\n" +
 	"\x04Rule\x12J\n" +
 	"\rEvaluateBatch\x12\x1b.rules.EvaluateBatchRequest\x1a\x1c.rules.EvaluateBatchResponse\x126\n" +
 	"\x04Init\x12\x16.google.protobuf.Empty\x1a\x16.google.protobuf.Empty\x12:\n" +
@@ -234,15 +243,15 @@ func file_pkg_rules_rpc_rules_rule_proto_rawDescGZIP() []byte {
 var file_pkg_rules_rpc_rules_rule_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_pkg_rules_rpc_rules_rule_proto_goTypes = []any{
 	(*EvaluateBatchRequest)(nil),  // 0: rules.EvaluateBatchRequest
-	(*EventResult)(nil),           // 1: rules.EventResult
+	(*EvaluateItem)(nil),          // 1: rules.EvaluateItem
 	(*EvaluateBatchResponse)(nil), // 2: rules.EvaluateBatchResponse
 	(*structpb.Struct)(nil),       // 3: google.protobuf.Struct
 	(*emptypb.Empty)(nil),         // 4: google.protobuf.Empty
 }
 var file_pkg_rules_rpc_rules_rule_proto_depIdxs = []int32{
 	3, // 0: rules.EvaluateBatchRequest.events:type_name -> google.protobuf.Struct
-	3, // 1: rules.EventResult.context:type_name -> google.protobuf.Struct
-	1, // 2: rules.EvaluateBatchResponse.results:type_name -> rules.EventResult
+	3, // 1: rules.EvaluateItem.context:type_name -> google.protobuf.Struct
+	1, // 2: rules.EvaluateBatchResponse.items:type_name -> rules.EvaluateItem
 	0, // 3: rules.Rule.EvaluateBatch:input_type -> rules.EvaluateBatchRequest
 	4, // 4: rules.Rule.Init:input_type -> google.protobuf.Empty
 	4, // 5: rules.Rule.Shutdown:input_type -> google.protobuf.Empty
