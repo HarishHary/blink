@@ -119,7 +119,7 @@ func (r *SnapshotReader) Start(ctx context.Context) error {
 				continue
 			}
 			// Bounded, ctx-aware backoff so a persistent read error doesn't spin the CPU or flood logs; reset on success.
-			r.logger.ErrorF("snapshot-reader: kafka read: %v (retry in %v)", err, backoff)
+			r.logger.ErrorF("snapshot-reader: broker read: %v (retry in %v)", err, backoff)
 			select {
 			case <-ctx.Done():
 				return nil
