@@ -72,3 +72,7 @@ terraform.rc
 .claude/*
 docs/*
 bin/*
+.serena/*
+openwiki/
+# CocoIndex Code (ccc)
+.cocoindex_code/
