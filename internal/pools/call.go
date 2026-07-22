@@ -3,12 +3,8 @@ package pools
 import (
 	"context"
 	"fmt"
-	"hash/fnv"
 	"log"
 )
-
-// DefaultRolloutKey is used when a call does not supply a rollout key.
-var DefaultRolloutKey = "tenant_id"
 
 // Call serves the caller's result from the routed pool; CallShadow mirrors to the shadow candidate in the
 // background (dropped). All rollout-mode logic lives here, so the plugin pools stay mode-agnostic:
@@ -91,16 +87,6 @@ func (pp *ProcessPool[T]) findAltPool(id string) *VersionedPool[T] {
 		return pp.pools[p.key]
 	}
 	return nil
-}
-
-// RolloutBucket returns rolloutKey's stable bucket in the range 1-100.
-func RolloutBucket(rolloutKey string) uint32 {
-	if rolloutKey == "" {
-		rolloutKey = DefaultRolloutKey
-	}
-	h := fnv.New32a()
-	_, _ = h.Write([]byte(rolloutKey))
-	return h.Sum32()%100 + 1
 }
 
 // servingPool returns altPool when rolloutKey hashes within rolloutPct (and altPool exists), else prodPool.

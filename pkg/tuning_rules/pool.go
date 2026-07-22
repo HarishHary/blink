@@ -52,7 +52,7 @@ func (p *Pool) Tune(ctx context.Context, tuningRuleID string, alerts []alts.Aler
 	groups := make([]routeGroup, 0)
 	groupIndexByBucket := make(map[uint32]int)
 	for i, alert := range alerts {
-		rolloutKey := pools.TenantRolloutKey(alert.Event["tenant_id"])
+		rolloutKey := pools.NormalizeRolloutKey(alert.Event["tenant_id"])
 		bucket := pools.RolloutBucket(rolloutKey)
 		groupIndex, ok := groupIndexByBucket[bucket]
 		if !ok {

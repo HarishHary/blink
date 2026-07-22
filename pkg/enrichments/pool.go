@@ -49,7 +49,7 @@ func (p *Pool) Enrich(ctx context.Context, enrichmentID string, alerts []*alts.A
 	groups := make([]routeGroup, 0)
 	groupIndexByBucket := make(map[uint32]int)
 	for i, alert := range alerts {
-		rolloutKey := pools.TenantRolloutKey(alert.Event["tenant_id"])
+		rolloutKey := pools.NormalizeRolloutKey(alert.Event["tenant_id"])
 		bucket := pools.RolloutBucket(rolloutKey)
 		groupIndex, ok := groupIndexByBucket[bucket]
 		if !ok {

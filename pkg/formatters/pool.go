@@ -52,7 +52,7 @@ func (p *Pool) Format(ctx context.Context, formatterID string, alerts []*alts.Al
 	groups := make([]routeGroup, 0)
 	groupIndexByBucket := make(map[uint32]int)
 	for i, alert := range alerts {
-		rolloutKey := pools.TenantRolloutKey(alert.Event["tenant_id"])
+		rolloutKey := pools.NormalizeRolloutKey(alert.Event["tenant_id"])
 		bucket := pools.RolloutBucket(rolloutKey)
 		groupIndex, ok := groupIndexByBucket[bucket]
 		if !ok {

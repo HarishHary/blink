@@ -43,7 +43,7 @@ func (p *Pool) Evaluate(ctx context.Context, ruleID string, events []evts.Event)
 	groups := make([]routeGroup, 0)
 	groupIndexByBucket := make(map[uint32]int)
 	for i, event := range events {
-		rolloutKey := pools.TenantRolloutKey(event["tenant_id"])
+		rolloutKey := pools.NormalizeRolloutKey(event["tenant_id"])
 		bucket := pools.RolloutBucket(rolloutKey)
 		groupIndex, ok := groupIndexByBucket[bucket]
 		if !ok {
