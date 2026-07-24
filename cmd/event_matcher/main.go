@@ -16,16 +16,13 @@ import (
 	"github.com/harishhary/blink/pkg/rules"
 )
 
-// config is everything event_matcher needs. Required fields fail fast at load.
-// Rule rollout comes from the rule snapshot (RuleSnapshotTopic) - there is no RULE_CONFIG_DIR.
-// The embedded matcher.Config carries the service's topic fields; the snapshot topics and
-// plugin dir wire the control plane here in main. Broker is injected post-load.
+// config is everything event_matcher needs. See docs/services/event_matcher.md.
 type config struct {
 	services.Common
 	matcher.Config
-	MatcherSnapshotTopic string `env:"KAFKA_TOPIC_MATCHER_SNAPSHOT"`
-	RuleSnapshotTopic    string `env:"KAFKA_TOPIC_RULE_SNAPSHOT"`
-	MatcherPluginDir     string `env:"MATCHER_PLUGIN_DIR"`
+	MatcherSnapshotTopic  string `env:"KAFKA_TOPIC_MATCHER_SNAPSHOT"`
+	ExecutorSnapshotTopic string `env:"KAFKA_TOPIC_EXECUTOR_SNAPSHOT"`
+	MatcherPluginDir      string `env:"MATCHER_PLUGIN_DIR"`
 }
 
 func main() {
@@ -45,7 +42,7 @@ func main() {
 	matcherSnapSvc := services.NewManagedService("matcher-snapshot-sync", matcherSnap)
 
 	// Rule snapshot: the sole source of rule config in the data plane
-	ruleSnap := controller.NewSnapshotReader(rootLogger.With("component", "rule_snapshot"), b.NewBroadcastReader(cfg.RuleSnapshotTopic))
+	ruleSnap := controller.NewSnapshotReader(rootLogger.With("component", "rule_snapshot"), b.NewBroadcastReader(cfg.ExecutorSnapshotTopic))
 	ruleSnapSvc := services.NewManagedService("rule-snapshot-sync", ruleSnap)
 
 	// Matcher Plugin Executor: runs the matcher plugins based on the matcher snapshot
@@ -63,7 +60,6 @@ func main() {
 	event_matcherSvc := matcher.NewService(rootLogger.With("component", "service"), cfg.Config, matcherPool, ruleCfg)
 
 	// Readiness: ready only once both control-plane inputs have primaries.
-	// FIXME: Wait for the pluginExecutor to be ready as well
 	go services.ServeHealth(":8080", ready)
 
 	runner := services.New()

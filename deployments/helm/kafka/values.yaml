@@ -8,38 +8,19 @@ kafka:
     storage:
       size: 100Gi
 
-logTypeDefaults:
-  matcher:
-    partitions: 6
-    replicas: 1
-    config:
-      retention.ms: "86400000"
-  executor:
-    partitions: 12
-    replicas: 1
-    config:
-      retention.ms: "3600000"
-
-# Enabled log types come from global.logTypes. Override topic settings per type here.
-logTypeOverrides: {}
-
-# Shared-stage topic capacity. Topology and names come from global.sharedStages.
-sharedStageDefaults:
+# Topic capacity shared by every data-plane stage.
+topicDefaults:
   primary:
     partitions: 6
     replicas: 1
     config:
-      retention.ms: "3600000"
+      retention.ms: "86400000"
   dlq:
-    partitions: 3
+    partitions: 6
     replicas: 1
     config:
       retention.ms: "86400000"
-
-sharedStageOverrides: {}
-
-snapshotTopic:
-  partitions: 1
-  replicas: 1
-  config:
-    cleanup.policy: compact
+  snapshot:
+    replicas: 1
+    config:
+      cleanup.policy: compact

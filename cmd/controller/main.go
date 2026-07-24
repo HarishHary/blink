@@ -23,21 +23,19 @@ import (
 
 type controllerConfig struct {
 	services.Common
-	RuleSnapshotTopic       string `env:"KAFKA_TOPIC_RULE_SNAPSHOT"`
-	MatcherSnapshotTopic    string `env:"KAFKA_TOPIC_MATCHER_SNAPSHOT"`
-	TuningSnapshotTopic     string `env:"KAFKA_TOPIC_TUNING_SNAPSHOT"`
-	FormatterSnapshotTopic  string `env:"KAFKA_TOPIC_FORMATTER_SNAPSHOT"`
-	EnrichmentSnapshotTopic string `env:"KAFKA_TOPIC_ENRICHMENT_SNAPSHOT"`
-	RulePluginDir           string `env:"RULE_PLUGIN_DIR"`
-	MatcherPluginDir        string `env:"MATCHER_PLUGIN_DIR"`
-	TuningPluginDir         string `env:"TUNER_PLUGIN_DIR"`
-	FormatterPluginDir      string `env:"FORMATTER_PLUGIN_DIR"`
-	EnrichmentPluginDir     string `env:"ENRICHER_PLUGIN_DIR"`
+	ExecutorSnapshotTopic  string `env:"KAFKA_TOPIC_EXECUTOR_SNAPSHOT"`
+	MatcherSnapshotTopic   string `env:"KAFKA_TOPIC_MATCHER_SNAPSHOT"`
+	TunerSnapshotTopic     string `env:"KAFKA_TOPIC_TUNER_SNAPSHOT"`
+	FormatterSnapshotTopic string `env:"KAFKA_TOPIC_FORMATTER_SNAPSHOT"`
+	EnricherSnapshotTopic  string `env:"KAFKA_TOPIC_ENRICHER_SNAPSHOT"`
+	RulePluginDir          string `env:"RULE_PLUGIN_DIR"`
+	MatcherPluginDir       string `env:"MATCHER_PLUGIN_DIR"`
+	TuningPluginDir        string `env:"TUNER_PLUGIN_DIR"`
+	FormatterPluginDir     string `env:"FORMATTER_PLUGIN_DIR"`
+	EnrichmentPluginDir    string `env:"ENRICHER_PLUGIN_DIR"`
 }
 
-// controller is the unified control plane: one PluginController per plugin type, each
-// reconciling its own plugin dir + YAML and publishing its effective Snapshot to its own
-// topic.
+// main runs the control plane: one PluginController per plugin type. See docs/services/controller.md.
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -49,17 +47,16 @@ func main() {
 	b := brokers.NewKafkaBroker(cfg.Kafka)
 	rootLogger := logger.New("controller", cfg.Env)
 
-	// Control-plane persistence shared by every type. NewNop is the no-op default;
-	// swap for a real store (SQLite/Postgres) when persistence is needed.
+	// Shared control-plane store; NewNop is the no-op default (swap for SQLite/Postgres).
 	db := backends.NewNop()
 
 	runner := services.New()
 
-	addController(rootLogger, "rule", cfg.RulePluginDir, runner, db, rules.Loader{}, b.NewWriter(cfg.RuleSnapshotTopic))
+	addController(rootLogger, "rule", cfg.RulePluginDir, runner, db, rules.Loader{}, b.NewWriter(cfg.ExecutorSnapshotTopic))
 	addController(rootLogger, "matcher", cfg.MatcherPluginDir, runner, db, matchers.Loader{}, b.NewWriter(cfg.MatcherSnapshotTopic))
-	addController(rootLogger, "tuning", cfg.TuningPluginDir, runner, db, tuning_rules.Loader{}, b.NewWriter(cfg.TuningSnapshotTopic))
+	addController(rootLogger, "tuning", cfg.TuningPluginDir, runner, db, tuning_rules.Loader{}, b.NewWriter(cfg.TunerSnapshotTopic))
 	addController(rootLogger, "formatter", cfg.FormatterPluginDir, runner, db, formatters.Loader{}, b.NewWriter(cfg.FormatterSnapshotTopic))
-	addController(rootLogger, "enrichment", cfg.EnrichmentPluginDir, runner, db, enrichments.Loader{}, b.NewWriter(cfg.EnrichmentSnapshotTopic))
+	addController(rootLogger, "enrichment", cfg.EnrichmentPluginDir, runner, db, enrichments.Loader{}, b.NewWriter(cfg.EnricherSnapshotTopic))
 
 	go services.ServeHealth(":8080", nil)
 
@@ -67,9 +64,7 @@ func main() {
 	log.Println("Shutting down controller")
 }
 
-// addController wires a LocalReader + PluginController for one plugin type and registers both as
-// services: the reader watches dir and exposes the parsed catalog; the controller reconciles it
-// against Postgres and publishes. loader parses one YAML sidecar into T.
+// addController registers a LocalReader + PluginController for one plugin type. See docs/services/controller.md.
 func addController[T plugin.Syncable](
 	rootLogger *logger.Logger,
 	name string,

@@ -70,82 +70,145 @@ its defaults reference `localhost` images with `image.pullPolicy=Never` for Mini
 For a registry-based cluster, override `image.registry`, `image.tag`, and
 `image.pullPolicy`.
 
-The Kafka chart creates the controller prerequisites: `rule-snapshot-topic`,
-`matcher-snapshot-topic`, `tuning-snapshot-topic`, `formatter-snapshot-topic`, and
-`enrichment-snapshot-topic`. Each has one partition and `cleanup.policy: compact`.
+The Kafka chart creates the controller prerequisites declared as `topic.snapshot`
+on each plugin stage. Names default to `<workload>-snapshot-topic`; shared
+capacity defaults provide the replication factor and `cleanup.policy: compact`.
+Snapshot topics are always rendered with one partition.
 
 ### Shared-stage topology and names
 
-`global.sharedStages` in `deployments/helm/values.yaml` is the canonical topology
+`global.stages` in `deployments/helm/values.yaml` is the canonical topology
 for the shared alert pipeline. Every chart must receive that same values file. Its
-stage key derives the primary topic as `<stage>-topic` and consumer group as
-`<stage>-group`; `workload` supplies the Deployment and Service name.
+`workload.name` supplies the Deployment and Service name. Each workload declares its
+own Kafka bindings under `workload.environment` using matching
+`kafka_topic_<stage>` and `kafka_group_<stage>` keys. Their default values follow
+the `<workload>-topic` and `<workload>-group` naming convention.
 
-| Stage        | Deployment         | Topic / group                           | DLQ (`withDLQ`)       | ScaledObject (`withScaler`) |
-| ------------ | ------------------ | --------------------------------------- | --------------------- | --------------------------- |
-| `merger`     | `alert-merger`     | `merger-topic` / `merger-group`         | disabled              | disabled                    |
-| `tuner`      | `rule-tuner`       | `tuner-topic` / `tuner-group`           | `tuner-dlq-topic`     | `rule-tuner-scaler`         |
-| `enricher`   | `alert-enricher`   | `enricher-topic` / `enricher-group`     | `enricher-dlq-topic`  | `alert-enricher-scaler`     |
-| `formatter`  | `alert-formatter`  | `formatter-topic` / `formatter-group`   | `formatter-dlq-topic` | `alert-formatter-scaler`    |
-| `dispatcher` | `alert-dispatcher` | `dispatcher-topic` / `dispatcher-group` | disabled              | `alert-dispatcher-scaler`   |
+Put all service-specific environment variables, including only the Kafka topics,
+groups, snapshots, DLQs, and plugin directories that service consumes, under
+`workload.environment` using `snake_case` keys; the Blink chart uppercases each key
+(`kafka_topic_matcher` becomes `KAFKA_TOPIC_MATCHER`). The non-stage controller is configured separately under
+`global.controller.workload`, which supports the same capacity, resource, and
+environment overrides as stage workloads.
 
-`withDLQ: true` conditionally creates `<stage>-dlq-topic` and supplies its service
-configuration; `withScaler: true` conditionally creates `<workload>-scaler` for the
-stage's topic and group. Merger and dispatcher DLQs remain disabled pending runtime
-support. Do not enable either merely by creating a topic.
+The shared ConfigMap contains only the common Kafka broker address. Kafka and KEDA
+resolve a stage's primary topic and consumer group from that stage's workload
+environment, keeping the runtime and infrastructure values identical.
 
-For the default `application` log type, the derived Deployments are
-`event-matcher-application` and `rule-executor-application`; their topics/groups are
-`matcher-application-topic` / `matcher-application-group` and
-`exec-application-topic` / `exec-application-group`, with ScaledObjects
-`event-matcher-application-scaler` and `rule-executor-application-scaler`.
+| Stage        | Deployment         | Topic / group                                       | DLQ                         | ScaledObject              |
+| ------------ | ------------------ | --------------------------------------------------- | --------------------------- | ------------------------- |
+| `merger`     | `alert-merger`     | `alert-merger-topic` / `alert-merger-group`         | disabled                    | disabled                  |
+| `tuner`      | `rule-tuner`       | `rule-tuner-topic` / `rule-tuner-group`             | `rule-tuner-dlq-topic`      | `rule-tuner-scaler`       |
+| `enricher`   | `alert-enricher`   | `alert-enricher-topic` / `alert-enricher-group`     | `alert-enricher-dlq-topic`  | `alert-enricher-scaler`   |
+| `formatter`  | `alert-formatter`  | `alert-formatter-topic` / `alert-formatter-group`   | `alert-formatter-dlq-topic` | `alert-formatter-scaler`  |
+| `dispatcher` | `alert-dispatcher` | `alert-dispatcher-topic` / `alert-dispatcher-group` | disabled                    | `alert-dispatcher-scaler` |
+
+The presence of `topic.dlq` creates the resolved DLQ and supplies its service
+configuration; the presence of `scaler` conditionally creates `<workload>-scaler`
+for the stage's topic and group. Scaler settings inherit the KEDA chart defaults,
+including `offsetResetPolicy: earliest`. Merger and dispatcher DLQs remain disabled
+pending runtime support. Do not enable either merely by creating a topic.
+Per-stage `topic` values override the Kafka chart's shared primary and DLQ
+capacity defaults.
+
+### Event pipeline topology
+
+All log sources use one shared matcher/executor lane. Producers publish events to
+`event-matcher-topic`; `event-matcher` selects matchers and rules from each event's
+`log_type`, publishes eligible events to `rule-executor-topic`, and sends exhausted failures
+to `event-matcher-dlq-topic`. `rule-executor` evaluates the routed rules and publishes
+alerts to the shared `alert-merger-topic`.
+
+| Stage          | Deployment / group                      | Topic                     |
+| -------------- | --------------------------------------- | ------------------------- |
+| Event matching | `event-matcher` / `event-matcher-group` | `event-matcher-topic`     |
+| Rule execution | `rule-executor` / `rule-executor-group` | `rule-executor-topic`     |
+| Matcher DLQ    | -                                       | `event-matcher-dlq-topic` |
+
+Matcher and executor pods do not use a deployment-level `LOG_TYPE`. The event's
+`log_type` selects the relevant rules from the shared snapshots, so adding a log source
+does not create another Kafka topic, consumer group, Deployment, or ScaledObject.
+
+### Event key
+
+Producers construct the event key once at ingress and set those exact bytes as the Kafka key:
+
+```text
+blink.event.pk|<tenant-bytes>:<tenant_id>,<log-type-bytes>:<log_type>,<kind-bytes>:<kind>,<origin-bytes>:<origin>,
+```
+
+Each length is a UTF-8 byte count, not a character count. `tenant_id` and `log_type` are required
+non-empty UTF-8 strings. Use literal `stream_id` and its value when `stream_id` is present; only
+when it is absent use literal `source_id` and its value. A present but invalid `stream_id` is an
+error, not a fallback to `source_id`. Test vector:
+
+```text
+{tenant_id: "acme", log_type: "cloud", stream_id: "stream-7"}
+blink.event.pk|4:acme,5:cloud,9:stream_id,8:stream-7,
+```
+
+The UTF-8 test vector with `tenant_id` bytes `74c3a9`, `log_type` bytes `e697a5e5bf97`, and
+`stream_id` bytes `e6ba90` produces hex
+`626c696e6b2e6576656e742e706b7c333a74c3a92c363ae697a5e5bf972c393a73747265616d5f69642c333ae6ba902c`.
+Producers reject or quarantine missing, empty, non-string, or invalid-UTF-8 required components;
+they never emit a partial or sentinel key. The matcher preserves the supplied key byte-for-byte
+on executor and matcher-DLQ writes.
+
+Blink's current Kafka writer uses the FNV-1a `kafka.Hash` balancer. Equal non-nil key bytes retain
+ordering and select the same partition only within one topic. Do not claim equal numeric partitions
+across topics: topics are independently partitioned and may have different partition counts.
+Increasing a topic's partition count remaps some existing keys, breaking their prior partition
+ordering; resize an active topic only when that remapping is acceptable. Keep each stage's replica
+and KEDA maximum at or below its topic partition count.
 
 ### Add a log type
 
-`global.logTypes` in `deployments/helm/values.yaml` is the canonical map of enabled
-log types; add `cloudtrail: {}` there once, then render or install every chart with
-that shared values file. Chart-local `logTypeOverrides` only tune chart-specific
-behavior for an already enabled key: Kafka topic capacity/retention, Blink workload
-resources/tuning, or KEDA scaler thresholds/replica bounds.
+Adding a log type does not change the deployment topology:
 
-For `cloudtrail`, the no-prefix naming contract derives the `event-matcher-cloudtrail`
-and `rule-executor-cloudtrail` Deployments, matcher topic/group
-`matcher-cloudtrail-topic` / `matcher-cloudtrail-group`, executor topic/group
-`exec-cloudtrail-topic` / `exec-cloudtrail-group`, and matching `-scaler` names.
+1. Ensure producers set the event's `log_type` and the standard Kafka key.
+2. Add or update the matcher and rule sidecars that support that `log_type`.
+3. Deploy the plugin artifacts and let the controller publish the updated snapshots.
 
 ## Pipeline flow
 
 ```mermaid
 flowchart LR
-    subgraph application[application log type]
-        appMatcherTopic([matcher-application-topic<br/>Kafka topic]) --> appMatcher[event-matcher-application<br/>Deployment]
-        appMatcher --> appExecutorTopic([exec-application-topic<br/>Kafka topic]) --> appExecutor[rule-executor-application<br/>Deployment]
-    end
-
-    subgraph authentication[authentication log type]
-        authMatcherTopic([matcher-authentication-topic<br/>Kafka topic]) --> authMatcher[event-matcher-authentication<br/>Deployment]
-        authMatcher --> authExecutorTopic([exec-authentication-topic<br/>Kafka topic]) --> authExecutor[rule-executor-authentication<br/>Deployment]
-    end
-
-    appExecutor --> mergerTopic([merger-topic<br/>Kafka topic])
-    authExecutor --> mergerTopic
-    otherLogTypes[Each other configured log type<br/>same matcher/executor branch] --> mergerTopic
-
-    mergerTopic --> merger[alert-merger<br/>Deployment] --> tunerTopic([tuner-topic<br/>Kafka topic])
-    tunerTopic --> tuner[rule-tuner<br/>Deployment] --> enricherTopic([enricher-topic<br/>Kafka topic])
-    enricherTopic --> enricher[alert-enricher<br/>Deployment] --> formatterTopic([formatter-topic<br/>Kafka topic])
-    formatterTopic --> formatter[alert-formatter<br/>Deployment] --> dispatcherTopic([dispatcher-topic<br/>Kafka topic])
+    producers[All log sources] --> eventTopic([event-matcher-topic<br/>Kafka topic])
+    eventTopic --> matcher[event-matcher<br/>Deployment]
+    matcher --> execTopic([rule-executor-topic<br/>Kafka topic]) --> executor[rule-executor<br/>Deployment]
+    matcher -. exhausted record .-> matcherDLQ([event-matcher-dlq-topic<br/>Kafka topic])
+    executor --> mergerTopic([alert-merger-topic<br/>Kafka topic])
+    mergerTopic --> merger[alert-merger<br/>Deployment] --> tunerTopic([rule-tuner-topic<br/>Kafka topic])
+    tunerTopic --> tuner[rule-tuner<br/>Deployment] --> enricherTopic([alert-enricher-topic<br/>Kafka topic])
+    enricherTopic --> enricher[alert-enricher<br/>Deployment] --> formatterTopic([alert-formatter-topic<br/>Kafka topic])
+    formatterTopic --> formatter[alert-formatter<br/>Deployment] --> dispatcherTopic([alert-dispatcher-topic<br/>Kafka topic])
     dispatcherTopic --> dispatcher[alert-dispatcher<br/>Deployment]
 
     classDef topic fill:#e8f1ff,stroke:#1a73e8,color:#000
     classDef deployment fill:#e6f4ea,stroke:#188038,color:#000
-    class appMatcherTopic,appExecutorTopic,authMatcherTopic,authExecutorTopic,mergerTopic,tunerTopic,enricherTopic,formatterTopic,dispatcherTopic topic
-    class appMatcher,appExecutor,authMatcher,authExecutor,merger,tuner,enricher,formatter,dispatcher deployment
+    class eventTopic,execTopic,matcherDLQ,mergerTopic,tunerTopic,enricherTopic,formatterTopic,dispatcherTopic topic
+    class matcher,executor,merger,tuner,enricher,formatter,dispatcher deployment
 ```
 
-Every configured log type creates the same branch: matcher Kafka topic →
-event-matcher Deployment → executor Kafka topic → rule-executor Deployment. Each
-per-log-type executor branch fans in to the single shared `merger-topic`.
+The shared matcher and executor deployments handle every log source. Stateful alert
+processing remains in the shared downstream stages.
+
+The matcher and executor acknowledge input offsets only after synchronous Kafka output writes
+(`RequireAll`) succeed. This yields at-least-once delivery: an output acknowledged before a later
+offset-commit failure can be written again after replay. `event_matcher` writes malformed records
+and exhausted matcher failures to `KAFKA_TOPIC_MATCHER_DLQ` using the protobuf
+`dlq.DLQEnvelope`, which retains source topic/partition/offset, original payload, stage, reason,
+attempts, and timestamp; the original key remains Kafka message metadata. These failures are
+terminal per record. Only shutdown cancellation leaves the whole fetched batch uncommitted.
+Before opening its grouped reader, the matcher waits for both
+snapshot readers to drain and for non-empty parsed primary matcher and rule catalogs; disabled
+primaries count, but candidate-only catalogs do not. This startup gate does not prove a controller
+heartbeat/freshness or stop an already-running reader if either catalog later becomes empty. The
+executor waits only for its rule snapshot reader to drain before opening its grouped reader, then
+commits only after all rule evaluations and alert writes for the batch succeed.
+Kafka readers wait on the caller context for a first record, use `MinBytes=1`, then give a partial
+batch one absolute 100 ms linger window; this avoids low-volume batch stalls without extending the
+deadline for each later record.
 
 ## Plugin binaries
 

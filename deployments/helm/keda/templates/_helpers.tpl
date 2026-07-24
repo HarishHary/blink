@@ -1,58 +1,16 @@
-{{/* Merge per-log-type scaler overrides with chart defaults. */}}
-{{- define "keda.logTypeConfig" -}}
-{{- toYaml (mergeOverwrite (deepCopy .root.Values.logTypeDefaults) (.overrides | default dict)) -}}
-{{- end }}
-
-{{- define "keda.sharedStage" -}}
+{{- define "keda.stage" -}}
 {{- $global := .root.Values.global | default dict -}}
-{{- $sharedStages := required "global.sharedStages is required; pass deployments/helm/values.yaml" (get $global "sharedStages") -}}
-{{- toYaml (required (printf "global.sharedStages.%s is required" .stage) (get $sharedStages .stage)) -}}
+{{- $stages := required "global.stages is required; pass deployments/helm/values.yaml" (get $global "stages") -}}
+{{- $stage := deepCopy (required (printf "global.stages.%s is required" .stage) (get $stages .stage)) -}}
+{{- $workload := required (printf "global.stages.%s.workload is required" .stage) (get $stage "workload") -}}
+{{- $workloadName := required (printf "global.stages.%s.workload.name is required" .stage) (get $workload "name") -}}
+{{- $environment := get $workload "environment" | default dict -}}
+{{- $envName := .stage | replace "-" "_" -}}
+{{- $topicName := required (printf "global.stages.%s.workload.environment.kafka_topic_%s is required" .stage $envName) (get $environment (printf "kafka_topic_%s" $envName)) -}}
+{{- $consumerGroup := required (printf "global.stages.%s.workload.environment.kafka_group_%s is required" .stage $envName) (get $environment (printf "kafka_group_%s" $envName)) -}}
+{{- toYaml (mergeOverwrite $stage (dict "workloadName" $workloadName "topicName" $topicName "consumerGroup" $consumerGroup)) -}}
 {{- end }}
 
-{{- define "keda.sharedStageConfig" -}}
-{{- toYaml (mergeOverwrite (deepCopy (.root.Values.sharedStageDefaults | default dict)) (.overrides | default dict)) -}}
-{{- end }}
-
-{{- define "keda.stageTopic" -}}
-{{- printf "%s-topic" . -}}
-{{- end }}
-
-{{- define "keda.stageGroup" -}}
-{{- printf "%s-group" . -}}
-{{- end }}
-
-{{- define "keda.scalerName" -}}
-{{- printf "%s-scaler" . -}}
-{{- end }}
-
-{{- define "keda.matcherName" -}}
-{{- printf "event-matcher-%s" . -}}
-{{- end }}
-
-{{- define "keda.executorName" -}}
-{{- printf "rule-executor-%s" . -}}
-{{- end }}
-
-{{- define "keda.matcherTopic" -}}
-{{- printf "matcher-%s-topic" . -}}
-{{- end }}
-
-{{- define "keda.executorTopic" -}}
-{{- printf "exec-%s-topic" . -}}
-{{- end }}
-
-{{- define "keda.matcherGroup" -}}
-{{- printf "matcher-%s-group" . -}}
-{{- end }}
-
-{{- define "keda.executorGroup" -}}
-{{- printf "exec-%s-group" . -}}
-{{- end }}
-
-{{- define "keda.matcherScalerName" -}}
-{{- printf "event-matcher-%s-scaler" . -}}
-{{- end }}
-
-{{- define "keda.executorScalerName" -}}
-{{- printf "rule-executor-%s-scaler" . -}}
+{{- define "keda.scalerConfig" -}}
+{{- toYaml (mergeOverwrite (deepCopy (.root.Values.scalerDefaults | default dict)) (.overrides | default dict)) -}}
 {{- end }}

@@ -47,14 +47,12 @@ type Service struct {
 	sem        *semaphore.Weighted // bounds parallel Pool.Match calls to MATCHER_CONCURRENCY
 }
 
-// Config is the explicit set of dependencies NewService needs, injected by main.
-// Config's topic fields are populated from the environment by main (which embeds it);
-// Broker is injected after load.
+// Config is the set of dependencies NewService needs, injected by main. See docs/services/event_matcher.md.
 type Config struct {
 	Broker       brokers.Broker
-	EventTopic   string `env:"KAFKA_TOPIC_EVENT"`
-	MatcherGroup string `env:"KAFKA_GROUP_EVENT_MATCHER"`
-	ExecTopic    string `env:"KAFKA_TOPIC_EXEC"`
+	EventTopic   string `env:"KAFKA_TOPIC_MATCHER"`
+	MatcherGroup string `env:"KAFKA_GROUP_MATCHER"`
+	ExecTopic    string `env:"KAFKA_TOPIC_EXECUTOR"`
 	DLQTopic     string `env:"KAFKA_TOPIC_MATCHER_DLQ"`
 	// Ready gates grouped-consumer creation until matcher and rule snapshots catch up.
 	Ready func() bool
@@ -190,8 +188,7 @@ func (s *Service) processBatch(batchCtx context.Context, msgs []brokers.Message)
 		return err
 	}
 	s.evaluateMatchers(batchCtx, states)
-	// Shutdown is the only reason evaluation leaves states unresolved; bail
-	// without committing so the batch is redelivered.
+	// Shutdown is the only reason states stay unresolved; bail so the batch is redelivered.
 	if batchCtx.Err() != nil {
 		return errors.NewE(batchCtx.Err())
 	}
@@ -201,9 +198,7 @@ func (s *Service) processBatch(batchCtx context.Context, msgs []brokers.Message)
 	return s.publishTerminals(batchCtx, states)
 }
 
-// decodeStates decodes every input into an ordered state. Invalid records become
-// prepared DLQ records immediately, but nothing is published until all states are
-// terminal.
+// decodeStates decodes every input into an ordered state; invalid records become prepared DLQ records.
 func (s *Service) decodeStates(msgs []brokers.Message) ([]*eventState, errors.Error) {
 	allRules := s.ruleCfg.Primaries()
 	states := make([]*eventState, len(msgs))
@@ -249,9 +244,7 @@ func (s *Service) decodeStates(msgs []brokers.Message) ([]*eventState, errors.Er
 	return states, nil
 }
 
-// groupByMatcher collects, per matcher, the pending states that need it along
-// with the rule IDs that depend on the outcome. Each state contributes at most
-// one item per matcher, in fetched order.
+// groupByMatcher collects, per matcher, the pending states and the rule IDs depending on its outcome.
 func groupByMatcher(states []*eventState) map[string][]routedItem {
 	byMatcher := make(map[string][]routedItem)
 	for i, s := range states {
@@ -271,10 +264,7 @@ func groupByMatcher(states []*eventState) map[string][]routedItem {
 	return byMatcher
 }
 
-// matcherRun coordinates one batch's concurrent matcher evaluation. Every
-// failure is per-event: retried up to MaxAttempts, then recorded so
-// prepareTerminals routes the event to the DLQ. Only batch context
-// cancellation (shutdown) stops evaluation early.
+// matcherRun coordinates one batch's concurrent matcher evaluation. See docs/services/event_matcher.md.
 type matcherRun struct {
 	service *Service
 	states  []*eventState
@@ -298,8 +288,7 @@ func (s *Service) evaluateMatchers(batchCtx context.Context, states []*eventStat
 	wg.Wait()
 }
 
-// errPendingRetries drives the backoff between attempts; per-item outcomes
-// live in run.states, never in the returned error.
+// errPendingRetries drives the backoff between attempts; outcomes live in run.states, not the error.
 var errPendingRetries = stderrors.New("matcher retries pending")
 
 // matchWithRetries owns one matcher's failed subset across attempts.
@@ -314,9 +303,7 @@ func (r *matcherRun) matchWithRetries(name string, pending []routedItem) {
 			return backoff.Permanent(errPendingRetries)
 		}
 
-		// Whole-call failures (missing plugin, call timeout, invalid shape) carry no
-		// per-item detail: fail every pending item for this attempt so the shared
-		// retry/DLQ path below owns them.
+		// Whole-call failures (missing plugin, call timeout, invalid shape) fail every pending item for this attempt.
 		callErr := result.CallErr
 		if callErr == nil && len(result.Items) != len(pending) {
 			callErr = errors.NewF("matcher %s returned invalid result shape", name)
@@ -443,9 +430,7 @@ func (s *Service) prepareTerminals(states []*eventState) errors.Error {
 	return nil
 }
 
-// publishTerminals publishes prepared bytes serially in fetched order. A failed
-// acknowledgement retries the same bytes indefinitely; matcher evaluation is
-// never repeated.
+// publishTerminals publishes prepared bytes serially in fetched order, retrying writes indefinitely.
 func (s *Service) publishTerminals(ctx context.Context, states []*eventState) errors.Error {
 	for _, state := range states {
 		if state.prepared == nil {
@@ -494,8 +479,7 @@ func (s *Service) prepareDLQ(source brokers.Message, stage, reason string, attem
 	}}, nil
 }
 
-// newBackoff returns the service's exponential retry policy (RetryBaseMS
-// initial, RetryCapMS interval cap, jittered), aborted when ctx ends.
+// newBackoff returns the service's exponential retry policy (RetryBaseMS initial, RetryCapMS cap, jittered).
 func (s *Service) newBackoff(ctx context.Context) backoff.BackOffContext {
 	b := backoff.NewExponentialBackOff()
 	b.InitialInterval = time.Duration(s.config.RetryBaseMS) * time.Millisecond

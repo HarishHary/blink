@@ -1,0 +1,79 @@
+{{- $stages := required "global.stages is required; pass deployments/helm/values.yaml" .Values.global.stages }}
+{{- $workloads := list }}
+{{- range $stageName, $_ := $stages }}
+{{- $stage := include "blink.stage" (dict "root" $ "stage" $stageName) | fromYaml }}
+{{- $config := include "blink.workloadConfig" (dict "root" $ "overrides" $stage.workload) | fromYaml }}
+{{- $plugins := true }}
+{{- if hasKey $stage.workload "plugins" }}{{- $plugins = $stage.workload.plugins }}{{- end }}
+{{- $workloads = append $workloads (dict "workload" $stage.workloadName "container" (default $stage.workloadName $stage.workload.container) "config" $config "plugins" $plugins) }}
+{{- end }}
+{{- $controller := required "global.controller is required; pass deployments/helm/values.yaml" .Values.global.controller }}
+{{- $controllerWorkload := required "global.controller.workload is required" $controller.workload }}
+{{- $controllerConfig := include "blink.workloadConfig" (dict "root" . "overrides" $controllerWorkload) | fromYaml }}
+{{- $controllerName := required "global.controller.workload.name is required" $controllerWorkload.name }}
+{{- $workloads = append $workloads (dict "workload" $controllerName "container" (default $controllerName $controllerWorkload.container) "config" $controllerConfig "plugins" true) }}
+{{- range $item := $workloads }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $item.workload }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    app: {{ $item.workload }}
+    {{- include "blink.labels" $ | nindent 4 }}
+spec:
+  replicas: {{ $item.config.replicas }}
+  selector:
+    matchLabels:
+      app: {{ $item.workload }}
+  template:
+    metadata:
+      labels:
+        app: {{ $item.workload }}
+    spec:
+      containers:
+        - name: {{ $item.container }}
+          image: {{ include "blink.image" (dict "registry" $.Values.image.registry "name" (printf "blink-%s" $item.container) "tag" $.Values.image.tag) }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          command: [{{ printf "/bin/blink-%s" $item.container | quote }}]
+          envFrom:
+            {{- include "blink.envFrom" $ | nindent 12 }}
+          env:
+            - name: APP_NAME
+              value: {{ $item.container | quote }}
+{{ range $name, $value := $item.config.environment }}
+            - name: {{ $name | upper }}
+              value: {{ $value | quote }}
+{{ end }}
+          ports:
+            - name: http
+              containerPort: 8080
+          {{- include "blink.probes" $ | nindent 10 }}
+{{ if $item.plugins }}
+          volumeMounts:
+            {{- include "blink.pluginVolumeMount" $ | nindent 12 }}
+{{ end }}
+          resources:
+            {{- toYaml $item.config.resources | nindent 12 }}
+{{ if $item.plugins }}
+      volumes:
+        {{- include "blink.pluginVolume" $ | nindent 8 }}
+{{ end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $item.workload }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    app: {{ $item.workload }}
+    {{- include "blink.labels" $ | nindent 4 }}
+spec:
+  selector:
+    app: {{ $item.workload }}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+{{- end }}
