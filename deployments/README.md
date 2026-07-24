@@ -71,9 +71,11 @@ For a registry-based cluster, override `image.registry`, `image.tag`, and
 `image.pullPolicy`.
 
 The Kafka chart creates the controller prerequisites declared as `topic.snapshot`
-on each plugin stage. Names default to `<workload>-snapshot-topic`; shared
-capacity defaults provide the replication factor and `cleanup.policy: compact`.
-Snapshot topics are always rendered with one partition.
+on each plugin stage. Each name comes from that workload's
+`kafka_topic_<stage>_snapshot` environment entry; the checked-in values follow the
+`<workload>-snapshot-topic` convention. Shared capacity defaults provide the
+replication factor and `cleanup.policy: compact`. Snapshot topics are always
+rendered with one partition.
 
 ### Shared-stage topology and names
 
@@ -81,8 +83,9 @@ Snapshot topics are always rendered with one partition.
 for the shared alert pipeline. Every chart must receive that same values file. Its
 `workload.name` supplies the Deployment and Service name. Each workload declares its
 own Kafka bindings under `workload.environment` using matching
-`kafka_topic_<stage>` and `kafka_group_<stage>` keys. Their default values follow
-the `<workload>-topic` and `<workload>-group` naming convention.
+`kafka_topic_<stage>` and `kafka_group_<stage>` keys. Their checked-in values follow
+the `<workload>-topic` and `<workload>-group` naming convention; these are explicit
+values, not names inferred by the templates.
 
 Put all service-specific environment variables, including only the Kafka topics,
 groups, snapshots, DLQs, and plugin directories that service consumes, under
@@ -103,11 +106,12 @@ environment, keeping the runtime and infrastructure values identical.
 | `formatter`  | `alert-formatter`  | `alert-formatter-topic` / `alert-formatter-group`   | `alert-formatter-dlq-topic` | `alert-formatter-scaler`  |
 | `dispatcher` | `alert-dispatcher` | `alert-dispatcher-topic` / `alert-dispatcher-group` | disabled                    | `alert-dispatcher-scaler` |
 
-The presence of `topic.dlq` creates the resolved DLQ and supplies its service
-configuration; the presence of `scaler` conditionally creates `<workload>-scaler`
-for the stage's topic and group. Scaler settings inherit the KEDA chart defaults,
-including `offsetResetPolicy: earliest`. Merger and dispatcher DLQs remain disabled
-pending runtime support. Do not enable either merely by creating a topic.
+The presence of `topic.dlq` creates the DLQ named by the matching
+`kafka_topic_<stage>_dlq` workload environment entry. The presence of `scaler`
+conditionally creates `<workload>-scaler` for the stage's environment-defined topic
+and group. Scaler settings inherit the KEDA chart defaults, including
+`offsetResetPolicy: earliest`. Merger and dispatcher DLQs remain disabled pending
+runtime support. Do not enable either merely by creating a topic.
 Per-stage `topic` values override the Kafka chart's shared primary and DLQ
 capacity defaults.
 

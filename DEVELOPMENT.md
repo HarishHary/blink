@@ -72,10 +72,13 @@ for the Strimzi and KEDA operator prerequisites, chart validation, and install s
 Install the independent Helm charts in order: `deployments/helm/kafka`, then
 `deployments/helm/blink`, then `deployments/helm/keda`; every chart command passes
 `-f deployments/helm/values.yaml`, where the shared alert-stage topology
-(`global.stages`) is defined once. `withDLQ` conditionally creates a
-stage DLQ and `withScaler` conditionally creates its KEDA ScaledObject; merger and
-dispatcher DLQs remain disabled pending runtime support. See the derived names and
-the canonical commands in [deployments/README.md](deployments/README.md).
+(`global.stages`) is defined once. Each stage declares its own topic, group, DLQ,
+snapshot, and plugin variables under `workload.environment`; Kafka and KEDA read
+the stage's `kafka_topic_<stage>` and `kafka_group_<stage>` entries from the same
+map. The presence of `topic.dlq` creates a DLQ, while the presence of `scaler`
+creates its KEDA ScaledObject. Merger and dispatcher DLQs remain disabled pending
+runtime support. See the canonical values and commands in
+[deployments/README.md](deployments/README.md).
 
 ## IDEs & Dev Containers
 

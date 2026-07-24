@@ -85,7 +85,7 @@ Detection content is production software. Blink's development and deployment pro
 - Race detection, `go vet`, and Staticcheck validate concurrency and code quality.
 - Helm linting and rendering validate Kubernetes deployment changes.
 - Blue-green, canary, and shadow modes separate plugin rollout from service deployment.
-- Helm charts provide Kafka, Blink service, and KEDA autoscaling configuration, including migration paths between deployment topologies.
+- Helm charts provide Kafka, Blink service, and KEDA autoscaling configuration from one shared stage topology with workload-specific runtime bindings.
 
 See [`DEVELOPMENT.md`](DEVELOPMENT.md) for local validation and [`deployments/README.md`](deployments/README.md) for Kubernetes deployment.
 
