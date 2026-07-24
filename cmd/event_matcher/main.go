@@ -57,7 +57,7 @@ func main() {
 	// each has published at least one effective primary configuration.
 	readyToConsume := snapshotCatalogsReady(matcherSnap.Ready, ruleSnap.Ready, matcherCfg, ruleCfg)
 	cfg.Config.Ready = readyToConsume
-	event_matcherSvc := matcher.NewService(rootLogger.With("component", "service"), cfg.Config, matcherPool, ruleCfg)
+	event_matcherSvc := matcher.NewService(rootLogger.With("component", "service"), cfg.Config, matcherPool, ruleCfg, matcherCfg)
 
 	// The pod is ready once both control-plane inputs are synchronized. Consumption
 	// remains gated above until there are matcher and rule catalogs to process with.

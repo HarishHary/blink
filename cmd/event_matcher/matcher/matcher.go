@@ -42,7 +42,8 @@ type Service struct {
 	config     Config
 	execWriter brokers.Writer
 	dlqWriter  brokers.Writer
-	ruleCfg    *rules.SnapshotConfig // rule controller's snapshot - the rollout authority
+	ruleCfg    *rules.SnapshotConfig    // rule controller's snapshot - the rollout authority
+	matcherCfg *matchers.SnapshotConfig // matcher catalog - resolves rule matcher-name refs to logical ids
 	pool       *matchers.Pool
 	sem        *semaphore.Weighted // bounds parallel Pool.Match calls to MATCHER_CONCURRENCY
 }
@@ -68,7 +69,7 @@ type Config struct {
 	RetryCapMS int `env:"MATCHER_RETRY_CAP_MS,optional"`
 }
 
-func NewService(logger *logger.Logger, cfg Config, pool *matchers.Pool, ruleCfg *rules.SnapshotConfig) *Service {
+func NewService(logger *logger.Logger, cfg Config, pool *matchers.Pool, ruleCfg *rules.SnapshotConfig, matcherCfg *matchers.SnapshotConfig) *Service {
 	if cfg.Concurrency <= 0 {
 		cfg.Concurrency = 8
 	}
@@ -94,6 +95,7 @@ func NewService(logger *logger.Logger, cfg Config, pool *matchers.Pool, ruleCfg 
 		execWriter: cfg.Broker.NewWriter(cfg.ExecTopic),
 		dlqWriter:  cfg.Broker.NewWriter(cfg.DLQTopic),
 		ruleCfg:    ruleCfg,
+		matcherCfg: matcherCfg,
 		pool:       pool,
 		sem:        semaphore.NewWeighted(int64(cfg.Concurrency)),
 	}
@@ -117,6 +119,7 @@ func (s *Service) Run(ctx context.Context) errors.Error {
 		return nil
 	}
 
+	s.logger.Info("catalogs ready; consuming events (topic=%s group=%s)", s.config.EventTopic, s.config.MatcherGroup)
 	reader := s.config.Broker.NewReader(s.config.EventTopic, s.config.MatcherGroup)
 	defer func() {
 		if err := reader.Close(); err != nil {
@@ -244,8 +247,22 @@ func (s *Service) decodeStates(msgs []brokers.Message) ([]*eventState, errors.Er
 	return states, nil
 }
 
+// matcherID resolves a rule's matcher name reference (file stem) to the matcher's
+// stable logical id, which the pool routes by. Unknown names pass through unchanged
+// so the pool call fails with plugin-not-found -> retry -> DLQ, surfacing the gap.
+func (s *Service) matcherID(name string) string {
+	if s.matcherCfg == nil {
+		return name
+	}
+	if m, ok := s.matcherCfg.ByFileName(name); ok {
+		return m.Metadata().Id
+	}
+	return name
+}
+
 // groupByMatcher collects, per matcher, the pending states and the rule IDs depending on its outcome.
-func groupByMatcher(states []*eventState) map[string][]routedItem {
+// Rules reference matchers by name; matcherID maps each to the matcher's logical id (the pool's key).
+func (svc *Service) groupByMatcher(states []*eventState) map[string][]routedItem {
 	byMatcher := make(map[string][]routedItem)
 	for i, s := range states {
 		if s.prepared != nil {
@@ -254,11 +271,12 @@ func groupByMatcher(states []*eventState) map[string][]routedItem {
 		perMatcher := make(map[string][]string)
 		for _, r := range s.candidates {
 			for _, name := range r.Matchers {
-				perMatcher[name] = append(perMatcher[name], r.Id)
+				id := svc.matcherID(name)
+				perMatcher[id] = append(perMatcher[id], r.Id)
 			}
 		}
-		for name, ruleIDs := range perMatcher {
-			byMatcher[name] = append(byMatcher[name], routedItem{stateIdx: i, ruleIDs: ruleIDs})
+		for id, ruleIDs := range perMatcher {
+			byMatcher[id] = append(byMatcher[id], routedItem{stateIdx: i, ruleIDs: ruleIDs})
 		}
 	}
 	return byMatcher
@@ -280,9 +298,9 @@ func (s *Service) evaluateMatchers(batchCtx context.Context, states []*eventStat
 	}
 
 	var wg sync.WaitGroup
-	for name, items := range groupByMatcher(states) {
+	for id, items := range s.groupByMatcher(states) {
 		wg.Go(func() {
-			run.matchWithRetries(name, items)
+			run.matchWithRetries(id, items)
 		})
 	}
 	wg.Wait()
