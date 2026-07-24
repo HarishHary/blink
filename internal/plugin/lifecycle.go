@@ -123,8 +123,10 @@ func (m *PluginExecutor[T]) startWithBackoff(path, hash string) error {
 			delete(m.failures, path)
 			f = nil
 		} else if time.Now().Before(f.nextRetry) {
+			at := f.nextRetry
 			m.mu.Unlock()
-			m.logger.Info("%s %s start deferred (backoff, retry in %v)", m.adapter.PluginKey(), path, time.Until(f.nextRetry).Round(time.Second))
+			m.logger.Info("%s %s start deferred (backoff, retry in %v)", m.adapter.PluginKey(), path, time.Until(at).Round(time.Second))
+			m.scheduleRetry(at) // re-arm in case no wake-up is pending (e.g. an early-firing timer already consumed itself)
 			return nil
 		}
 	}
@@ -141,8 +143,10 @@ func (m *PluginExecutor[T]) startWithBackoff(path, hash string) error {
 		f.count++
 		backoff := min(time.Duration(10<<min(f.count-1, 5))*time.Second, 5*time.Minute) // 10s→320s, cap 5min
 		f.nextRetry = time.Now().Add(backoff)
+		at := f.nextRetry
 		m.mu.Unlock()
 		m.logger.ErrorF("%s %s start failed (attempt %d), next retry in %v", m.adapter.PluginKey(), path, f.count, backoff)
+		m.scheduleRetry(at)
 		return err
 	}
 
@@ -151,6 +155,33 @@ func (m *PluginExecutor[T]) startWithBackoff(path, hash string) error {
 	delete(m.failures, path)
 	m.mu.Unlock()
 	return nil
+}
+
+// scheduleRetry arms (or re-arms with an earlier deadline) ONE coalesced timer that
+// triggers a reconcile at the next backoff deadline, so a failed start recovers on
+// its own instead of waiting for an unrelated snapshot event.
+func (m *PluginExecutor[T]) scheduleRetry(at time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.retryTimer != nil && !at.Before(m.retryAt) {
+		return // an earlier-or-equal wake-up is already pending
+	}
+	if m.retryTimer != nil {
+		m.retryTimer.Stop()
+	}
+	m.retryAt = at
+	m.retryTimer = time.AfterFunc(time.Until(at), func() {
+		m.mu.Lock()
+		if m.retryTimer == nil {
+			m.mu.Unlock()
+			return // stopped by shutdown after this callback was already queued
+		}
+		m.retryTimer = nil
+		m.mu.Unlock()
+		if err := m.reconcile("retry"); err != nil {
+			m.logger.ErrorF("%s retry reconcile error: %v", m.adapter.PluginKey(), err)
+		}
+	})
 }
 
 // start spawns n workers and notifies the pool to register them.

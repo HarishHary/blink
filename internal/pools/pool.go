@@ -123,15 +123,14 @@ func (pp *ProcessPool[T]) Promote(pluginID string) {
 
 	var drainPool *VersionedPool[T]
 	var drainKey PoolKey
-	noOldPool := false
 	if hasOld && oldKey != p.key {
 		drainPool = pp.pools[oldKey]
 		drainKey = oldKey
-		noOldPool = drainPool == nil
 	}
 	pp.mu.Unlock()
 
 	// onDrained runs outside the lock: it may kill() (up to 3s on gRPC Shutdown), which would stall every Call().
+	// Old key present but pool already removed (drainPool == nil): skip onDrained entirely.
 	switch {
 	case drainPool != nil:
 		go pp.drain(drainKey, drainPool, p.onDrained)
@@ -140,8 +139,6 @@ func (pp *ProcessPool[T]) Promote(pluginID string) {
 		if p.onDrained != nil {
 			p.onDrained()
 		}
-	case noOldPool:
-		// Old key existed in active but pool was already removed - skip onDrained.
 	}
 }
 

@@ -56,11 +56,14 @@ func main() {
 
 	// Rule Config: to select rules for the event matcher based on the rule log type
 	ruleCfg := rules.NewSnapshotConfig(rootLogger.With("component", "rule_config"), ruleSnap)
+	// Gate consumption until both control-plane snapshots have caught up and
+	// each has published at least one effective primary configuration.
+	ready := snapshotCatalogsReady(matcherSnap.Ready, ruleSnap.Ready, matcherCfg, ruleCfg)
+	cfg.Config.Ready = ready
 	event_matcherSvc := matcher.NewService(rootLogger.With("component", "service"), cfg.Config, matcherPool, ruleCfg)
 
-	// Readiness: ready only once BOTH control-plane inputs have arrived
+	// Readiness: ready only once both control-plane inputs have primaries.
 	// FIXME: Wait for the pluginExecutor to be ready as well
-	ready := func() bool { return matcherSnap.Ready() && ruleSnap.Ready() }
 	go services.ServeHealth(":8080", ready)
 
 	runner := services.New()
@@ -72,4 +75,10 @@ func main() {
 	)
 	runner.Run(ctx)
 	log.Println("Shutting down event-matcher")
+}
+
+func snapshotCatalogsReady(matcherReady, ruleReady func() bool, matcherCfg *matchers.SnapshotConfig, ruleCfg *rules.SnapshotConfig) func() bool {
+	return func() bool {
+		return matcherReady() && ruleReady() && len(matcherCfg.Primaries()) > 0 && len(ruleCfg.Primaries()) > 0
+	}
 }
