@@ -57,6 +57,8 @@ type Config struct {
 	DLQTopic     string `env:"KAFKA_TOPIC_MATCHER_DLQ"`
 	// Ready gates grouped-consumer creation until matcher and rule snapshots catch up.
 	Ready func() bool
+	// BatchSize is the number of events to process in a single batch.
+	BatchSize int `env:"MATCHER_BATCH_SIZE,optional"`
 	// Concurrency is the maximum number of parallel matcher plugin calls.
 	Concurrency int `env:"MATCHER_CONCURRENCY,optional"`
 	// TimeoutSec bounds each matcher pool call in seconds.
@@ -70,6 +72,9 @@ type Config struct {
 }
 
 func NewService(logger *logger.Logger, cfg Config, pool *matchers.Pool, ruleCfg *rules.SnapshotConfig, matcherCfg *matchers.SnapshotConfig) *Service {
+	if cfg.BatchSize <= 0 {
+		cfg.BatchSize = 50
+	}
 	if cfg.Concurrency <= 0 {
 		cfg.Concurrency = 8
 	}
@@ -128,7 +133,7 @@ func (s *Service) Run(ctx context.Context) errors.Error {
 	}()
 
 	for {
-		msgs, err := reader.ReadBatch(ctx, 50)
+		msgs, err := reader.ReadBatch(ctx, s.config.BatchSize)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil

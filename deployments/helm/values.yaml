@@ -74,6 +74,7 @@ global:
           matcher_max_attempts: "3"
           matcher_retry_base_ms: "100"
           matcher_retry_cap_ms: "5000"
+          matcher_batch_size: "50"
       scaler: {}
       topic:
         dlq: {}
@@ -84,13 +85,17 @@ global:
         container: rule-executor
         environment:
           kafka_topic_executor: rule-executor-topic
+          kafka_topic_executor_dlq: rule-executor-dlq-topic
           kafka_group_executor: rule-executor-group
           kafka_topic_merger: alert-merger-topic
           kafka_topic_executor_snapshot: rule-executor-snapshot-topic
           rule_plugin_dir: /plugins/rules
           executor_batch_size: "50"
-          executor_concurrency: "4"
+          executor_concurrency: "8"
           executor_timeout_sec: "10"
+          executor_max_attempts: "3"
+          executor_retry_base_ms: "100"
+          executor_retry_cap_ms: "5000"
       scaler: {}
       topic:
         snapshot: {}
