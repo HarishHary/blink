@@ -1,34 +1,25 @@
-{{/* Merge per-log-type topic overrides with chart defaults. */}}
-{{- define "kafka.logTypeConfig" -}}
-{{- toYaml (mergeOverwrite (deepCopy .root.Values.logTypeDefaults) (.overrides | default dict)) -}}
-{{- end }}
-
-{{- define "kafka.sharedStage" -}}
+{{- define "kafka.stage" -}}
 {{- $global := .root.Values.global | default dict -}}
-{{- $sharedStages := required "global.sharedStages is required; pass deployments/helm/values.yaml" (get $global "sharedStages") -}}
-{{- toYaml (required (printf "global.sharedStages.%s is required" .stage) (get $sharedStages .stage)) -}}
+{{- $stages := required "global.stages is required; pass deployments/helm/values.yaml" (get $global "stages") -}}
+{{- $stage := deepCopy (required (printf "global.stages.%s is required" .stage) (get $stages .stage)) -}}
+{{- $workload := required (printf "global.stages.%s.workload is required" .stage) (get $stage "workload") -}}
+{{- $workloadName := required (printf "global.stages.%s.workload.name is required" .stage) (get $workload "name") -}}
+{{- $environment := get $workload "environment" | default dict -}}
+{{- $envName := .stage | replace "-" "_" -}}
+{{- $topic := get $stage "topic" | default dict -}}
+{{- $topicName := required (printf "global.stages.%s.workload.environment.kafka_topic_%s is required" .stage $envName) (get $environment (printf "kafka_topic_%s" $envName)) -}}
+{{- $consumerGroup := required (printf "global.stages.%s.workload.environment.kafka_group_%s is required" .stage $envName) (get $environment (printf "kafka_group_%s" $envName)) -}}
+{{- $dlqTopicName := "" -}}
+{{- if hasKey $topic "dlq" -}}
+{{- $dlqTopicName = required (printf "global.stages.%s.workload.environment.kafka_topic_%s_dlq is required" .stage $envName) (get $environment (printf "kafka_topic_%s_dlq" $envName)) -}}
+{{- end -}}
+{{- $snapshotTopicName := "" -}}
+{{- if hasKey $topic "snapshot" -}}
+{{- $snapshotTopicName = required (printf "global.stages.%s.workload.environment.kafka_topic_%s_snapshot is required" .stage $envName) (get $environment (printf "kafka_topic_%s_snapshot" $envName)) -}}
+{{- end -}}
+{{- toYaml (mergeOverwrite $stage (dict "workloadName" $workloadName "topicName" $topicName "consumerGroup" $consumerGroup "dlqTopicName" $dlqTopicName "withDLQ" (hasKey $topic "dlq") "snapshotTopicName" $snapshotTopicName "withSnapshot" (hasKey $topic "snapshot"))) -}}
 {{- end }}
 
-{{- define "kafka.sharedStageConfig" -}}
-{{- toYaml (mergeOverwrite (deepCopy (.root.Values.sharedStageDefaults | default dict)) (.overrides | default dict)) -}}
-{{- end }}
-
-{{- define "kafka.stageTopic" -}}
-{{- printf "%s-topic" . -}}
-{{- end }}
-
-{{- define "kafka.stageDLQTopic" -}}
-{{- printf "%s-dlq-topic" . -}}
-{{- end }}
-
-{{- define "kafka.snapshotTopic" -}}
-{{- printf "%s-snapshot-topic" . -}}
-{{- end }}
-
-{{- define "kafka.matcherTopic" -}}
-{{- printf "matcher-%s-topic" . -}}
-{{- end }}
-
-{{- define "kafka.executorTopic" -}}
-{{- printf "exec-%s-topic" . -}}
+{{- define "kafka.topic" -}}
+{{- toYaml (mergeOverwrite (deepCopy (.root.Values.topicDefaults | default dict)) (.overrides | default dict)) -}}
 {{- end }}

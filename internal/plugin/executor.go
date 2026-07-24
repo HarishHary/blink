@@ -34,6 +34,8 @@ type PluginExecutor[T Syncable] struct {
 	failures       map[string]*startFailure
 	restarting     map[string]struct{} // paths mid-restart; reconcile skips these to prevent double-start
 	pingInterval   time.Duration       // 0 → defaults to 15s; set before Start() for tests
+	retryTimer     *time.Timer         // coalesced wake-up for backoff retries; nil when none pending (guarded by mu)
+	retryAt        time.Time           // deadline of the pending retryTimer (guarded by mu)
 }
 
 // WithPingInterval overrides the default 15s health-check interval; call before Start() (mainly for tests).
@@ -81,6 +83,14 @@ func (m *PluginExecutor[T]) Start(ctx context.Context) error {
 					m.logger.ErrorF("%s reconcile error: %v", m.adapter.PluginKey(), err)
 				}
 			case <-ctx.Done():
+				// ponytail: a retry callback already past its nil-check may still run one
+				// reconcile after cancellation, consistent with the executor's loose shutdown.
+				m.mu.Lock()
+				if m.retryTimer != nil {
+					m.retryTimer.Stop()
+					m.retryTimer = nil
+				}
+				m.mu.Unlock()
 				return
 			}
 		}

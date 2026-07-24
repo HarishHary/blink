@@ -71,8 +71,8 @@ Local clusters run on Podman or Minikube. See **[deployments/README.md](deployme
 for the Strimzi and KEDA operator prerequisites, chart validation, and install sequence.
 Install the independent Helm charts in order: `deployments/helm/kafka`, then
 `deployments/helm/blink`, then `deployments/helm/keda`; every chart command passes
-`-f deployments/helm/values.yaml`, where `global.logTypes` and the shared alert-stage
-topology (`global.sharedStages`) are defined once. `withDLQ` conditionally creates a
+`-f deployments/helm/values.yaml`, where the shared alert-stage topology
+(`global.stages`) is defined once. `withDLQ` conditionally creates a
 stage DLQ and `withScaler` conditionally creates its KEDA ScaledObject; merger and
 dispatcher DLQs remain disabled pending runtime support. See the derived names and
 the canonical commands in [deployments/README.md](deployments/README.md).

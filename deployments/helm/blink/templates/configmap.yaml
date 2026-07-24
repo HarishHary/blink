@@ -1,8 +1,3 @@
-{{- $global := .Values.global | default dict }}
-{{- $sharedStages := required "global.sharedStages is required; pass deployments/helm/values.yaml" (get $global "sharedStages") }}
-{{- $tuner := include "blink.sharedStage" (dict "root" . "stage" "tuner") | fromYaml }}
-{{- $enricher := include "blink.sharedStage" (dict "root" . "stage" "enricher") | fromYaml }}
-{{- $formatter := include "blink.sharedStage" (dict "root" . "stage" "formatter") | fromYaml }}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -12,46 +7,7 @@ metadata:
   labels:
     {{- include "blink.labels" . | nindent 4 }}
 data:
-  APP_STACK_ENVIRONMENT: {{ .Values.config.appStackEnvironment | quote }}
-  TENANT:                {{ .Values.config.tenant | quote }}
-  DOMAIN:                {{ .Values.config.domain | quote }}
   KAFKA_BROKERS:         {{ .Values.kafka.brokers | quote }}
-
-  # Shared pipeline topics - downstream of the per-log-type executor stage.
-  KAFKA_TOPIC_MERGER:        {{ include "blink.stageTopic" "merger" | quote }}
-  KAFKA_GROUP_MERGER:        {{ include "blink.stageGroup" "merger" | quote }}
-  KAFKA_TOPIC_TUNER:         {{ include "blink.stageTopic" "tuner" | quote }}
-  KAFKA_GROUP_TUNER:         {{ include "blink.stageGroup" "tuner" | quote }}
-  {{- if $tuner.withDLQ }}
-  KAFKA_TOPIC_TUNER_DLQ:     {{ include "blink.stageDLQTopic" "tuner" | quote }}
-  {{- end }}
-  KAFKA_TOPIC_ENRICHER:      {{ include "blink.stageTopic" "enricher" | quote }}
-  KAFKA_GROUP_ENRICHER:      {{ include "blink.stageGroup" "enricher" | quote }}
-  {{- if $enricher.withDLQ }}
-  KAFKA_TOPIC_ENRICHER_DLQ:  {{ include "blink.stageDLQTopic" "enricher" | quote }}
-  {{- end }}
-  KAFKA_TOPIC_FORMATTER:     {{ include "blink.stageTopic" "formatter" | quote }}
-  KAFKA_GROUP_FORMATTER:     {{ include "blink.stageGroup" "formatter" | quote }}
-  {{- if $formatter.withDLQ }}
-  KAFKA_TOPIC_FORMATTER_DLQ: {{ include "blink.stageDLQTopic" "formatter" | quote }}
-  {{- end }}
-  KAFKA_TOPIC_DISPATCHER:    {{ include "blink.stageTopic" "dispatcher" | quote }}
-  KAFKA_GROUP_DISPATCHER:    {{ include "blink.stageGroup" "dispatcher" | quote }}
-
-  # Log-compacted plugin configuration snapshots published by the controller
-  KAFKA_TOPIC_RULE_SNAPSHOT:       {{ include "blink.snapshotTopic" "rule" | quote }}
-  KAFKA_TOPIC_MATCHER_SNAPSHOT:    {{ include "blink.snapshotTopic" "matcher" | quote }}
-  KAFKA_TOPIC_TUNING_SNAPSHOT:     {{ include "blink.snapshotTopic" "tuning" | quote }}
-  KAFKA_TOPIC_FORMATTER_SNAPSHOT:  {{ include "blink.snapshotTopic" "formatter" | quote }}
-  KAFKA_TOPIC_ENRICHMENT_SNAPSHOT: {{ include "blink.snapshotTopic" "enrichment" | quote }}
-
-  # Plugin directories (mounted at /plugins in every pod).
-  RULE_PLUGIN_DIR:       {{ .Values.config.pluginDirs.rules | quote }}
-  MATCHER_PLUGIN_DIR:    {{ .Values.config.pluginDirs.matchers | quote }}
-  TUNER_PLUGIN_DIR:      {{ .Values.config.pluginDirs.tuner | quote }}
-  ENRICHER_PLUGIN_DIR:   {{ .Values.config.pluginDirs.enricher | quote }}
-  FORMATTER_PLUGIN_DIR:  {{ .Values.config.pluginDirs.formatter | quote }}
-  DISPATCHER_CONFIG_DIR: {{ .Values.config.pluginDirs.dispatcher | quote }}
 
 ---
 apiVersion: v1

@@ -43,14 +43,14 @@ func ShardConcurrent[Item, Result any](items []Item, maxChunks int, processChunk
 	}
 	chunks := ShardSlice(items, maxChunks)
 	results := make([]Result, len(chunks))
-	var waitGroup sync.WaitGroup
+	var wg sync.WaitGroup
 	for chunkIndex := range chunks {
-		waitGroup.Add(1)
+		wg.Add(1)
 		go func(chunkIndex int) {
-			defer waitGroup.Done()
+			defer wg.Done()
 			results[chunkIndex] = processChunk(chunks[chunkIndex])
 		}(chunkIndex)
 	}
-	waitGroup.Wait()
+	wg.Wait()
 	return results
 }

@@ -1,0 +1,25 @@
+syntax = "proto3";
+package dlq;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "pb/;pb";
+
+// DLQEnvelope wraps a single source record that a pipeline service gave up on.
+// It preserves the source coordinates and the original payload byte-for-byte
+// so a future replayer can re-inject the record.
+message DLQEnvelope {
+  DLQSource                 source           = 1;
+  bytes                     original_payload = 2;
+  string                    stage            = 3;
+  string                    reason           = 4;
+  int32                     attempts         = 5;
+  google.protobuf.Timestamp failed_at        = 6;
+}
+
+// DLQSource identifies where the failed record was read from.
+message DLQSource {
+  string topic     = 1;
+  int32  partition = 2;
+  int64  offset    = 3;
+}

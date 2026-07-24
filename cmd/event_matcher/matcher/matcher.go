@@ -3,10 +3,14 @@ package matcher
 import (
 	"context"
 	"encoding/json"
+	stderrors "errors"
+	"fmt"
 	"sync"
 	"time"
 
+	"github.com/cenkalti/backoff/v4"
 	"github.com/harishhary/blink/internal/brokers"
+	dlqpb "github.com/harishhary/blink/internal/dlq/pb"
 	"github.com/harishhary/blink/internal/errors"
 	execpb "github.com/harishhary/blink/internal/exec/pb"
 	"github.com/harishhary/blink/internal/logger"
@@ -15,8 +19,10 @@ import (
 	"github.com/harishhary/blink/pkg/rules"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"golang.org/x/sync/semaphore"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var (
@@ -29,226 +35,455 @@ var (
 	rulesRouted     = promauto.NewHistogram(prometheus.HistogramOpts{Namespace: "blink", Subsystem: "event_matcher", Name: "rules_routed_per_event", Buckets: []float64{0, 1, 5, 10, 25, 50, 100}})
 )
 
-// Service routes incoming events to eligible rules and publishes ExecMessages
-// to blink-exec. For each batch it:
-//  1. Decodes all events and finds candidate rules by log_type.
-//  2. Groups events by matcher plugin and calls each matcher once with all relevant events,
-//     filtering candidates down to the eligible set (rules whose every matcher passed).
-//  3. Emits one ExecMessage per event with the eligible rule IDs from step 2.
+// Service prepares a terminal noop, normal record, or DLQ record for every
+// fetched event before publishing normal and DLQ records in fetched order.
 type Service struct {
-	*logger.Logger
-	reader  brokers.Reader
-	writer  brokers.Writer
-	ruleCfg *rules.SnapshotConfig // rule controller's snapshot - the rollout authority
-	pool    *matchers.Pool
+	logger     *logger.Logger
+	config     Config
+	execWriter brokers.Writer
+	dlqWriter  brokers.Writer
+	ruleCfg    *rules.SnapshotConfig // rule controller's snapshot - the rollout authority
+	pool       *matchers.Pool
+	sem        *semaphore.Weighted // bounds parallel Pool.Match calls to MATCHER_CONCURRENCY
 }
 
-// Config is the explicit set of dependencies NewService needs, injected by main.
-// Config's topic fields are populated from the environment by main (which embeds it);
-// Broker is injected after load.
+// Config is the set of dependencies NewService needs, injected by main. See docs/services/event_matcher.md.
 type Config struct {
 	Broker       brokers.Broker
-	MatcherTopic string `env:"KAFKA_TOPIC_MATCHER"`
+	EventTopic   string `env:"KAFKA_TOPIC_MATCHER"`
 	MatcherGroup string `env:"KAFKA_GROUP_MATCHER"`
-	ExecTopic    string `env:"KAFKA_TOPIC_EXEC"`
+	ExecTopic    string `env:"KAFKA_TOPIC_EXECUTOR"`
+	DLQTopic     string `env:"KAFKA_TOPIC_MATCHER_DLQ"`
+	// Ready gates grouped-consumer creation until matcher and rule snapshots catch up.
+	Ready func() bool
+	// Concurrency is the maximum number of parallel matcher plugin calls.
+	Concurrency int `env:"MATCHER_CONCURRENCY,optional"`
+	// TimeoutSec bounds each matcher pool call in seconds.
+	TimeoutSec int `env:"MATCHER_TIMEOUT_SEC,optional"`
+	// MaxAttempts is how many times a failing matcher call is tried per event before DLQ.
+	MaxAttempts int `env:"MATCHER_MAX_ATTEMPTS,optional"`
+	// RetryBaseMS is the initial matcher and publication retry delay in milliseconds.
+	RetryBaseMS int `env:"MATCHER_RETRY_BASE_MS,optional"`
+	// RetryCapMS bounds exponential matcher and publication retry delays in milliseconds.
+	RetryCapMS int `env:"MATCHER_RETRY_CAP_MS,optional"`
 }
 
-func NewService(logger *logger.Logger, c Config, pool *matchers.Pool, ruleCfg *rules.SnapshotConfig) *Service {
+func NewService(logger *logger.Logger, cfg Config, pool *matchers.Pool, ruleCfg *rules.SnapshotConfig) *Service {
+	if cfg.Concurrency <= 0 {
+		cfg.Concurrency = 8
+	}
+	if cfg.TimeoutSec <= 0 {
+		cfg.TimeoutSec = 10
+	}
+	if cfg.MaxAttempts <= 0 {
+		cfg.MaxAttempts = 3
+	}
+	if cfg.RetryBaseMS <= 0 {
+		cfg.RetryBaseMS = 100
+	}
+	if cfg.RetryCapMS <= 0 {
+		cfg.RetryCapMS = 5000
+	}
+	if cfg.RetryCapMS < cfg.RetryBaseMS {
+		cfg.RetryCapMS = cfg.RetryBaseMS
+	}
+
 	return &Service{
-		Logger:  logger,
-		reader:  c.Broker.NewReader(c.MatcherTopic, c.MatcherGroup),
-		writer:  c.Broker.NewWriter(c.ExecTopic),
-		ruleCfg: ruleCfg,
-		pool:    pool,
+		logger:     logger,
+		config:     cfg,
+		execWriter: cfg.Broker.NewWriter(cfg.ExecTopic),
+		dlqWriter:  cfg.Broker.NewWriter(cfg.DLQTopic),
+		ruleCfg:    ruleCfg,
+		pool:       pool,
+		sem:        semaphore.NewWeighted(int64(cfg.Concurrency)),
 	}
 }
 
-func (service *Service) Name() string { return "event-matcher" }
+func (s *Service) Name() string { return "event-matcher" }
 
-func (service *Service) Run(ctx context.Context) errors.Error {
+func (s *Service) Run(ctx context.Context) errors.Error {
+	// matcher and rule snapshots need to catch up, so we never match against a half-loaded rollout state
+	ticker := time.NewTicker(10 * time.Millisecond)
+	for !s.config.Ready() {
+		select {
+		case <-ctx.Done():
+			ticker.Stop()
+			return nil
+		case <-ticker.C:
+		}
+	}
+	ticker.Stop()
+	if ctx.Err() != nil {
+		return nil
+	}
+
+	reader := s.config.Broker.NewReader(s.config.EventTopic, s.config.MatcherGroup)
+	defer func() {
+		if err := reader.Close(); err != nil {
+			s.logger.Error(errors.NewE(err))
+		}
+	}()
+
 	for {
-		msgs, err := service.reader.ReadBatch(ctx, 50)
+		msgs, err := reader.ReadBatch(ctx, 50)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
 			readErrors.Inc()
-			service.Error(errors.NewE(err))
-			continue
+			err := errors.NewE(err)
+			s.logger.Error(err)
+			return err
 		}
 
-		service.processBatch(ctx, msgs)
+		if err := s.processBatch(ctx, msgs); err != nil {
+			s.logger.Error(err)
+			return err
+		}
 
-		if err := service.reader.CommitMessages(ctx, msgs...); err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-			service.Error(errors.NewE(err))
+		if err := reader.CommitMessages(ctx, msgs...); err != nil {
+			err := errors.NewE(err)
+			s.logger.Error(err)
+			return err
 		}
 	}
 }
 
-// eventState holds a decoded event and the set of candidate rules still eligible.
-type eventState struct {
-	key        []byte
-	event      events.Event
-	logType    string
-	candidates []*rules.RuleMetadata
-	eligible   map[string]bool
+type terminalKind uint8
+
+const (
+	terminalDrop terminalKind = iota
+	terminalNormal
+	terminalDLQ
+)
+
+type preparedRecord struct {
+	kind    terminalKind
+	message brokers.Message
 }
 
-func (service *Service) processBatch(batchCtx context.Context, msgs []brokers.Message) {
-	allRules := service.ruleCfg.Primaries()
+type matcherFailure struct {
+	matcher  string
+	reason   string
+	attempts int
+}
 
-	// Decode events and find candidate rules.
-	states := make([]*eventState, 0, len(msgs))
-	for _, m := range msgs {
+type eventState struct {
+	source     brokers.Message
+	event      events.Event
+	candidates []*rules.RuleMetadata
+	eligible   map[string]bool
+	failures   map[string]matcherFailure
+	prepared   *preparedRecord
+}
+
+type routedItem struct {
+	stateIdx int
+	ruleIDs  []string
+}
+
+func (s *Service) processBatch(batchCtx context.Context, msgs []brokers.Message) errors.Error {
+	states, err := s.decodeStates(msgs)
+	if err != nil {
+		return err
+	}
+	s.evaluateMatchers(batchCtx, states)
+	// Shutdown is the only reason states stay unresolved; bail so the batch is redelivered.
+	if batchCtx.Err() != nil {
+		return errors.NewE(batchCtx.Err())
+	}
+	if err := s.prepareTerminals(states); err != nil {
+		return err
+	}
+	return s.publishTerminals(batchCtx, states)
+}
+
+// decodeStates decodes every input into an ordered state; invalid records become prepared DLQ records.
+func (s *Service) decodeStates(msgs []brokers.Message) ([]*eventState, errors.Error) {
+	allRules := s.ruleCfg.Primaries()
+	states := make([]*eventState, len(msgs))
+	for i, msg := range msgs {
+		state := &eventState{source: msg}
+		states[i] = state
 		var evt events.Event
-		if err := json.Unmarshal(m.Value, &evt); err != nil {
+		if err := json.Unmarshal(msg.Value, &evt); err != nil {
 			parseErrors.Inc()
-			service.Error(errors.NewE(err))
+			prepared, prepareErr := s.prepareDLQ(msg, "decode", err.Error(), 0)
+			if prepareErr != nil {
+				return nil, prepareErr
+			}
+			state.prepared = &prepared
 			continue
 		}
 		eventsIn.Inc()
 
 		logType, ok := evt["log_type"].(string)
 		if !ok {
+			prepared, prepareErr := s.prepareDLQ(msg, "log_type", "event log_type must be a string", 0)
+			if prepareErr != nil {
+				return nil, prepareErr
+			}
+			state.prepared = &prepared
 			continue
 		}
 
 		candidates := rules.RulesForLogTypeIn(allRules, logType)
 		if len(candidates) == 0 {
+			state.prepared = &preparedRecord{kind: terminalDrop}
 			continue
 		}
 
-		eligible := make(map[string]bool, len(candidates))
+		state.event = evt
+		state.candidates = candidates
+		state.eligible = make(map[string]bool, len(candidates))
 		for _, r := range candidates {
-			eligible[r.Id] = true
+			state.eligible[r.Id] = true
 		}
-		states = append(states, &eventState{
-			key: m.Key, event: evt, logType: logType,
-			candidates: candidates, eligible: eligible,
-		})
+		state.failures = make(map[string]matcherFailure)
 	}
-	if len(states) == 0 {
-		return
-	}
+	return states, nil
+}
 
-	// Group by matcher: byMatcher[name] = one slot per (matcher, event) pair.
-	// slotOf[name][stateIdx] tracks where that slot lives so multiple rules sharing
-	// the same matcher for the same event are merged into one slot rather than
-	// calling pool.Match with the same event twice.
-	type matchItem struct {
-		stateIdx int
-		ruleIDs  []string // rules that require this matcher for this event
-	}
-	byMatcher := make(map[string][]matchItem)
-	slotOf := make(map[string]map[int]int) // matcher → stateIdx → position in byMatcher[matcher]
+// groupByMatcher collects, per matcher, the pending states and the rule IDs depending on its outcome.
+func groupByMatcher(states []*eventState) map[string][]routedItem {
+	byMatcher := make(map[string][]routedItem)
 	for i, s := range states {
+		if s.prepared != nil {
+			continue
+		}
+		perMatcher := make(map[string][]string)
 		for _, r := range s.candidates {
 			for _, name := range r.Matchers {
-				if slotOf[name] == nil {
-					slotOf[name] = make(map[int]int)
+				perMatcher[name] = append(perMatcher[name], r.Id)
+			}
+		}
+		for name, ruleIDs := range perMatcher {
+			byMatcher[name] = append(byMatcher[name], routedItem{stateIdx: i, ruleIDs: ruleIDs})
+		}
+	}
+	return byMatcher
+}
+
+// matcherRun coordinates one batch's concurrent matcher evaluation. See docs/services/event_matcher.md.
+type matcherRun struct {
+	service *Service
+	states  []*eventState
+	ctx     context.Context
+	mu      sync.Mutex // guards per-state eligible/failures mutation
+}
+
+func (s *Service) evaluateMatchers(batchCtx context.Context, states []*eventState) {
+	run := &matcherRun{
+		service: s,
+		states:  states,
+		ctx:     batchCtx,
+	}
+
+	var wg sync.WaitGroup
+	for name, items := range groupByMatcher(states) {
+		wg.Go(func() {
+			run.matchWithRetries(name, items)
+		})
+	}
+	wg.Wait()
+}
+
+// errPendingRetries drives the backoff between attempts; outcomes live in run.states, not the error.
+var errPendingRetries = stderrors.New("matcher retries pending")
+
+// matchWithRetries owns one matcher's failed subset across attempts.
+func (r *matcherRun) matchWithRetries(name string, pending []routedItem) {
+	service := r.service
+	attempt := 0
+	_ = backoff.Retry(func() error {
+		attempt++
+		result, ok := r.match(name, pending)
+		if !ok {
+			// Shutdown; processBatch bails without committing.
+			return backoff.Permanent(errPendingRetries)
+		}
+
+		// Whole-call failures (missing plugin, call timeout, invalid shape) fail every pending item for this attempt.
+		callErr := result.CallErr
+		if callErr == nil && len(result.Items) != len(pending) {
+			callErr = errors.NewF("matcher %s returned invalid result shape", name)
+		}
+		if callErr != nil {
+			items := make([]matchers.MatchItem, len(pending))
+			for j := range items {
+				items[j].Err = callErr
+			}
+			result = matchers.MatchResult{Items: items}
+		}
+
+		pending = r.apply(name, attempt, pending, result)
+		if len(pending) == 0 {
+			// Done: apply records DLQ failures for leftovers at MaxAttempts.
+			return nil
+		}
+		return errPendingRetries
+	}, service.newBackoff(r.ctx))
+}
+
+// match performs one bounded, timed Pool.Match call for the pending items.
+// ok is false when the batch or evaluation context ended the run.
+func (r *matcherRun) match(name string, pending []routedItem) (matchers.MatchResult, bool) {
+	if err := r.service.sem.Acquire(r.ctx, 1); err != nil {
+		return matchers.MatchResult{}, false
+	}
+	defer r.service.sem.Release(1)
+
+	evts := make([]events.Event, len(pending))
+	for j, item := range pending {
+		evts[j] = r.states[item.stateIdx].event
+	}
+	matchCtx, cancelMatch := context.WithTimeout(r.ctx, time.Duration(r.service.config.TimeoutSec)*time.Second)
+	defer cancelMatch()
+	start := time.Now()
+	result := r.service.pool.Match(matchCtx, name, evts)
+	matchDuration.Observe(time.Since(start).Seconds())
+
+	if r.ctx.Err() != nil {
+		return matchers.MatchResult{}, false
+	}
+	return result, true
+}
+
+// apply records per-item outcomes and returns the subset to retry.
+func (r *matcherRun) apply(name string, attempt int, pending []routedItem, result matchers.MatchResult) []routedItem {
+	next := make([]routedItem, 0, len(pending))
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for j, item := range pending {
+		match := result.Items[j]
+		state := r.states[item.stateIdx]
+		if match.Err != nil {
+			r.service.logger.Error(match.Err)
+			if attempt == r.service.config.MaxAttempts {
+				state.failures[name] = matcherFailure{
+					matcher: name, reason: fmt.Sprint(match.Err.Message()), attempts: attempt,
 				}
-				if pos, ok := slotOf[name][i]; ok {
-					byMatcher[name][pos].ruleIDs = append(byMatcher[name][pos].ruleIDs, r.Id)
-				} else {
-					slotOf[name][i] = len(byMatcher[name])
-					byMatcher[name] = append(byMatcher[name], matchItem{stateIdx: i, ruleIDs: []string{r.Id}})
-				}
+			} else {
+				next = append(next, item)
+			}
+			continue
+		}
+		if !match.Matched {
+			for _, ruleID := range item.ruleIDs {
+				state.eligible[ruleID] = false
 			}
 		}
 	}
+	return next
+}
 
-	// Fan out: one goroutine per matcher with all its events.
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-	for name, items := range byMatcher {
-		wg.Add(1)
-		go func(name string, items []matchItem) {
-			defer wg.Done()
-
-			evts := make([]events.Event, len(items))
-			for j, item := range items {
-				evts[j] = states[item.stateIdx].event
-			}
-
-			result := service.pool.Match(batchCtx, name, evts, "")
-			if result.Absent || result.Removed {
-				label := "not found"
-				if result.Removed {
-					label = "removed"
-				}
-				service.Error(errors.NewF("matcher %s %s", name, label))
-				mu.Lock()
-				for _, item := range items {
-					for _, ruleID := range item.ruleIDs {
-						states[item.stateIdx].eligible[ruleID] = false
-					}
-				}
-				mu.Unlock()
-				return
-			}
-			mu.Lock()
-			for j, item := range items {
-				if result.Errs[j] != nil {
-					// On error, fail only the affected (event, rule) pairs conservatively.
-					service.Error(result.Errs[j])
-					for _, ruleID := range item.ruleIDs {
-						states[item.stateIdx].eligible[ruleID] = false
-					}
-					continue
-				}
-				if !result.Results[j] {
-					for _, ruleID := range item.ruleIDs {
-						states[item.stateIdx].eligible[ruleID] = false
-					}
+func (s *Service) prepareTerminals(states []*eventState) errors.Error {
+	for _, state := range states {
+		if state.prepared != nil {
+			continue
+		}
+		if len(state.failures) > 0 {
+			// Deterministic pick: the alphabetically first failing matcher.
+			var failure matcherFailure
+			for _, f := range state.failures {
+				if failure.matcher == "" || f.matcher < failure.matcher {
+					failure = f
 				}
 			}
-			mu.Unlock()
-		}(name, items)
-	}
-	wg.Wait()
-
-	// Write ExecMessages - one per event with its eligible rule IDs.
-	var outWg sync.WaitGroup
-	for _, s := range states {
-		outWg.Add(1)
-		go func(s *eventState) {
-			defer outWg.Done()
-
-			start := time.Now()
-			var ruleIDs []string
-			for _, r := range s.candidates {
-				if s.eligible[r.Id] {
-					ruleIDs = append(ruleIDs, r.Id)
-				}
-			}
-			matchDuration.Observe(time.Since(start).Seconds())
-			rulesRouted.Observe(float64(len(ruleIDs)))
-
-			if len(ruleIDs) == 0 {
-				return
-			}
-			service.Info("rollout event log_type=%s to %d rule(s)", s.logType, len(ruleIDs))
-
-			eventStruct, err := structpb.NewStruct(s.event)
+			prepared, err := s.prepareDLQ(state.source, "matcher", fmt.Sprintf("matcher %s: %s", failure.matcher, failure.reason), failure.attempts)
 			if err != nil {
-				parseErrors.Inc()
-				service.Error(errors.NewE(err))
-				return
+				return err
 			}
-			payload, _ := proto.Marshal(&execpb.ExecMessage{
-				Event:   eventStruct,
-				RuleIds: ruleIDs,
-			})
-			if err := service.writer.WriteMessages(batchCtx, brokers.Message{Key: s.key, Value: payload}); err != nil {
-				writeErrors.Inc()
-				service.Error(errors.NewE(err))
-			} else {
-				eventsForwarded.Inc()
+			state.prepared = &prepared
+			continue
+		}
+
+		var ruleIDs []string
+		for _, r := range state.candidates {
+			if state.eligible[r.Id] {
+				ruleIDs = append(ruleIDs, r.Id)
 			}
-		}(s)
+		}
+		rulesRouted.Observe(float64(len(ruleIDs)))
+
+		if len(ruleIDs) == 0 {
+			state.prepared = &preparedRecord{kind: terminalDrop}
+			continue
+		}
+
+		eventStruct, err := structpb.NewStruct(state.event)
+		if err != nil {
+			parseErrors.Inc()
+			return errors.NewE(err)
+		}
+		payload, err := proto.Marshal(&execpb.ExecMessage{
+			Event:   eventStruct,
+			RuleIds: ruleIDs,
+		})
+		if err != nil {
+			return errors.NewE(err)
+		}
+		state.prepared = &preparedRecord{kind: terminalNormal, message: brokers.Message{
+			Key: append([]byte(nil), state.source.Key...), Value: payload,
+		}}
 	}
-	outWg.Wait()
+	return nil
+}
+
+// publishTerminals publishes prepared bytes serially in fetched order, retrying writes indefinitely.
+func (s *Service) publishTerminals(ctx context.Context, states []*eventState) errors.Error {
+	for _, state := range states {
+		if state.prepared == nil {
+			return errors.NewF("event matcher left an input without a terminal state")
+		}
+		if state.prepared.kind == terminalDrop {
+			continue
+		}
+		writer := s.execWriter
+		if state.prepared.kind == terminalDLQ {
+			writer = s.dlqWriter
+		}
+		err := backoff.Retry(func() error {
+			if werr := writer.WriteMessages(ctx, state.prepared.message); werr != nil {
+				writeErrors.Inc()
+				return werr
+			}
+			return nil
+		}, s.newBackoff(ctx))
+		if err != nil {
+			return errors.NewE(err) // only ctx cancellation stops the write retry
+		}
+		if state.prepared.kind == terminalNormal {
+			eventsForwarded.Inc()
+		}
+	}
+	return nil
+}
+
+func (s *Service) prepareDLQ(source brokers.Message, stage, reason string, attempts int) (preparedRecord, errors.Error) {
+	payload, err := proto.Marshal(&dlqpb.DLQEnvelope{
+		Source: &dlqpb.DLQSource{
+			Topic: source.Topic, Partition: int32(source.Partition), Offset: source.Offset,
+		},
+		OriginalPayload: source.Value,
+		Stage:           stage,
+		Reason:          reason,
+		Attempts:        int32(attempts),
+		FailedAt:        timestamppb.Now(),
+	})
+	if err != nil {
+		return preparedRecord{}, errors.NewE(err)
+	}
+	return preparedRecord{kind: terminalDLQ, message: brokers.Message{
+		Key: append([]byte(nil), source.Key...), Value: payload,
+	}}, nil
+}
+
+// newBackoff returns the service's exponential retry policy (RetryBaseMS initial, RetryCapMS cap, jittered).
+func (s *Service) newBackoff(ctx context.Context) backoff.BackOffContext {
+	b := backoff.NewExponentialBackOff()
+	b.InitialInterval = time.Duration(s.config.RetryBaseMS) * time.Millisecond
+	b.MaxInterval = time.Duration(s.config.RetryCapMS) * time.Millisecond
+	b.MaxElapsedTime = 0 // callers bound attempts themselves or retry until ctx cancel
+	return backoff.WithContext(b, ctx)
 }

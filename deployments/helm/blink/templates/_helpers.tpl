@@ -69,59 +69,17 @@ Args: dict "registry" $registry "name" $name "tag" $tag
 {{ .registry }}/{{ .name }}:{{ .tag }}
 {{- end }}
 
-{{/* Merge per-log-type overrides with chart defaults. */}}
-{{- define "blink.logTypeConfig" -}}
-{{- toYaml (mergeOverwrite (deepCopy .root.Values.logTypeDefaults) (.overrides | default dict)) -}}
-{{- end }}
-
-{{/* Return the shared-stage topology declared in the common values file. */}}
-{{- define "blink.sharedStage" -}}
+{{/* Return stage topology declared in the common values file. */}}
+{{- define "blink.stage" -}}
 {{- $global := .root.Values.global | default dict -}}
-{{- $sharedStages := required "global.sharedStages is required; pass deployments/helm/values.yaml" (get $global "sharedStages") -}}
-{{- toYaml (required (printf "global.sharedStages.%s is required" .stage) (get $sharedStages .stage)) -}}
+{{- $stages := required "global.stages is required; pass deployments/helm/values.yaml" (get $global "stages") -}}
+{{- $stage := deepCopy (required (printf "global.stages.%s is required" .stage) (get $stages .stage)) -}}
+{{- $workload := required (printf "global.stages.%s.workload is required" .stage) (get $stage "workload") -}}
+{{- $workloadName := required (printf "global.stages.%s.workload.name is required" .stage) (get $workload "name") -}}
+{{- toYaml (mergeOverwrite $stage (dict "workloadName" $workloadName)) -}}
 {{- end }}
 
-{{/* Merge shared-stage capacity overrides with this chart's defaults. */}}
-{{- define "blink.sharedStageConfig" -}}
-{{- toYaml (mergeOverwrite (deepCopy (.root.Values.sharedStageDefaults | default dict)) (.overrides | default dict)) -}}
-{{- end }}
-
-{{- define "blink.stageTopic" -}}
-{{- printf "%s-topic" . -}}
-{{- end }}
-
-{{- define "blink.stageGroup" -}}
-{{- printf "%s-group" . -}}
-{{- end }}
-
-{{- define "blink.stageDLQTopic" -}}
-{{- printf "%s-dlq-topic" . -}}
-{{- end }}
-
-{{- define "blink.snapshotTopic" -}}
-{{- printf "%s-snapshot-topic" . -}}
-{{- end }}
-
-{{- define "blink.matcherName" -}}
-{{- printf "event-matcher-%s" . -}}
-{{- end }}
-
-{{- define "blink.executorName" -}}
-{{- printf "rule-executor-%s" . -}}
-{{- end }}
-
-{{- define "blink.matcherTopic" -}}
-{{- printf "matcher-%s-topic" . -}}
-{{- end }}
-
-{{- define "blink.executorTopic" -}}
-{{- printf "exec-%s-topic" . -}}
-{{- end }}
-
-{{- define "blink.matcherGroup" -}}
-{{- printf "matcher-%s-group" . -}}
-{{- end }}
-
-{{- define "blink.executorGroup" -}}
-{{- printf "exec-%s-group" . -}}
+{{/* Merge a stage's workload settings with this chart's defaults. */}}
+{{- define "blink.workloadConfig" -}}
+{{- toYaml (mergeOverwrite (deepCopy (.root.Values.workloadDefaults | default dict)) (.overrides | default dict)) -}}
 {{- end }}

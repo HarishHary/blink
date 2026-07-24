@@ -16,16 +16,13 @@ import (
 	"github.com/harishhary/blink/pkg/rules"
 )
 
-// config is everything event_matcher needs. Required fields fail fast at load.
-// Rule rollout comes from the rule snapshot (RuleSnapshotTopic) - there is no RULE_CONFIG_DIR.
-// The embedded matcher.Config carries the service's topic fields; the snapshot topics and
-// plugin dir wire the control plane here in main. Broker is injected post-load.
+// config is everything event_matcher needs. See docs/services/event_matcher.md.
 type config struct {
 	services.Common
 	matcher.Config
-	MatcherSnapshotTopic string `env:"KAFKA_TOPIC_MATCHER_SNAPSHOT"`
-	RuleSnapshotTopic    string `env:"KAFKA_TOPIC_RULE_SNAPSHOT"`
-	MatcherPluginDir     string `env:"MATCHER_PLUGIN_DIR"`
+	MatcherSnapshotTopic  string `env:"KAFKA_TOPIC_MATCHER_SNAPSHOT"`
+	ExecutorSnapshotTopic string `env:"KAFKA_TOPIC_EXECUTOR_SNAPSHOT"`
+	MatcherPluginDir      string `env:"MATCHER_PLUGIN_DIR"`
 }
 
 func main() {
@@ -45,7 +42,7 @@ func main() {
 	matcherSnapSvc := services.NewManagedService("matcher-snapshot-sync", matcherSnap)
 
 	// Rule snapshot: the sole source of rule config in the data plane
-	ruleSnap := controller.NewSnapshotReader(rootLogger.With("component", "rule_snapshot"), b.NewBroadcastReader(cfg.RuleSnapshotTopic))
+	ruleSnap := controller.NewSnapshotReader(rootLogger.With("component", "rule_snapshot"), b.NewBroadcastReader(cfg.ExecutorSnapshotTopic))
 	ruleSnapSvc := services.NewManagedService("rule-snapshot-sync", ruleSnap)
 
 	// Matcher Plugin Executor: runs the matcher plugins based on the matcher snapshot
@@ -56,11 +53,13 @@ func main() {
 
 	// Rule Config: to select rules for the event matcher based on the rule log type
 	ruleCfg := rules.NewSnapshotConfig(rootLogger.With("component", "rule_config"), ruleSnap)
+	// Gate consumption until both control-plane snapshots have caught up and
+	// each has published at least one effective primary configuration.
+	ready := snapshotCatalogsReady(matcherSnap.Ready, ruleSnap.Ready, matcherCfg, ruleCfg)
+	cfg.Config.Ready = ready
 	event_matcherSvc := matcher.NewService(rootLogger.With("component", "service"), cfg.Config, matcherPool, ruleCfg)
 
-	// Readiness: ready only once BOTH control-plane inputs have arrived
-	// FIXME: Wait for the pluginExecutor to be ready as well
-	ready := func() bool { return matcherSnap.Ready() && ruleSnap.Ready() }
+	// Readiness: ready only once both control-plane inputs have primaries.
 	go services.ServeHealth(":8080", ready)
 
 	runner := services.New()
@@ -72,4 +71,10 @@ func main() {
 	)
 	runner.Run(ctx)
 	log.Println("Shutting down event-matcher")
+}
+
+func snapshotCatalogsReady(matcherReady, ruleReady func() bool, matcherCfg *matchers.SnapshotConfig, ruleCfg *rules.SnapshotConfig) func() bool {
+	return func() bool {
+		return matcherReady() && ruleReady() && len(matcherCfg.Primaries()) > 0 && len(ruleCfg.Primaries()) > 0
+	}
 }

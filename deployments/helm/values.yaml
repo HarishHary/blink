@@ -1,27 +1,162 @@
-# Canonical enabled log types for all independent Blink Helm charts.
+# Shared topology for all independent Blink Helm charts.
+# Stage entry template (omit scaler to disable autoscaling):
+# <stage-name>:
+#   workload:
+#     name: <deployment-name>
+#     container: <binary-name>          # defaults to name
+#     plugins: true                     # set false to omit the plugin volume
+#     replicas: 2
+#     resources:
+#       requests:
+#         cpu: "100m"
+#         memory: "128Mi"
+#       limits:
+#         cpu: "500m"
+#         memory: "256Mi"
+#     environment:                     # snake_case keys render uppercase
+#       kafka_topic_<stage>: <input-topic>
+#       kafka_group_<stage>: <consumer-group>
+#       <type>_plugin_dir: /plugins/example
+#       app_setting: "value"           # renders APP_SETTING=value
+#   scaler:
+#     minReplicas: 1
+#     maxReplicas: 6
+#     lagThreshold: "100"
+#     offsetResetPolicy: earliest
+#   topic:
+#     primary:
+#       partitions: 6
+#       replicas: 1
+#       config:
+#         retention.ms: "86400000"
+#     dlq:                              # omit to disable the DLQ
+#       partitions: 6
+#       replicas: 1
+#       config:
+#         retention.ms: "86400000"
+#     snapshot:                         # omit if the stage has no plugin snapshot
+#       replicas: 1
+#       config:
+#         cleanup.policy: compact
 global:
-  logTypes:
-    application: {}
-    # authentication: {}
-  # Shared pipeline topology consumed by the Kafka, Blink, and KEDA charts.
-  sharedStages:
+  # The controller is not a pipeline stage, but uses the same workload settings.
+  controller:
+    workload:
+      name: blink-controller
+      container: controller
+      replicas: 1
+      environment:
+        kafka_topic_executor_snapshot: rule-executor-snapshot-topic
+        kafka_topic_matcher_snapshot: event-matcher-snapshot-topic
+        kafka_topic_tuner_snapshot: rule-tuner-snapshot-topic
+        kafka_topic_formatter_snapshot: alert-formatter-snapshot-topic
+        kafka_topic_enricher_snapshot: alert-enricher-snapshot-topic
+        rule_plugin_dir: /plugins/rules
+        matcher_plugin_dir: /plugins/matchers
+        tuner_plugin_dir: /plugins/tuning_rules
+        formatter_plugin_dir: /plugins/formatters
+        enricher_plugin_dir: /plugins/enrichments
+  stages:
+    matcher:
+      workload:
+        name: event-matcher
+        container: event-matcher
+        environment:
+          kafka_topic_matcher: event-matcher-topic
+          kafka_group_matcher: event-matcher-group
+          kafka_topic_executor: rule-executor-topic
+          kafka_topic_matcher_dlq: event-matcher-dlq-topic
+          kafka_topic_matcher_snapshot: event-matcher-snapshot-topic
+          kafka_topic_executor_snapshot: rule-executor-snapshot-topic
+          matcher_plugin_dir: /plugins/matchers
+          matcher_concurrency: "8"
+          matcher_timeout_sec: "10"
+          matcher_max_attempts: "3"
+          matcher_retry_base_ms: "100"
+          matcher_retry_cap_ms: "5000"
+      scaler: {}
+      topic:
+        dlq: {}
+        snapshot: {}
+    executor:
+      workload:
+        name: rule-executor
+        container: rule-executor
+        environment:
+          kafka_topic_executor: rule-executor-topic
+          kafka_group_executor: rule-executor-group
+          kafka_topic_merger: alert-merger-topic
+          kafka_topic_executor_snapshot: rule-executor-snapshot-topic
+          rule_plugin_dir: /plugins/rules
+          executor_batch_size: "50"
+          executor_concurrency: "4"
+          executor_timeout_sec: "10"
+      scaler: {}
+      topic:
+        snapshot: {}
     merger:
-      workload: alert-merger
-      withDLQ: false
-      withScaler: false
+      workload:
+        name: alert-merger
+        container: alert-merger
+        plugins: false
+        # alert_merger groups related alerts; replicas must not exceed topic partitions.
+        replicas: 1
+        environment:
+          kafka_topic_merger: alert-merger-topic
+          kafka_group_merger: alert-merger-group
+          # 0 disables the live merge-group cap.
+          merger_max_groups: "10000"
     tuner:
-      workload: rule-tuner
-      withDLQ: true
-      withScaler: true
+      workload:
+        name: rule-tuner
+        container: rule-tuner
+        environment:
+          kafka_topic_tuner: rule-tuner-topic
+          kafka_group_tuner: rule-tuner-group
+          kafka_topic_enricher: alert-enricher-topic
+          kafka_topic_tuner_dlq: rule-tuner-dlq-topic
+          kafka_topic_tuner_snapshot: rule-tuner-snapshot-topic
+          tuner_plugin_dir: /plugins/tuning_rules
+      scaler: {}
+      topic:
+        dlq: {}
+        snapshot: {}
     enricher:
-      workload: alert-enricher
-      withDLQ: true
-      withScaler: true
+      workload:
+        name: alert-enricher
+        container: alert-enricher
+        environment:
+          kafka_topic_enricher: alert-enricher-topic
+          kafka_group_enricher: alert-enricher-group
+          kafka_topic_formatter: alert-formatter-topic
+          kafka_topic_enricher_dlq: alert-enricher-dlq-topic
+          kafka_topic_enricher_snapshot: alert-enricher-snapshot-topic
+          enricher_plugin_dir: /plugins/enrichments
+      scaler: {}
+      topic:
+        dlq: {}
+        snapshot: {}
     formatter:
-      workload: alert-formatter
-      withDLQ: true
-      withScaler: true
+      workload:
+        name: alert-formatter
+        container: alert-formatter
+        environment:
+          kafka_topic_formatter: alert-formatter-topic
+          kafka_group_formatter: alert-formatter-group
+          kafka_topic_dispatcher: alert-dispatcher-topic
+          kafka_topic_formatter_dlq: alert-formatter-dlq-topic
+          kafka_topic_formatter_snapshot: alert-formatter-snapshot-topic
+          formatter_plugin_dir: /plugins/formatters
+      scaler: {}
+      topic:
+        dlq: {}
+        snapshot: {}
     dispatcher:
-      workload: alert-dispatcher
-      withDLQ: false
-      withScaler: true
+      workload:
+        name: alert-dispatcher
+        container: alert-dispatcher
+        environment:
+          kafka_topic_dispatcher: alert-dispatcher-topic
+          kafka_group_dispatcher: alert-dispatcher-group
+          dispatcher_config_dir: /plugins/dispatchers
+      scaler: {}
