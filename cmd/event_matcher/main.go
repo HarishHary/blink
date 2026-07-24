@@ -55,12 +55,13 @@ func main() {
 	ruleCfg := rules.NewSnapshotConfig(rootLogger.With("component", "rule_config"), ruleSnap)
 	// Gate consumption until both control-plane snapshots have caught up and
 	// each has published at least one effective primary configuration.
-	ready := snapshotCatalogsReady(matcherSnap.Ready, ruleSnap.Ready, matcherCfg, ruleCfg)
-	cfg.Config.Ready = ready
+	readyToConsume := snapshotCatalogsReady(matcherSnap.Ready, ruleSnap.Ready, matcherCfg, ruleCfg)
+	cfg.Config.Ready = readyToConsume
 	event_matcherSvc := matcher.NewService(rootLogger.With("component", "service"), cfg.Config, matcherPool, ruleCfg)
 
-	// Readiness: ready only once both control-plane inputs have primaries.
-	go services.ServeHealth(":8080", ready)
+	// The pod is ready once both control-plane inputs are synchronized. Consumption
+	// remains gated above until there are matcher and rule catalogs to process with.
+	go services.ServeHealth(":8080", func() bool { return matcherSnap.Ready() && ruleSnap.Ready() })
 
 	runner := services.New()
 	runner.Register(

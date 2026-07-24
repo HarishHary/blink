@@ -24,6 +24,14 @@ minikube config set driver podman
 minikube start
 ```
 
+Build the controller and event-matcher images directly in Minikube before installing
+the Blink chart. Their tags match the chart's local defaults:
+
+```bash
+minikube image build --tag localhost/blink-controller:latest --file cmd/controller/Dockerfile .
+minikube image build --tag localhost/blink-event-matcher:latest --file cmd/event_matcher/Dockerfile .
+```
+
 ### Required operators
 
 Install the Strimzi operator before the Kafka chart and the KEDA operator before the
@@ -69,6 +77,15 @@ Build and publish or load the Blink service images before installing the Blink c
 its defaults reference `localhost` images with `image.pullPolicy=Never` for Minikube.
 For a registry-based cluster, override `image.registry`, `image.tag`, and
 `image.pullPolicy`.
+
+After rebuilding an image under the same local tag, restart its deployment so new
+pods load the replacement image:
+
+```bash
+minikube image build --tag localhost/blink-event-matcher:latest --file cmd/event_matcher/Dockerfile .
+kubectl rollout restart deployment/event-matcher --namespace blink
+kubectl rollout status deployment/event-matcher --namespace blink --timeout=120s
+```
 
 The Kafka chart creates the controller prerequisites declared as `topic.snapshot`
 on each plugin stage. Each name comes from that workload's
@@ -204,8 +221,9 @@ and exhausted matcher failures to `KAFKA_TOPIC_MATCHER_DLQ` using the protobuf
 `dlq.DLQEnvelope`, which retains source topic/partition/offset, original payload, stage, reason,
 attempts, and timestamp; the original key remains Kafka message metadata. These failures are
 terminal per record. Only shutdown cancellation leaves the whole fetched batch uncommitted.
-Before opening its grouped reader, the matcher waits for both
-snapshot readers to drain and for non-empty parsed primary matcher and rule catalogs; disabled
+The matcher readiness probe succeeds after both snapshot readers drain, including when both
+catalogs are empty. Before opening its grouped reader, the matcher additionally waits for
+non-empty parsed primary matcher and rule catalogs; disabled
 primaries count, but candidate-only catalogs do not. This startup gate does not prove a controller
 heartbeat/freshness or stop an already-running reader if either catalog later becomes empty. The
 executor waits only for its rule snapshot reader to drain before opening its grouped reader, then
@@ -227,8 +245,11 @@ mount is intentional for now; it is not split per log type.
 - Mount the plugin local folder in minikube
 
 ```bash
+mkdir -p ~/.blink/plugins/{rules,matchers,tuning_rules,formatters,enrichments,dispatchers}
 minikube mount ~/.blink/plugins:/blink/plugins
 ```
+
+Keep the `minikube mount` process running while Blink is deployed.
 
 - The chart mounts this HostPath into every pod, including the controller.
 
