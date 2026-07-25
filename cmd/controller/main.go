@@ -50,7 +50,7 @@ func main() {
 	// Shared control-plane store; NewNop is the no-op default (swap for SQLite/Postgres).
 	db := backends.NewNop()
 
-	runner := services.New()
+	runner := services.New(rootLogger.With("component", "runner"))
 
 	addController(rootLogger, "rule", cfg.RulePluginDir, runner, db, rules.Loader{}, b.NewWriter(cfg.ExecutorSnapshotTopic))
 	addController(rootLogger, "matcher", cfg.MatcherPluginDir, runner, db, matchers.Loader{}, b.NewWriter(cfg.MatcherSnapshotTopic))
@@ -58,7 +58,7 @@ func main() {
 	addController(rootLogger, "formatter", cfg.FormatterPluginDir, runner, db, formatters.Loader{}, b.NewWriter(cfg.FormatterSnapshotTopic))
 	addController(rootLogger, "enrichment", cfg.EnrichmentPluginDir, runner, db, enrichments.Loader{}, b.NewWriter(cfg.EnricherSnapshotTopic))
 
-	go services.ServeHealth(":8080", nil)
+	go services.ServeHealth(rootLogger.With("component", "health"), ":8080", nil)
 
 	runner.Run(ctx)
 	log.Println("Shutting down controller")

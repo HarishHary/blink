@@ -30,22 +30,22 @@ func newLogger(output io.Writer, service string, environment string) *Logger {
 }
 
 // With returns an immutable child logger that includes args on every record.
-func (log *Logger) With(args ...any) *Logger {
-	return &Logger{logger: log.logger.With(args...)}
+func (l *Logger) With(args ...any) *Logger {
+	return &Logger{logger: l.logger.With(args...)}
 }
 
-func (log *Logger) Debug(message string, v ...any) {
-	log.logger.Debug(fmt.Sprintf(message, v...))
+func (l *Logger) Debug(message string, v ...any) {
+	l.logger.Debug(fmt.Sprintf(message, v...))
 }
 
-func (log *Logger) Info(message string, v ...any) {
-	log.logger.Info(fmt.Sprintf(message, v...))
+func (l *Logger) Info(message string, v ...any) {
+	l.logger.Info(fmt.Sprintf(message, v...))
 }
 
-func (log *Logger) Error(err errors.Error) {
-	log.logger.Error(err.Error())
+func (l *Logger) Error(err errors.Error) {
+	l.logger.Error(err.Error())
 }
 
-func (log *Logger) ErrorF(message string, v ...any) {
-	log.logger.Error(fmt.Sprintf(message, v...))
+func (l *Logger) ErrorF(message string, v ...any) {
+	l.logger.Error(fmt.Sprintf(message, v...))
 }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/harishhary/blink/internal/config"
 	"github.com/harishhary/blink/internal/errors"
+	"github.com/harishhary/blink/internal/logger"
 	"github.com/harishhary/blink/internal/messaging"
 	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/internal/pools"
@@ -25,9 +26,9 @@ type EvaluateResult struct {
 }
 
 // NewPool builds a rule process pool.
-func NewPool(cfg config.Source[*RuleMetadata], drainTimeout time.Duration) *Pool {
+func NewPool(logger *logger.Logger, cfg config.Source[*RuleMetadata], drainTimeout time.Duration) *Pool {
 	return &Pool{
-		ProcessPool: pools.NewProcessPool[Rule](config.RolloutFor(cfg), pools.NewPoolMetrics("rules"), drainTimeout),
+		ProcessPool: pools.NewProcessPool[Rule](logger, config.RolloutFor(cfg), pools.NewPoolMetrics("rules"), drainTimeout),
 	}
 }
 

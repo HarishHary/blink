@@ -2,13 +2,12 @@ package services
 
 import (
 	"context"
-	"log"
 	"math"
 	"math/rand"
-	"os"
 	"sync"
 	"time"
 
+	"github.com/harishhary/blink/internal/logger"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -38,13 +37,13 @@ const (
 type Runner struct {
 	inits    []service
 	services []service
-	logger   *log.Logger
+	logger   *logger.Logger
 }
 
-func New() *Runner {
+func New(logger *logger.Logger) *Runner {
 	return &Runner{
 		services: make([]service, 0),
-		logger:   log.New(os.Stdout, "[SERVICE - RUNNER] ", log.Ldate|log.Ltime),
+		logger:   logger,
 	}
 }
 
@@ -66,11 +65,11 @@ func (r *Runner) Run(ctx context.Context) {
 		svc := r.inits[i]
 		go func() {
 			defer wg.Done()
-			r.logger.Printf("init service %s started\n", svc.Name())
+			r.logger.Info("init service %s started", svc.Name())
 			if err := svc.Run(ctx); err != nil {
-				r.logger.Printf("init service %s terminated with error: %s\n", svc.Name(), err)
+				r.logger.ErrorF("init service %s terminated with error: %s", svc.Name(), err)
 			} else {
-				r.logger.Printf("init service %s completed\n", svc.Name())
+				r.logger.Info("init service %s completed", svc.Name())
 			}
 		}()
 	}
@@ -81,7 +80,7 @@ func (r *Runner) Run(ctx context.Context) {
 	}
 
 	<-ctx.Done()
-	r.logger.Println("runner: context cancelled, shutting down")
+	r.logger.Info("context cancelled; shutting down")
 }
 
 // runWithBackoff runs a service with exponential backoff on failure,
@@ -89,13 +88,13 @@ func (r *Runner) Run(ctx context.Context) {
 func (r *Runner) runWithBackoff(ctx context.Context, svc service) {
 	attempt := 0
 	for {
-		r.logger.Printf("service %s starting (attempt %d)\n", svc.Name(), attempt+1)
+		r.logger.Info("service %s starting (attempt %d)", svc.Name(), attempt+1)
 		if err := svc.Run(ctx); err != nil {
-			r.logger.Printf("service %s error: %s\n", svc.Name(), err)
+			r.logger.ErrorF("service %s error: %s", svc.Name(), err)
 		}
 
 		if ctx.Err() != nil {
-			r.logger.Printf("service %s stopped (context cancelled)\n", svc.Name())
+			r.logger.Info("service %s stopped (context cancelled)", svc.Name())
 			return
 		}
 
@@ -107,12 +106,12 @@ func (r *Runner) runWithBackoff(ctx context.Context, svc service) {
 		jitter := time.Duration(rand.Int63n(int64(exp / 4)))
 		delay := time.Duration(exp) + jitter
 		serviceRestartDelay.WithLabelValues(svc.Name()).Observe(delay.Seconds())
-		r.logger.Printf("service %s restarting in %v\n", svc.Name(), delay.Round(time.Millisecond))
+		r.logger.Info("service %s restarting in %v", svc.Name(), delay.Round(time.Millisecond))
 
 		select {
 		case <-time.After(delay):
 		case <-ctx.Done():
-			r.logger.Printf("service %s restart cancelled (context cancelled)\n", svc.Name())
+			r.logger.Info("service %s restart cancelled (context cancelled)", svc.Name())
 			return
 		}
 	}

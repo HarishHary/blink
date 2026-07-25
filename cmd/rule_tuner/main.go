@@ -3,71 +3,60 @@ package main
 import (
 	"context"
 	"log"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/harishhary/blink/cmd/rule_tuner/tuner"
 	"github.com/harishhary/blink/internal/brokers"
-	"github.com/harishhary/blink/internal/configuration"
 	"github.com/harishhary/blink/internal/controller"
 	"github.com/harishhary/blink/internal/logger"
-	pools "github.com/harishhary/blink/internal/pools"
 	"github.com/harishhary/blink/internal/services"
 	"github.com/harishhary/blink/pkg/tuning_rules"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-func main() {
-	go func() {
-		http.Handle("/metrics", promhttp.Handler())
-		http.HandleFunc("/health/live", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-		http.HandleFunc("/health/ready", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-		log.Fatal(http.ListenAndServe(":8080", nil))
-	}()
+// config contains the environment-loaded rule-tuner settings.
+type config struct {
+	services.Common
+	tuner.Config
+	TunerSnapshotTopic string `env:"KAFKA_TOPIC_TUNER_SNAPSHOT"`
+	TuningPluginDir    string `env:"TUNER_PLUGIN_DIR"`
+}
 
+func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	pluginDir := os.Getenv("TUNER_PLUGIN_DIR")
-	cfgMgr := tuning_rules.NewTuningRuleConfigWatcher(logger.New("tuning-config", "dev"), pluginDir)
-	cfgSvc := services.NewConfigSyncService("tuning-config-sync", "BLINK-RULE-TUNER - CONFIG", cfgMgr)
-
-	// Read replica: consumes the tuning controller's snapshot topic and feeds the
-	// executor the control plane's desired state.
-	var cfg configuration.ServiceConfiguration
-	if err := configuration.LoadFromEnvironment(&cfg); err != nil {
+	var cfg config
+	if err := services.LoadFromEnvironment(&cfg); err != nil {
 		log.Fatalf("config: %v", err)
 	}
-	b := brokers.NewKafkaBroker(cfg.Kafka)
-	replica := controller.NewReplica(
-		logger.New("tuning-snapshot", "dev"),
-		b.NewReader(cfg.Topics.TuningSnapshotTopic, cfg.Topics.TuningSnapshotGroup),
-	)
-	replicaSvc, err := services.NewPluginSyncService("tuning-snapshot-sync", "BLINK-RULE-TUNER - SNAPSHOT", replica)
-	if err != nil {
-		log.Fatalf("snapshot service: %v", err)
-	}
+	cfg.Config.Broker = brokers.NewKafkaBroker(cfg.Kafka)
+	b := cfg.Config.Broker
+	rootLogger := logger.New("rule-tuner", cfg.Env)
 
-	routingTable := pools.NewRoutingTable()
-	tuningPool := tuning_rules.NewPool(routingTable, 0)
+	// The snapshot drives both tuning-rule metadata and subprocess lifecycle.
+	tuningSnap := controller.NewSnapshotReader(rootLogger.With("component", "tuning_snapshot"), b.NewBroadcastReader(cfg.TunerSnapshotTopic))
+	tuningSnapSvc := services.NewManagedService("tuning-snapshot-sync", tuningSnap)
+	tuningCfg := tuning_rules.NewSnapshotConfig(rootLogger.With("component", "tuning_config"), tuningSnap)
 
-	pluginMgr := tuning_rules.NewTuningRulePluginExecutor(logger.New("rule-tuner", "dev"), tuningPool.Sync, pluginDir, replica, cfgMgr)
-	syncSvc, err := services.NewPluginSyncService("rule-tuner-sync", "BLINK-RULE-TUNER - SYNC", pluginMgr)
-	if err != nil {
-		log.Fatalf("sync service: %v", err)
-	}
-	tunerSvc, err := tuner.NewTunerService(tuningPool)
-	if err != nil {
-		log.Fatalf("tuner service: %v", err)
-	}
+	tuningPool := tuning_rules.NewPool(rootLogger.With("component", "tuning_pool"), tuningCfg, 0)
 
-	runner := services.New()
+	pluginExecutor := tuning_rules.NewPluginExecutor(rootLogger.With("component", "plugin_executor"), tuningPool.Sync, cfg.TuningPluginDir, tuningSnap, tuningCfg)
+	pluginExecutorSvc := services.NewManagedService("rule-tuner-sync", pluginExecutor)
+
+	cfg.Config.ReadyFn = func() bool {
+		return tuningSnap.Ready() && len(tuningCfg.Primaries()) > 0
+	}
+	tunerSvc := tuner.NewService(rootLogger.With("component", "service"), cfg.Config, tuningPool, tuningCfg)
+
+	// Health only requires snapshot catch-up; consumption also requires a non-empty primary catalog.
+	go services.ServeHealth(rootLogger.With("component", "health"), ":8080", tuningSnap.Ready)
+
+	runner := services.New(rootLogger.With("component", "runner"))
 	runner.Register(
-		cfgSvc,
-		replicaSvc,
-		syncSvc,
+		tuningSnapSvc,
+		pluginExecutorSvc,
 		tunerSvc,
 	)
 	runner.Run(ctx)
