@@ -34,18 +34,18 @@ func main() {
 	b := cfg.Config.Broker
 	rootLogger := logger.New("rule-executor", cfg.Env)
 
-	// Rule snapshot: the sole source of rule config in the data plane
+	// The rule snapshot is the data plane's rule configuration source.
 	ruleSnap := controller.NewSnapshotReader(rootLogger.With("component", "rule_snapshot"), b.NewBroadcastReader(cfg.ExecutorSnapshotTopic))
 	ruleSnapSvc := services.NewManagedService("rule-snapshot-sync", ruleSnap)
 
-	// Rule Plugin Executor: runs the rule plugins based on the rule snapshot
+	// The plugin executor reconciles rule processes from the rule snapshot.
 	ruleCfg := rules.NewSnapshotConfig(rootLogger.With("component", "rule_config"), ruleSnap)
 	rulePool := rules.NewPool(ruleCfg, 0)
 	pluginExecutor := rules.NewPluginExecutor(rootLogger.With("component", "plugin_executor"), rulePool.Sync, cfg.RulePluginDir, ruleSnap, ruleCfg)
 	pluginExecutorSvc := services.NewManagedService("rule-executor-sync", pluginExecutor)
 
-	// Rule Executor: consumes blink-exec, evaluates rules, writes alerts to blink-merger
-	cfg.Config.Ready = func() bool { return ruleSnap.Ready() && len(ruleCfg.Primaries()) > 0 }
+	// The executor consumes routed events and publishes alerts to the merger.
+	cfg.Config.ReadyFn = func() bool { return ruleSnap.Ready() && len(ruleCfg.Primaries()) > 0 }
 	executorSvc := executor.NewService(rootLogger.With("component", "service"), cfg.Config, rulePool, ruleCfg)
 
 	go services.ServeHealth(":8080", func() bool { return ruleSnap.Ready() })

@@ -136,15 +136,17 @@ capacity defaults.
 
 All log sources use one shared matcher/executor lane. Producers publish events to
 `event-matcher-topic`; `event-matcher` selects matchers and rules from each event's
-`log_type`, publishes eligible events to `rule-executor-topic`, and sends exhausted failures
-to `event-matcher-dlq-topic`. `rule-executor` evaluates the routed rules and publishes
-alerts to the shared `alert-merger-topic`.
+`log_type`, publishes eligible events to `rule-executor-topic`, and sends terminal input,
+configuration, and exhausted matcher failures to `event-matcher-dlq-topic`. `rule-executor`
+evaluates the routed rules and publishes alerts to the shared `alert-merger-topic`; terminal
+input, routing, and exhausted rule failures go to `rule-executor-dlq-topic`.
 
 | Stage          | Deployment / group                      | Topic                     |
 | -------------- | --------------------------------------- | ------------------------- |
 | Event matching | `event-matcher` / `event-matcher-group` | `event-matcher-topic`     |
 | Rule execution | `rule-executor` / `rule-executor-group` | `rule-executor-topic`     |
 | Matcher DLQ    | -                                       | `event-matcher-dlq-topic` |
+| Executor DLQ   | -                                       | `rule-executor-dlq-topic` |
 
 Matcher and executor pods do not use a deployment-level `LOG_TYPE`. The event's
 `log_type` selects the relevant rules from the shared snapshots, so adding a log source
@@ -197,8 +199,9 @@ flowchart LR
     producers[All log sources] --> eventTopic([event-matcher-topic<br/>Kafka topic])
     eventTopic --> matcher[event-matcher<br/>Deployment]
     matcher --> execTopic([rule-executor-topic<br/>Kafka topic]) --> executor[rule-executor<br/>Deployment]
-    matcher -. exhausted record .-> matcherDLQ([event-matcher-dlq-topic<br/>Kafka topic])
+    matcher -. failed record .-> matcherDLQ([event-matcher-dlq-topic<br/>Kafka topic])
     executor --> mergerTopic([alert-merger-topic<br/>Kafka topic])
+    executor -. failed record .-> executorDLQ([rule-executor-dlq-topic<br/>Kafka topic])
     mergerTopic --> merger[alert-merger<br/>Deployment] --> tunerTopic([rule-tuner-topic<br/>Kafka topic])
     tunerTopic --> tuner[rule-tuner<br/>Deployment] --> enricherTopic([alert-enricher-topic<br/>Kafka topic])
     enricherTopic --> enricher[alert-enricher<br/>Deployment] --> formatterTopic([alert-formatter-topic<br/>Kafka topic])
@@ -207,27 +210,30 @@ flowchart LR
 
     classDef topic fill:#e8f1ff,stroke:#1a73e8,color:#000
     classDef deployment fill:#e6f4ea,stroke:#188038,color:#000
-    class eventTopic,execTopic,matcherDLQ,mergerTopic,tunerTopic,enricherTopic,formatterTopic,dispatcherTopic topic
+    class eventTopic,execTopic,matcherDLQ,executorDLQ,mergerTopic,tunerTopic,enricherTopic,formatterTopic,dispatcherTopic topic
     class matcher,executor,merger,tuner,enricher,formatter,dispatcher deployment
 ```
 
 The shared matcher and executor deployments handle every log source. Stateful alert
 processing remains in the shared downstream stages.
 
-The matcher and executor acknowledge input offsets only after synchronous Kafka output writes
-(`RequireAll`) succeed. This yields at-least-once delivery: an output acknowledged before a later
-offset-commit failure can be written again after replay. `event_matcher` writes malformed records
-and exhausted matcher failures to `KAFKA_TOPIC_MATCHER_DLQ` using the protobuf
-`dlq.DLQEnvelope`, which retains source topic/partition/offset, original payload, stage, reason,
-attempts, and timestamp; the original key remains Kafka message metadata. These failures are
-terminal per record. Only shutdown cancellation leaves the whole fetched batch uncommitted.
+The matcher and executor prepare every output in a fetched batch before starting synchronous Kafka
+writes (`RequireAll`), then commit input offsets only after all writes succeed. This yields
+at-least-once delivery: an output acknowledged before cancellation, a later write failure, or an
+offset-commit failure can be written again after replay. Both services use the protobuf
+`dlq.DLQEnvelope` for malformed records, deterministic routing or configuration failures, and
+exhausted item failures; it retains source topic/partition/offset, original payload, stage, reason,
+attempts, and timestamp, while the original key remains Kafka message metadata. A non-DLQ
+output-preparation failure leaves the batch uncommitted without partially publishing that batch.
 The matcher readiness probe succeeds after both snapshot readers drain, including when both
 catalogs are empty. Before opening its grouped reader, the matcher additionally waits for
 non-empty parsed primary matcher and rule catalogs; disabled
 primaries count, but candidate-only catalogs do not. This startup gate does not prove a controller
 heartbeat/freshness or stop an already-running reader if either catalog later becomes empty. The
-executor waits only for its rule snapshot reader to drain before opening its grouped reader, then
-commits only after all rule evaluations and alert writes for the batch succeed.
+executor likewise waits for a drained rule snapshot and a non-empty parsed primary rule catalog
+before opening its grouped reader. Neither gate waits for initial plugin subprocess reconciliation.
+`MATCHER_CONCURRENCY` and `EXECUTOR_CONCURRENCY` limit active outer pool calls, not the child RPCs
+created when a pool fans out by rollout bucket and serving process.
 Kafka readers wait on the caller context for a first record, use `MinBytes=1`, then give a partial
 batch one absolute 100 ms linger window; this avoids low-volume batch stalls without extending the
 deadline for each later record.

@@ -37,30 +37,29 @@ func main() {
 	b := cfg.Config.Broker
 	rootLogger := logger.New("event-matcher", cfg.Env)
 
-	// Matcher snapshot: the sole source of matcher config in the data plane
+	// The matcher snapshot is the data plane's matcher configuration source.
 	matcherSnap := controller.NewSnapshotReader(rootLogger.With("component", "matcher_snapshot"), b.NewBroadcastReader(cfg.MatcherSnapshotTopic))
 	matcherSnapSvc := services.NewManagedService("matcher-snapshot-sync", matcherSnap)
 
-	// Rule snapshot: the sole source of rule config in the data plane
+	// The rule snapshot is the data plane's rule configuration source.
 	ruleSnap := controller.NewSnapshotReader(rootLogger.With("component", "rule_snapshot"), b.NewBroadcastReader(cfg.ExecutorSnapshotTopic))
 	ruleSnapSvc := services.NewManagedService("rule-snapshot-sync", ruleSnap)
 
-	// Matcher Plugin Executor: runs the matcher plugins based on the matcher snapshot
+	// The plugin executor reconciles matcher processes from the matcher snapshot.
 	matcherCfg := matchers.NewSnapshotConfig(rootLogger.With("component", "matcher_config"), matcherSnap)
 	matcherPool := matchers.NewPool(matcherCfg, 0)
 	pluginExecutor := matchers.NewPluginExecutor(rootLogger.With("component", "plugin_executor"), matcherPool.Sync, cfg.MatcherPluginDir, matcherSnap, matcherCfg)
 	pluginExecutorSvc := services.NewManagedService("event-matcher-sync", pluginExecutor)
 
-	// Rule Config: to select rules for the event matcher based on the rule log type
+	// The rule catalog selects candidates by event log type.
 	ruleCfg := rules.NewSnapshotConfig(rootLogger.With("component", "rule_config"), ruleSnap)
-	// Gate consumption until both control-plane snapshots have caught up and
-	// each has published at least one effective primary configuration.
-	readyToConsume := snapshotCatalogsReady(matcherSnap.Ready, ruleSnap.Ready, matcherCfg, ruleCfg)
-	cfg.Config.Ready = readyToConsume
+	// Consumption waits for synchronized, non-empty matcher and rule catalogs.
+	cfg.Config.ReadyFn = func() bool {
+		return matcherSnap.Ready() && ruleSnap.Ready() && len(matcherCfg.Primaries()) > 0 && len(ruleCfg.Primaries()) > 0
+	}
 	matcherSvc := matcher.NewService(rootLogger.With("component", "service"), cfg.Config, matcherPool, ruleCfg, matcherCfg)
 
-	// The pod is ready once both control-plane inputs are synchronized. Consumption
-	// remains gated above until there are matcher and rule catalogs to process with.
+	// Health requires synchronized snapshots but does not require non-empty catalogs.
 	go services.ServeHealth(":8080", func() bool { return matcherSnap.Ready() && ruleSnap.Ready() })
 
 	runner := services.New()
@@ -72,10 +71,4 @@ func main() {
 	)
 	runner.Run(ctx)
 	log.Println("Shutting down event-matcher")
-}
-
-func snapshotCatalogsReady(matcherReady, ruleReady func() bool, matcherCfg *matchers.SnapshotConfig, ruleCfg *rules.SnapshotConfig) func() bool {
-	return func() bool {
-		return matcherReady() && ruleReady() && len(matcherCfg.Primaries()) > 0 && len(ruleCfg.Primaries()) > 0
-	}
 }
