@@ -48,8 +48,8 @@ func main() {
 	// Matcher Plugin Executor: runs the matcher plugins based on the matcher snapshot
 	matcherCfg := matchers.NewSnapshotConfig(rootLogger.With("component", "matcher_config"), matcherSnap)
 	matcherPool := matchers.NewPool(matcherCfg, 0)
-	pluginExector := matchers.NewPluginExecutor(rootLogger.With("component", "plugin_executor"), matcherPool.Sync, cfg.MatcherPluginDir, matcherSnap, matcherCfg)
-	pluginExectorSvc := services.NewManagedService("event-matcher-sync", pluginExector)
+	pluginExecutor := matchers.NewPluginExecutor(rootLogger.With("component", "plugin_executor"), matcherPool.Sync, cfg.MatcherPluginDir, matcherSnap, matcherCfg)
+	pluginExecutorSvc := services.NewManagedService("event-matcher-sync", pluginExecutor)
 
 	// Rule Config: to select rules for the event matcher based on the rule log type
 	ruleCfg := rules.NewSnapshotConfig(rootLogger.With("component", "rule_config"), ruleSnap)
@@ -57,7 +57,7 @@ func main() {
 	// each has published at least one effective primary configuration.
 	readyToConsume := snapshotCatalogsReady(matcherSnap.Ready, ruleSnap.Ready, matcherCfg, ruleCfg)
 	cfg.Config.Ready = readyToConsume
-	event_matcherSvc := matcher.NewService(rootLogger.With("component", "service"), cfg.Config, matcherPool, ruleCfg, matcherCfg)
+	matcherSvc := matcher.NewService(rootLogger.With("component", "service"), cfg.Config, matcherPool, ruleCfg, matcherCfg)
 
 	// The pod is ready once both control-plane inputs are synchronized. Consumption
 	// remains gated above until there are matcher and rule catalogs to process with.
@@ -67,8 +67,8 @@ func main() {
 	runner.Register(
 		matcherSnapSvc,
 		ruleSnapSvc,
-		pluginExectorSvc,
-		event_matcherSvc,
+		pluginExecutorSvc,
+		matcherSvc,
 	)
 	runner.Run(ctx)
 	log.Println("Shutting down event-matcher")

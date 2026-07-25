@@ -10,7 +10,7 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/harishhary/blink/internal/brokers"
-	dlqpb "github.com/harishhary/blink/internal/dlq/pb"
+	"github.com/harishhary/blink/internal/dlq"
 	"github.com/harishhary/blink/internal/errors"
 	execpb "github.com/harishhary/blink/internal/exec/pb"
 	"github.com/harishhary/blink/internal/logger"
@@ -22,7 +22,6 @@ import (
 	"golang.org/x/sync/semaphore"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var (
@@ -38,23 +37,23 @@ var (
 // Service prepares a terminal noop, normal record, or DLQ record for every
 // fetched event before publishing normal and DLQ records in fetched order.
 type Service struct {
-	logger     *logger.Logger
-	config     Config
-	execWriter brokers.Writer
-	dlqWriter  brokers.Writer
-	ruleCfg    *rules.SnapshotConfig    // rule controller's snapshot - the rollout authority
-	matcherCfg *matchers.SnapshotConfig // matcher catalog - resolves rule matcher-name refs to logical ids
-	pool       *matchers.Pool
-	sem        *semaphore.Weighted // bounds parallel Pool.Match calls to MATCHER_CONCURRENCY
+	logger         *logger.Logger
+	config         Config
+	executorWriter brokers.Writer
+	dlqWriter      brokers.Writer
+	ruleCfg        *rules.SnapshotConfig    // rule controller's snapshot - the rollout authority
+	matcherCfg     *matchers.SnapshotConfig // matcher catalog - resolves rule matcher-name refs to logical ids
+	pool           *matchers.Pool
+	sem            *semaphore.Weighted // bounds parallel Pool.Match calls to MATCHER_CONCURRENCY
 }
 
 // Config is the set of dependencies NewService needs, injected by main. See docs/services/event_matcher.md.
 type Config struct {
-	Broker       brokers.Broker
-	EventTopic   string `env:"KAFKA_TOPIC_MATCHER"`
-	MatcherGroup string `env:"KAFKA_GROUP_MATCHER"`
-	ExecTopic    string `env:"KAFKA_TOPIC_EXECUTOR"`
-	DLQTopic     string `env:"KAFKA_TOPIC_MATCHER_DLQ"`
+	Broker        brokers.Broker
+	MatcherTopic  string `env:"KAFKA_TOPIC_MATCHER"`
+	MatcherGroup  string `env:"KAFKA_GROUP_MATCHER"`
+	ExecutorTopic string `env:"KAFKA_TOPIC_EXECUTOR"`
+	DLQTopic      string `env:"KAFKA_TOPIC_MATCHER_DLQ"`
 	// Ready gates grouped-consumer creation until matcher and rule snapshots catch up.
 	Ready func() bool
 	// BatchSize is the number of events to process in a single batch.
@@ -95,14 +94,14 @@ func NewService(logger *logger.Logger, cfg Config, pool *matchers.Pool, ruleCfg 
 	}
 
 	return &Service{
-		logger:     logger,
-		config:     cfg,
-		execWriter: cfg.Broker.NewWriter(cfg.ExecTopic),
-		dlqWriter:  cfg.Broker.NewWriter(cfg.DLQTopic),
-		ruleCfg:    ruleCfg,
-		matcherCfg: matcherCfg,
-		pool:       pool,
-		sem:        semaphore.NewWeighted(int64(cfg.Concurrency)),
+		logger:         logger,
+		config:         cfg,
+		executorWriter: cfg.Broker.NewWriter(cfg.ExecutorTopic),
+		dlqWriter:      cfg.Broker.NewWriter(cfg.DLQTopic),
+		ruleCfg:        ruleCfg,
+		matcherCfg:     matcherCfg,
+		pool:           pool,
+		sem:            semaphore.NewWeighted(int64(cfg.Concurrency)),
 	}
 }
 
@@ -124,8 +123,8 @@ func (s *Service) Run(ctx context.Context) errors.Error {
 		return nil
 	}
 
-	s.logger.Info("catalogs ready; consuming events (topic=%s group=%s)", s.config.EventTopic, s.config.MatcherGroup)
-	reader := s.config.Broker.NewReader(s.config.EventTopic, s.config.MatcherGroup)
+	s.logger.Info("catalogs ready; consuming events (topic=%s group=%s)", s.config.MatcherTopic, s.config.MatcherGroup)
+	reader := s.config.Broker.NewReader(s.config.MatcherTopic, s.config.MatcherGroup)
 	defer func() {
 		if err := reader.Close(); err != nil {
 			s.logger.Error(errors.NewE(err))
@@ -462,7 +461,7 @@ func (s *Service) publishTerminals(ctx context.Context, states []*eventState) er
 		if state.prepared.kind == terminalDrop {
 			continue
 		}
-		writer := s.execWriter
+		writer := s.executorWriter
 		if state.prepared.kind == terminalDLQ {
 			writer = s.dlqWriter
 		}
@@ -483,23 +482,13 @@ func (s *Service) publishTerminals(ctx context.Context, states []*eventState) er
 	return nil
 }
 
+// prepareDLQ marks an input for the dead-letter topic using the shared envelope.
 func (s *Service) prepareDLQ(source brokers.Message, stage, reason string, attempts int) (preparedRecord, errors.Error) {
-	payload, err := proto.Marshal(&dlqpb.DLQEnvelope{
-		Source: &dlqpb.DLQSource{
-			Topic: source.Topic, Partition: int32(source.Partition), Offset: source.Offset,
-		},
-		OriginalPayload: source.Value,
-		Stage:           stage,
-		Reason:          reason,
-		Attempts:        int32(attempts),
-		FailedAt:        timestamppb.Now(),
-	})
+	msg, err := dlq.Record(source, stage, reason, attempts)
 	if err != nil {
 		return preparedRecord{}, errors.NewE(err)
 	}
-	return preparedRecord{kind: terminalDLQ, message: brokers.Message{
-		Key: append([]byte(nil), source.Key...), Value: payload,
-	}}, nil
+	return preparedRecord{kind: terminalDLQ, message: msg}, nil
 }
 
 // newBackoff returns the service's exponential retry policy (RetryBaseMS initial, RetryCapMS cap, jittered).

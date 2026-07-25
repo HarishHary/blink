@@ -2,11 +2,14 @@ package executor
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"sync"
 	"time"
 
+	"github.com/cenkalti/backoff/v4"
 	"github.com/harishhary/blink/internal/brokers"
+	"github.com/harishhary/blink/internal/dlq"
 	"github.com/harishhary/blink/internal/errors"
 	execpb "github.com/harishhary/blink/internal/exec/pb"
 	"github.com/harishhary/blink/internal/logger"
@@ -42,13 +45,21 @@ var (
 	alertsWriteErrors   = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "alerts_write_errors_total"})
 	alertsWriteDuration = promauto.NewHistogram(prometheus.HistogramOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "alerts_write_seconds"})
 
+	dlqOut         = promauto.NewCounterVec(prometheus.CounterOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "dlq_records_total"}, []string{"stage"})
+	dlqWriteErrors = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "dlq_write_errors_total"})
+
 	ruleMatches = promauto.NewCounterVec(prometheus.CounterOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "rule_matches_total"}, []string{"rule"})
 )
 
 type ruleEntry struct {
-	meta    *rules.RuleMetadata
-	events  []events.Event
-	results []rules.EvaluateItem
+	meta   *rules.RuleMetadata
+	events []events.Event
+	// sources[i] is the Kafka record events[i] was decoded from, kept so an evaluation
+	// failure can be dead-lettered against its origin instead of killing the batch.
+	sources  []brokers.Message
+	results  []rules.EvaluateItem
+	failure  string // non-empty once evaluation is exhausted; sources go to the DLQ
+	attempts int
 }
 
 // Reads ExecMessages from blink-exec, applies the rolled out rules, and writes alerts to blink-merger.
@@ -62,11 +73,11 @@ type Service struct {
 	sem          *semaphore.Weighted
 }
 
-// Config is the explicit set of dependencies NewExecutorService needs. The composition
+// Config is the explicit set of dependencies NewService needs. The composition
 // root (cmd/rule_executor/main) loads config once and injects these, rather than the
 // component reaching into a shared ServiceContext / re-loading the whole environment.
-// Config's topic fields (and the embedded Tuning knobs) are populated from the environment
-// by main (which embeds it); Broker is injected after load.
+// Config's topic fields (and the optional EXECUTOR_* tuning knobs) are populated from the
+// environment by main (which embeds it); Broker and Ready are injected after load.
 type Config struct {
 	Broker        brokers.Broker
 	ExecutorTopic string `env:"KAFKA_TOPIC_EXECUTOR"`
@@ -89,7 +100,7 @@ type Config struct {
 	RetryCapMS int `env:"EXECUTOR_RETRY_CAP_MS,optional"`
 }
 
-func NewExecutorService(logger *logger.Logger, cfg Config, pool *rules.Pool, ruleCfg *rules.SnapshotConfig) *Service {
+func NewService(logger *logger.Logger, cfg Config, pool *rules.Pool, ruleCfg *rules.SnapshotConfig) *Service {
 	if cfg.BatchSize <= 0 {
 		cfg.BatchSize = 50
 	}
@@ -198,33 +209,70 @@ func waitForReady(ctx context.Context, ready func() bool) bool {
 	}
 }
 
-// processBatch decodes messages, groups events by rule and rollout bucket, evaluates
-// every cohort, then publishes each rule's matched events in original input order.
-func (s *Service) processBatch(ctx context.Context, msgs []brokers.Message, ruleSet []*rules.RuleMetadata) errors.Error {
-	byRule := make(map[string]*ruleEntry)
-	ruleOrder := make([]*ruleEntry, 0)
+// batch is one poll's decoded work: the rules to evaluate, in first-seen order, plus the
+// dead-letter records collected along the way.
+type batch struct {
+	byRule    map[string]*ruleEntry
+	ruleOrder []*ruleEntry
+	dlq       []brokers.Message
+}
 
+// route appends an event to its rule's work, registering the rule on first sight.
+func (b *batch) route(meta *rules.RuleMetadata, event events.Event, source brokers.Message) {
+	e, exists := b.byRule[meta.Id]
+	if !exists {
+		e = &ruleEntry{meta: meta}
+		b.byRule[meta.Id] = e
+		b.ruleOrder = append(b.ruleOrder, e)
+	}
+	e.events = append(e.events, event)
+	e.sources = append(e.sources, source)
+}
+
+// processBatch decodes messages, groups events by rule, evaluates every rule, then
+// publishes each rule's matched events in original input order.
+func (s *Service) processBatch(ctx context.Context, msgs []brokers.Message, ruleSet []*rules.RuleMetadata) errors.Error {
+	b := s.decode(msgs, ruleSet)
+	if len(b.ruleOrder) > 0 {
+		rulesPerBatch.Observe(float64(len(b.ruleOrder)))
+		s.logger.Info("evaluating %d rule(s) across batch of %d message(s)", len(b.ruleOrder), len(msgs))
+		s.evaluate(ctx, b.ruleOrder)
+		if ctx.Err() != nil {
+			return nil // shutdown: leave the batch uncommitted for redelivery
+		}
+	}
+	return s.publish(ctx, b)
+}
+
+// decode turns raw records into per-rule work. Input faults are per-record and never fail the
+// batch: an uncommitted poison pill would be redelivered forever.
+func (s *Service) decode(msgs []brokers.Message, ruleSet []*rules.RuleMetadata) *batch {
+	b := &batch{byRule: make(map[string]*ruleEntry)}
 	for _, m := range msgs {
 		var msg execpb.ExecMessage
 		if err := proto.Unmarshal(m.Value, &msg); err != nil {
 			eventsParseErrors.Inc()
-			return errors.NewE(err)
+			s.deadLetter(b, m, "decode", err.Error(), 0)
+			continue
 		}
-
 		if msg.GetEvent() == nil {
 			eventsParseErrors.Inc()
-			return errors.NewF("exec message has no event")
+			s.deadLetter(b, m, "decode", "exec message has no event", 0)
+			continue
 		}
+
 		event := msg.GetEvent().AsMap()
 		lt, ok := event["log_type"].(string)
 		if !ok {
 			eventsInvalidLogType.Inc()
-			return errors.NewF("event log_type must be a string")
+			s.deadLetter(b, m, "log_type", "event log_type must be a string", 0)
+			continue
 		}
 
 		metaList, err := s.eligibleRules(ruleSet, lt, msg.GetRuleIds())
 		if err != nil {
-			return err
+			s.deadLetter(b, m, "rules", err.Error(), 0)
+			continue
 		}
 		if len(metaList) == 0 {
 			eventsNoRules.Inc()
@@ -238,45 +286,23 @@ func (s *Service) processBatch(ctx context.Context, msgs []brokers.Message, rule
 			if len(meta.ReqSubkeys) > 0 && !rules.DefaultSubKeysInEvent(meta, event) {
 				continue
 			}
-			e, exists := byRule[meta.Id]
-			if !exists {
-				e = &ruleEntry{meta: meta}
-				byRule[meta.Id] = e
-				ruleOrder = append(ruleOrder, e)
-			}
-			e.events = append(e.events, event)
+			b.route(meta, event, m)
 		}
 	}
+	return b
+}
 
-	if len(byRule) == 0 {
-		return nil
-	}
-
-	rulesPerBatch.Observe(float64(len(byRule)))
-	s.logger.Info("evaluating %d rule(s) across batch of %d message(s)", len(byRule), len(msgs))
-
-	// Evaluate every rule independently. The rule pool owns tenant-sticky rollout
-	// partitioning. No alert is built or published until every rule completes.
-	evalCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
+// evaluate runs every rule's pool call in parallel, bounded by EXECUTOR_CONCURRENCY. Evaluation
+// failures are recorded on the entry rather than returned, so nothing here fails the batch.
+func (s *Service) evaluate(ctx context.Context, entries []*ruleEntry) {
 	var wg sync.WaitGroup
-	var mu sync.Mutex
-	var batchErr errors.Error
-	setBatchErr := func(err errors.Error) {
-		mu.Lock()
-		defer mu.Unlock()
-		if batchErr == nil {
-			batchErr = err
-			cancel()
-		}
-	}
-	for _, entry := range ruleOrder {
+	for _, entry := range entries {
 		wg.Add(1)
-		go func(entry *ruleEntry) {
+		go func() {
 			defer wg.Done()
-			if err := s.sem.Acquire(evalCtx, 1); err != nil {
-				setBatchErr(errors.NewE(err))
+			// Acquire only fails once ctx is done; the caller re-checks ctx and leaves
+			// the batch uncommitted, so a half-evaluated entry is never published.
+			if err := s.sem.Acquire(ctx, 1); err != nil {
 				return
 			}
 			concurrencyGauge.Inc()
@@ -284,28 +310,60 @@ func (s *Service) processBatch(ctx context.Context, msgs []brokers.Message, rule
 				s.sem.Release(1)
 				concurrencyGauge.Dec()
 			}()
-
-			cctx, cancel := context.WithTimeout(evalCtx, time.Duration(s.config.TimeoutSec)*time.Second)
-			defer cancel()
-			results, err := s.evaluateRule(cctx, entry.meta, entry.events)
-			if err != nil {
-				setBatchErr(err)
-				return
-			}
-			entry.results = results
-		}(entry)
+			s.evaluateWithRetries(ctx, entry)
+		}()
 	}
 	wg.Wait()
-	if batchErr != nil {
-		return batchErr
-	}
+}
 
-	for _, entry := range ruleOrder {
-		if err := s.publishRuleResults(ctx, entry, entry.results); err != nil {
+// publish writes each rule's alerts, dead-letters the rules whose evaluation was exhausted,
+// then flushes every dead-letter record before the caller commits the batch's offsets.
+func (s *Service) publish(ctx context.Context, b *batch) errors.Error {
+	for _, entry := range b.ruleOrder {
+		if entry.failure != "" {
+			// ponytail: an event routed to N failing rules yields N DLQ records, one per
+			// rule. Dedupe by (partition, offset) only if replay volume proves it matters.
+			reason := fmt.Sprintf("rule %s: %s", entry.meta.Name, entry.failure)
+			for _, src := range entry.sources {
+				s.deadLetter(b, src, "rule", reason, entry.attempts)
+			}
+			continue
+		}
+		if err := s.publishRuleResults(ctx, entry); err != nil {
+			return err
+		}
+	}
+	for _, rec := range b.dlq {
+		if err := s.writeWithRetries(ctx, s.dlqWriter, rec, dlqWriteErrors); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// evaluateWithRetries retries the rule's pool call up to MaxAttempts, each attempt bounded by
+// TimeoutSec. On exhaustion it records the failure on the entry so the caller dead-letters that
+// rule's source records, rather than failing the batch and redelivering it indefinitely.
+func (s *Service) evaluateWithRetries(ctx context.Context, entry *ruleEntry) {
+	attempt := 0
+	err := backoff.Retry(func() error {
+		attempt++
+		cctx, cancel := context.WithTimeout(ctx, time.Duration(s.config.TimeoutSec)*time.Second)
+		defer cancel()
+		results, evalErr := s.evaluateRule(cctx, entry.meta, entry.events)
+		if evalErr != nil {
+			if attempt >= s.config.MaxAttempts {
+				return backoff.Permanent(evalErr)
+			}
+			return evalErr
+		}
+		entry.results = results
+		return nil
+	}, s.newBackoff(ctx))
+	if err != nil {
+		entry.attempts = attempt
+		entry.failure = err.Error()
+	}
 }
 
 func (s *Service) evaluateRule(ctx context.Context, meta *rules.RuleMetadata, events []events.Event) ([]rules.EvaluateItem, errors.Error) {
@@ -330,8 +388,8 @@ func (s *Service) evaluateRule(ctx context.Context, meta *rules.RuleMetadata, ev
 	return results, nil
 }
 
-func (s *Service) publishRuleResults(ctx context.Context, entry *ruleEntry, results []rules.EvaluateItem) errors.Error {
-	for i, result := range results {
+func (s *Service) publishRuleResults(ctx context.Context, entry *ruleEntry) errors.Error {
+	for i, result := range entry.results {
 		if !result.Matched {
 			continue
 		}
@@ -357,18 +415,55 @@ func (s *Service) publishRuleResults(ctx context.Context, entry *ruleEntry, resu
 			return errors.NewE(marshalErr)
 		}
 		startWrite := time.Now()
-		if err := s.mergerWriter.WriteMessages(ctx, brokers.Message{
+		if err := s.writeWithRetries(ctx, s.mergerWriter, brokers.Message{
 			Key:   []byte(alert.MergePartitionKey()),
 			Value: payload,
-		}); err != nil {
-			alertsWriteErrors.Inc()
-			return errors.NewE(err)
+		}, alertsWriteErrors); err != nil {
+			return err
 		}
 		alertsWriteDuration.Observe(time.Since(startWrite).Seconds())
 		ruleMatches.WithLabelValues(entry.meta.Name).Inc()
 		alertsOut.Inc()
 	}
 	return nil
+}
+
+// writeWithRetries retries a publish indefinitely; only ctx cancellation stops it. A dropped
+// write would silently lose an alert (or the evidence of a failure), so there is no give-up path.
+func (s *Service) writeWithRetries(ctx context.Context, w brokers.Writer, msg brokers.Message, errCount prometheus.Counter) errors.Error {
+	err := backoff.Retry(func() error {
+		if werr := w.WriteMessages(ctx, msg); werr != nil {
+			errCount.Inc()
+			return werr
+		}
+		return nil
+	}, s.newBackoff(ctx))
+	if err != nil {
+		return errors.NewE(err)
+	}
+	return nil
+}
+
+// deadLetter queues one record for the dead-letter topic. A marshal failure is unreachable for a
+// well-formed envelope, so it is logged and dropped: failing the batch instead would leave the
+// offending record uncommitted and replay it forever.
+func (s *Service) deadLetter(b *batch, source brokers.Message, stage, reason string, attempts int) {
+	msg, err := dlq.Record(source, stage, reason, attempts)
+	if err != nil {
+		s.logger.ErrorF("dropping dead-letter record (stage=%s): %v", stage, err)
+		return
+	}
+	dlqOut.WithLabelValues(stage).Inc()
+	b.dlq = append(b.dlq, msg)
+}
+
+// newBackoff returns the service's exponential retry policy (RetryBaseMS initial, RetryCapMS cap, jittered).
+func (s *Service) newBackoff(ctx context.Context) backoff.BackOffContext {
+	b := backoff.NewExponentialBackOff()
+	b.InitialInterval = time.Duration(s.config.RetryBaseMS) * time.Millisecond
+	b.MaxInterval = time.Duration(s.config.RetryCapMS) * time.Millisecond
+	b.MaxElapsedTime = 0 // callers bound attempts themselves or retry until ctx cancel
+	return backoff.WithContext(b, ctx)
 }
 
 // eligibleRules returns the rule metadata to evaluate for this event.

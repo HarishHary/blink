@@ -32,11 +32,11 @@ func main() {
 	}
 	cfg.Config.Broker = brokers.NewKafkaBroker(cfg.Kafka)
 	b := cfg.Config.Broker
-	rootLogger := logger.New("event-matcher", cfg.Env)
+	rootLogger := logger.New("rule-executor", cfg.Env)
 
 	// Rule snapshot: the sole source of rule config in the data plane
 	ruleSnap := controller.NewSnapshotReader(rootLogger.With("component", "rule_snapshot"), b.NewBroadcastReader(cfg.ExecutorSnapshotTopic))
-	ruleSnapSvc := services.NewManagedService("matcher-snapshot-sync", ruleSnap)
+	ruleSnapSvc := services.NewManagedService("rule-snapshot-sync", ruleSnap)
 
 	// Rule Plugin Executor: runs the rule plugins based on the rule snapshot
 	ruleCfg := rules.NewSnapshotConfig(rootLogger.With("component", "rule_config"), ruleSnap)
@@ -44,10 +44,14 @@ func main() {
 	pluginExecutor := rules.NewPluginExecutor(rootLogger.With("component", "plugin_executor"), rulePool.Sync, cfg.RulePluginDir, ruleSnap, ruleCfg)
 	pluginExecutorSvc := services.NewManagedService("rule-executor-sync", pluginExecutor)
 
+	// Rule Executor: consumes blink-exec, evaluates rules, writes alerts to blink-merger
+	cfg.Config.Ready = func() bool { return ruleSnap.Ready() && len(ruleCfg.Primaries()) > 0 }
+	executorSvc := executor.NewService(rootLogger.With("component", "service"), cfg.Config, rulePool, ruleCfg)
+
 	go services.ServeHealth(":8080", func() bool { return ruleSnap.Ready() })
 
 	runner := services.New()
-	runner.Register(ruleSnapSvc, pluginExecutorSvc)
+	runner.Register(ruleSnapSvc, pluginExecutorSvc, executorSvc)
 	runner.Run(ctx)
 	log.Println("Shutting down rule-executor")
 }
