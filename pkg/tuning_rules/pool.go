@@ -7,6 +7,7 @@ import (
 
 	"github.com/harishhary/blink/internal/config"
 	"github.com/harishhary/blink/internal/errors"
+	"github.com/harishhary/blink/internal/logger"
 	"github.com/harishhary/blink/internal/messaging"
 	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/internal/pools"
@@ -20,9 +21,9 @@ type Pool struct {
 }
 
 // NewPool builds the tuning-rule pool with live rollout routing derived from cfg.
-func NewPool(cfg config.Source[*TuningRuleMetadata], drainTimeout time.Duration) *Pool {
+func NewPool(logger *logger.Logger, cfg config.Source[*TuningRuleMetadata], drainTimeout time.Duration) *Pool {
 	return &Pool{
-		ProcessPool: pools.NewProcessPool[TuningRule](config.RolloutFor(cfg), pools.NewPoolMetrics("tuning_rules"), drainTimeout),
+		ProcessPool: pools.NewProcessPool[TuningRule](logger, config.RolloutFor(cfg), pools.NewPoolMetrics("tuning_rules"), drainTimeout),
 	}
 }
 

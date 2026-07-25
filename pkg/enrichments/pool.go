@@ -7,6 +7,7 @@ import (
 
 	"github.com/harishhary/blink/internal/config"
 	"github.com/harishhary/blink/internal/errors"
+	"github.com/harishhary/blink/internal/logger"
 	"github.com/harishhary/blink/internal/messaging"
 	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/internal/pools"
@@ -20,9 +21,9 @@ type Pool struct {
 
 // NewPool builds the enrichment pool with live rollout derived from cfg (see the
 // rules pool for the closure rationale).
-func NewPool(cfg config.Source[*EnrichmentMetadata], drainTimeout time.Duration) *Pool {
+func NewPool(logger *logger.Logger, cfg config.Source[*EnrichmentMetadata], drainTimeout time.Duration) *Pool {
 	return &Pool{
-		ProcessPool: pools.NewProcessPool[Enrichment](config.RolloutFor(cfg), pools.NewPoolMetrics("enrichments"), drainTimeout),
+		ProcessPool: pools.NewProcessPool[Enrichment](logger, config.RolloutFor(cfg), pools.NewPoolMetrics("enrichments"), drainTimeout),
 	}
 }
 

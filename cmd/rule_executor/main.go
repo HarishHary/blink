@@ -40,7 +40,7 @@ func main() {
 
 	// The plugin executor reconciles rule processes from the rule snapshot.
 	ruleCfg := rules.NewSnapshotConfig(rootLogger.With("component", "rule_config"), ruleSnap)
-	rulePool := rules.NewPool(ruleCfg, 0)
+	rulePool := rules.NewPool(rootLogger.With("component", "rule_pool"), ruleCfg, 0)
 	pluginExecutor := rules.NewPluginExecutor(rootLogger.With("component", "plugin_executor"), rulePool.Sync, cfg.RulePluginDir, ruleSnap, ruleCfg)
 	pluginExecutorSvc := services.NewManagedService("rule-executor-sync", pluginExecutor)
 
@@ -48,9 +48,9 @@ func main() {
 	cfg.Config.ReadyFn = func() bool { return ruleSnap.Ready() && len(ruleCfg.Primaries()) > 0 }
 	executorSvc := executor.NewService(rootLogger.With("component", "service"), cfg.Config, rulePool, ruleCfg)
 
-	go services.ServeHealth(":8080", func() bool { return ruleSnap.Ready() })
+	go services.ServeHealth(rootLogger.With("component", "health"), ":8080", func() bool { return ruleSnap.Ready() })
 
-	runner := services.New()
+	runner := services.New(rootLogger.With("component", "runner"))
 	runner.Register(ruleSnapSvc, pluginExecutorSvc, executorSvc)
 	runner.Run(ctx)
 	log.Println("Shutting down rule-executor")

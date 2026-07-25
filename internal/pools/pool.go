@@ -2,9 +2,10 @@ package pools
 
 import (
 	"errors"
-	"log"
 	"sync"
 	"time"
+
+	"github.com/harishhary/blink/internal/logger"
 )
 
 // ErrPluginNotFound is returned by Call when no active pool exists for the plugin ID.
@@ -29,12 +30,13 @@ type ProcessPool[T any] struct {
 	rolloutCfg   RolloutConfig
 	drainTimeout time.Duration // drainTimeout ≤ 0 uses 60s.
 	metrics      *PoolMetrics
+	logger       *logger.Logger
 }
 
 const defaultDrainTimeout = 60 * time.Second
 
 // Creates a ProcessPool driven by the given RolloutConfig callback.
-func NewProcessPool[T any](rolloutCfg RolloutConfig, metrics *PoolMetrics, drainTimeout time.Duration) *ProcessPool[T] {
+func NewProcessPool[T any](logger *logger.Logger, rolloutCfg RolloutConfig, metrics *PoolMetrics, drainTimeout time.Duration) *ProcessPool[T] {
 	if drainTimeout <= 0 {
 		drainTimeout = defaultDrainTimeout
 	}
@@ -46,6 +48,7 @@ func NewProcessPool[T any](rolloutCfg RolloutConfig, metrics *PoolMetrics, drain
 		rolloutCfg:   rolloutCfg,
 		drainTimeout: drainTimeout,
 		metrics:      metrics,
+		logger:       logger,
 	}
 }
 
@@ -217,9 +220,9 @@ func (pp *ProcessPool[T]) drain(key PoolKey, pool *VersionedPool[T], onDrained f
 	}
 
 	if pool.Inflight() > 0 {
-		log.Printf("processpool: force-killed pool %s after %.1fs drain (%d in-flight)", key, elapsed, pool.Inflight())
+		pp.logger.ErrorF("force-killed pool %s after %.1fs drain (%d in-flight)", key, elapsed, pool.Inflight())
 	} else {
-		log.Printf("processpool: drained pool %s in %.2fs", key, elapsed)
+		pp.logger.Info("drained pool %s in %.2fs", key, elapsed)
 	}
 
 	// Only delete if this exact pool is still at key - a concurrent Register() may have replaced it.

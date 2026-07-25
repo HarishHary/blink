@@ -40,7 +40,7 @@ func main() {
 	tuningSnapSvc := services.NewManagedService("tuning-snapshot-sync", tuningSnap)
 	tuningCfg := tuning_rules.NewSnapshotConfig(rootLogger.With("component", "tuning_config"), tuningSnap)
 
-	tuningPool := tuning_rules.NewPool(tuningCfg, 0)
+	tuningPool := tuning_rules.NewPool(rootLogger.With("component", "tuning_pool"), tuningCfg, 0)
 
 	pluginExecutor := tuning_rules.NewPluginExecutor(rootLogger.With("component", "plugin_executor"), tuningPool.Sync, cfg.TuningPluginDir, tuningSnap, tuningCfg)
 	pluginExecutorSvc := services.NewManagedService("rule-tuner-sync", pluginExecutor)
@@ -51,9 +51,9 @@ func main() {
 	tunerSvc := tuner.NewService(rootLogger.With("component", "service"), cfg.Config, tuningPool, tuningCfg)
 
 	// Health only requires snapshot catch-up; consumption also requires a non-empty primary catalog.
-	go services.ServeHealth(":8080", tuningSnap.Ready)
+	go services.ServeHealth(rootLogger.With("component", "health"), ":8080", tuningSnap.Ready)
 
-	runner := services.New()
+	runner := services.New(rootLogger.With("component", "runner"))
 	runner.Register(
 		tuningSnapSvc,
 		pluginExecutorSvc,

@@ -3,7 +3,6 @@ package pools
 import (
 	"context"
 	"fmt"
-	"log"
 )
 
 // Call serves the caller's result from the routed pool; CallShadow mirrors to the shadow candidate in the
@@ -68,12 +67,12 @@ func (pp *ProcessPool[T]) CallShadow(ctx context.Context, id string, fn func(con
 		}
 		plugin, err := altPool.Acquire(shadowCtx)
 		if err != nil {
-			log.Printf("processpool: shadow acquire failed for %s: %v", id, err)
+			pp.logger.ErrorF("shadow acquire failed for %s: %v", id, err)
 			return
 		}
 		defer altPool.Release(plugin)
 		if err := fn(shadowCtx, plugin); err != nil {
-			log.Printf("processpool: shadow error for %s: %v", id, err)
+			pp.logger.ErrorF("shadow call failed for %s: %v", id, err)
 			if pp.metrics != nil {
 				pp.metrics.shadowDiffs.WithLabelValues(id).Inc()
 			}

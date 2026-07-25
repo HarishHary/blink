@@ -7,6 +7,7 @@ import (
 
 	"github.com/harishhary/blink/internal/config"
 	"github.com/harishhary/blink/internal/errors"
+	"github.com/harishhary/blink/internal/logger"
 	"github.com/harishhary/blink/internal/messaging"
 	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/internal/pools"
@@ -21,9 +22,9 @@ type Pool struct {
 // NewPool builds the matcher pool with live rollout derived from cfg: a
 // running canary/shadow artifact's mode+pct comes from its own spec (by binary name);
 // otherwise the merged per-ID rollout applies. Mirrors the rules pool.
-func NewPool(cfg config.Source[*MatcherMetadata], drainTimeout time.Duration) *Pool {
+func NewPool(logger *logger.Logger, cfg config.Source[*MatcherMetadata], drainTimeout time.Duration) *Pool {
 	return &Pool{
-		ProcessPool: pools.NewProcessPool[Matcher](config.RolloutFor(cfg), pools.NewPoolMetrics("matchers"), drainTimeout),
+		ProcessPool: pools.NewProcessPool[Matcher](logger, config.RolloutFor(cfg), pools.NewPoolMetrics("matchers"), drainTimeout),
 	}
 }
 

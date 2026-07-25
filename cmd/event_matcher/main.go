@@ -47,7 +47,7 @@ func main() {
 
 	// The plugin executor reconciles matcher processes from the matcher snapshot.
 	matcherCfg := matchers.NewSnapshotConfig(rootLogger.With("component", "matcher_config"), matcherSnap)
-	matcherPool := matchers.NewPool(matcherCfg, 0)
+	matcherPool := matchers.NewPool(rootLogger.With("component", "matcher_pool"), matcherCfg, 0)
 	pluginExecutor := matchers.NewPluginExecutor(rootLogger.With("component", "plugin_executor"), matcherPool.Sync, cfg.MatcherPluginDir, matcherSnap, matcherCfg)
 	pluginExecutorSvc := services.NewManagedService("event-matcher-sync", pluginExecutor)
 
@@ -60,9 +60,9 @@ func main() {
 	matcherSvc := matcher.NewService(rootLogger.With("component", "service"), cfg.Config, matcherPool, ruleCfg, matcherCfg)
 
 	// Health requires synchronized snapshots but does not require non-empty catalogs.
-	go services.ServeHealth(":8080", func() bool { return matcherSnap.Ready() && ruleSnap.Ready() })
+	go services.ServeHealth(rootLogger.With("component", "health"), ":8080", func() bool { return matcherSnap.Ready() && ruleSnap.Ready() })
 
-	runner := services.New()
+	runner := services.New(rootLogger.With("component", "runner"))
 	runner.Register(
 		matcherSnapSvc,
 		ruleSnapSvc,
