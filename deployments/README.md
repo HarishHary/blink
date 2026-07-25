@@ -204,20 +204,21 @@ flowchart LR
     executor -. failed record .-> executorDLQ([rule-executor-dlq-topic<br/>Kafka topic])
     mergerTopic --> merger[alert-merger<br/>Deployment] --> tunerTopic([rule-tuner-topic<br/>Kafka topic])
     tunerTopic --> tuner[rule-tuner<br/>Deployment] --> enricherTopic([alert-enricher-topic<br/>Kafka topic])
+    tuner -. failed record .-> tunerDLQ([rule-tuner-dlq-topic<br/>Kafka topic])
     enricherTopic --> enricher[alert-enricher<br/>Deployment] --> formatterTopic([alert-formatter-topic<br/>Kafka topic])
     formatterTopic --> formatter[alert-formatter<br/>Deployment] --> dispatcherTopic([alert-dispatcher-topic<br/>Kafka topic])
     dispatcherTopic --> dispatcher[alert-dispatcher<br/>Deployment]
 
     classDef topic fill:#e8f1ff,stroke:#1a73e8,color:#000
     classDef deployment fill:#e6f4ea,stroke:#188038,color:#000
-    class eventTopic,execTopic,matcherDLQ,executorDLQ,mergerTopic,tunerTopic,enricherTopic,formatterTopic,dispatcherTopic topic
+    class eventTopic,execTopic,matcherDLQ,executorDLQ,mergerTopic,tunerTopic,tunerDLQ,enricherTopic,formatterTopic,dispatcherTopic topic
     class matcher,executor,merger,tuner,enricher,formatter,dispatcher deployment
 ```
 
 The shared matcher and executor deployments handle every log source. Stateful alert
 processing remains in the shared downstream stages.
 
-The matcher and executor prepare every output in a fetched batch before starting synchronous Kafka
+The matcher, executor, and tuner prepare every output in a fetched batch before starting synchronous Kafka
 writes (`RequireAll`), then commit input offsets only after all writes succeed. This yields
 at-least-once delivery: an output acknowledged before cancellation, a later write failure, or an
 offset-commit failure can be written again after replay. Both services use the protobuf
@@ -231,8 +232,9 @@ non-empty parsed primary matcher and rule catalogs; disabled
 primaries count, but candidate-only catalogs do not. This startup gate does not prove a controller
 heartbeat/freshness or stop an already-running reader if either catalog later becomes empty. The
 executor likewise waits for a drained rule snapshot and a non-empty parsed primary rule catalog
-before opening its grouped reader. Neither gate waits for initial plugin subprocess reconciliation.
-`MATCHER_CONCURRENCY` and `EXECUTOR_CONCURRENCY` limit active outer pool calls, not the child RPCs
+before opening its grouped reader. The tuner applies the same gate to its tuning-rule snapshot and
+primary catalog. None of these gates waits for initial plugin subprocess reconciliation.
+`MATCHER_CONCURRENCY`, `EXECUTOR_CONCURRENCY`, and `TUNER_CONCURRENCY` limit active outer pool calls, not the child RPCs
 created when a pool fans out by rollout bucket and serving process.
 Kafka readers wait on the caller context for a first record, use `MinBytes=1`, then give a partial
 batch one absolute 100 ms linger window; this avoids low-volume batch stalls without extending the
