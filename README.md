@@ -71,6 +71,8 @@ Blink's current foundation focuses on safely running detection logic:
   snapshots; data-plane services reconcile local subprocesses from that state.
 - Process pools support `blue_green`, `canary`, and `shadow` rollout modes for
   controlled changes and offline evaluation.
+- Matcher and executor batches retry only pending failures, prepare all outputs before publication, and commit consumed offsets only after synchronous writes.
+- Matcher and executor DLQs use protobuf envelopes that retain the failed input's source coordinates, payload, stage, reason, attempts, and timestamp while preserving its Kafka key as message metadata.
 - The alert pipeline currently matches events, evaluates rules, merges related
   alerts, adjusts scoring, adds context, and formats results.
 
@@ -85,7 +87,7 @@ Detection content is production software. Blink's development and deployment pro
 - Race detection, `go vet`, and Staticcheck validate concurrency and code quality.
 - Helm linting and rendering validate Kubernetes deployment changes.
 - Blue-green, canary, and shadow modes separate plugin rollout from service deployment.
-- Helm charts provide Kafka, Blink service, and KEDA autoscaling configuration, including migration paths between deployment topologies.
+- Helm charts provide Kafka, Blink service, and KEDA autoscaling configuration from one shared stage topology with workload-specific runtime bindings.
 
 See [`DEVELOPMENT.md`](DEVELOPMENT.md) for local validation and [`deployments/README.md`](deployments/README.md) for Kubernetes deployment.
 

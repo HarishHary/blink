@@ -24,6 +24,14 @@ minikube config set driver podman
 minikube start
 ```
 
+Build the controller and event-matcher images directly in Minikube before installing
+the Blink chart. Their tags match the chart's local defaults:
+
+```bash
+minikube image build --tag localhost/blink-controller:latest --file cmd/controller/Dockerfile .
+minikube image build --tag localhost/blink-event-matcher:latest --file cmd/event_matcher/Dockerfile .
+```
+
 ### Required operators
 
 Install the Strimzi operator before the Kafka chart and the KEDA operator before the
@@ -70,10 +78,21 @@ its defaults reference `localhost` images with `image.pullPolicy=Never` for Mini
 For a registry-based cluster, override `image.registry`, `image.tag`, and
 `image.pullPolicy`.
 
+After rebuilding an image under the same local tag, restart its deployment so new
+pods load the replacement image:
+
+```bash
+minikube image build --tag localhost/blink-event-matcher:latest --file cmd/event_matcher/Dockerfile .
+kubectl rollout restart deployment/event-matcher --namespace blink
+kubectl rollout status deployment/event-matcher --namespace blink --timeout=120s
+```
+
 The Kafka chart creates the controller prerequisites declared as `topic.snapshot`
-on each plugin stage. Names default to `<workload>-snapshot-topic`; shared
-capacity defaults provide the replication factor and `cleanup.policy: compact`.
-Snapshot topics are always rendered with one partition.
+on each plugin stage. Each name comes from that workload's
+`kafka_topic_<stage>_snapshot` environment entry; the checked-in values follow the
+`<workload>-snapshot-topic` convention. Shared capacity defaults provide the
+replication factor and `cleanup.policy: compact`. Snapshot topics are always
+rendered with one partition.
 
 ### Shared-stage topology and names
 
@@ -81,8 +100,9 @@ Snapshot topics are always rendered with one partition.
 for the shared alert pipeline. Every chart must receive that same values file. Its
 `workload.name` supplies the Deployment and Service name. Each workload declares its
 own Kafka bindings under `workload.environment` using matching
-`kafka_topic_<stage>` and `kafka_group_<stage>` keys. Their default values follow
-the `<workload>-topic` and `<workload>-group` naming convention.
+`kafka_topic_<stage>` and `kafka_group_<stage>` keys. Their checked-in values follow
+the `<workload>-topic` and `<workload>-group` naming convention; these are explicit
+values, not names inferred by the templates.
 
 Put all service-specific environment variables, including only the Kafka topics,
 groups, snapshots, DLQs, and plugin directories that service consumes, under
@@ -103,11 +123,12 @@ environment, keeping the runtime and infrastructure values identical.
 | `formatter`  | `alert-formatter`  | `alert-formatter-topic` / `alert-formatter-group`   | `alert-formatter-dlq-topic` | `alert-formatter-scaler`  |
 | `dispatcher` | `alert-dispatcher` | `alert-dispatcher-topic` / `alert-dispatcher-group` | disabled                    | `alert-dispatcher-scaler` |
 
-The presence of `topic.dlq` creates the resolved DLQ and supplies its service
-configuration; the presence of `scaler` conditionally creates `<workload>-scaler`
-for the stage's topic and group. Scaler settings inherit the KEDA chart defaults,
-including `offsetResetPolicy: earliest`. Merger and dispatcher DLQs remain disabled
-pending runtime support. Do not enable either merely by creating a topic.
+The presence of `topic.dlq` creates the DLQ named by the matching
+`kafka_topic_<stage>_dlq` workload environment entry. The presence of `scaler`
+conditionally creates `<workload>-scaler` for the stage's environment-defined topic
+and group. Scaler settings inherit the KEDA chart defaults, including
+`offsetResetPolicy: earliest`. Merger and dispatcher DLQs remain disabled pending
+runtime support. Do not enable either merely by creating a topic.
 Per-stage `topic` values override the Kafka chart's shared primary and DLQ
 capacity defaults.
 
@@ -115,15 +136,17 @@ capacity defaults.
 
 All log sources use one shared matcher/executor lane. Producers publish events to
 `event-matcher-topic`; `event-matcher` selects matchers and rules from each event's
-`log_type`, publishes eligible events to `rule-executor-topic`, and sends exhausted failures
-to `event-matcher-dlq-topic`. `rule-executor` evaluates the routed rules and publishes
-alerts to the shared `alert-merger-topic`.
+`log_type`, publishes eligible events to `rule-executor-topic`, and sends terminal input,
+configuration, and exhausted matcher failures to `event-matcher-dlq-topic`. `rule-executor`
+evaluates the routed rules and publishes alerts to the shared `alert-merger-topic`; terminal
+input, routing, and exhausted rule failures go to `rule-executor-dlq-topic`.
 
 | Stage          | Deployment / group                      | Topic                     |
 | -------------- | --------------------------------------- | ------------------------- |
 | Event matching | `event-matcher` / `event-matcher-group` | `event-matcher-topic`     |
 | Rule execution | `rule-executor` / `rule-executor-group` | `rule-executor-topic`     |
 | Matcher DLQ    | -                                       | `event-matcher-dlq-topic` |
+| Executor DLQ   | -                                       | `rule-executor-dlq-topic` |
 
 Matcher and executor pods do not use a deployment-level `LOG_TYPE`. The event's
 `log_type` selects the relevant rules from the shared snapshots, so adding a log source
@@ -176,8 +199,9 @@ flowchart LR
     producers[All log sources] --> eventTopic([event-matcher-topic<br/>Kafka topic])
     eventTopic --> matcher[event-matcher<br/>Deployment]
     matcher --> execTopic([rule-executor-topic<br/>Kafka topic]) --> executor[rule-executor<br/>Deployment]
-    matcher -. exhausted record .-> matcherDLQ([event-matcher-dlq-topic<br/>Kafka topic])
+    matcher -. failed record .-> matcherDLQ([event-matcher-dlq-topic<br/>Kafka topic])
     executor --> mergerTopic([alert-merger-topic<br/>Kafka topic])
+    executor -. failed record .-> executorDLQ([rule-executor-dlq-topic<br/>Kafka topic])
     mergerTopic --> merger[alert-merger<br/>Deployment] --> tunerTopic([rule-tuner-topic<br/>Kafka topic])
     tunerTopic --> tuner[rule-tuner<br/>Deployment] --> enricherTopic([alert-enricher-topic<br/>Kafka topic])
     enricherTopic --> enricher[alert-enricher<br/>Deployment] --> formatterTopic([alert-formatter-topic<br/>Kafka topic])
@@ -186,26 +210,30 @@ flowchart LR
 
     classDef topic fill:#e8f1ff,stroke:#1a73e8,color:#000
     classDef deployment fill:#e6f4ea,stroke:#188038,color:#000
-    class eventTopic,execTopic,matcherDLQ,mergerTopic,tunerTopic,enricherTopic,formatterTopic,dispatcherTopic topic
+    class eventTopic,execTopic,matcherDLQ,executorDLQ,mergerTopic,tunerTopic,enricherTopic,formatterTopic,dispatcherTopic topic
     class matcher,executor,merger,tuner,enricher,formatter,dispatcher deployment
 ```
 
 The shared matcher and executor deployments handle every log source. Stateful alert
 processing remains in the shared downstream stages.
 
-The matcher and executor acknowledge input offsets only after synchronous Kafka output writes
-(`RequireAll`) succeed. This yields at-least-once delivery: an output acknowledged before a later
-offset-commit failure can be written again after replay. `event_matcher` writes malformed records
-and exhausted matcher failures to `KAFKA_TOPIC_MATCHER_DLQ` using the protobuf
-`dlq.DLQEnvelope`, which retains source topic/partition/offset, original payload, stage, reason,
-attempts, and timestamp; the original key remains Kafka message metadata. These failures are
-terminal per record. Only shutdown cancellation leaves the whole fetched batch uncommitted.
-Before opening its grouped reader, the matcher waits for both
-snapshot readers to drain and for non-empty parsed primary matcher and rule catalogs; disabled
+The matcher and executor prepare every output in a fetched batch before starting synchronous Kafka
+writes (`RequireAll`), then commit input offsets only after all writes succeed. This yields
+at-least-once delivery: an output acknowledged before cancellation, a later write failure, or an
+offset-commit failure can be written again after replay. Both services use the protobuf
+`dlq.DLQEnvelope` for malformed records, deterministic routing or configuration failures, and
+exhausted item failures; it retains source topic/partition/offset, original payload, stage, reason,
+attempts, and timestamp, while the original key remains Kafka message metadata. A non-DLQ
+output-preparation failure leaves the batch uncommitted without partially publishing that batch.
+The matcher readiness probe succeeds after both snapshot readers drain, including when both
+catalogs are empty. Before opening its grouped reader, the matcher additionally waits for
+non-empty parsed primary matcher and rule catalogs; disabled
 primaries count, but candidate-only catalogs do not. This startup gate does not prove a controller
 heartbeat/freshness or stop an already-running reader if either catalog later becomes empty. The
-executor waits only for its rule snapshot reader to drain before opening its grouped reader, then
-commits only after all rule evaluations and alert writes for the batch succeed.
+executor likewise waits for a drained rule snapshot and a non-empty parsed primary rule catalog
+before opening its grouped reader. Neither gate waits for initial plugin subprocess reconciliation.
+`MATCHER_CONCURRENCY` and `EXECUTOR_CONCURRENCY` limit active outer pool calls, not the child RPCs
+created when a pool fans out by rollout bucket and serving process.
 Kafka readers wait on the caller context for a first record, use `MinBytes=1`, then give a partial
 batch one absolute 100 ms linger window; this avoids low-volume batch stalls without extending the
 deadline for each later record.
@@ -223,8 +251,11 @@ mount is intentional for now; it is not split per log type.
 - Mount the plugin local folder in minikube
 
 ```bash
+mkdir -p ~/.blink/plugins/{rules,matchers,tuning_rules,formatters,enrichments,dispatchers}
 minikube mount ~/.blink/plugins:/blink/plugins
 ```
+
+Keep the `minikube mount` process running while Blink is deployed.
 
 - The chart mounts this HostPath into every pod, including the controller.
 
