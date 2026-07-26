@@ -117,20 +117,14 @@ environment, keeping the runtime and infrastructure values identical.
 
 | Stage        | Deployment         | Topic / group                                       | DLQ                         | ScaledObject              |
 | ------------ | ------------------ | --------------------------------------------------- | --------------------------- | ------------------------- |
-| `merger`     | `alert-merger`     | `alert-merger-topic` / `alert-merger-group`         | disabled                    | disabled                  |
+| `merger`     | `alert-merger`     | `alert-merger-topic` / `alert-merger-group`         | `alert-merger-dlq-topic`    | disabled                  |
 | `tuner`      | `rule-tuner`       | `rule-tuner-topic` / `rule-tuner-group`             | `rule-tuner-dlq-topic`      | `rule-tuner-scaler`       |
 | `enricher`   | `alert-enricher`   | `alert-enricher-topic` / `alert-enricher-group`     | `alert-enricher-dlq-topic`  | `alert-enricher-scaler`   |
 | `formatter`  | `alert-formatter`  | `alert-formatter-topic` / `alert-formatter-group`   | `alert-formatter-dlq-topic` | `alert-formatter-scaler`  |
 | `dispatcher` | `alert-dispatcher` | `alert-dispatcher-topic` / `alert-dispatcher-group` | disabled                    | `alert-dispatcher-scaler` |
 
-The presence of `topic.dlq` creates the DLQ named by the matching
-`kafka_topic_<stage>_dlq` workload environment entry. The presence of `scaler`
-conditionally creates `<workload>-scaler` for the stage's environment-defined topic
-and group. Scaler settings inherit the KEDA chart defaults, including
-`offsetResetPolicy: earliest`. Merger and dispatcher DLQs remain disabled pending
-runtime support. Do not enable either merely by creating a topic.
-Per-stage `topic` values override the Kafka chart's shared primary and DLQ
-capacity defaults.
+The presence of `topic.dlq` creates the DLQ named by the matching `kafka_topic_<stage>_dlq` workload environment entry. The presence of `scaler` conditionally creates `<workload>-scaler` for the stage's environment-defined topic and group. Scaler settings inherit the KEDA chart defaults, including `offsetResetPolicy: earliest`. The dispatcher has no DLQ runtime path; do not enable one merely by
+creating a topic. Per-stage `topic` values override the Kafka chart's shared primary and DLQ capacity defaults.
 
 ### Event pipeline topology
 
@@ -203,6 +197,7 @@ flowchart LR
     executor --> mergerTopic([alert-merger-topic<br/>Kafka topic])
     executor -. failed record .-> executorDLQ([rule-executor-dlq-topic<br/>Kafka topic])
     mergerTopic --> merger[alert-merger<br/>Deployment] --> tunerTopic([rule-tuner-topic<br/>Kafka topic])
+    merger -. malformed record .-> mergerDLQ([alert-merger-dlq-topic<br/>Kafka topic])
     tunerTopic --> tuner[rule-tuner<br/>Deployment] --> enricherTopic([alert-enricher-topic<br/>Kafka topic])
     tuner -. failed record .-> tunerDLQ([rule-tuner-dlq-topic<br/>Kafka topic])
     enricherTopic --> enricher[alert-enricher<br/>Deployment] --> formatterTopic([alert-formatter-topic<br/>Kafka topic])
@@ -213,7 +208,7 @@ flowchart LR
 
     classDef topic fill:#e8f1ff,stroke:#1a73e8,color:#000
     classDef deployment fill:#e6f4ea,stroke:#188038,color:#000
-    class eventTopic,execTopic,matcherDLQ,executorDLQ,mergerTopic,tunerTopic,tunerDLQ,enricherTopic,enricherDLQ,formatterTopic,formatterDLQ,dispatcherTopic topic
+    class eventTopic,execTopic,matcherDLQ,executorDLQ,mergerTopic,mergerDLQ,tunerTopic,tunerDLQ,enricherTopic,enricherDLQ,formatterTopic,formatterDLQ,dispatcherTopic topic
     class matcher,executor,merger,tuner,enricher,formatter,dispatcher deployment
 ```
 
@@ -228,6 +223,12 @@ offset-commit failure can be written again after replay. These stages use the pr
 exhausted item failures; it retains source topic/partition/offset, original payload, stage, reason,
 attempts, and timestamp, while the original key remains Kafka message metadata. A non-DLQ
 output-preparation failure leaves the batch uncommitted without partially publishing that batch.
+The merger is stateful: it retains source records while merge windows are open, stops reading at
+`MERGER_MAX_PENDING_RECORDS`, and commits only the contiguous resolved prefix of each partition
+after pass-through, merged, or protobuf DLQ output is acknowledged. This prevents a later resolved
+offset from committing an earlier buffered alert. Forced group limits flush the oldest group rather
+than evicting it, and the merge partition key is preserved downstream. Its 40-second pod termination
+grace period exceeds the default 30-second bounded drain.
 The matcher readiness probe succeeds after both snapshot readers drain, including when both
 catalogs are empty. Before opening its grouped reader, the matcher additionally waits for
 non-empty parsed primary matcher and rule catalogs; disabled

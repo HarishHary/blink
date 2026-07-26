@@ -8,6 +8,7 @@ metadata:
     {{- include "blink.labels" . | nindent 4 }}
 data:
   KAFKA_BROKERS:         {{ .Values.kafka.brokers | quote }}
+  ENVIRONMENT:           {{ .Values.environment | quote }}
 
 ---
 apiVersion: v1

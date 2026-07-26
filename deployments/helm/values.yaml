@@ -104,13 +104,23 @@ global:
         name: alert-merger
         container: alert-merger
         plugins: false
+        terminationGracePeriodSeconds: 40
         # alert_merger groups related alerts; replicas must not exceed topic partitions.
         replicas: 1
         environment:
           kafka_topic_merger: alert-merger-topic
           kafka_group_merger: alert-merger-group
-          # 0 disables the live merge-group cap.
+          kafka_topic_tuner: rule-tuner-topic
+          kafka_topic_merger_dlq: alert-merger-dlq-topic
+          merger_batch_size: "50"
           merger_max_groups: "10000"
+          merger_max_pending_records: "10000"
+          merger_flush_interval_sec: "10"
+          merger_drain_timeout_sec: "30"
+          merger_retry_base_ms: "100"
+          merger_retry_cap_ms: "5000"
+      topic:
+        dlq: {}
     tuner:
       workload:
         name: rule-tuner
@@ -122,6 +132,12 @@ global:
           kafka_topic_tuner_dlq: rule-tuner-dlq-topic
           kafka_topic_tuner_snapshot: rule-tuner-snapshot-topic
           tuner_plugin_dir: /plugins/tuning_rules
+          tuner_batch_size: "50"
+          tuner_concurrency: "8"
+          tuner_timeout_sec: "10"
+          tuner_max_attempts: "3"
+          tuner_retry_base_ms: "100"
+          tuner_retry_cap_ms: "5000"
       scaler: {}
       topic:
         dlq: {}
@@ -137,6 +153,12 @@ global:
           kafka_topic_enricher_dlq: alert-enricher-dlq-topic
           kafka_topic_enricher_snapshot: alert-enricher-snapshot-topic
           enricher_plugin_dir: /plugins/enrichments
+          enricher_batch_size: "50"
+          enricher_concurrency: "8"
+          enricher_timeout_sec: "10"
+          enricher_max_attempts: "3"
+          enricher_retry_base_ms: "100"
+          enricher_retry_cap_ms: "5000"
       scaler: {}
       topic:
         dlq: {}
@@ -152,6 +174,12 @@ global:
           kafka_topic_formatter_dlq: alert-formatter-dlq-topic
           kafka_topic_formatter_snapshot: alert-formatter-snapshot-topic
           formatter_plugin_dir: /plugins/formatters
+          formatter_batch_size: "50"
+          formatter_concurrency: "8"
+          formatter_timeout_sec: "10"
+          formatter_max_attempts: "3"
+          formatter_retry_base_ms: "100"
+          formatter_retry_cap_ms: "5000"
       scaler: {}
       topic:
         dlq: {}

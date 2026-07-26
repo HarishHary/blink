@@ -55,9 +55,7 @@ func (r *Runner) Register(services ...service) {
 	r.services = append(r.services, services...)
 }
 
-// Run executes all registered services. Init services run first to completion,
-// then regular services are started concurrently with auto-restart on failure.
-// Run blocks until ctx is cancelled.
+// Run executes init services, then runs regular services until cancellation and waits for shutdown.
 func (r *Runner) Run(ctx context.Context) {
 	var wg sync.WaitGroup
 	for i := range r.inits {
@@ -76,11 +74,13 @@ func (r *Runner) Run(ctx context.Context) {
 	wg.Wait()
 
 	for _, svc := range r.services {
-		go r.runWithBackoff(ctx, svc)
+		wg.Go(func() { r.runWithBackoff(ctx, svc) })
 	}
 
 	<-ctx.Done()
-	r.logger.Info("context cancelled; shutting down")
+	r.logger.Info("context cancelled; waiting for services to stop")
+	wg.Wait()
+	r.logger.Info("all services stopped")
 }
 
 // runWithBackoff runs a service with exponential backoff on failure,
