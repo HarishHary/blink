@@ -208,21 +208,22 @@ flowchart LR
     enricherTopic --> enricher[alert-enricher<br/>Deployment] --> formatterTopic([alert-formatter-topic<br/>Kafka topic])
     enricher -. failed record .-> enricherDLQ([alert-enricher-dlq-topic<br/>Kafka topic])
     formatterTopic --> formatter[alert-formatter<br/>Deployment] --> dispatcherTopic([alert-dispatcher-topic<br/>Kafka topic])
+    formatter -. failed record .-> formatterDLQ([alert-formatter-dlq-topic<br/>Kafka topic])
     dispatcherTopic --> dispatcher[alert-dispatcher<br/>Deployment]
 
     classDef topic fill:#e8f1ff,stroke:#1a73e8,color:#000
     classDef deployment fill:#e6f4ea,stroke:#188038,color:#000
-    class eventTopic,execTopic,matcherDLQ,executorDLQ,mergerTopic,tunerTopic,tunerDLQ,enricherTopic,enricherDLQ,formatterTopic,dispatcherTopic topic
+    class eventTopic,execTopic,matcherDLQ,executorDLQ,mergerTopic,tunerTopic,tunerDLQ,enricherTopic,enricherDLQ,formatterTopic,formatterDLQ,dispatcherTopic topic
     class matcher,executor,merger,tuner,enricher,formatter,dispatcher deployment
 ```
 
 The shared matcher and executor deployments handle every log source. Stateful alert
 processing remains in the shared downstream stages.
 
-The matcher, executor, tuner, and enricher prepare every output in a fetched batch before starting synchronous Kafka
+The matcher, executor, tuner, enricher, and formatter prepare every output in a fetched batch before starting synchronous Kafka
 writes (`RequireAll`), then commit input offsets only after all writes succeed. This yields
 at-least-once delivery: an output acknowledged before cancellation, a later write failure, or an
-offset-commit failure can be written again after replay. Both services use the protobuf
+offset-commit failure can be written again after replay. These stages use the protobuf
 `dlq.DLQEnvelope` for malformed records, deterministic routing or configuration failures, and
 exhausted item failures; it retains source topic/partition/offset, original payload, stage, reason,
 attempts, and timestamp, while the original key remains Kafka message metadata. A non-DLQ
@@ -233,10 +234,11 @@ non-empty parsed primary matcher and rule catalogs; disabled
 primaries count, but candidate-only catalogs do not. This startup gate does not prove a controller
 heartbeat/freshness or stop an already-running reader if either catalog later becomes empty. The
 executor likewise waits for a drained rule snapshot and a non-empty parsed primary rule catalog
-before opening its grouped reader. The tuner and enricher apply the same gate to their own snapshot
-and primary catalog. Enricher dependencies execute before their dependents, and enrichments for one
-alert never overlap. None of these gates waits for initial plugin subprocess reconciliation.
-`MATCHER_CONCURRENCY`, `EXECUTOR_CONCURRENCY`, `TUNER_CONCURRENCY`, and `ENRICHER_CONCURRENCY` limit active outer pool calls, not the child RPCs
+before opening its grouped reader. The tuner, enricher, and formatter apply the same gate to their own snapshot
+and primary catalog. Enricher dependencies execute before their dependents, while formatter entries
+execute in declared order; neither stage overlaps plugin work for one alert. None of these gates waits
+for initial plugin subprocess reconciliation.
+`MATCHER_CONCURRENCY`, `EXECUTOR_CONCURRENCY`, `TUNER_CONCURRENCY`, `ENRICHER_CONCURRENCY`, and `FORMATTER_CONCURRENCY` limit active outer pool calls, not the child RPCs
 created when a pool fans out by rollout bucket and serving process.
 Kafka readers wait on the caller context for a first record, use `MinBytes=1`, then give a partial
 batch one absolute 100 ms linger window; this avoids low-volume batch stalls without extending the
