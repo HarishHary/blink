@@ -8,6 +8,39 @@ import (
 // Event is a dynamic detection record: a nested map of arbitrary fields with lookup/merge helpers.
 type Event map[string]any
 
+// Clone returns a deep copy of the event's JSON-like maps and slices.
+func (e Event) Clone() Event {
+	if e == nil {
+		return nil
+	}
+	clone := make(Event, len(e))
+	for key, value := range e {
+		clone[key] = cloneValue(value)
+	}
+	return clone
+}
+
+func cloneValue(value any) any {
+	switch value := value.(type) {
+	case Event:
+		return value.Clone()
+	case map[string]any:
+		clone := make(map[string]any, len(value))
+		for key, nested := range value {
+			clone[key] = cloneValue(nested)
+		}
+		return clone
+	case []any:
+		clone := make([]any, len(value))
+		for i, nested := range value {
+			clone[i] = cloneValue(nested)
+		}
+		return clone
+	default:
+		return value
+	}
+}
+
 // GetMergedKeys retrieves merge keys from a Event
 func (e Event) GetMergedKeys(keys []string) map[string]any {
 	mergeKeys := make(map[string]any)
