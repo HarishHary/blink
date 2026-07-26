@@ -72,7 +72,8 @@ Blink's current foundation focuses on safely running detection logic:
 - Process pools support `blue_green`, `canary`, and `shadow` rollout modes for
   controlled changes and offline evaluation.
 - Matcher, executor, tuner, enricher, and formatter batches retry only pending failures, prepare all outputs before publication, and commit consumed offsets only after synchronous writes.
-- Their DLQs use protobuf envelopes that retain the failed input's source coordinates, payload, stage, reason, attempts, and timestamp while preserving its Kafka key as message metadata.
+- The merger retains buffered source offsets across merge windows and commits only contiguous resolved offsets after pass-through, merged, or DLQ output is acknowledged.
+- Pipeline DLQs use protobuf envelopes that retain the failed input's source coordinates, payload, stage, reason, attempts, and timestamp while preserving its Kafka key as message metadata.
 - The alert pipeline currently matches events, evaluates rules, merges related
   alerts, adjusts scoring, adds context, and formats results.
 

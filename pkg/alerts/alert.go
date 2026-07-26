@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/helpers"
+	"github.com/harishhary/blink/internal/pools"
 	"github.com/harishhary/blink/pkg/events"
 	"github.com/harishhary/blink/pkg/rules"
 	"github.com/harishhary/blink/pkg/scoring"
@@ -62,6 +63,9 @@ func (a *Alert) MergeByKeys() []string {
 	if len(a.OverrideMergeByKeys) > 0 {
 		return a.OverrideMergeByKeys
 	}
+	if a.Rule == nil {
+		return nil
+	}
 	return a.Rule.MergeByKeys
 }
 
@@ -110,7 +114,7 @@ func Merge(alerts []*Alert) (*Alert, errors.Error) {
 		"ValueDiffs":      getValueDiffs(common, alerts, cleanedEvents),
 	}
 
-	return NewAlert(
+	merged, err := NewAlert(
 		alerts[0].Rule,
 		newEvent,
 		WithCluster(alerts[0].Cluster),
@@ -120,6 +124,21 @@ func Merge(alerts []*Alert) (*Alert, errors.Error) {
 		WithSourceService(alerts[0].SourceService),
 		WithStaged(anyStaged(alerts)),
 	)
+	if err != nil {
+		return nil, err
+	}
+	merged.OverrideMergeByKeys = append([]string(nil), alerts[0].OverrideMergeByKeys...)
+	merged.Severity = alerts[0].Severity
+	merged.Confidence = alerts[0].Confidence
+	for _, alert := range alerts {
+		if alert.Severity > merged.Severity {
+			merged.Severity = alert.Severity
+		}
+		if alert.Confidence > merged.Confidence {
+			merged.Confidence = alert.Confidence
+		}
+	}
+	return merged, nil
 }
 
 // Finds values common to all records
@@ -150,7 +169,8 @@ func getValueDiffs(common map[string]any, alerts []*Alert, events []events.Event
 	for i, event := range events {
 		diff := event.ComputeDiff(common)
 		if len(diff) > 0 {
-			valueDiffs[alerts[i].Created.Format(helpers.DATETIME_FORMAT)] = diff
+			key := fmt.Sprintf("%s|%s|%d", alerts[i].Created.Format(time.RFC3339Nano), alerts[i].Id, i)
+			valueDiffs[key] = diff
 		}
 	}
 	return valueDiffs
@@ -207,7 +227,10 @@ func (a *Alert) Less(other *Alert) bool {
 
 // Checks if two alerts can be merged together
 func (a *Alert) CanMerge(other *Alert) bool {
-	if !a.MergeEnabled() || !other.MergeEnabled() {
+	if other == nil || !a.MergeEnabled() || !other.MergeEnabled() {
+		return false
+	}
+	if ruleIdentity(a.Rule) != ruleIdentity(other.Rule) || a.Rule.Version != other.Rule.Version {
 		return false
 	}
 
@@ -225,7 +248,9 @@ func (a *Alert) CanMerge(other *Alert) bool {
 	}
 
 	for _, key := range a.MergeByKeys() {
-		if a.Event.GetFirstKey(key, "n/a") != other.Event.GetFirstKey(key, "n/a2") {
+		left := a.Event.GetKeys(key, 1)
+		right := other.Event.GetKeys(key, 1)
+		if len(left) != 1 || len(right) != 1 || !reflect.DeepEqual(left[0], right[0]) {
 			return false
 		}
 	}
@@ -235,22 +260,58 @@ func (a *Alert) CanMerge(other *Alert) bool {
 
 // MergeEnabled reports whether this alert is eligible for merging (has merge keys and a positive window).
 func (a *Alert) MergeEnabled() bool {
-	return len(a.MergeByKeys()) > 0 && a.Rule.MergeWindowMins() > 0
+	return a != nil && a.Rule != nil && a.Event != nil && len(a.MergeByKeys()) > 0 && a.Rule.MergeWindowMins() > 0
 }
 
-// MergePartitionKey returns a stable Kafka key ("rule_name|k1=v1|k2=v2", merge-by fields sorted) so
-// alerts in the same merge group land on the same partition, hence the same merger replica. Merge
-// disabled → rule name alone (still stable; those alerts pass straight through).
+// MergePartitionKey returns a tenant- and rule-version-scoped key with typed merge values.
 func (a *Alert) MergePartitionKey() string {
-	keys := a.MergeByKeys()
+	keys := append([]string(nil), a.MergeByKeys()...)
 	sort.Strings(keys)
-	merged := a.Event.GetMergedKeys(keys)
-	parts := make([]string, 0, len(keys)+1)
-	parts = append(parts, a.Rule.Name)
+	ruleID := ""
+	version := ""
+	if a.Rule != nil {
+		ruleID = ruleIdentity(a.Rule)
+		version = a.Rule.Version
+	}
+	tenant := pools.NormalizeRolloutKey(nil)
+	if a.Event != nil {
+		tenant = pools.NormalizeRolloutKey(a.Event["tenant_id"])
+	}
+	parts := []string{
+		"tenant=" + mergeKeyValue(tenant, true),
+		"rule=" + mergeKeyValue(ruleID, true),
+		"version=" + mergeKeyValue(version, true),
+	}
 	for _, k := range keys {
-		parts = append(parts, fmt.Sprintf("%s=%v", k, merged[k]))
+		values := a.Event.GetKeys(k, 1)
+		var value any
+		if len(values) == 1 {
+			value = values[0]
+		}
+		parts = append(parts, mergeKeyValue(k, true)+"="+mergeKeyValue(value, len(values) == 1))
 	}
 	return strings.Join(parts, "|")
+}
+
+func ruleIdentity(rule *rules.RuleMetadata) string {
+	if rule == nil {
+		return ""
+	}
+	if rule.Id != "" {
+		return rule.Id
+	}
+	return rule.Name
+}
+
+func mergeKeyValue(value any, present bool) string {
+	if !present {
+		return "<missing>"
+	}
+	payload, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Sprintf("%T:%#v", value, value)
+	}
+	return string(payload)
 }
 
 // RemainingOutputs returns the alert's dispatchers not yet sent - narrowed to requiredOutputs when merge is enabled.

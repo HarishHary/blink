@@ -3,6 +3,8 @@ image:
   pullPolicy: Never
   tag: latest
 
+environment: prod
+
 kafka:
   brokers: "blink-kafka-cluster-kafka-bootstrap.kafka:9092"
 
@@ -17,6 +19,7 @@ plugins:
 # Capacity shared by every workload, including the controller.
 workloadDefaults:
   replicas: 1
+  terminationGracePeriodSeconds: 30
   resources:
     requests:
       cpu: "100m"

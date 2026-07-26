@@ -71,8 +71,13 @@ func (e Event) ComputeDiff(common map[string]any) map[string]any {
 	diff := make(map[string]any)
 	for key, val := range e {
 		if commonVal, ok := common[key]; !ok || !reflect.DeepEqual(val, commonVal) {
-			if v, ok := val.(Event); ok && reflect.TypeOf(commonVal).Kind() == reflect.Map {
-				nestedDiff := v.ComputeDiff(commonVal.(map[string]any))
+			if v, ok := val.(Event); ok {
+				commonMap, commonIsMap := commonVal.(map[string]any)
+				if !commonIsMap {
+					diff[key] = val
+					continue
+				}
+				nestedDiff := v.ComputeDiff(commonMap)
 				if len(nestedDiff) > 0 {
 					diff[key] = nestedDiff
 				}
@@ -187,7 +192,8 @@ func (e Event) GetFirstKey(key string, defaultValue any) any {
 
 // isContainerType checks if the value is a container type (map or slice)
 func isContainerType(val any) bool {
-	return reflect.TypeOf(val).Kind() == reflect.Map || reflect.TypeOf(val).Kind() == reflect.Slice
+	valueType := reflect.TypeOf(val)
+	return valueType != nil && (valueType.Kind() == reflect.Map || valueType.Kind() == reflect.Slice)
 }
 
 // GetKeys searches for a key anywhere in the nested data structure, returning all associated values.
