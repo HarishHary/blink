@@ -3,7 +3,6 @@ package alerts
 import (
 	"encoding/json"
 	"fmt"
-	"maps"
 	"reflect"
 	"sort"
 	"strings"
@@ -42,15 +41,14 @@ type Alert struct {
 	OverrideMergeByKeys []string
 }
 
-// Clone returns a shallow copy of the alert with its Event map cloned. Metadata fields such
-// as Rule and slice fields are shared with the original; callers use this when plugins may mutate Event.
+// Clone returns a shallow alert copy with a deeply cloned Event.
 func (a *Alert) Clone() *Alert {
 	clone := *a
-	clone.Event = maps.Clone(clone.Event)
+	clone.Event = a.Event.Clone()
 	return &clone
 }
 
-// CloneBatch returns shallow alert copies with cloned Event maps, preserving input order.
+// CloneBatch returns alert copies with deeply cloned Events, preserving input order.
 func CloneBatch(in []*Alert) []*Alert {
 	out := make([]*Alert, len(in))
 	for i, alert := range in {

@@ -9,12 +9,12 @@ import (
 )
 
 // ServeHealth starts the blocking metrics, liveness, and readiness HTTP server.
-func ServeHealth(logger *logger.Logger, addr string, ready func() bool) {
+func ServeHealth(logger *logger.Logger, addr string, readyFn func() bool) {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/health/live", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	mux.HandleFunc("/health/ready", func(w http.ResponseWriter, _ *http.Request) {
-		if ready == nil || ready() {
+		if readyFn == nil || readyFn() {
 			w.WriteHeader(http.StatusOK)
 			return
 		}

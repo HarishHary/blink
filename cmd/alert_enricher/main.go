@@ -3,72 +3,60 @@ package main
 import (
 	"context"
 	"log"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/harishhary/blink/cmd/alert_enricher/enricher"
 	"github.com/harishhary/blink/internal/brokers"
-	"github.com/harishhary/blink/internal/configuration"
 	"github.com/harishhary/blink/internal/controller"
 	"github.com/harishhary/blink/internal/logger"
-	pools "github.com/harishhary/blink/internal/pools"
 	"github.com/harishhary/blink/internal/services"
 	"github.com/harishhary/blink/pkg/enrichments"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-func main() {
-	go func() {
-		http.Handle("/metrics", promhttp.Handler())
-		http.HandleFunc("/health/live", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-		http.HandleFunc("/health/ready", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-		log.Fatal(http.ListenAndServe(":8080", nil))
-	}()
+// config contains the environment-loaded alert-enricher settings.
+type config struct {
+	services.Common
+	enricher.Config
+	EnricherSnapshotTopic string `env:"KAFKA_TOPIC_ENRICHER_SNAPSHOT"`
+	EnrichmentPluginDir   string `env:"ENRICHER_PLUGIN_DIR"`
+}
 
+func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	pluginDir := os.Getenv("ENRICHER_PLUGIN_DIR")
-	cfgMgr := enrichments.NewEnrichmentConfigWatcher(logger.New("enrichment-config", "dev"), pluginDir)
-	cfgSvc := services.NewConfigSyncService("enrichment-config-sync", "BLINK-ALERT-ENRICHER - CONFIG", cfgMgr)
-
-	// Read replica: consumes the enrichment controller's snapshot topic and feeds the
-	// executor the control plane's desired state.
-	var cfg configuration.ServiceConfiguration
-	if err := configuration.LoadFromEnvironment(&cfg); err != nil {
+	var cfg config
+	if err := services.LoadFromEnvironment(&cfg); err != nil {
 		log.Fatalf("config: %v", err)
 	}
-	b := brokers.NewKafkaBroker(cfg.Kafka)
-	replica := controller.NewReplica(
-		logger.New("enrichment-snapshot", "dev"),
-		b.NewReader(cfg.Topics.EnrichmentSnapshotTopic, cfg.Topics.EnrichmentSnapshotGroup),
-	)
-	replicaSvc, err := services.NewPluginSyncService("enrichment-snapshot-sync", "BLINK-ALERT-ENRICHER - SNAPSHOT", replica)
-	if err != nil {
-		log.Fatalf("snapshot service: %v", err)
+	cfg.Config.Broker = brokers.NewKafkaBroker(cfg.Kafka)
+	b := cfg.Config.Broker
+	rootLogger := logger.New("alert-enricher", cfg.Env)
+
+	// The snapshot drives both enrichment metadata and subprocess lifecycle.
+	enrichmentSnap := controller.NewSnapshotReader(rootLogger.With("component", "enrichment_snapshot"), b.NewBroadcastReader(cfg.EnricherSnapshotTopic))
+	enrichmentSnapSvc := services.NewManagedService("enrichment-snapshot-sync", enrichmentSnap)
+	enrichmentCfg := enrichments.NewSnapshotConfig(rootLogger.With("component", "enrichment_config"), enrichmentSnap)
+
+	enricherPool := enrichments.NewPool(rootLogger.With("component", "enrichment_pool"), enrichmentCfg, 0)
+
+	pluginExecutor := enrichments.NewPluginExecutor(rootLogger.With("component", "plugin_executor"), enricherPool.Sync, cfg.EnrichmentPluginDir, enrichmentSnap, enrichmentCfg)
+	pluginExecutorSvc := services.NewManagedService("alert-enricher-sync", pluginExecutor)
+
+	cfg.Config.ReadyFn = func() bool {
+		return enrichmentSnap.Ready() && len(enrichmentCfg.Primaries()) > 0
 	}
+	enricherSvc := enricher.NewService(rootLogger.With("component", "service"), cfg.Config, enricherPool, enrichmentCfg)
 
-	routingTable := pools.NewRoutingTable()
-	enricherPool := enrichments.NewPool(routingTable, 0)
+	// Health only requires snapshot catch-up; consumption also requires a non-empty primary catalog.
+	go services.ServeHealth(rootLogger.With("component", "health"), ":8080", enrichmentSnap.Ready)
 
-	pluginMgr := enrichments.NewEnrichmentPluginExecutor(logger.New("enricher", "dev"), enricherPool.Sync, pluginDir, replica, cfgMgr)
-	syncSvc, err := services.NewPluginSyncService("alert-enricher-sync", "BLINK-ALERT-ENRICHER - SYNC", pluginMgr)
-	if err != nil {
-		log.Fatalf("sync service: %v", err)
-	}
-
-	enricherSvc, err := enricher.NewEnricherService(enricherPool)
-	if err != nil {
-		log.Fatalf("enricher service: %v", err)
-	}
-
-	runner := services.New()
+	runner := services.New(rootLogger.With("component", "runner"))
 	runner.Register(
-		cfgSvc,
-		replicaSvc,
-		syncSvc,
+		enrichmentSnapSvc,
+		pluginExecutorSvc,
 		enricherSvc,
 	)
 	runner.Run(ctx)
