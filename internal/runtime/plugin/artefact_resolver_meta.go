@@ -29,6 +29,7 @@ type ArtifactResolverStatus struct {
 	Lifecycle      ArtifactResolverLifecycle
 	Availability   runtime.Availability
 	Generation     uint64
+	RestartCount   uint64
 	RestartPending bool
 	LastError      string
 }

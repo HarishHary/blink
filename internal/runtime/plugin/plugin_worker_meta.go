@@ -69,11 +69,11 @@ type pluginWorkerMeta[T plugin.Syncable] struct {
 	stopCh    chan struct{}
 	closeOnce sync.Once
 
-	sessionMu sync.RWMutex
-	instance  T
-	client    *goplugin.Client
-	rpc       plugin.PluginRPC
-	ready     bool
+	stateMu  sync.RWMutex
+	instance T
+	client   *goplugin.Client
+	rpc      plugin.PluginRPC
+	ready    bool
 }
 
 type pluginWorkerStarted struct {
@@ -150,9 +150,9 @@ func (m *pluginWorkerMeta[T]) Start() error {
 		return fmt.Errorf("launch plugin worker: %w", err)
 	}
 
-	m.sessionMu.Lock()
+	m.stateMu.Lock()
 	m.instance, m.client, m.rpc, m.ready = instance, client, rpc, true
-	m.sessionMu.Unlock()
+	m.stateMu.Unlock()
 
 	if err := m.Send(m.Parent(), pluginWorkerStarted{
 		slot:             m.slot,
@@ -175,9 +175,9 @@ func (m *pluginWorkerMeta[T]) HandleMessage(_ gen.PID, message any) error {
 			return nil
 		}
 
-		m.sessionMu.RLock()
+		m.stateMu.RLock()
 		instance, ready := m.instance, m.ready
-		m.sessionMu.RUnlock()
+		m.stateMu.RUnlock()
 		if !ready {
 			m.reportInvocationFinished(msg, ErrPluginUnavailable, false)
 			return nil
@@ -191,9 +191,9 @@ func (m *pluginWorkerMeta[T]) HandleMessage(_ gen.PID, message any) error {
 		}
 
 	case pluginWorkerPing:
-		m.sessionMu.RLock()
+		m.stateMu.RLock()
 		rpc, ready := m.rpc, m.ready
-		m.sessionMu.RUnlock()
+		m.stateMu.RUnlock()
 		if !ready || rpc == nil {
 			return nil
 		}
@@ -224,9 +224,9 @@ func (m *pluginWorkerMeta[T]) HandleCall(gen.PID, gen.Ref, any) (any, error) {
 func (m *pluginWorkerMeta[T]) Terminate(error) { m.close() }
 
 func (m *pluginWorkerMeta[T]) HandleInspect(gen.PID, ...string) map[string]string {
-	m.sessionMu.RLock()
+	m.stateMu.RLock()
 	ready := m.ready
-	m.sessionMu.RUnlock()
+	m.stateMu.RUnlock()
 	return map[string]string{
 		"slot":       fmt.Sprintf("%d", m.slot),
 		"generation": fmt.Sprintf("%d", m.workerGeneration),
@@ -312,11 +312,11 @@ func (m *pluginWorkerMeta[T]) validateArtifact() error {
 }
 
 func (m *pluginWorkerMeta[T]) shutdownSession() {
-	m.sessionMu.Lock()
+	m.stateMu.Lock()
 	rpc, client := m.rpc, m.client
 	m.ready = false
 	m.rpc, m.client = nil, nil
-	m.sessionMu.Unlock()
+	m.stateMu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	if rpc != nil {

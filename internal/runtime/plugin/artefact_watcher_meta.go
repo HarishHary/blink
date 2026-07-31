@@ -38,6 +38,7 @@ type ArtifactWatcherStatus struct {
 	Lifecycle         ArtifactWatcherLifecycle
 	Availability      runtime.Availability
 	Generation        uint64
+	RestartCount      uint64
 	RestartPending    bool
 	DirectoryReadable bool
 	WatchingDirectory bool
@@ -272,7 +273,9 @@ func (m *artifactWatcherMeta) HandleInspect(gen.PID, ...string) map[string]strin
 }
 
 func (m *artifactWatcherMeta) notifyChanged() error {
-	if err := m.Send(m.Parent(), artifactDirectoryChanged{watcherGeneration: m.generation}); err != nil {
+	if err := m.Send(m.Parent(), artifactDirectoryChanged{
+		generation: m.generation,
+	}); err != nil {
 		return fmt.Errorf("notify artifact directory change: %w", err)
 	}
 	return nil

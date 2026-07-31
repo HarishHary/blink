@@ -48,42 +48,37 @@ func (s CatalogStatus) clone() CatalogStatus {
 	return clone
 }
 
-type catalogCallState struct{ routerPID gen.PID }
-
 type routerState struct {
 	pid             gen.PID
 	actorGeneration uint64
 	lastEpoch       uint64
 	restartCount    uint64
 	lastError       string
+	restart         *scheduledBackoff
 	status          RouterStatus
 	retiring        bool
 }
 
 type catalogActor[T plugin.Syncable] struct {
 	act.Actor
-
-	deps actorDependencies[T]
-
-	actorGeneration   uint64
-	activated         bool
-	routers           map[string]*routerState
-	routerGenerations map[string]uint64
-	routerRestarts    map[string]*scheduledBackoff
-	desired           map[string]routerApplyDesired
-	activeCalls       map[uint64]catalogCallState
-	revision          uint64
-	draining          bool
-	drainReported     bool
-	status            CatalogStatus
-	statusEpoch       uint64
+	deps            actorDependencies[T]
+	actorGeneration uint64
+	activated       bool
+	routers         map[string]*routerState
+	desired         map[string]routerApplyDesired
+	inFlightCalls   map[uint64]gen.PID
+	desiredRevision uint64
+	draining        bool
+	drainReported   bool
+	liveStatus      CatalogStatus
+	statusEpoch     uint64
 }
 
 type catalogActivate struct{ generation uint64 }
 
 type catalogApplySnapshot struct {
-	revision uint64
-	desired  map[string]routerApplyDesired
+	desiredRevision uint64
+	desired         map[string]routerApplyDesired
 }
 
 type catalogDrain struct{}
@@ -101,9 +96,9 @@ type catalogStatusChanged struct {
 }
 
 type routerRestart struct {
-	pluginID string
-	revision uint64
-	token    uint64
+	pluginID        string
+	desiredRevision uint64
+	token           uint64
 }
 
 func newCatalogActor[T plugin.Syncable](deps actorDependencies[T]) gen.ProcessBehavior {
@@ -112,10 +107,8 @@ func newCatalogActor[T plugin.Syncable](deps actorDependencies[T]) gen.ProcessBe
 
 func (a *catalogActor[T]) Init(...any) error {
 	a.routers = make(map[string]*routerState)
-	a.routerGenerations = make(map[string]uint64)
-	a.routerRestarts = make(map[string]*scheduledBackoff)
 	a.desired = make(map[string]routerApplyDesired)
-	a.activeCalls = make(map[uint64]catalogCallState)
+	a.inFlightCalls = make(map[uint64]gen.PID)
 	return nil
 }
 
@@ -136,10 +129,10 @@ func (a *catalogActor[T]) HandleMessage(_ gen.PID, message any) error {
 		a.reconcileStatus()
 
 	case catalogApplySnapshot:
-		if !a.activated || a.draining || m.revision < a.revision {
+		if !a.activated || a.draining || m.desiredRevision < a.desiredRevision {
 			return nil
 		}
-		a.revision = m.revision
+		a.desiredRevision = m.desiredRevision
 		a.desired = m.desired
 		for id := range m.desired {
 			a.sendDesiredToRouter(id)
@@ -151,7 +144,7 @@ func (a *catalogActor[T]) HandleMessage(_ gen.PID, message any) error {
 			ref.retiring = true
 			a.cancelRouterRestart(id, false)
 			if ref.pid == (gen.PID{}) {
-				delete(a.routers, id)
+				a.retireRouter(id, ErrPluginUnavailable)
 				continue
 			}
 			_ = a.Send(ref.pid, drain{})
@@ -159,7 +152,7 @@ func (a *catalogActor[T]) HandleMessage(_ gen.PID, message any) error {
 		a.reconcileStatus()
 
 	case invokeCall[T]:
-		if a.draining || a.revision == 0 {
+		if a.draining || a.desiredRevision == 0 {
 			a.finishUntrackedCall(m, ErrPluginUnavailable)
 			return nil
 		}
@@ -168,24 +161,24 @@ func (a *catalogActor[T]) HandleMessage(_ gen.PID, message any) error {
 			a.finishUntrackedCall(m, ErrPluginUnavailable)
 			return nil
 		}
-		a.activeCalls[m.callID] = catalogCallState{routerPID: ref.pid}
+		a.inFlightCalls[m.callID] = ref.pid
 		if err := a.Send(ref.pid, m); err != nil {
 			a.finishTrackedCall(m.callID, ErrPluginUnavailable)
 			_ = a.Node().SendExit(ref.pid, fmt.Errorf("forward invocation to router: %w", err))
 		}
 
 	case cancelCall:
-		call, ok := a.activeCalls[m.callID]
+		routerPID, ok := a.inFlightCalls[m.callID]
 		if !ok {
 			return nil
 		}
-		if err := a.Send(call.routerPID, m); err != nil {
+		if err := a.Send(routerPID, m); err != nil {
 			a.finishTrackedCall(m.callID, m.err)
 		}
 
 	case callCompleted:
-		if _, ok := a.activeCalls[m.callID]; ok {
-			delete(a.activeCalls, m.callID)
+		if _, ok := a.inFlightCalls[m.callID]; ok {
+			delete(a.inFlightCalls, m.callID)
 			_ = a.Send(a.Parent(), m)
 		}
 
@@ -218,7 +211,22 @@ func (a *catalogActor[T]) HandleMessage(_ gen.PID, message any) error {
 		if !a.draining && !ref.retiring {
 			return nil
 		}
+
 		_ = a.Send(ref.pid, stop{})
+		a.retireRouter(m.pluginID, ErrPluginUnavailable)
+
+		if a.draining {
+			a.reconcileStatus()
+			if a.liveRouterCount() == 0 {
+				a.reportDrained()
+			}
+			return nil
+		}
+
+		if _, desired := a.desired[m.pluginID]; desired {
+			a.sendDesiredToRouter(m.pluginID)
+		}
+		a.reconcileStatus()
 
 	case routerStatusChanged:
 		ref := a.routers[m.pluginID]
@@ -241,13 +249,17 @@ func (a *catalogActor[T]) HandleMessage(_ gen.PID, message any) error {
 		a.reconcileStatus()
 
 	case routerRestart:
-		restart := a.routerRestarts[m.pluginID]
-		if restart == nil || !restart.pending || restart.token != m.token {
+		ref := a.routers[m.pluginID]
+		if ref == nil ||
+			ref.restart == nil ||
+			!ref.restart.pending ||
+			ref.restart.token != m.token {
 			return nil
 		}
-		restart.pending = false
-		restart.cancel = nil
-		if !a.draining && m.revision == a.revision {
+		ref.restart.pending = false
+		ref.restart.cancel = nil
+		ref.status.RestartPending = false
+		if !a.draining && m.desiredRevision == a.desiredRevision {
 			a.sendDesiredToRouter(m.pluginID)
 		}
 
@@ -257,14 +269,6 @@ func (a *catalogActor[T]) HandleMessage(_ gen.PID, message any) error {
 				continue
 			}
 
-			for callID, call := range a.activeCalls {
-				if call.routerPID == ref.pid {
-					a.finishTrackedCall(callID, ErrPluginUnavailable)
-				}
-			}
-
-			ref.pid = gen.PID{}
-			ref.lastEpoch = 0
 			ref.restartCount++
 			ref.lastError = errorText(m.Reason)
 			ref.status.Lifecycle = RouterRestarting
@@ -276,12 +280,22 @@ func (a *catalogActor[T]) HandleMessage(_ gen.PID, message any) error {
 
 			_, desired := a.desired[id]
 			if a.draining || ref.retiring || !desired {
-				delete(a.routers, id)
-				a.cancelRouterRestart(id, false)
-				if a.draining && a.liveRouterCount() == 0 {
-					a.reportDrained()
+				a.retireRouter(id, ErrPluginUnavailable)
+				if a.draining {
+					if a.liveRouterCount() == 0 {
+						a.reportDrained()
+					}
+				} else if desired {
+					a.sendDesiredToRouter(id)
 				}
 			} else {
+				ref.pid = gen.PID{}
+				ref.lastEpoch = 0
+				for callID, routerPID := range a.inFlightCalls {
+					if routerPID == m.PID {
+						a.finishTrackedCall(callID, ErrPluginUnavailable)
+					}
+				}
 				_ = a.scheduleRouterRestart(id)
 			}
 			a.reconcileStatus()
@@ -296,13 +310,16 @@ func (a *catalogActor[T]) sendDesiredToRouter(id string) {
 	if !ok || a.draining {
 		return
 	}
+	if ref := a.routers[id]; ref != nil && ref.pid != (gen.PID{}) && ref.retiring {
+		return
+	}
 	ref, err := a.startRouter(id)
 	if err != nil {
 		_ = a.scheduleRouterRestart(id)
 		return
 	}
 	ref.retiring = false
-	desired.desiredRevision = a.revision
+	desired.desiredRevision = a.desiredRevision
 	if err := a.Send(ref.pid, desired); err != nil {
 		_ = a.Node().SendExit(ref.pid, fmt.Errorf("apply desired state to router %q: %w", id, err))
 	}
@@ -318,9 +335,8 @@ func (a *catalogActor[T]) startRouter(id string) (*routerState, error) {
 		a.routers[id] = ref
 	}
 
-	generation := a.routerGenerations[id] + 1
-	a.routerGenerations[id] = generation
-	ref.actorGeneration = generation
+	ref.actorGeneration++
+	generation := ref.actorGeneration
 	ref.lastEpoch = 0
 	ref.retiring = false
 	ref.status = RouterStatus{
@@ -375,13 +391,59 @@ func (a *catalogActor[T]) startRouter(id string) (*routerState, error) {
 	return ref, nil
 }
 
-func (a *catalogActor[T]) routerRestartState(id string) *scheduledBackoff {
-	state := a.routerRestarts[id]
-	if state == nil {
-		state = newScheduledBackoff(a.deps.retryMin, a.deps.retryMax)
-		a.routerRestarts[id] = state
+func (a *catalogActor[T]) retireRouter(id string, callErr error) {
+	ref := a.routers[id]
+	if ref == nil {
+		return
 	}
-	return state
+
+	if ref.restart != nil {
+		ref.restart.cancelScheduled(false)
+	}
+
+	retiredPID := ref.pid
+	if retiredPID != (gen.PID{}) {
+		for callID, routerPID := range a.inFlightCalls {
+			if routerPID == retiredPID {
+				a.finishTrackedCall(callID, callErr)
+			}
+		}
+	}
+
+	ref.pid = gen.PID{}
+	ref.lastEpoch = 0
+	ref.retiring = false
+	ref.status = RouterStatus{
+		Lifecycle:       RouterStopped,
+		Availability:    runtime.AvailabilityUnavailable,
+		ActorGeneration: ref.actorGeneration,
+		RestartCount:    ref.restartCount,
+		RestartPending:  false,
+		ActorLastError:  ref.lastError,
+		Revision:        a.desiredRevision,
+		Primary: DeploymentPoolStatus{
+			Lifecycle:    DeploymentPoolStopped,
+			Availability: runtime.AvailabilityUnavailable,
+			Workers:      make(map[int]PluginWorkerStatus),
+		},
+		Candidate: DeploymentPoolStatus{
+			Lifecycle:    DeploymentPoolStopped,
+			Availability: runtime.AvailabilityUnavailable,
+			Workers:      make(map[int]PluginWorkerStatus),
+		},
+	}
+}
+
+func (a *catalogActor[T]) routerRestartState(id string) *scheduledBackoff {
+	ref := a.routers[id]
+	if ref == nil {
+		ref = &routerState{}
+		a.routers[id] = ref
+	}
+	if ref.restart == nil {
+		ref.restart = newScheduledBackoff(a.deps.retryMin, a.deps.retryMax)
+	}
+	return ref.restart
 }
 
 func (a *catalogActor[T]) scheduleRouterRestart(id string) error {
@@ -401,7 +463,7 @@ func (a *catalogActor[T]) scheduleRouterRestart(id string) error {
 	token := state.token
 	cancel, err := a.SendAfter(
 		a.PID(),
-		routerRestart{pluginID: id, revision: a.revision, token: token},
+		routerRestart{pluginID: id, desiredRevision: a.desiredRevision, token: token},
 		delay,
 	)
 	if err != nil {
@@ -420,10 +482,10 @@ func (a *catalogActor[T]) scheduleRouterRestart(id string) error {
 }
 
 func (a *catalogActor[T]) cancelRouterRestart(id string, reset bool) {
-	if state := a.routerRestarts[id]; state != nil {
-		state.cancelScheduled(reset)
-	}
 	if ref := a.routers[id]; ref != nil {
+		if ref.restart != nil {
+			ref.restart.cancelScheduled(reset)
+		}
 		ref.status.RestartPending = false
 	}
 }
@@ -433,14 +495,14 @@ func (a *catalogActor[T]) resetRouterRestartBackoff(id string) {
 }
 
 func (a *catalogActor[T]) cancelAllRouterRestarts(reset bool) {
-	for id := range a.routerRestarts {
+	for id := range a.routers {
 		a.cancelRouterRestart(id, reset)
 	}
 }
 
 func (a *catalogActor[T]) routerRestartPending(id string) bool {
-	state := a.routerRestarts[id]
-	return state != nil && state.pending
+	ref := a.routers[id]
+	return ref != nil && ref.restart != nil && ref.restart.pending
 }
 
 func (a *catalogActor[T]) liveRouterCount() int {
@@ -458,10 +520,10 @@ func (a *catalogActor[T]) finishUntrackedCall(call invokeCall[T], err error) {
 }
 
 func (a *catalogActor[T]) finishTrackedCall(callID uint64, err error) {
-	if _, ok := a.activeCalls[callID]; !ok {
+	if _, ok := a.inFlightCalls[callID]; !ok {
 		return
 	}
-	delete(a.activeCalls, callID)
+	delete(a.inFlightCalls, callID)
 	_ = a.Send(a.Parent(), callCompleted{callID: callID, err: err})
 }
 
@@ -505,13 +567,13 @@ func (a *catalogActor[T]) reconcileStatus() {
 		lifecycle = CatalogStopped
 	case a.draining:
 		lifecycle = CatalogDraining
-	case a.revision != 0:
+	case a.desiredRevision != 0:
 		lifecycle = CatalogRunning
 	}
 
 	availability := runtime.AvailabilityUnavailable
 	switch {
-	case a.revision == 0 || len(a.desired) == 0:
+	case a.desiredRevision == 0 || len(a.desired) == 0:
 		availability = runtime.AvailabilityUnavailable
 	case unavailable == 0 && degraded == 0 && routable == len(a.desired):
 		availability = runtime.AvailabilityReady
@@ -523,19 +585,19 @@ func (a *catalogActor[T]) reconcileStatus() {
 		Lifecycle:          lifecycle,
 		Availability:       availability,
 		ActorGeneration:    a.actorGeneration,
-		Revision:           a.revision,
+		Revision:           a.desiredRevision,
 		DesiredRouters:     len(a.desired),
 		RoutableRouters:    routable,
 		DegradedRouters:    degraded,
 		UnavailableRouters: unavailable,
 		Routers:            routers,
 	}
-	if sameCatalogStatus(a.status, next) && a.statusEpoch != 0 {
+	if sameCatalogStatus(a.liveStatus, next) && a.statusEpoch != 0 {
 		return
 	}
 
 	a.statusEpoch++
-	a.status = next
+	a.liveStatus = next
 	if !a.activated {
 		return
 	}
