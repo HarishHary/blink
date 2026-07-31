@@ -1,0 +1,116 @@
+package plugin
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"time"
+
+	"ergo.services/ergo/gen"
+	"ergo.services/ergo/node"
+)
+
+// Host owns the single Ergo node for one Blink process.
+//
+// Actor runtimes attach supervisor subtrees to this node. They must never stop
+// the node themselves; only Host owns the node-wide shutdown boundary.
+type NodeHost struct {
+	node gen.Node
+
+	stopOnce sync.Once
+	stopped  chan struct{}
+}
+
+type NodeOptions struct {
+	Name            gen.Atom
+	ShutdownTimeout time.Duration
+}
+
+func Start(opts NodeOptions) (*NodeHost, error) {
+	if opts.Name == "" {
+		return nil, errors.New("actornode: name is required")
+	}
+	if opts.ShutdownTimeout <= 0 {
+		opts.ShutdownTimeout = gen.DefaultShutdownTimeout
+	}
+
+	n, err := node.Start(
+		opts.Name,
+		gen.NodeOptions{
+			ShutdownTimeout: opts.ShutdownTimeout,
+			Network: gen.NetworkOptions{
+				Mode: gen.NetworkModeDisabled,
+			},
+		},
+		gen.Version{},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("start Ergo node %q: %w", opts.Name, err)
+	}
+
+	return &NodeHost{
+		node:    n,
+		stopped: make(chan struct{}),
+	}, nil
+}
+
+func (h *NodeHost) Node() gen.Node {
+	if h == nil {
+		return nil
+	}
+	return h.node
+}
+
+func (h *NodeHost) Name() gen.Atom {
+	if h == nil || h.node == nil {
+		return ""
+	}
+	return h.node.Name()
+}
+
+func (h *NodeHost) Close(ctx context.Context) error {
+	if h == nil || h.node == nil {
+		return nil
+	}
+
+	initiator := false
+	h.stopOnce.Do(func() {
+		initiator = true
+		go func() {
+			h.node.Stop()
+			close(h.stopped)
+		}()
+	})
+
+	// Another caller already initiated shutdown. This caller is only a waiter.
+	if !initiator {
+		return h.waitForStop(ctx)
+	}
+
+	select {
+	case <-h.stopped:
+		return nil
+
+	case <-ctx.Done():
+		// Graceful shutdown may have completed concurrently with cancellation.
+		select {
+		case <-h.stopped:
+			return nil
+		default:
+		}
+		// Only the initiating caller may force shutdown.
+		// Do not wait afterward because ctx has expired.
+		h.node.StopForce()
+		return fmt.Errorf("stop Ergo node: %w", ctx.Err())
+	}
+}
+
+func (h *NodeHost) waitForStop(ctx context.Context) error {
+	select {
+	case <-h.stopped:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("wait for Ergo node shutdown: %w", ctx.Err())
+	}
+}
