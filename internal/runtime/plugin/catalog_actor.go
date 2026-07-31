@@ -81,8 +81,6 @@ type catalogApplyDesired struct {
 	desired         map[string]routerApplyDesired
 }
 
-type catalogDrain struct{}
-
 type catalogDrained struct {
 	pid        gen.PID
 	generation uint64
@@ -182,7 +180,7 @@ func (a *catalogActor[T]) HandleMessage(_ gen.PID, message any) error {
 			_ = a.Send(a.Parent(), m)
 		}
 
-	case catalogDrain:
+	case drain:
 		if a.draining {
 			return nil
 		}
@@ -262,6 +260,9 @@ func (a *catalogActor[T]) HandleMessage(_ gen.PID, message any) error {
 		if !a.draining && m.desiredRevision == a.desiredRevision {
 			a.sendDesiredToRouter(m.pluginID)
 		}
+
+	case stop:
+		return gen.TerminateReasonNormal
 
 	case gen.MessageDownPID:
 		for id, ref := range a.routers {

@@ -130,12 +130,9 @@ type runtimeSubmit[T plugin.Syncable] struct {
 	result               *runtime.AsyncResult
 }
 
-type runtimeDrain struct{}
 type runtimeGetStatus struct{}
 
-func newRuntimeSupervisor[T plugin.Syncable](
-	opts runtimeSupervisorOptions[T],
-) gen.ProcessBehavior {
+func newRuntimeSupervisor[T plugin.Syncable](opts runtimeSupervisorOptions[T]) gen.ProcessBehavior {
 	return &runtimeSupervisor[T]{opts: opts}
 }
 
@@ -202,13 +199,9 @@ func (s *runtimeSupervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 
 // HandleCall remains control-plane only. Plugin execution enters through
 // runtimeSubmit in HandleMessage and never blocks an Ergo Call callback.
-func (s *runtimeSupervisor[T]) HandleCall(
-	from gen.PID,
-	ref gen.Ref,
-	request any,
-) (any, error) {
+func (s *runtimeSupervisor[T]) HandleCall(from gen.PID, ref gen.Ref, request any) (any, error) {
 	switch request.(type) {
-	case runtimeDrain:
+	case drain:
 		s.drainWaiters = append(s.drainWaiters, runtimeDrainWaiter{pid: from, ref: ref})
 		if s.draining {
 			return nil, nil
@@ -218,7 +211,7 @@ func (s *runtimeSupervisor[T]) HandleCall(
 		s.reconcileStatus()
 		s.publishStatus()
 		if s.catalog.pid != (gen.PID{}) {
-			_ = s.Send(s.catalog.pid, catalogDrain{})
+			_ = s.Send(s.catalog.pid, drain{})
 		}
 		return nil, nil
 
@@ -226,9 +219,7 @@ func (s *runtimeSupervisor[T]) HandleCall(
 		return s.liveStatus.clone(), nil
 
 	default:
-		return runtimeDrainReply{
-			Err: fmt.Errorf("actorruntime: unsupported supervisor call %T", request),
-		}, nil
+		return runtimeDrainReply{Err: fmt.Errorf("actorruntime: unsupported supervisor call %T", request)}, nil
 	}
 }
 
@@ -444,7 +435,7 @@ func (s *runtimeSupervisor[T]) startCatalogIncarnation(pid gen.PID) error {
 		}
 	}
 	if s.draining {
-		if err := s.Send(pid, catalogDrain{}); err != nil {
+		if err := s.Send(pid, drain{}); err != nil {
 			_ = s.Node().SendExit(
 				pid,
 				fmt.Errorf("drain replacement catalog: %w", err),
@@ -454,10 +445,7 @@ func (s *runtimeSupervisor[T]) startCatalogIncarnation(pid gen.PID) error {
 	return nil
 }
 
-func (s *runtimeSupervisor[T]) retireReconcilerIncarnation(
-	pid gen.PID,
-	reason error,
-) {
+func (s *runtimeSupervisor[T]) retireReconcilerIncarnation(pid gen.PID, reason error) {
 	state := &s.reconciler
 	if state.pid != pid {
 		return
@@ -477,10 +465,7 @@ func (s *runtimeSupervisor[T]) retireReconcilerIncarnation(
 	state.status.Watcher.RestartPending = false
 }
 
-func (s *runtimeSupervisor[T]) retireCatalogIncarnation(
-	pid gen.PID,
-	reason error,
-) {
+func (s *runtimeSupervisor[T]) retireCatalogIncarnation(pid gen.PID, reason error) {
 	state := &s.catalog
 	if state.pid != pid {
 		return
