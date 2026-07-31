@@ -10,62 +10,59 @@ import (
 // send failures, child termination, cancellation, and normal completion may
 // race without blocking or double-completing the caller.
 type AsyncResult struct {
-	once sync.Once
-	ch   chan error
+	Once sync.Once
+	Ch   chan error
 }
 
-func newAsyncResult() *AsyncResult {
-	return &AsyncResult{ch: make(chan error, 1)}
+func NewAsyncResult() *AsyncResult {
+	return &AsyncResult{Ch: make(chan error, 1)}
 }
 
 func (r *AsyncResult) Complete(err error) {
 	if r == nil {
 		return
 	}
-	r.once.Do(func() {
-		r.ch <- err
-		close(r.ch)
+	r.Once.Do(func() {
+		r.Ch <- err
+		close(r.Ch)
 	})
 }
 
 // Invocation is the asynchronous handle returned by Runtime.Submit and Runtime.SubmitShadow.
 type Invocation struct {
-	id    uint64
-	state *invocationState
+	Id    uint64
+	State *invocationState
 }
-
-// ID returns the runtime-local invocation identifier.
-func (i Invocation) ID() uint64 { return i.id }
 
 // Done is closed after the invocation reaches one terminal result.
 func (i Invocation) Done() <-chan struct{} {
-	if i.state == nil {
+	if i.State == nil {
 		done := make(chan struct{})
 		close(done)
 		return done
 	}
-	return i.state.done
+	return i.State.done
 }
 
 // Err returns the terminal invocation error. It returns nil before completion
 // and for a successful invocation.
 func (i Invocation) Err() error {
-	if i.state == nil {
+	if i.State == nil {
 		return nil
 	}
-	i.state.mu.RLock()
-	defer i.state.mu.RUnlock()
-	return i.state.err
+	i.State.mu.RLock()
+	defer i.State.mu.RUnlock()
+	return i.State.err
 }
 
 // Cancel requests cancellation of this invocation. Cancellation is idempotent;
 // the invocation completes only when the runtime acknowledges a terminal
 // result through the normal completion path.
 func (i Invocation) Cancel(err error) {
-	if i.state == nil {
+	if i.State == nil {
 		return
 	}
-	i.state.RequestCancel(err)
+	i.State.RequestCancel(err)
 }
 
 type invocationState struct {
