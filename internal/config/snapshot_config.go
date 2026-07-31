@@ -11,118 +11,145 @@ import (
 
 // SnapshotConfig[T] adapts the controller's published snapshot into the data plane's Source[T].
 type SnapshotConfig[T plugin.Syncable] struct {
-	logger     *logger.Logger
-	src        plugin.SnapshotSource
-	loader     Loader[T] // reuse the per-type loader; only ParseSpec is called here
-	mu         sync.Mutex
-	generation int64
-	ready      bool                          // a non-nil snapshot has been parsed at least once
-	byName     map[string]T                  // any artifact (primary or candidate) by binary stem
-	primaries  []T                           // effective (primary) items, for data-plane enumeration
-	rollout    map[string]pools.RolloutEntry // by logical ID, merged across artifacts
+	logger      *logger.Logger
+	loader      Loader[T] // reuse the per-type loader; only ParseSpec is called here
+	mu          sync.RWMutex
+	generation  int64
+	initialized bool
+	readerReady bool                          // a non-nil snapshot has been parsed at least once
+	byName      map[string]T                  // any artifact (primary or candidate) by binary stem
+	primaries   []T                           // effective (primary) items, for data-plane enumeration
+	rollout     map[string]pools.RolloutEntry // by logical ID, merged across artifacts
 }
 
 // NewSnapshotConfig builds a SnapshotConfig reading from src, parsing specs with loader.ParseSpec.
-func NewSnapshotConfig[T plugin.Syncable](logger *logger.Logger, src plugin.SnapshotSource, loader Loader[T]) *SnapshotConfig[T] {
-	return &SnapshotConfig[T]{src: src, loader: loader, logger: logger}
+func NewSnapshotConfig[T plugin.Syncable](logger *logger.Logger, loader Loader[T]) *SnapshotConfig[T] {
+	return &SnapshotConfig[T]{loader: loader, logger: logger}
+}
+
+// Apply parses and atomically replaces the cache with one complete published
+// snapshot. Parsing happens before acquiring the write lock.
+func (s *SnapshotConfig[T]) Apply(snap *snapshot.Snapshot) {
+	if snap == nil {
+		return
+	}
+
+	byName := make(map[string]T, len(snap.Entries))
+	rollout := make(map[string]pools.RolloutEntry, len(snap.Entries))
+	primaries := make([]T, 0, len(snap.Entries))
+
+	for _, entry := range snap.Entries {
+		for index, ref := range [...]*snapshot.ArtifactRef{entry.Primary, entry.Candidate} {
+			if ref == nil || len(ref.Spec) == 0 {
+				continue
+			}
+			item, err := s.loader.ParseSpec(ref.Name, ref.Spec)
+			if err != nil {
+				s.logger.ErrorF(
+					"snapshot config: parse spec %q (id %q): %v",
+					ref.Name,
+					entry.Id,
+					err,
+				)
+				continue
+			}
+
+			byName[ref.Name] = item
+			metadata := item.Metadata()
+			rolloutEntry := pools.RolloutEntry{
+				RolloutMode: metadata.RolloutMode,
+				RolloutPct:  metadata.RolloutPct,
+			}
+			if existing, ok := rollout[entry.Id]; ok {
+				rollout[entry.Id] = mergeRollout(existing, rolloutEntry)
+			} else {
+				rollout[entry.Id] = rolloutEntry
+			}
+			if index == 0 {
+				primaries = append(primaries, item)
+			}
+		}
+	}
+
+	s.mu.Lock()
+	s.generation = snap.Generation
+	s.initialized = true
+	s.byName = byName
+	s.primaries = primaries
+	s.rollout = rollout
+	s.mu.Unlock()
+}
+
+// SetReaderReady applies the lifecycle readiness projected from the snapshot
+// supervisor. The last parsed config remains available while Ready is false.
+func (s *SnapshotConfig[T]) SetReaderReady(ready bool) {
+	s.mu.Lock()
+	s.readerReady = ready
+	s.mu.Unlock()
+}
+
+func (s *SnapshotConfig[T]) Ready() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.initialized && s.readerReady
+}
+
+func (s *SnapshotConfig[T]) Generation() int64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.generation
 }
 
 // Primaries returns the effective (primary) items from the latest snapshot; candidates are excluded.
 func (s *SnapshotConfig[T]) Primaries() []T {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.loadLocked()
-	return s.primaries
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]T(nil), s.primaries...)
 }
 
 // ByFileName returns the item parsed from the artifact whose binary stem matches name (primary or candidate); used by the pool's per-binary rollout and rpc wrappers.
 func (s *SnapshotConfig[T]) ByFileName(name string) (T, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.loadLocked()
-	v, ok := s.byName[name]
-	return v, ok
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	value, ok := s.byName[name]
+	return value, ok
 }
 
 // RolloutById returns the rollout rollout for a logical plugin ID, merged across its primary and candidate artifacts (highest mode + pct wins).
-func (s *SnapshotConfig[T]) RolloutById(id string) pools.RolloutEntry {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.loadLocked()
-	return s.rollout[id]
+func (s *SnapshotConfig[T]) RolloutById(pluginId string) pools.RolloutEntry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.rollout[pluginId]
 }
 
 // DesiredBinaryState satisfies plugin.DesiredConfig: the desired lifecycle state for one binary by stem.
 func (s *SnapshotConfig[T]) DesiredBinaryState(name string) (plugin.BinaryState, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.loadLocked()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	item, ok := s.byName[name]
 	if !ok {
 		return plugin.BinaryState{}, false
 	}
 	md := item.Metadata()
 	return plugin.BinaryState{
-		Id:       md.Id,
-		Name:     md.Name,
-		Enabled:  md.Enabled,
-		Mode:     md.RolloutMode,
-		MaxProcs: md.MaxProcs,
+		Id:         md.Id,
+		Name:       md.Name,
+		Enabled:    md.Enabled,
+		Mode:       md.RolloutMode,
+		RolloutPct: md.RolloutPct,
+		MaxProcs:   md.MaxProcs,
 	}, true
 }
 
-// loadLocked refreshes the parsed caches on a snapshot generation change; caller holds s.mu.
-func (s *SnapshotConfig[T]) loadLocked() {
-	snap := s.src.Snapshot()
-	if snap == nil {
-		s.byName, s.primaries, s.rollout, s.ready = nil, nil, nil, false
-		return
-	}
-	if s.ready && s.generation == snap.Generation {
-		return
-	}
-
-	byName := make(map[string]T, len(snap.Entries))
-	rollout := make(map[string]pools.RolloutEntry, len(snap.Entries))
-	var primaries []T
-	for _, e := range snap.Entries {
-		// index 0 = primary (the effective item for rollout), 1 = candidate.
-		for i, ref := range [...]*snapshot.ArtifactRef{e.Primary, e.Candidate} {
-			if ref == nil || len(ref.Spec) == 0 {
-				continue
-			}
-			item, err := s.loader.ParseSpec(ref.Name, ref.Spec)
-			if err != nil {
-				s.logger.ErrorF("snapshot config: parse spec %q (id %q): %v", ref.Name, e.Id, err)
-				continue
-			}
-			byName[ref.Name] = item
-			md := item.Metadata()
-			re := pools.RolloutEntry{RolloutMode: md.RolloutMode, RolloutPct: md.RolloutPct}
-			if ex, ok := rollout[e.Id]; ok {
-				rollout[e.Id] = mergeRollout(ex, re)
-			} else {
-				rollout[e.Id] = re
-			}
-			if i == 0 {
-				primaries = append(primaries, item)
-			}
-		}
-	}
-
-	s.byName, s.primaries, s.rollout = byName, primaries, rollout
-	s.generation = snap.Generation
-	s.ready = true
-}
-
 // mergeRollout combines two rollout entries for an ID, taking the higher mode and pct.
-func mergeRollout(a, b pools.RolloutEntry) pools.RolloutEntry {
-	out := a
-	if b.RolloutMode > a.RolloutMode {
-		out.RolloutMode = b.RolloutMode
+func mergeRollout(left, right pools.RolloutEntry) pools.RolloutEntry {
+	out := left
+	if right.RolloutMode > left.RolloutMode {
+		out.RolloutMode = right.RolloutMode
 	}
-	if b.RolloutPct > a.RolloutPct {
-		out.RolloutPct = b.RolloutPct
+	if right.RolloutPct > left.RolloutPct {
+		out.RolloutPct = right.RolloutPct
 	}
 	return out
 }

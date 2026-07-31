@@ -42,10 +42,13 @@ type Alert struct {
 	OverrideMergeByKeys []string
 }
 
-// Clone returns a shallow alert copy with a deeply cloned Event.
+// Clone returns an alert copy with independently owned mutable fields.
 func (a *Alert) Clone() *Alert {
 	clone := *a
 	clone.Event = a.Event.Clone()
+	clone.OutputsSent = append([]string(nil), a.OutputsSent...)
+	clone.EnrichmentsApplied = append([]string(nil), a.EnrichmentsApplied...)
+	clone.OverrideMergeByKeys = append([]string(nil), a.OverrideMergeByKeys...)
 	return &clone
 }
 

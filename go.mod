@@ -3,6 +3,7 @@ module github.com/harishhary/blink
 go 1.26
 
 require (
+	ergo.services/ergo v1.999.320
 	github.com/Azure/azure-sdk-for-go/sdk/messaging/azeventhubs/v2 v2.0.2
 	github.com/cenkalti/backoff/v4 v4.3.0
 	github.com/fsnotify/fsnotify v1.9.0

@@ -73,6 +73,6 @@ terraform.rc
 docs/*
 bin/*
 .serena/*
-openwiki/
+openwiki/*
 # CocoIndex Code (ccc)
 .cocoindex_code/
