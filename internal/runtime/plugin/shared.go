@@ -14,14 +14,11 @@ import (
 var (
 	ErrPluginUnavailable = errors.New("plugin unavailable")
 	ErrQueueFull         = errors.New("plugin queue full")
+	ErrArtifactMismatch  = errors.New("plugin artifact checksum mismatch")
 	ErrRuntimeNotStarted = errors.New("actor runtime not started")
 	ErrRuntimeStopped    = errors.New("actor runtime stopped")
-	ErrArtifactMismatch  = errors.New("plugin artifact checksum mismatch")
-)
-
-var (
-	errWorkerRecycle   = errors.New("worker recycled after plugin transport failure")
-	errWorkerUnhealthy = errors.New("worker plugin health check failed")
+	ErrWorkerRecycle     = errors.New("worker recycled after plugin transport failure")
+	ErrWorkerUnhealthy   = errors.New("worker plugin health check failed")
 )
 
 type actorDependencies[T plugin.Syncable] struct {
@@ -55,30 +52,6 @@ func (d *deployment) poolKey() deploymentPoolKey {
 
 func (d *deployment) workerCount() int {
 	return max(1, d.MaxProcs)
-}
-
-type retryState struct {
-	attempt int
-	pending bool
-	token   uint64
-}
-
-type workerRetryState struct {
-	attempt int
-	pending bool
-	token   uint64
-}
-
-func retryDelay(attempt int, minDelay, maxDelay time.Duration) time.Duration {
-	shift := attempt
-	if shift > 5 {
-		shift = 5
-	}
-	delay := minDelay * time.Duration(1<<shift)
-	if delay > maxDelay {
-		delay = maxDelay
-	}
-	return delay
 }
 
 type drain struct{}

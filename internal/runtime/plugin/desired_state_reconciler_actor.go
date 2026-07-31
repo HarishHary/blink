@@ -262,9 +262,9 @@ func (a *desiredStateReconcilerActor[T]) HandleMessage(_ gen.PID, message any) e
 
 		a.revision++
 		a.deferred = m.deferred
-		if err := a.Send(a.Parent(), runtimeApplySnapshot{
+		if err := a.Send(a.Parent(), runtimeApplyDesired{
 			generation: a.actorGeneration,
-			snapshot: catalogApplySnapshot{
+			desired: catalogApplyDesired{
 				desiredRevision: a.revision,
 				desired:         m.desired,
 			},

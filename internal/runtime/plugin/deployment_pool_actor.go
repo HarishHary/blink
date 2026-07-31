@@ -236,7 +236,7 @@ func (a *deploymentPoolActor[T]) HandleMessage(_ gen.PID, message any) error {
 		worker.status.Activity = PluginWorkerIdle
 		if m.recycle {
 			worker.status.Availability = runtime.AvailabilityUnavailable
-			worker.status.LastError = errorText(errWorkerRecycle)
+			worker.status.LastError = errorText(ErrWorkerRecycle)
 		} else {
 			worker.status.Lifecycle = PluginWorkerRunning
 			worker.status.Availability = runtime.AvailabilityReady

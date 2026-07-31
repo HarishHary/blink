@@ -76,7 +76,7 @@ type catalogActor[T plugin.Syncable] struct {
 
 type catalogActivate struct{ generation uint64 }
 
-type catalogApplySnapshot struct {
+type catalogApplyDesired struct {
 	desiredRevision uint64
 	desired         map[string]routerApplyDesired
 }
@@ -128,7 +128,7 @@ func (a *catalogActor[T]) HandleMessage(_ gen.PID, message any) error {
 		a.activated = true
 		a.reconcileStatus()
 
-	case catalogApplySnapshot:
+	case catalogApplyDesired:
 		if !a.activated || a.draining || m.desiredRevision < a.desiredRevision {
 			return nil
 		}

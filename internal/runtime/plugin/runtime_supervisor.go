@@ -67,18 +67,18 @@ type runtimeSupervisorOptions[T plugin.Syncable] struct {
 	Stopped       chan<- error
 }
 
-type controlTarget struct {
+type runtimeDrainWaiter struct {
 	pid gen.PID
 	ref gen.Ref
 }
 
-func (t controlTarget) alive() bool { return t.ref.IsAlive() }
+func (t runtimeDrainWaiter) alive() bool { return t.ref.IsAlive() }
 
-type controlReply struct{ Err error }
+type runtimeDrainReply struct{ Err error }
 
-type runtimeCallState struct {
+type runtimeInvocationState struct {
 	catalogPID gen.PID
-	result     *asyncResult
+	result     *runtime.AsyncResult
 }
 
 type runtimeReconcilerState struct {
@@ -107,18 +107,18 @@ type runtimeSupervisor[T plugin.Syncable] struct {
 	reconciler runtimeReconcilerState
 	catalog    runtimeCatalogState
 
-	desiredSnapshot catalogApplySnapshot
-	inFlightCalls   map[uint64]runtimeCallState
-	drainWaiters    []controlTarget
+	desiredState        catalogApplyDesired
+	inFlightInvocations map[uint64]runtimeInvocationState
+	drainWaiters        []runtimeDrainWaiter
 
 	draining    bool
 	everRunning bool
 	liveStatus  RuntimeStatus
 }
 
-type runtimeApplySnapshot struct {
+type runtimeApplyDesired struct {
 	generation uint64
-	snapshot   catalogApplySnapshot
+	desired    catalogApplyDesired
 }
 
 type runtimeSubmit[T plugin.Syncable] struct {
@@ -127,7 +127,7 @@ type runtimeSubmit[T plugin.Syncable] struct {
 	pluginID, rolloutKey string
 	fn                   func(context.Context, T) error
 	shadow               bool
-	result               *asyncResult
+	result               *runtime.AsyncResult
 }
 
 type runtimeDrain struct{}
@@ -150,7 +150,7 @@ func (s *runtimeSupervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 	}
 
 	s.events = RuntimeEventsFor(s.Node(), s.opts.Name)
-	s.inFlightCalls = make(map[uint64]runtimeCallState)
+	s.inFlightInvocations = make(map[uint64]runtimeInvocationState)
 	s.catalog.status = newCatalogStatus(0, 0, "")
 	s.reconciler.status = newDesiredStateReconcilerStatus(0, 0, "")
 	s.reconcileStatus()
@@ -209,7 +209,7 @@ func (s *runtimeSupervisor[T]) HandleCall(
 ) (any, error) {
 	switch request.(type) {
 	case runtimeDrain:
-		s.drainWaiters = append(s.drainWaiters, controlTarget{pid: from, ref: ref})
+		s.drainWaiters = append(s.drainWaiters, runtimeDrainWaiter{pid: from, ref: ref})
 		if s.draining {
 			return nil, nil
 		}
@@ -226,7 +226,7 @@ func (s *runtimeSupervisor[T]) HandleCall(
 		return s.liveStatus.clone(), nil
 
 	default:
-		return controlReply{
+		return runtimeDrainReply{
 			Err: fmt.Errorf("actorruntime: unsupported supervisor call %T", request),
 		}, nil
 	}
@@ -236,16 +236,16 @@ func (s *runtimeSupervisor[T]) HandleMessage(from gen.PID, message any) error {
 	switch m := message.(type) {
 	case runtimeSubmit[T]:
 		if s.draining || s.catalog.pid == (gen.PID{}) {
-			m.result.complete(ErrPluginUnavailable)
+			m.result.Complete(ErrPluginUnavailable)
 			return nil
 		}
 		if err := m.context.Err(); err != nil {
-			m.result.complete(err)
+			m.result.Complete(err)
 			return nil
 		}
 
 		catalogPID := s.catalog.pid
-		s.inFlightCalls[m.callID] = runtimeCallState{
+		s.inFlightInvocations[m.callID] = runtimeInvocationState{
 			catalogPID: catalogPID,
 			result:     m.result,
 		}
@@ -274,20 +274,20 @@ func (s *runtimeSupervisor[T]) HandleMessage(from gen.PID, message any) error {
 		s.reconcileStatus()
 		s.publishStatus()
 
-	case runtimeApplySnapshot:
+	case runtimeApplyDesired:
 		if from != s.reconciler.pid ||
 			m.generation != s.reconciler.actorGeneration ||
 			s.draining ||
-			m.snapshot.desiredRevision <= s.desiredSnapshot.desiredRevision {
+			m.desired.desiredRevision <= s.desiredState.desiredRevision {
 			return nil
 		}
 
-		s.desiredSnapshot = m.snapshot
+		s.desiredState = m.desired
 		if s.catalog.pid != (gen.PID{}) {
-			if err := s.Send(s.catalog.pid, m.snapshot); err != nil {
+			if err := s.Send(s.catalog.pid, m.desired); err != nil {
 				_ = s.Node().SendExit(
 					s.catalog.pid,
-					fmt.Errorf("apply snapshot to catalog: %w", err),
+					fmt.Errorf("apply desired state to catalog: %w", err),
 				)
 			}
 		}
@@ -295,7 +295,7 @@ func (s *runtimeSupervisor[T]) HandleMessage(from gen.PID, message any) error {
 		s.publishStatus()
 
 	case cancelCall:
-		call, ok := s.inFlightCalls[m.callID]
+		call, ok := s.inFlightInvocations[m.callID]
 		if !ok {
 			return nil
 		}
@@ -327,12 +327,12 @@ func (s *runtimeSupervisor[T]) HandleMessage(from gen.PID, message any) error {
 			return nil
 		}
 
-		for callID := range s.inFlightCalls {
+		for callID := range s.inFlightInvocations {
 			s.finishCall(callID, ErrPluginUnavailable)
 		}
 		for _, waiter := range s.drainWaiters {
 			if waiter.alive() {
-				_ = s.SendResponse(waiter.pid, waiter.ref, controlReply{})
+				_ = s.SendResponse(waiter.pid, waiter.ref, runtimeDrainReply{})
 			}
 		}
 		s.drainWaiters = nil
@@ -352,11 +352,7 @@ func (s *runtimeSupervisor[T]) HandleChildStart(name gen.Atom, pid gen.PID) erro
 	return nil
 }
 
-func (s *runtimeSupervisor[T]) HandleChildTerminate(
-	name gen.Atom,
-	pid gen.PID,
-	reason error,
-) error {
+func (s *runtimeSupervisor[T]) HandleChildTerminate(name gen.Atom, pid gen.PID, reason error) error {
 	switch name {
 	case s.reconcilerActorName():
 		s.retireReconcilerIncarnation(pid, reason)
@@ -371,7 +367,7 @@ func (s *runtimeSupervisor[T]) HandleChildTerminate(
 }
 
 func (s *runtimeSupervisor[T]) Terminate(reason error) {
-	for callID := range s.inFlightCalls {
+	for callID := range s.inFlightInvocations {
 		s.finishCall(callID, ErrPluginUnavailable)
 	}
 
@@ -410,7 +406,7 @@ func (s *runtimeSupervisor[T]) startReconcilerIncarnation(pid gen.PID) error {
 
 	if err := s.Send(pid, desiredStateReconcilerActivate{
 		generation:   state.actorGeneration,
-		revisionBase: s.desiredSnapshot.desiredRevision,
+		revisionBase: s.desiredState.desiredRevision,
 	}); err != nil {
 		_ = s.Node().SendExit(
 			pid,
@@ -441,12 +437,9 @@ func (s *runtimeSupervisor[T]) startCatalogIncarnation(pid gen.PID) error {
 		_ = s.Node().SendExit(pid, fmt.Errorf("activate catalog: %w", err))
 		return nil
 	}
-	if s.desiredSnapshot.desiredRevision != 0 {
-		if err := s.Send(pid, s.desiredSnapshot); err != nil {
-			_ = s.Node().SendExit(
-				pid,
-				fmt.Errorf("replay desired snapshot to catalog: %w", err),
-			)
+	if s.desiredState.desiredRevision != 0 {
+		if err := s.Send(pid, s.desiredState); err != nil {
+			_ = s.Node().SendExit(pid, fmt.Errorf("replay desired state to catalog: %w", err))
 			return nil
 		}
 	}
@@ -502,7 +495,7 @@ func (s *runtimeSupervisor[T]) retireCatalogIncarnation(
 	state.status.RestartPending = true
 	state.status.ActorLastError = errorText(reason)
 
-	for callID, call := range s.inFlightCalls {
+	for callID, call := range s.inFlightInvocations {
 		if call.catalogPID == pid {
 			s.finishCall(callID, ErrPluginUnavailable)
 		}
@@ -510,12 +503,12 @@ func (s *runtimeSupervisor[T]) retireCatalogIncarnation(
 }
 
 func (s *runtimeSupervisor[T]) finishCall(callID uint64, err error) {
-	call, ok := s.inFlightCalls[callID]
+	call, ok := s.inFlightInvocations[callID]
 	if !ok {
 		return
 	}
-	delete(s.inFlightCalls, callID)
-	call.result.complete(err)
+	delete(s.inFlightInvocations, callID)
+	call.result.Complete(err)
 }
 
 func (s *runtimeSupervisor[T]) mergeReconcilerStatus(status DesiredStateReconcilerStatus) {
@@ -549,7 +542,7 @@ func (s *runtimeSupervisor[T]) reconcileStatus() {
 	s.liveStatus = RuntimeStatus{
 		Lifecycle:       s.runtimeLifecycle(),
 		Availability:    s.runtimeAvailability(),
-		DesiredRevision: s.desiredSnapshot.desiredRevision,
+		DesiredRevision: s.desiredState.desiredRevision,
 		Catalog:         s.catalog.status.clone(),
 		Reconciler:      s.reconciler.status,
 	}
@@ -562,11 +555,7 @@ func (s *runtimeSupervisor[T]) publishStatus() {
 	_ = s.SendEvent(s.events.Status.Name, s.statusToken, s.liveStatus.clone())
 }
 
-func newCatalogStatus(
-	actorGeneration uint64,
-	restartCount uint64,
-	lastError string,
-) CatalogStatus {
+func newCatalogStatus(actorGeneration uint64, restartCount uint64, lastError string) CatalogStatus {
 	return CatalogStatus{
 		Lifecycle:       CatalogStarting,
 		Availability:    runtime.AvailabilityUnavailable,
@@ -577,11 +566,7 @@ func newCatalogStatus(
 	}
 }
 
-func newDesiredStateReconcilerStatus(
-	actorGeneration uint64,
-	restartCount uint64,
-	lastError string,
-) DesiredStateReconcilerStatus {
+func newDesiredStateReconcilerStatus(actorGeneration uint64, restartCount uint64, lastError string) DesiredStateReconcilerStatus {
 	return DesiredStateReconcilerStatus{
 		Lifecycle:       DesiredStateReconcilerStarting,
 		Availability:    runtime.AvailabilityUnavailable,
