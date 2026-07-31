@@ -26,15 +26,15 @@ type artifactResolverRestart struct{ token uint64 }
 type artifactWatcherRestart struct{ token uint64 }
 
 type artifactResolve struct {
-	resolverGeneration uint64
 	id                 uint64
+	resolverGeneration uint64
 	snapshotGeneration int64
 	snapshot           *snapshot.Snapshot
 }
 
 type artifactResolved struct {
-	resolverGeneration uint64
 	id                 uint64
+	resolverGeneration uint64
 	snapshotGeneration int64
 	desired            map[string]routerApplyDesired
 	deferred           bool
@@ -279,7 +279,7 @@ func (a *desiredStateReconcilerActor[T]) HandleMessage(_ gen.PID, message any) e
 		a.resetDesiredStateResolutionBackoff()
 
 	case artifactDirectoryChanged:
-		if m.watcherGeneration != a.watcher.generation ||
+		if m.generation != a.watcher.generation ||
 			a.watcher.alias == (gen.Alias{}) ||
 			a.current == nil {
 			return nil
