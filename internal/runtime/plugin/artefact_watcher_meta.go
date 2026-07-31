@@ -13,12 +13,36 @@ import (
 
 	"ergo.services/ergo/gen"
 	"github.com/fsnotify/fsnotify"
+	"github.com/harishhary/blink/internal/runtime"
 )
 
 const (
 	artifactWatchDebounce = 300 * time.Millisecond
 	artifactWatchPoll     = 5 * time.Second
 )
+
+// ArtifactWatcherLifecycle describes one watcher meta-process incarnation.
+type ArtifactWatcherLifecycle string
+
+const (
+	ArtifactWatcherStarting   ArtifactWatcherLifecycle = "starting"
+	ArtifactWatcherRunning    ArtifactWatcherLifecycle = "running"
+	ArtifactWatcherRestarting ArtifactWatcherLifecycle = "restarting"
+	ArtifactWatcherStopped    ArtifactWatcherLifecycle = "stopped"
+)
+
+// ArtifactWatcherStatus is owned by desiredStateReconcilerActor. The watcher
+// meta-process reports directory facts; the actor derives lifecycle and
+// availability and owns restart state.
+type ArtifactWatcherStatus struct {
+	Lifecycle         ArtifactWatcherLifecycle
+	Availability      runtime.Availability
+	Generation        uint64
+	RestartPending    bool
+	DirectoryReadable bool
+	WatchingDirectory bool
+	LastError         string
+}
 
 // artifactWatcherMeta owns one watcher incarnation. fsnotify provides
 // low-latency notifications and the periodic metadata fingerprint is a fallback

@@ -12,16 +12,6 @@ import (
 	"github.com/harishhary/blink/internal/snapshot"
 )
 
-// desiredStateReconcilerActivate is sent by runtimeSupervisor after the child
-// reaches Running state. It fences actor incarnations and gives a replacement
-// reconciler a revision base that is newer than the last state accepted by the
-// supervisor.
-type desiredStateReconcilerActivate struct {
-	generation   uint64
-	revisionBase uint64
-}
-
-type desiredStateResolutionRetry struct{ token uint64 }
 type artifactResolverRestart struct{ token uint64 }
 type artifactWatcherRestart struct{ token uint64 }
 
@@ -50,6 +40,10 @@ type artifactWatcherStateChanged struct {
 	err               string
 }
 
+// artifactDirectoryChanged is emitted by artifactWatcherMeta. The watcher
+// generation fences notifications from replaced watcher incarnations.
+type artifactDirectoryChanged struct{ watcherGeneration uint64 }
+
 // DesiredStateReconcilerLifecycle describes the stable actor that projects
 // control-plane snapshots and local artifacts into runtime desired state.
 type DesiredStateReconcilerLifecycle string
@@ -60,49 +54,6 @@ const (
 	DesiredStateReconcilerRestarting DesiredStateReconcilerLifecycle = "restarting"
 	DesiredStateReconcilerStopped    DesiredStateReconcilerLifecycle = "stopped"
 )
-
-// ArtifactResolverLifecycle describes one resolver meta-process incarnation.
-type ArtifactResolverLifecycle string
-
-const (
-	ArtifactResolverStarting   ArtifactResolverLifecycle = "starting"
-	ArtifactResolverRunning    ArtifactResolverLifecycle = "running"
-	ArtifactResolverRestarting ArtifactResolverLifecycle = "restarting"
-	ArtifactResolverStopped    ArtifactResolverLifecycle = "stopped"
-)
-
-// ArtifactResolverStatus is owned by desiredStateReconcilerActor because the
-// actor owns resolver generations, restart policy, and alias monitoring.
-type ArtifactResolverStatus struct {
-	Lifecycle      ArtifactResolverLifecycle
-	Availability   runtime.Availability
-	Generation     uint64
-	RestartPending bool
-	LastError      string
-}
-
-// ArtifactWatcherLifecycle describes one watcher meta-process incarnation.
-type ArtifactWatcherLifecycle string
-
-const (
-	ArtifactWatcherStarting   ArtifactWatcherLifecycle = "starting"
-	ArtifactWatcherRunning    ArtifactWatcherLifecycle = "running"
-	ArtifactWatcherRestarting ArtifactWatcherLifecycle = "restarting"
-	ArtifactWatcherStopped    ArtifactWatcherLifecycle = "stopped"
-)
-
-// ArtifactWatcherStatus is owned by desiredStateReconcilerActor. The watcher
-// meta-process reports directory facts; the actor derives lifecycle and
-// availability and owns restart state.
-type ArtifactWatcherStatus struct {
-	Lifecycle         ArtifactWatcherLifecycle
-	Availability      runtime.Availability
-	Generation        uint64
-	RestartPending    bool
-	DirectoryReadable bool
-	WatchingDirectory bool
-	LastError         string
-}
 
 // DesiredStateReconcilerStatus groups the independently managed resolver and
 // watcher statuses instead of flattening their fields into the parent.
@@ -119,14 +70,21 @@ type DesiredStateReconcilerStatus struct {
 	Watcher            ArtifactWatcherStatus
 }
 
+// desiredStateReconcilerActivate is sent by runtimeSupervisor after the child
+// reaches Running state. It fences actor incarnations and gives a replacement
+// reconciler a revision base that is newer than the last state accepted by the
+// supervisor.
+type desiredStateReconcilerActivate struct {
+	generation   uint64
+	revisionBase uint64
+}
+
+type desiredStateResolutionRetry struct{ token uint64 }
+
 type desiredStateReconcilerStatusChanged struct {
 	generation uint64
 	status     DesiredStateReconcilerStatus
 }
-
-// artifactDirectoryChanged is emitted by artifactWatcherMeta. The watcher
-// generation fences notifications from replaced watcher incarnations.
-type artifactDirectoryChanged struct{ watcherGeneration uint64 }
 
 // desiredStateReconcilerActor subscribes to the buffered snapshot event and is
 // the stable owner of the current snapshot, desired-state revisions, resolution

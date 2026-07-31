@@ -9,8 +9,29 @@ import (
 	"ergo.services/ergo/gen"
 	"github.com/harishhary/blink/internal/helpers"
 	"github.com/harishhary/blink/internal/plugin"
+	"github.com/harishhary/blink/internal/runtime"
 	"github.com/harishhary/blink/internal/snapshot"
 )
+
+// ArtifactResolverLifecycle describes one resolver meta-process incarnation.
+type ArtifactResolverLifecycle string
+
+const (
+	ArtifactResolverStarting   ArtifactResolverLifecycle = "starting"
+	ArtifactResolverRunning    ArtifactResolverLifecycle = "running"
+	ArtifactResolverRestarting ArtifactResolverLifecycle = "restarting"
+	ArtifactResolverStopped    ArtifactResolverLifecycle = "stopped"
+)
+
+// ArtifactResolverStatus is owned by desiredStateReconcilerActor because the
+// actor owns resolver generations, restart policy, and alias monitoring.
+type ArtifactResolverStatus struct {
+	Lifecycle      ArtifactResolverLifecycle
+	Availability   runtime.Availability
+	Generation     uint64
+	RestartPending bool
+	LastError      string
+}
 
 // artifactResolverMeta owns one resolver incarnation. It performs filesystem
 // readiness checks and binary checksums for complete snapshot-resolution
