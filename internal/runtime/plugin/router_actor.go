@@ -119,9 +119,9 @@ type routerStatusChanged struct {
 }
 
 type deploymentPoolRestart struct {
-	poolKey  deploymentPoolKey
-	revision uint64
-	token    uint64
+	poolKey         deploymentPoolKey
+	desiredRevision uint64
+	token           uint64
 }
 
 func (a *routerActor[T]) Init(...any) error {
@@ -198,7 +198,7 @@ func (a *routerActor[T]) HandleMessage(_ gen.PID, message any) error {
 		ref := a.pools[m.poolKey]
 		if ref == nil ||
 			ref.pid != m.pid ||
-			ref.actorGeneration != m.generation ||
+			ref.actorGeneration != m.actorGeneration ||
 			m.epoch <= ref.lastEpoch {
 			return nil
 		}
@@ -230,7 +230,7 @@ func (a *routerActor[T]) HandleMessage(_ gen.PID, message any) error {
 		ref.restart.cancel = nil
 		ref.status.RestartPending = false
 
-		if !a.draining && m.revision == a.desiredRevision {
+		if !a.draining && m.desiredRevision == a.desiredRevision {
 			a.startDeploymentPool(a.desiredDeployment(m.poolKey))
 			a.reconcileDeployments()
 			a.reconcileStatus()
@@ -262,24 +262,12 @@ func (a *routerActor[T]) HandleMessage(_ gen.PID, message any) error {
 		ref := a.pools[m.poolKey]
 		if ref == nil ||
 			ref.pid != m.pid ||
-			ref.actorGeneration != m.generation {
+			ref.actorGeneration != m.actorGeneration {
 			return nil
 		}
 
-		a.cancelDeploymentPoolRestart(m.poolKey, false)
 		_ = a.Send(m.pid, stop{})
-		ref.pid = gen.PID{}
-		ref.lastEpoch = 0
-		ref.status.Lifecycle = DeploymentPoolStopped
-		ref.status.Availability = runtime.AvailabilityUnavailable
-		ref.status.RestartPending = false
-
-		if a.activePrimary != nil && a.activePrimary.poolKey() == m.poolKey {
-			a.activePrimary = nil
-		}
-		if a.activeCandidate != nil && a.activeCandidate.poolKey() == m.poolKey {
-			a.activeCandidate = nil
-		}
+		a.retireDeploymentPool(m.poolKey, ErrPluginUnavailable)
 
 		if a.draining {
 			a.reconcileStatus()
@@ -300,41 +288,39 @@ func (a *routerActor[T]) HandleMessage(_ gen.PID, message any) error {
 				continue
 			}
 
-			for callID, poolPID := range a.inFlightCalls {
-				if poolPID == m.PID {
-					a.finishTrackedCall(callID, ErrPluginUnavailable)
-				}
-			}
-
-			ref.pid = gen.PID{}
-			ref.lastEpoch = 0
 			ref.restartCount++
 			ref.lastError = errorText(m.Reason)
-			ref.status.Lifecycle = DeploymentPoolRestarting
-			ref.status.Availability = runtime.AvailabilityUnavailable
-			ref.status.ActorGeneration = ref.actorGeneration
-			ref.status.RestartCount = ref.restartCount
-			ref.status.RestartPending = false
-			ref.status.ActorLastError = ref.lastError
-
-			if a.activePrimary != nil && a.activePrimary.poolKey() == poolKey {
-				a.activePrimary = nil
-			}
-			if a.activeCandidate != nil && a.activeCandidate.poolKey() == poolKey {
-				a.activeCandidate = nil
-			}
-
 			desired := a.desiredDeployment(poolKey)
-			if a.draining || ref.draining || desired == nil {
-				a.cancelDeploymentPoolRestart(poolKey, false)
-				ref.status.Lifecycle = DeploymentPoolStopped
-				ref.status.Availability = runtime.AvailabilityUnavailable
-				ref.status.RestartPending = false
-				a.cancelDeploymentPoolRestart(poolKey, false)
+			shouldRestart := !a.draining && !ref.draining && desired != nil
+
+			if !shouldRestart {
+				a.retireDeploymentPool(poolKey, ErrPluginUnavailable)
 				if a.draining && a.liveDeploymentPoolCount() == 0 {
 					a.reportDrained()
 				}
 			} else {
+				for callID, poolPID := range a.inFlightCalls {
+					if poolPID == m.PID {
+						a.finishTrackedCall(callID, ErrPluginUnavailable)
+					}
+				}
+
+				ref.pid = gen.PID{}
+				ref.lastEpoch = 0
+				ref.status.Lifecycle = DeploymentPoolRestarting
+				ref.status.Availability = runtime.AvailabilityUnavailable
+				ref.status.ActorGeneration = ref.actorGeneration
+				ref.status.RestartCount = ref.restartCount
+				ref.status.RestartPending = false
+				ref.status.ActorLastError = ref.lastError
+
+				if a.activePrimary != nil && a.activePrimary.poolKey() == poolKey {
+					a.activePrimary = nil
+				}
+				if a.activeCandidate != nil && a.activeCandidate.poolKey() == poolKey {
+					a.activeCandidate = nil
+				}
+
 				_ = a.scheduleDeploymentPoolRestart(poolKey)
 			}
 			a.reconcileStatus()
@@ -360,7 +346,6 @@ func (a *routerActor[T]) startDeploymentPool(d *deployment) {
 
 	ref.actorGeneration++
 	generation := ref.actorGeneration
-	ref.actorGeneration = generation
 	ref.lastEpoch = 0
 	ref.draining = false
 	ref.status = DeploymentPoolStatus{
@@ -418,6 +403,48 @@ func (a *routerActor[T]) stopDeploymentPool(poolKey deploymentPoolKey, reason er
 	_ = a.Node().SendExit(ref.pid, reason)
 }
 
+func (a *routerActor[T]) retireDeploymentPool(poolKey deploymentPoolKey, callErr error) {
+	ref := a.pools[poolKey]
+	if ref == nil {
+		return
+	}
+
+	if ref.restart != nil {
+		ref.restart.cancelScheduled(false)
+	}
+
+	poolPID := ref.pid
+	if poolPID != (gen.PID{}) {
+		for callID, targetPID := range a.inFlightCalls {
+			if targetPID == poolPID {
+				a.finishTrackedCall(callID, callErr)
+			}
+		}
+	}
+
+	ref.pid = gen.PID{}
+	ref.lastEpoch = 0
+	ref.draining = false
+
+	ref.status.Lifecycle = DeploymentPoolStopped
+	ref.status.Availability = runtime.AvailabilityUnavailable
+	ref.status.ActorGeneration = ref.actorGeneration
+	ref.status.RestartCount = ref.restartCount
+	ref.status.RestartPending = false
+	ref.status.ActorLastError = ref.lastError
+	ref.status.HealthyWorkers = 0
+	ref.status.QueueDepth = 0
+	ref.status.ActiveCalls = 0
+	ref.status.Workers = make(map[int]PluginWorkerStatus)
+
+	if a.activePrimary != nil && a.activePrimary.poolKey() == poolKey {
+		a.activePrimary = nil
+	}
+	if a.activeCandidate != nil && a.activeCandidate.poolKey() == poolKey {
+		a.activeCandidate = nil
+	}
+}
+
 func (a *routerActor[T]) deploymentPoolRestartState(poolKey deploymentPoolKey) *scheduledBackoff {
 	ref := a.pools[poolKey]
 	if ref == nil {
@@ -454,7 +481,7 @@ func (a *routerActor[T]) scheduleDeploymentPoolRestart(poolKey deploymentPoolKey
 	token := state.token
 	cancel, err := a.SendAfter(
 		a.PID(),
-		deploymentPoolRestart{poolKey: poolKey, revision: a.desiredRevision, token: token},
+		deploymentPoolRestart{poolKey: poolKey, desiredRevision: a.desiredRevision, token: token},
 		delay,
 	)
 	if err != nil {
@@ -548,14 +575,15 @@ func (a *routerActor[T]) drainObsoleteDeploymentPools() {
 		if keep[key] || ref.draining {
 			continue
 		}
-		ref.draining = true
-		a.cancelDeploymentPoolRestart(key, false)
 		if ref.pid == (gen.PID{}) {
-			ref.status.Lifecycle = DeploymentPoolStopped
-			ref.status.Availability = runtime.AvailabilityUnavailable
-			ref.status.RestartPending = false
+			if ref.status.Lifecycle != DeploymentPoolStopped {
+				a.retireDeploymentPool(key, ErrPluginUnavailable)
+			}
 			continue
 		}
+
+		ref.draining = true
+		a.cancelDeploymentPoolRestart(key, false)
 		_ = a.Send(ref.pid, drain{})
 	}
 }

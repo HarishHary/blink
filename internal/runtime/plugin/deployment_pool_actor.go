@@ -86,17 +86,17 @@ type deploymentPoolActor[T plugin.Syncable] struct {
 type deploymentPoolActivate struct{ generation uint64 }
 
 type deploymentPoolStatusChanged struct {
-	poolKey    deploymentPoolKey
-	pid        gen.PID
-	generation uint64
-	epoch      uint64
-	status     DeploymentPoolStatus
+	poolKey         deploymentPoolKey
+	pid             gen.PID
+	actorGeneration uint64
+	epoch           uint64
+	status          DeploymentPoolStatus
 }
 
 type deploymentPoolDrained struct {
-	poolKey    deploymentPoolKey
-	pid        gen.PID
-	generation uint64
+	poolKey         deploymentPoolKey
+	pid             gen.PID
+	actorGeneration uint64
 }
 
 type pluginWorkerRestart struct {
@@ -557,7 +557,6 @@ func (a *deploymentPoolActor[T]) handlePluginWorkerExit(slot int, worker workerS
 	}
 
 	current.alias = gen.Alias{}
-	// current.activeCall = nil
 	current.status.Availability = runtime.AvailabilityUnavailable
 	current.status.Activity = PluginWorkerIdle
 	current.status.LastError = errorText(reason)
@@ -589,24 +588,28 @@ func (a *deploymentPoolActor[T]) handlePluginWorkerExit(slot int, worker workerS
 }
 
 func (a *deploymentPoolActor[T]) stopIdlePluginWorkers() {
+	changed := false
+	for slot, worker := range a.workers {
+		if worker.alias == (gen.Alias{}) ||
+			worker.status.Activity != PluginWorkerIdle {
+			continue
+		}
+		worker.status.Lifecycle = PluginWorkerDraining
+		a.workers[slot] = worker
+		changed = true
+		a.stopPluginWorker(slot, gen.TerminateReasonShutdown)
+	}
+	if changed {
+		a.reconcileStatus()
+	}
+}
+
+func (a *deploymentPoolActor[T]) stopAllPluginWorkers(reason error) {
 	for slot, worker := range a.workers {
 		if worker.alias == (gen.Alias{}) {
 			continue
 		}
 
-		if worker.activeCall != nil {
-			worker.activeCall.cancel()
-		}
-
-		worker.status.Lifecycle = PluginWorkerDraining
-		a.workers[slot] = worker
-		a.stopPluginWorker(slot, gen.TerminateReasonShutdown)
-	}
-	a.reconcileStatus()
-}
-
-func (a *deploymentPoolActor[T]) stopAllPluginWorkers(reason error) {
-	for slot, worker := range a.workers {
 		if worker.activeCall != nil {
 			worker.activeCall.cancel()
 		}
@@ -723,11 +726,11 @@ func (a *deploymentPoolActor[T]) reconcileStatus() {
 		return
 	}
 	_ = a.Send(a.Parent(), deploymentPoolStatusChanged{
-		poolKey:    a.deployment.poolKey(),
-		pid:        a.PID(),
-		generation: a.actorGeneration,
-		epoch:      a.statusEpoch,
-		status:     next.clone(),
+		poolKey:         a.deployment.poolKey(),
+		pid:             a.PID(),
+		actorGeneration: a.actorGeneration,
+		epoch:           a.statusEpoch,
+		status:          next.clone(),
 	})
 }
 
@@ -758,8 +761,8 @@ func (a *deploymentPoolActor[T]) reportDrained() {
 	a.drainReported = true
 	a.reconcileStatus()
 	_ = a.Send(a.Parent(), deploymentPoolDrained{
-		poolKey:    a.deployment.poolKey(),
-		pid:        a.PID(),
-		generation: a.actorGeneration,
+		poolKey:         a.deployment.poolKey(),
+		pid:             a.PID(),
+		actorGeneration: a.actorGeneration,
 	})
 }
