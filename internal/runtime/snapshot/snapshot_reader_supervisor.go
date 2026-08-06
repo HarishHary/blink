@@ -43,41 +43,12 @@ func EventsFor(node gen.Node, name gen.Atom) Events {
 	}
 }
 
-// SnapshotReaderLifecycle describes the stable snapshot-reader actor subtree.
-type SnapshotReaderLifecycle string
+// The supervisor accepts status only from its current child PID.
+type messageSnapshotReaderStatusChanged struct{ status SnapshotReaderStatus }
 
-const (
-	SnapshotReaderStarting   SnapshotReaderLifecycle = "starting"
-	SnapshotReaderRunning    SnapshotReaderLifecycle = "running"
-	SnapshotReaderRestarting SnapshotReaderLifecycle = "restarting"
-	SnapshotReaderStopped    SnapshotReaderLifecycle = "stopped"
-)
-
-// SnapshotReaderStatus is the public status value published by the supervisor.
-// Reader contains the independently managed broker-reader meta-process state.
-type SnapshotReaderStatus struct {
-	Lifecycle         SnapshotReaderLifecycle
-	Availability      runtime.Availability
-	ActorGeneration   uint64
-	ActorLastError    string
-	LocalRevision     int64
-	AppliedGeneration int64
-	Reader            SnapshotReaderMetaStatus
-}
-
-// snapshotReaderActorStatusChanged is emitted by the current reader actor. The
-// supervisor validates the exact PID and actor generation before publishing.
-type snapshotReaderActorStatusChanged struct {
-	pid        gen.PID
-	generation uint64
-	status     SnapshotReaderStatus
-}
-
-// snapshotReaderActorActivate delegates the supervisor-owned snapshot event
-// token to the current actor generation.
-type snapshotReaderActorActivate struct {
-	generation         uint64
-	revision           int64
+// messageSnapshotReaderActivate delegates the supervisor-owned snapshot event
+// token to the current reader actor.
+type messageSnapshotReaderActivate struct {
 	snapshotEventName  gen.Atom
 	snapshotEventToken gen.Ref
 }
@@ -96,8 +67,7 @@ type snapshotReaderSupervisor struct {
 
 	opts Options
 
-	actorPID        gen.PID
-	actorGeneration uint64
+	actorPID gen.PID
 
 	events        Events
 	snapshotToken gen.Ref
@@ -123,7 +93,7 @@ func (s *snapshotReaderSupervisor) Init(...any) (act.SupervisorSpec, error) {
 		return act.SupervisorSpec{}, fmt.Errorf("register snapshot status event: %w", err)
 	}
 	s.statusToken = statusToken
-	s.status = newSnapshotReaderStatus(0)
+	s.status = newSnapshotReaderStatus()
 	s.publishStatus()
 
 	return act.SupervisorSpec{
@@ -151,13 +121,10 @@ func (s *snapshotReaderSupervisor) HandleChildStart(name gen.Atom, pid gen.PID) 
 	}
 
 	s.actorPID = pid
-	s.actorGeneration++
-	s.status = newSnapshotReaderStatus(s.actorGeneration)
+	s.status = newSnapshotReaderStatus()
 	s.publishStatus()
 
-	return s.Send(pid, snapshotReaderActorActivate{
-		generation:         s.actorGeneration,
-		revision:           int64(s.actorGeneration) << 32,
+	return s.Send(pid, messageSnapshotReaderActivate{
 		snapshotEventName:  s.events.Snapshot.Name,
 		snapshotEventToken: s.snapshotToken,
 	})
@@ -171,8 +138,7 @@ func (s *snapshotReaderSupervisor) HandleChildTerminate(name gen.Atom, pid gen.P
 	s.actorPID = gen.PID{}
 	s.status.Lifecycle = SnapshotReaderRestarting
 	s.status.Availability = runtime.AvailabilityUnavailable
-	s.status.ActorGeneration = s.actorGeneration
-	s.status.ActorLastError = errorText(reason)
+	s.status.LastError = reason
 	s.status.Reader.Lifecycle = SnapshotReaderMetaStopped
 	s.status.Reader.Availability = runtime.AvailabilityUnavailable
 	s.status.Reader.CaughtUp = false
@@ -183,10 +149,8 @@ func (s *snapshotReaderSupervisor) HandleChildTerminate(name gen.Atom, pid gen.P
 
 func (s *snapshotReaderSupervisor) HandleMessage(from gen.PID, message any) error {
 	switch m := message.(type) {
-	case snapshotReaderActorStatusChanged:
-		if from != s.actorPID ||
-			m.pid != s.actorPID ||
-			m.generation != s.actorGeneration {
+	case messageSnapshotReaderStatusChanged:
+		if from != s.actorPID {
 			return nil
 		}
 		s.status = m.status
@@ -218,23 +182,15 @@ func (s *snapshotReaderSupervisor) publishStatus() {
 	_ = s.SendEvent(s.events.Status.Name, s.statusToken, s.status)
 }
 
-func newSnapshotReaderStatus(actorGeneration uint64) SnapshotReaderStatus {
+func newSnapshotReaderStatus() SnapshotReaderStatus {
 	return SnapshotReaderStatus{
-		Lifecycle:       SnapshotReaderStarting,
-		Availability:    runtime.AvailabilityUnavailable,
-		ActorGeneration: actorGeneration,
+		Lifecycle:    SnapshotReaderStarting,
+		Availability: runtime.AvailabilityUnavailable,
 		Reader: SnapshotReaderMetaStatus{
 			Lifecycle:    SnapshotReaderMetaStarting,
 			Availability: runtime.AvailabilityUnavailable,
 		},
 	}
-}
-
-func errorText(err error) string {
-	if err == nil {
-		return ""
-	}
-	return err.Error()
 }
 
 func defaultOptions(opts Options) Options {

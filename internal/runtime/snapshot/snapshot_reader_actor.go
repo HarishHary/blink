@@ -12,150 +12,139 @@ import (
 	"github.com/harishhary/blink/internal/snapshot"
 )
 
-type snapshotEntry = snapshot.EffectiveEntry
-
-// SnapshotReaderMetaLifecycle describes one blocking broker-reader
-// meta-process incarnation.
-type SnapshotReaderMetaLifecycle string
+// SnapshotReaderLifecycle describes the stable snapshot-reader actor subtree.
+type SnapshotReaderLifecycle string
 
 const (
-	SnapshotReaderMetaStarting   SnapshotReaderMetaLifecycle = "starting"
-	SnapshotReaderMetaRunning    SnapshotReaderMetaLifecycle = "running"
-	SnapshotReaderMetaRestarting SnapshotReaderMetaLifecycle = "restarting"
-	SnapshotReaderMetaStopped    SnapshotReaderMetaLifecycle = "stopped"
+	SnapshotReaderStarting   SnapshotReaderLifecycle = "starting"
+	SnapshotReaderRunning    SnapshotReaderLifecycle = "running"
+	SnapshotReaderRestarting SnapshotReaderLifecycle = "restarting"
+	SnapshotReaderStopped    SnapshotReaderLifecycle = "stopped"
 )
 
-// SnapshotReaderMetaStatus is owned by snapshotReaderActor because that actor
-// owns the meta-process generation, restart policy, and interpretation of
-// MessageDownAlias. The meta-process only reports runtime facts.
-type SnapshotReaderMetaStatus struct {
-	Lifecycle      SnapshotReaderMetaLifecycle
-	Availability   runtime.Availability
-	Generation     uint64
-	CaughtUp       bool
-	RestartPending bool
-	LastError      string
+// SnapshotReaderStatus is the public status value published by the supervisor.
+// Reader contains the independently managed broker-reader meta-process state.
+type SnapshotReaderStatus struct {
+	Lifecycle    SnapshotReaderLifecycle
+	Availability runtime.Availability
+	LastError    error
+	Generation   int64
+	Reader       SnapshotReaderMetaStatus
 }
 
-// snapshotReaderMetaRestart is owned by the actor because the actor owns
-// creation and restart policy for its blocking reader meta-process.
-type snapshotReaderMetaRestart struct{ token uint64 }
+type snapshotEntry = snapshot.EffectiveEntry
+
+type messageSnapshotReaderRestart struct{ token uint64 }
+
+type snapshotReaderMetaState struct {
+	alias        gen.Alias
+	incarnation  uint64
+	restartCount uint64
+	restart      *runtime.ScheduledBackoff
+	status       SnapshotReaderMetaStatus
+}
 
 type snapshotReaderActor struct {
 	act.Actor
 
 	opts Options
 
-	actorGeneration uint64
-
-	revision int64
-
 	snapshotEventName  gen.Atom
 	snapshotEventToken gen.Ref
 
-	activated bool
+	reader snapshotReaderMetaState
 
-	readerAlias          gen.Alias
-	readerStatus         SnapshotReaderMetaStatus
-	readerRestartBackoff *backoff.ExponentialBackOff
-	readerRestartCancel  gen.CancelFunc
-	readerRestartToken   uint64
-
-	entries           map[string]snapshot.EffectiveEntry
-	localRevision     int64
-	appliedGeneration int64
+	entries   map[string]snapshot.EffectiveEntry
+	committed *snapshot.Snapshot
 }
 
 func (a *snapshotReaderActor) Init(...any) error {
 	a.entries = make(map[string]snapshotEntry)
-	a.readerStatus = SnapshotReaderMetaStatus{
+	a.reader.status = SnapshotReaderMetaStatus{
 		Lifecycle:    SnapshotReaderMetaStarting,
 		Availability: runtime.AvailabilityUnavailable,
 	}
-	a.readerRestartBackoff = backoff.NewExponentialBackOff(
-		backoff.WithInitialInterval(a.opts.RestartMin),
-		backoff.WithMaxInterval(a.opts.RestartMax),
-		backoff.WithMultiplier(2),
-		backoff.WithMaxElapsedTime(0),
-	)
+	a.reader.restart = runtime.NewScheduledBackoff(a.opts.RestartMin, a.opts.RestartMax)
 	return nil
 }
 
 func (a *snapshotReaderActor) HandleMessage(_ gen.PID, message any) error {
 	switch m := message.(type) {
-	case snapshotReaderActorActivate:
-		if m.generation <= a.actorGeneration {
-			return nil
+	case messageSnapshotReaderActivate:
+		if a.snapshotEventToken != (gen.Ref{}) {
+			return fmt.Errorf("snapshot reader actor already activated")
 		}
-		if a.activated {
-			return fmt.Errorf("snapshot reader actor already activated as generation %d", a.actorGeneration)
-		}
-		a.actorGeneration = m.generation
-		a.revision = m.revision
 		a.snapshotEventName = m.snapshotEventName
 		a.snapshotEventToken = m.snapshotEventToken
-		a.activated = true
 		a.publishStatus()
 		return a.startSnapshotReaderMeta()
 
-	case snapshotReaderMetaStarted:
-		if m.generation != a.readerStatus.Generation || a.readerAlias == (gen.Alias{}) {
+	case messageSnapshotReaderStarted:
+		if m.incarnation != a.reader.incarnation || a.reader.alias == (gen.Alias{}) {
 			return nil
 		}
-		a.readerStatus.Lifecycle = SnapshotReaderMetaRunning
-		a.readerStatus.Availability = runtime.AvailabilityDegraded
-		a.readerStatus.CaughtUp = false
-		a.readerStatus.RestartPending = false
-		a.readerStatus.LastError = ""
+		a.reader.status.Lifecycle = SnapshotReaderMetaRunning
+		a.reader.status.Availability = runtime.AvailabilityDegraded
+		a.reader.status.CaughtUp = false
+		a.reader.status.RestartPending = false
+		a.reader.status.LastError = nil
 		a.publishStatus()
 
-	case snapshotReaderMetaRecord:
-		if m.generation != a.readerStatus.Generation {
+	case messageSnapshotRecord:
+		if m.incarnation != a.reader.incarnation || a.reader.alias == (gen.Alias{}) {
 			return nil
 		}
-		changed := a.apply(m.message)
-		if changed && a.readerStatus.CaughtUp {
+		committed := a.apply(m.message)
+		if committed && a.reader.status.CaughtUp {
+			a.reader.status.Availability = runtime.AvailabilityReady
+			a.reader.status.LastError = nil
 			a.publishSnapshot()
-		}
-		if a.readerStatus.CaughtUp {
 			a.publishStatus()
 		}
 
-	case snapshotReaderMetaCaughtUp:
-		if m.generation != a.readerStatus.Generation || a.readerStatus.CaughtUp {
+	case messageSnapshotCaughtUp:
+		if m.incarnation != a.reader.incarnation ||
+			a.reader.alias == (gen.Alias{}) ||
+			a.reader.status.CaughtUp {
 			return nil
 		}
-		a.readerStatus.Lifecycle = SnapshotReaderMetaRunning
-		a.readerStatus.Availability = runtime.AvailabilityReady
-		a.readerStatus.CaughtUp = true
-		a.readerStatus.RestartPending = false
-		a.readerStatus.LastError = ""
+		a.reader.status.Lifecycle = SnapshotReaderMetaRunning
+		a.reader.status.Availability = runtime.AvailabilityReady
+		a.reader.status.CaughtUp = true
+		a.reader.status.RestartPending = false
+		a.reader.restart.CancelScheduled(true)
+		if a.committed == nil {
+			a.reader.status.Availability = runtime.AvailabilityUnavailable
+			a.reader.status.LastError = fmt.Errorf("%w: generation marker not found", runtime.ErrSnapshotRead)
+			a.publishStatus()
+			return nil
+		}
+		a.reader.status.LastError = nil
 		a.publishSnapshot()
-		a.resetSnapshotReaderMetaRestartBackoff()
 		a.publishStatus()
 
-	case snapshotReaderMetaRestart:
-		if !a.readerStatus.RestartPending ||
-			a.readerRestartToken != m.token ||
-			a.readerAlias != (gen.Alias{}) {
+	case messageSnapshotReaderRestart:
+		if !a.reader.restart.Pending ||
+			a.reader.restart.Token != m.token ||
+			a.reader.alias != (gen.Alias{}) {
 			return nil
 		}
-		a.readerStatus.RestartPending = false
-		a.readerRestartCancel = nil
+		a.reader.restart.Pending = false
+		a.reader.restart.Cancel = nil
 		return a.startSnapshotReaderMeta()
 
 	case gen.MessageDownAlias:
-		if m.Alias != a.readerAlias {
+		if m.Alias != a.reader.alias {
 			return nil
 		}
-		a.readerAlias = gen.Alias{}
-		a.readerStatus.Lifecycle = SnapshotReaderMetaRestarting
-		a.readerStatus.Availability = runtime.AvailabilityUnavailable
-		a.readerStatus.CaughtUp = false
-		a.readerStatus.LastError = errorText(m.Reason)
+		a.reader.alias = gen.Alias{}
+		a.reader.status.Lifecycle = SnapshotReaderMetaRestarting
+		a.reader.status.Availability = runtime.AvailabilityUnavailable
+		a.reader.status.CaughtUp = false
+		a.reader.status.LastError = m.Reason
 		a.opts.Logger.ErrorF(
-			"snapshot reader actor: reader generation %d stopped: %v",
-			a.readerStatus.Generation,
+			"snapshot reader actor: reader incarnation %d stopped: %v",
+			a.reader.incarnation,
 			m.Reason,
 		)
 		a.publishStatus()
@@ -169,102 +158,92 @@ func (a *snapshotReaderActor) HandleCall(gen.PID, gen.Ref, any) (any, error) {
 }
 
 func (a *snapshotReaderActor) Terminate(error) {
-	a.cancelSnapshotReaderMetaRestart(false)
+	a.reader.restart.CancelScheduled(false)
 	a.stopSnapshotReaderMeta(gen.TerminateReasonShutdown)
-	a.readerStatus.Lifecycle = SnapshotReaderMetaStopped
-	a.readerStatus.Availability = runtime.AvailabilityUnavailable
-	a.readerStatus.CaughtUp = false
+	a.reader.status.Lifecycle = SnapshotReaderMetaStopped
+	a.reader.status.Availability = runtime.AvailabilityUnavailable
+	a.reader.status.CaughtUp = false
 }
 
 // startSnapshotReaderMeta starts a fresh reader incarnation and a fresh compacted
 // topic reconstruction. The previous complete buffered snapshot remains
-// available to subscribers while this generation catches up.
+// available to subscribers while this incarnation catches up.
 func (a *snapshotReaderActor) startSnapshotReaderMeta() error {
 	a.stopSnapshotReaderMeta(gen.TerminateReasonShutdown)
-	a.readerStatus.Generation++
-	a.readerStatus.Lifecycle = SnapshotReaderMetaStarting
-	a.readerStatus.Availability = runtime.AvailabilityUnavailable
-	a.readerStatus.CaughtUp = false
-	a.readerStatus.RestartPending = false
+	if a.reader.incarnation > 0 {
+		a.reader.restartCount++
+	}
+	a.reader.incarnation++
+	a.reader.status = SnapshotReaderMetaStatus{
+		Lifecycle:    SnapshotReaderMetaStarting,
+		Availability: runtime.AvailabilityUnavailable,
+		Incarnation:  a.reader.incarnation,
+		RestartCount: a.reader.restartCount,
+	}
 	a.entries = make(map[string]snapshotEntry)
-	a.appliedGeneration = 0
+	a.committed = nil
 	a.publishStatus()
 
 	reader := a.opts.ReaderFactory()
 	if reader == nil {
-		a.readerStatus.Lifecycle = SnapshotReaderMetaRestarting
-		a.readerStatus.LastError = "reader factory returned nil"
+		a.reader.status.Lifecycle = SnapshotReaderMetaRestarting
+		a.reader.status.LastError = fmt.Errorf("start snapshot reader meta: reader factory returned nil")
 		a.publishStatus()
 		return a.scheduleSnapshotReaderMetaRestart()
 	}
 
-	alias, err := a.SpawnMeta(&snapshotReaderMeta{reader: reader, generation: a.readerStatus.Generation}, gen.MetaOptions{})
+	alias, err := a.SpawnMeta(&snapshotReaderMeta{reader: reader, incarnation: a.reader.incarnation}, gen.MetaOptions{})
 	if err != nil {
 		_ = reader.Close()
-		a.readerStatus.Lifecycle = SnapshotReaderMetaRestarting
-		a.readerStatus.LastError = fmt.Sprintf("spawn snapshot reader meta: %v", err)
+		a.reader.status.Lifecycle = SnapshotReaderMetaRestarting
+		a.reader.status.LastError = fmt.Errorf("spawn snapshot reader meta: %w", err)
 		a.publishStatus()
 		return a.scheduleSnapshotReaderMetaRestart()
 	}
 	if err := a.MonitorAlias(alias); err != nil {
 		_ = a.SendExitMeta(alias, gen.TerminateReasonShutdown)
-		a.readerStatus.Lifecycle = SnapshotReaderMetaRestarting
-		a.readerStatus.LastError = fmt.Sprintf("monitor snapshot reader meta: %v", err)
+		a.reader.status.Lifecycle = SnapshotReaderMetaRestarting
+		a.reader.status.LastError = fmt.Errorf("monitor snapshot reader meta: %w", err)
 		a.publishStatus()
 		return a.scheduleSnapshotReaderMetaRestart()
 	}
-	a.readerAlias = alias
+	a.reader.alias = alias
 	return nil
 }
 
 func (a *snapshotReaderActor) stopSnapshotReaderMeta(reason error) {
-	if a.readerAlias == (gen.Alias{}) {
+	if a.reader.alias == (gen.Alias{}) {
 		return
 	}
-	alias := a.readerAlias
-	a.readerAlias = gen.Alias{}
+	alias := a.reader.alias
+	a.reader.alias = gen.Alias{}
 	_ = a.DemonitorAlias(alias)
 	_ = a.SendExitMeta(alias, reason)
 }
 
 func (a *snapshotReaderActor) scheduleSnapshotReaderMetaRestart() error {
-	if a.readerStatus.RestartPending {
+	if a.reader.restart.Pending {
 		return nil
 	}
 
-	delay := a.readerRestartBackoff.NextBackOff()
+	delay := a.reader.restart.Strategy.NextBackOff()
 	if delay == backoff.Stop {
 		return fmt.Errorf("snapshot reader meta restart backoff stopped")
 	}
 
-	a.readerRestartToken++
-	token := a.readerRestartToken
-	cancel, err := a.SendAfter(a.PID(), snapshotReaderMetaRestart{token: token}, delay)
+	a.reader.restart.Token++
+	token := a.reader.restart.Token
+	cancel, err := a.SendAfter(a.PID(), messageSnapshotReaderRestart{token: token}, delay)
 	if err != nil {
 		return fmt.Errorf("schedule snapshot reader meta restart: %w", err)
 	}
-	a.readerStatus.Lifecycle = SnapshotReaderMetaRestarting
-	a.readerStatus.Availability = runtime.AvailabilityUnavailable
-	a.readerStatus.RestartPending = true
-	a.readerRestartCancel = cancel
+	a.reader.restart.Pending = true
+	a.reader.restart.Cancel = cancel
+	a.reader.status.Lifecycle = SnapshotReaderMetaRestarting
+	a.reader.status.Availability = runtime.AvailabilityUnavailable
+	a.reader.status.RestartPending = true
 	a.publishStatus()
 	return nil
-}
-
-func (a *snapshotReaderActor) cancelSnapshotReaderMetaRestart(reset bool) {
-	if a.readerRestartCancel != nil {
-		a.readerRestartCancel()
-		a.readerRestartCancel = nil
-	}
-	a.readerStatus.RestartPending = false
-	a.readerRestartToken++
-	if reset {
-		a.readerRestartBackoff.Reset()
-	}
-}
-
-func (a *snapshotReaderActor) resetSnapshotReaderMetaRestartBackoff() {
-	a.cancelSnapshotReaderMetaRestart(true)
 }
 
 func (a *snapshotReaderActor) apply(message brokers.Message) bool {
@@ -275,23 +254,27 @@ func (a *snapshotReaderActor) apply(message brokers.Message) bool {
 			a.opts.Logger.ErrorF("snapshot reader actor: decode generation marker: %v", err)
 			return false
 		}
-		if generation < a.appliedGeneration {
+		if a.committed != nil && generation <= a.committed.Generation {
+			if generation == a.committed.Generation {
+				return false
+			}
 			a.opts.Logger.ErrorF(
 				"snapshot reader actor: generation went backwards %d -> %d",
-				a.appliedGeneration,
+				a.committed.Generation,
 				generation,
 			)
+			return false
 		}
-		a.appliedGeneration = generation
-		return false
+		a.committed = &snapshot.Snapshot{
+			Generation: generation,
+			Entries:    a.sortedEntries(),
+		}
+		return true
 	}
 
 	if len(message.Value) == 0 {
-		if _, ok := a.entries[key]; !ok {
-			return false
-		}
 		delete(a.entries, key)
-		return true
+		return false
 	}
 
 	entry, err := snapshot.Unmarshal(message.Value)
@@ -300,52 +283,50 @@ func (a *snapshotReaderActor) apply(message brokers.Message) bool {
 		return false
 	}
 	a.entries[entry.Id] = entry
-	return true
+	return false
 }
 
 func (a *snapshotReaderActor) publishSnapshot() {
-	entries := make([]snapshot.EffectiveEntry, 0, len(a.entries))
-	for _, entry := range a.entries {
-		entries = append(entries, entry)
-	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Id < entries[j].Id })
-
-	a.localRevision++
-	published := &snapshot.Snapshot{
-		Generation: a.revision + a.localRevision,
-		Entries:    entries,
+	if a.committed == nil {
+		return
 	}
 	if a.snapshotEventToken != (gen.Ref{}) {
-		_ = a.SendEvent(a.snapshotEventName, a.snapshotEventToken, published)
+		_ = a.SendEvent(a.snapshotEventName, a.snapshotEventToken, a.committed.Clone())
 	}
 }
 
+func (a *snapshotReaderActor) sortedEntries() []snapshot.EffectiveEntry {
+	entries := make([]snapshot.EffectiveEntry, 0, len(a.entries))
+	for _, entry := range a.entries {
+		entries = append(entries, entry.Clone())
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Id < entries[j].Id })
+	return entries
+}
+
 func (a *snapshotReaderActor) publishStatus() {
-	if !a.activated {
+	if a.snapshotEventToken == (gen.Ref{}) {
 		return
 	}
-	_ = a.Send(a.Parent(), snapshotReaderActorStatusChanged{
-		pid:        a.PID(),
-		generation: a.actorGeneration,
-		status:     a.currentStatus(),
-	})
+	_ = a.Send(a.Parent(), messageSnapshotReaderStatusChanged{status: a.currentStatus()})
 }
 
 func (a *snapshotReaderActor) currentStatus() SnapshotReaderStatus {
 	availability := runtime.AvailabilityUnavailable
-	switch a.readerStatus.Availability {
+	switch a.reader.status.Availability {
 	case runtime.AvailabilityReady:
 		availability = runtime.AvailabilityReady
 	case runtime.AvailabilityDegraded:
 		availability = runtime.AvailabilityDegraded
 	}
 
-	return SnapshotReaderStatus{
-		Lifecycle:         SnapshotReaderRunning,
-		Availability:      availability,
-		ActorGeneration:   a.actorGeneration,
-		LocalRevision:     a.localRevision,
-		AppliedGeneration: a.appliedGeneration,
-		Reader:            a.readerStatus,
+	status := SnapshotReaderStatus{
+		Lifecycle:    SnapshotReaderRunning,
+		Availability: availability,
+		Reader:       a.reader.status,
 	}
+	if a.committed != nil {
+		status.Generation = a.committed.Generation
+	}
+	return status
 }

@@ -4,26 +4,48 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	"ergo.services/ergo/gen"
 	"github.com/harishhary/blink/internal/brokers"
+	"github.com/harishhary/blink/internal/runtime"
 )
+
+// SnapshotReaderMetaLifecycle describes one blocking broker-reader
+// meta-process incarnation.
+type SnapshotReaderMetaLifecycle string
+
+const (
+	SnapshotReaderMetaStarting   SnapshotReaderMetaLifecycle = "starting"
+	SnapshotReaderMetaRunning    SnapshotReaderMetaLifecycle = "running"
+	SnapshotReaderMetaRestarting SnapshotReaderMetaLifecycle = "restarting"
+	SnapshotReaderMetaStopped    SnapshotReaderMetaLifecycle = "stopped"
+)
+
+// SnapshotReaderMetaStatus is owned by snapshotReaderActor because that actor
+// owns the meta-process incarnation, restart policy, and interpretation of
+// MessageDownAlias. The meta-process only reports runtime facts.
+type SnapshotReaderMetaStatus struct {
+	Lifecycle      SnapshotReaderMetaLifecycle
+	Availability   runtime.Availability
+	Incarnation    uint64
+	RestartCount   uint64
+	CaughtUp       bool
+	RestartPending bool
+	LastError      error
+}
 
 const snapshotCatchUpPoll = 250 * time.Millisecond
 
-// snapshotReaderMetaStarted, snapshotReaderMetaRecord, and
-// snapshotReaderMetaCaughtUp are emitted by one reader incarnation. The parent
-// actor fences every message by generation.
-type snapshotReaderMetaStarted struct{ generation uint64 }
+// Reader meta messages are fenced by incarnation in the parent actor.
+type messageSnapshotReaderStarted struct{ incarnation uint64 }
 
-type snapshotReaderMetaRecord struct {
-	generation uint64
-	message    brokers.Message
+type messageSnapshotRecord struct {
+	incarnation uint64
+	message     brokers.Message
 }
 
-type snapshotReaderMetaCaughtUp struct{ generation uint64 }
+type messageSnapshotCaughtUp struct{ incarnation uint64 }
 
 // snapshotReaderMeta owns one concrete broker reader and one blocking read
 // loop. Its parent actor owns reader creation, restart/backoff, public status,
@@ -31,12 +53,11 @@ type snapshotReaderMetaCaughtUp struct{ generation uint64 }
 type snapshotReaderMeta struct {
 	gen.MetaProcess
 
-	reader     brokers.Reader
-	generation uint64
+	reader      brokers.Reader
+	incarnation uint64
 
-	runCtx    context.Context
-	cancelRun context.CancelFunc
-	closeOnce sync.Once
+	runCtx context.Context
+	cancel context.CancelFunc
 }
 
 func (m *snapshotReaderMeta) Init(process gen.MetaProcess) error {
@@ -44,13 +65,13 @@ func (m *snapshotReaderMeta) Init(process gen.MetaProcess) error {
 		return fmt.Errorf("snapshot reader meta: reader is required")
 	}
 	m.MetaProcess = process
-	m.runCtx, m.cancelRun = context.WithCancel(context.Background())
+	m.runCtx, m.cancel = context.WithCancel(context.Background())
 	return nil
 }
 
 func (m *snapshotReaderMeta) Start() error {
-	if err := m.Send(m.Parent(), snapshotReaderMetaStarted{generation: m.generation}); err != nil {
-		return fmt.Errorf("snapshot reader meta: announce start: %w", err)
+	if err := m.Send(m.Parent(), messageSnapshotReaderStarted{incarnation: m.incarnation}); err != nil {
+		return fmt.Errorf("%w: announce start: %w", runtime.ErrSnapshotRead, err)
 	}
 
 	caughtUp := false
@@ -71,24 +92,26 @@ func (m *snapshotReaderMeta) Start() error {
 			if !caughtUp && errors.Is(err, context.DeadlineExceeded) {
 				lag, lagErr := m.reader.ReadLag(m.runCtx)
 				if lagErr != nil {
-					return fmt.Errorf("snapshot reader meta: read lag: %w", lagErr)
+					return fmt.Errorf("%w: read lag: %w", runtime.ErrSnapshotRead, lagErr)
 				}
 				if lag == 0 {
 					caughtUp = true
-					if sendErr := m.Send(m.Parent(), snapshotReaderMetaCaughtUp{generation: m.generation}); sendErr != nil {
-						return fmt.Errorf("snapshot reader meta: send caught-up: %w", sendErr)
+					if sendErr := m.Send(m.Parent(), messageSnapshotCaughtUp{incarnation: m.incarnation}); sendErr != nil {
+						return fmt.Errorf("%w: send caught-up: %w", runtime.ErrSnapshotRead, sendErr)
 					}
 				}
 				continue
 			}
-			return fmt.Errorf("snapshot reader meta: read message: %w", err)
+			return fmt.Errorf("%w: read message: %w", runtime.ErrSnapshotRead, err)
 		}
 
-		if err := m.Send(m.Parent(), snapshotReaderMetaRecord{
-			generation: m.generation,
-			message:    message,
+		message.Key = append([]byte(nil), message.Key...)
+		message.Value = append([]byte(nil), message.Value...)
+		if err := m.Send(m.Parent(), messageSnapshotRecord{
+			incarnation: m.incarnation,
+			message:     message,
 		}); err != nil {
-			return fmt.Errorf("snapshot reader meta: send record: %w", err)
+			return fmt.Errorf("%w: send record: %w", runtime.ErrSnapshotRead, err)
 		}
 	}
 }
@@ -100,16 +123,14 @@ func (m *snapshotReaderMeta) HandleCall(gen.PID, gen.Ref, any) (any, error) {
 }
 
 func (m *snapshotReaderMeta) Terminate(error) {
-	m.closeOnce.Do(func() {
-		if m.cancelRun != nil {
-			m.cancelRun()
-		}
-		if m.reader != nil {
-			_ = m.reader.Close()
-		}
-	})
+	if m.cancel != nil {
+		m.cancel()
+	}
+	if m.reader != nil {
+		_ = m.reader.Close()
+	}
 }
 
 func (m *snapshotReaderMeta) HandleInspect(gen.PID, ...string) map[string]string {
-	return map[string]string{"generation": fmt.Sprintf("%d", m.generation)}
+	return map[string]string{"incarnation": fmt.Sprintf("%d", m.incarnation)}
 }

@@ -19,6 +19,8 @@ var (
 	ErrArtifactWatch     = errors.New("plugin artifact watch failed")
 	ErrSnapshotLoad      = errors.New("snapshot state load failed")
 	ErrSnapshotPublish   = errors.New("snapshot publication failed")
+	ErrSnapshotRead      = errors.New("snapshot read failed")
+	ErrSnapshotSubscribe = errors.New("snapshot event subscription failed")
 	ErrRuntimeNotStarted = errors.New("actor runtime not started")
 	ErrRuntimeStopped    = errors.New("actor runtime stopped")
 	ErrWorkerRecycle     = errors.New("worker recycled after plugin transport failure")
@@ -47,7 +49,7 @@ type DeploymentPoolKey struct {
 	maxProcs int
 }
 
-func (d *Deployment) poolKey() DeploymentPoolKey {
+func (d *Deployment) PoolKey() DeploymentPoolKey {
 	return DeploymentPoolKey{
 		PoolKey:  pools.PoolKey{Id: d.Id, Name: d.Name, Hash: d.hash},
 		maxProcs: d.workerCount(),
