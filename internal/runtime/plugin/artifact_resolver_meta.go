@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
-	"sync"
 
 	"ergo.services/ergo/gen"
 	"github.com/harishhary/blink/internal/helpers"
@@ -28,125 +27,141 @@ const (
 type ArtifactResolverStatus struct {
 	Lifecycle      ArtifactResolverLifecycle
 	Availability   runtime.Availability
-	Generation     uint64
+	Incarnation    uint64
 	RestartCount   uint64
 	RestartPending bool
-	LastError      string
+	LastError      error
 }
 
 // artifactResolverMeta owns one resolver incarnation. It performs filesystem
 // readiness checks and binary checksums for complete snapshot-resolution
 // requests. The parent actor owns restart policy and fences requests/results by
-// generation.
+// incarnation.
 type artifactResolverMeta[T plugin.Syncable] struct {
 	gen.MetaProcess
 
-	directory  string
-	adapter    *plugin.PluginAdapter[T]
-	generation uint64
+	directory   string
+	adapter     *plugin.PluginAdapter[T]
+	incarnation uint64
 
 	runCtx    context.Context
 	cancelRun context.CancelFunc
-	closeOnce sync.Once
+	jobs      chan MessageResolveArtifacts
 }
 
 func (m *artifactResolverMeta[T]) Init(process gen.MetaProcess) error {
+	if m.directory == "" || m.adapter == nil || m.adapter.Config == nil {
+		return fmt.Errorf("artifact resolver meta: directory, adapter, and config are required")
+	}
 	m.MetaProcess = process
 	m.runCtx, m.cancelRun = context.WithCancel(context.Background())
+	m.jobs = make(chan MessageResolveArtifacts, 1)
 	return nil
 }
 
 func (m *artifactResolverMeta[T]) Start() error {
-	if err := m.Send(m.Parent(), artifactResolverStarted{generation: m.generation}); err != nil {
-		return fmt.Errorf("announce artifact resolver start: %w", err)
+	if err := m.Send(m.Parent(), MessageArtifactResolverStarted{incarnation: m.incarnation}); err != nil {
+		return fmt.Errorf("%w: announce start: %w", runtime.ErrArtifactResolve, err)
 	}
-	<-m.runCtx.Done()
-	return nil
+
+	for {
+		select {
+		case <-m.runCtx.Done():
+			return nil
+		case request := <-m.jobs:
+			desired, deferred, complete := m.buildDesiredRoutes(request.snapshot)
+			if err := m.Send(m.Parent(), MessageArtifactResolutionResult{
+				incarnation:        m.incarnation,
+				snapshotGeneration: request.snapshot.Generation,
+				desired:            desired,
+				deferred:           deferred,
+				complete:           complete,
+			}); err != nil {
+				return fmt.Errorf("%w: send result: %w", runtime.ErrArtifactResolve, err)
+			}
+		}
+	}
 }
 
 func (m *artifactResolverMeta[T]) HandleMessage(_ gen.PID, message any) error {
-	switch request := message.(type) {
-	case artifactResolve:
-		if request.resolverGeneration != m.generation {
-			return nil
-		}
-		desired, deferred := m.buildDesiredRoutes(request.snapshot)
-		return m.Send(m.Parent(), artifactResolved{
-			resolverGeneration: m.generation,
-			id:                 request.id,
-			snapshotGeneration: request.snapshotGeneration,
-			desired:            desired,
-			deferred:           deferred,
-		})
+	request, ok := message.(MessageResolveArtifacts)
+	if !ok || request.incarnation != m.incarnation {
+		return nil
 	}
-	return nil
+	select {
+	case m.jobs <- request:
+		return nil
+	default:
+		return fmt.Errorf("%w: request already queued", runtime.ErrArtifactResolve)
+	}
 }
 
-func (m *artifactResolverMeta[T]) HandleCall(gen.PID, gen.Ref, any) (any, error) {
-	return nil, nil
+func (m *artifactResolverMeta[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
+	return nil, fmt.Errorf("actorruntime: unsupported artifact resolver call %T", request)
 }
 
 func (m *artifactResolverMeta[T]) Terminate(error) {
-	m.closeOnce.Do(func() {
-		if m.cancelRun != nil {
-			m.cancelRun()
-		}
-	})
+	if m.cancelRun != nil {
+		m.cancelRun()
+	}
 }
 
 func (m *artifactResolverMeta[T]) HandleInspect(gen.PID, ...string) map[string]string {
 	return map[string]string{
-		"directory":  m.directory,
-		"generation": fmt.Sprintf("%d", m.generation),
+		"directory":   m.directory,
+		"incarnation": fmt.Sprintf("%d", m.incarnation),
 	}
 }
 
-func (m *artifactResolverMeta[T]) buildDesiredRoutes(snap *snapshot.Snapshot) (map[string]routerApplyDesired, bool) {
-	desired := make(map[string]routerApplyDesired)
-	if snap == nil {
-		return desired, false
+func (m *artifactResolverMeta[T]) buildDesiredRoutes(snap snapshot.Snapshot) (map[string]MessageApplyRouterDesiredState, bool, bool) {
+	desired := make(map[string]MessageApplyRouterDesiredState)
+	if !m.configMatches(snap.Generation) {
+		return desired, false, false
 	}
 
 	deferred := false
 	for _, entry := range snap.Entries {
-		route := routerApplyDesired{}
+		route := MessageApplyRouterDesiredState{}
 		route.primary, route.primaryDeferred = m.resolveDeployment(entry, entry.Primary)
 		route.candidate, route.candidateDeferred = m.resolveDeployment(entry, entry.Candidate)
 		deferred = deferred || route.primaryDeferred || route.candidateDeferred
 		desired[entry.Id] = route
 	}
-	return desired, deferred
+	if !m.configMatches(snap.Generation) {
+		return nil, false, false
+	}
+	return desired, deferred, true
 }
 
 func (m *artifactResolverMeta[T]) resolveDeployment(entry snapshot.EffectiveEntry, ref *snapshot.ArtifactRef) (*deployment, bool) {
 	if ref == nil || !entry.Enabled {
 		return nil, false
 	}
+	if ref.Name == "" || filepath.Base(ref.Name) != ref.Name || !filepath.IsLocal(ref.Name) || ref.Hash == "" {
+		return nil, true
+	}
 
 	path := filepath.Join(m.directory, ref.Name)
 	state, ok := m.adapter.Config.DesiredBinaryState(ref.Name)
-	if !ok || !state.Enabled || state.Id != entry.Id || !m.adapter.IsReady(path) {
+	if !ok || !state.Enabled || state.Id != entry.Id {
 		return nil, true
 	}
 
 	digest, err := helpers.BinaryChecksum(path)
-	if err != nil || (ref.Hash != "" && ref.Hash != digest) {
+	if err != nil || ref.Hash != digest {
 		return nil, true
 	}
 
 	state.Id, state.Name = entry.Id, ref.Name
-	rolloutPct := 0.0
-	if source, ok := m.adapter.Config.(interface {
-		ByFileName(string) (T, bool)
-	}); ok {
-		if item, found := source.ByFileName(ref.Name); found {
-			rolloutPct = item.Metadata().RolloutPct
-		}
-	}
-	return &deployment{
+	return &runtime.Deployment{
 		BinaryState: state,
-		path:        path,
-		hash:        digest,
-		rolloutPct:  rolloutPct,
+		Path:        path,
+		Hash:        digest,
+		RolloutPct:  state.RolloutPct,
 	}, false
+}
+
+func (m *artifactResolverMeta[T]) configMatches(generation int64) bool {
+	source, ok := m.adapter.Config.(interface{ Generation() int64 })
+	return !ok || source.Generation() == generation
 }

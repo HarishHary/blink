@@ -82,10 +82,10 @@ type runtimeInvocationState struct {
 }
 
 type runtimeReconcilerState struct {
-	pid             gen.PID
-	actorGeneration uint64
-	restartCount    uint64
-	status          DesiredStateReconcilerStatus
+	pid          gen.PID
+	incarnation  uint64
+	restartCount uint64
+	status       DesiredStateReconcilerStatus
 }
 
 type runtimeCatalogState struct {
@@ -107,7 +107,7 @@ type runtimeSupervisor[T plugin.Syncable] struct {
 	reconciler runtimeReconcilerState
 	catalog    runtimeCatalogState
 
-	desiredState        catalogApplyDesired
+	desiredState        MessageApplyCatalogDesiredState
 	inFlightInvocations map[uint64]runtimeInvocationState
 	drainWaiters        []runtimeDrainWaiter
 
@@ -116,9 +116,8 @@ type runtimeSupervisor[T plugin.Syncable] struct {
 	liveStatus  RuntimeStatus
 }
 
-type runtimeApplyDesired struct {
-	generation uint64
-	desired    catalogApplyDesired
+type MessageApplyDesiredState struct {
+	desired MessageApplyCatalogDesiredState
 }
 
 type runtimeSubmit[T plugin.Syncable] struct {
@@ -149,7 +148,7 @@ func (s *runtimeSupervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 	s.events = RuntimeEventsFor(s.Node(), s.opts.Name)
 	s.inFlightInvocations = make(map[uint64]runtimeInvocationState)
 	s.catalog.status = newCatalogStatus(0, 0, "")
-	s.reconciler.status = newDesiredStateReconcilerStatus(0, 0, "")
+	s.reconciler.status = newDesiredStateReconcilerStatus(0, 0, nil)
 	s.reconcileStatus()
 
 	token, err := s.RegisterEvent(s.events.Status.Name, gen.EventOptions{Buffer: 1})
@@ -256,18 +255,16 @@ func (s *runtimeSupervisor[T]) HandleMessage(from gen.PID, message any) error {
 			)
 		}
 
-	case desiredStateReconcilerStatusChanged:
-		if from != s.reconciler.pid ||
-			m.generation != s.reconciler.actorGeneration {
+	case MessageDesiredStateReconcilerStatusChanged:
+		if from != s.reconciler.pid {
 			return nil
 		}
 		s.mergeReconcilerStatus(m.status)
 		s.reconcileStatus()
 		s.publishStatus()
 
-	case runtimeApplyDesired:
+	case MessageApplyDesiredState:
 		if from != s.reconciler.pid ||
-			m.generation != s.reconciler.actorGeneration ||
 			s.draining ||
 			m.desired.desiredRevision <= s.desiredState.desiredRevision {
 			return nil
@@ -381,22 +378,21 @@ func (s *runtimeSupervisor[T]) Terminate(reason error) {
 
 func (s *runtimeSupervisor[T]) startReconcilerIncarnation(pid gen.PID) error {
 	state := &s.reconciler
-	if state.actorGeneration > 0 {
+	if state.incarnation > 0 {
 		state.restartCount++
 	}
 
-	state.actorGeneration++
+	state.incarnation++
 	state.pid = pid
 	state.status = newDesiredStateReconcilerStatus(
-		state.actorGeneration,
+		state.incarnation,
 		state.restartCount,
-		state.status.ActorLastError,
+		state.status.LastError,
 	)
 	s.reconcileStatus()
 	s.publishStatus()
 
-	if err := s.Send(pid, desiredStateReconcilerActivate{
-		generation:   state.actorGeneration,
+	if err := s.Send(pid, MessageDesiredStateReconcilerActivate{
 		revisionBase: s.desiredState.desiredRevision,
 	}); err != nil {
 		_ = s.Node().SendExit(
@@ -454,9 +450,9 @@ func (s *runtimeSupervisor[T]) retireReconcilerIncarnation(pid gen.PID, reason e
 	state.pid = gen.PID{}
 	state.status.Lifecycle = DesiredStateReconcilerRestarting
 	state.status.Availability = runtime.AvailabilityUnavailable
-	state.status.ActorGeneration = state.actorGeneration
+	state.status.Incarnation = state.incarnation
 	state.status.RestartCount = state.restartCount
-	state.status.ActorLastError = errorText(reason)
+	state.status.LastError = reason
 	state.status.Resolver.Lifecycle = ArtifactResolverStopped
 	state.status.Resolver.Availability = runtime.AvailabilityUnavailable
 	state.status.Resolver.RestartPending = false
@@ -498,12 +494,12 @@ func (s *runtimeSupervisor[T]) finishCall(callID uint64, err error) {
 
 func (s *runtimeSupervisor[T]) mergeReconcilerStatus(status DesiredStateReconcilerStatus) {
 	state := &s.reconciler
-	status.ActorGeneration = state.actorGeneration
+	status.Incarnation = state.incarnation
 	status.RestartCount = state.restartCount
 	if status.Lifecycle == DesiredStateReconcilerRunning {
-		status.ActorLastError = ""
+		status.LastError = nil
 	} else {
-		status.ActorLastError = state.status.ActorLastError
+		status.LastError = state.status.LastError
 	}
 	state.status = status
 }
@@ -551,13 +547,13 @@ func newCatalogStatus(actorGeneration uint64, restartCount uint64, lastError str
 	}
 }
 
-func newDesiredStateReconcilerStatus(actorGeneration uint64, restartCount uint64, lastError string) DesiredStateReconcilerStatus {
+func newDesiredStateReconcilerStatus(incarnation uint64, restartCount uint64, lastError error) DesiredStateReconcilerStatus {
 	return DesiredStateReconcilerStatus{
-		Lifecycle:       DesiredStateReconcilerStarting,
-		Availability:    runtime.AvailabilityUnavailable,
-		ActorGeneration: actorGeneration,
-		RestartCount:    restartCount,
-		ActorLastError:  lastError,
+		Lifecycle:    DesiredStateReconcilerStarting,
+		Availability: runtime.AvailabilityUnavailable,
+		Incarnation:  incarnation,
+		RestartCount: restartCount,
+		LastError:    lastError,
 		Resolver: ArtifactResolverStatus{
 			Lifecycle:    ArtifactResolverStarting,
 			Availability: runtime.AvailabilityUnavailable,

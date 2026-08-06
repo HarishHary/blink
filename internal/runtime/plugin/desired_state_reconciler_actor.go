@@ -12,46 +12,39 @@ import (
 	"github.com/harishhary/blink/internal/snapshot"
 )
 
-// desiredStateReconcilerActivate is sent by runtimeSupervisor after the child
-// reaches Running state. It fences actor incarnations and gives a replacement
-// reconciler a revision base that is newer than the last state accepted by the
-// supervisor.
-type desiredStateReconcilerActivate struct {
-	generation   uint64
-	revisionBase uint64
+// MessageDesiredStateReconcilerActivate gives a replacement reconciler a
+// revision base newer than the last state accepted by its supervisor.
+type MessageDesiredStateReconcilerActivate struct{ revisionBase uint64 }
+
+type MessageDesiredStateResolutionRetry struct{ token uint64 }
+type MessageArtifactResolverRestart struct{ token uint64 }
+type MessageArtifactWatcherRestart struct{ token uint64 }
+
+type MessageResolveArtifacts struct {
+	incarnation uint64
+	snapshot    snapshot.Snapshot
 }
 
-type desiredStateResolutionRetry struct{ token uint64 }
-type artifactResolverRestart struct{ token uint64 }
-type artifactWatcherRestart struct{ token uint64 }
-
-type artifactResolve struct {
-	id                 uint64
-	resolverGeneration uint64
+type MessageArtifactResolutionResult struct {
+	incarnation        uint64
 	snapshotGeneration int64
-	snapshot           *snapshot.Snapshot
-}
-
-type artifactResolved struct {
-	id                 uint64
-	resolverGeneration uint64
-	snapshotGeneration int64
-	desired            map[string]routerApplyDesired
+	desired            map[string]MessageApplyRouterDesiredState
 	deferred           bool
+	complete           bool
 }
 
-type artifactResolverStarted struct{ generation uint64 }
-type artifactWatcherStarted struct{ generation uint64 }
+type MessageArtifactResolverStarted struct{ incarnation uint64 }
+type MessageArtifactWatcherStarted struct{ incarnation uint64 }
 
-// artifactDirectoryChanged is emitted by artifactWatcherMeta. The watcher
-// generation fences notifications from replaced watcher incarnations.
-type artifactDirectoryChanged struct{ generation uint64 }
+// MessageArtifactDirectoryChanged is emitted by artifactWatcherMeta. Its
+// incarnation fences notifications from replaced watcher processes.
+type MessageArtifactDirectoryChanged struct{ incarnation uint64 }
 
-type artifactWatcherStateChanged struct {
-	generation        uint64
+type MessageArtifactWatcherStateChanged struct {
+	incarnation       uint64
 	directoryReadable bool
 	watchingDirectory bool
-	err               string
+	err               error
 }
 
 // DesiredStateReconcilerLifecycle describes the stable actor that projects
@@ -70,9 +63,9 @@ const (
 type DesiredStateReconcilerStatus struct {
 	Lifecycle          DesiredStateReconcilerLifecycle
 	Availability       runtime.Availability
-	ActorGeneration    uint64
+	Incarnation        uint64
 	RestartCount       uint64
-	ActorLastError     string
+	LastError          error
 	SnapshotGeneration int64
 	Revision           uint64
 	Resolving          bool
@@ -81,17 +74,14 @@ type DesiredStateReconcilerStatus struct {
 	Watcher            ArtifactWatcherStatus
 }
 
-type desiredStateReconcilerStatusChanged struct {
-	generation uint64
-	status     DesiredStateReconcilerStatus
-}
+type MessageDesiredStateReconcilerStatusChanged struct{ status DesiredStateReconcilerStatus }
 
 type artifactResolverState struct {
 	alias gen.Alias
 
-	generation   uint64
+	incarnation  uint64
 	restartCount uint64
-	restart      *scheduledBackoff
+	restart      *runtime.ScheduledBackoff
 
 	status ArtifactResolverStatus
 }
@@ -99,9 +89,9 @@ type artifactResolverState struct {
 type artifactWatcherState struct {
 	alias gen.Alias
 
-	generation   uint64
+	incarnation  uint64
 	restartCount uint64
-	restart      *scheduledBackoff
+	restart      *runtime.ScheduledBackoff
 
 	status ArtifactWatcherStatus
 }
@@ -114,21 +104,19 @@ type artifactWatcherState struct {
 type desiredStateReconcilerActor[T plugin.Syncable] struct {
 	act.Actor
 
-	actorGeneration uint64
-	activated       bool
-	revision        uint64
+	lifecycle DesiredStateReconcilerLifecycle
+	revision  uint64
 
 	snapshotEvent gen.Event
 	directory     string
 	adapter       *plugin.PluginAdapter[T]
 
-	resolutionRetry *scheduledBackoff
+	resolutionRetry *runtime.ScheduledBackoff
 
 	resolver artifactResolverState
 	watcher  artifactWatcherState
 
 	current   *snapshot.Snapshot
-	resolveID uint64
 	resolving bool
 	dirty     bool
 	deferred  bool
@@ -142,19 +130,20 @@ func newDesiredStateReconcilerActor[T plugin.Syncable](
 	retryMax time.Duration,
 ) gen.ProcessBehavior {
 	return &desiredStateReconcilerActor[T]{
+		lifecycle:       DesiredStateReconcilerStarting,
 		snapshotEvent:   snapshotEvent,
 		directory:       directory,
 		adapter:         adapter,
-		resolutionRetry: newScheduledBackoff(retryMin, retryMax),
+		resolutionRetry: runtime.NewScheduledBackoff(retryMin, retryMax),
 		resolver: artifactResolverState{
-			restart: newScheduledBackoff(retryMin, retryMax),
+			restart: runtime.NewScheduledBackoff(retryMin, retryMax),
 			status: ArtifactResolverStatus{
 				Lifecycle:    ArtifactResolverStarting,
 				Availability: runtime.AvailabilityUnavailable,
 			},
 		},
 		watcher: artifactWatcherState{
-			restart: newScheduledBackoff(retryMin, retryMax),
+			restart: runtime.NewScheduledBackoff(retryMin, retryMax),
 			status: ArtifactWatcherStatus{
 				Lifecycle:    ArtifactWatcherStarting,
 				Availability: runtime.AvailabilityUnavailable,
@@ -167,20 +156,13 @@ func (a *desiredStateReconcilerActor[T]) Init(...any) error { return nil }
 
 func (a *desiredStateReconcilerActor[T]) HandleMessage(_ gen.PID, message any) error {
 	switch m := message.(type) {
-	case desiredStateReconcilerActivate:
-		if m.generation <= a.actorGeneration {
-			return nil
-		}
-		if a.activated {
-			return fmt.Errorf(
-				"desired-state reconciler already activated as generation %d",
-				a.actorGeneration,
-			)
+	case MessageDesiredStateReconcilerActivate:
+		if a.lifecycle == DesiredStateReconcilerRunning {
+			return fmt.Errorf("desired-state reconciler already activated")
 		}
 
-		a.actorGeneration = m.generation
 		a.revision = m.revisionBase
-		a.activated = true
+		a.lifecycle = DesiredStateReconcilerRunning
 		a.publishStatus()
 
 		buffered, err := a.MonitorEvent(a.snapshotEvent)
@@ -198,24 +180,24 @@ func (a *desiredStateReconcilerActor[T]) HandleMessage(_ gen.PID, message any) e
 		}
 		return a.startArtifactWatcherMeta()
 
-	case artifactResolverStarted:
-		if m.generation != a.resolver.generation || a.resolver.alias == (gen.Alias{}) {
+	case MessageArtifactResolverStarted:
+		if m.incarnation != a.resolver.incarnation || a.resolver.alias == (gen.Alias{}) {
 			return nil
 		}
 		a.resolver.status.Lifecycle = ArtifactResolverRunning
 		a.resolver.status.Availability = runtime.AvailabilityReady
-		a.resolver.status.LastError = ""
+		a.resolver.status.LastError = nil
 		a.resetResolverRestartBackoff()
 		a.publishStatus()
 		return a.requestResolve()
 
-	case artifactWatcherStarted:
-		if m.generation != a.watcher.generation || a.watcher.alias == (gen.Alias{}) {
+	case MessageArtifactWatcherStarted:
+		if m.incarnation != a.watcher.incarnation || a.watcher.alias == (gen.Alias{}) {
 			return nil
 		}
 		a.watcher.status.Lifecycle = ArtifactWatcherRunning
 		a.watcher.status.Availability = runtime.AvailabilityDegraded
-		a.watcher.status.LastError = ""
+		a.watcher.status.LastError = nil
 		a.resetWatcherRestartBackoff()
 		a.publishStatus()
 		if a.current != nil {
@@ -225,8 +207,8 @@ func (a *desiredStateReconcilerActor[T]) HandleMessage(_ gen.PID, message any) e
 		}
 		return a.requestResolve()
 
-	case artifactWatcherStateChanged:
-		if m.generation != a.watcher.generation || a.watcher.alias == (gen.Alias{}) {
+	case MessageArtifactWatcherStateChanged:
+		if m.incarnation != a.watcher.incarnation || a.watcher.alias == (gen.Alias{}) {
 			return nil
 		}
 		a.watcher.status.Lifecycle = ArtifactWatcherRunning
@@ -240,13 +222,13 @@ func (a *desiredStateReconcilerActor[T]) HandleMessage(_ gen.PID, message any) e
 		}
 		a.publishStatus()
 
-	case artifactResolved:
-		if m.resolverGeneration != a.resolver.generation ||
-			!a.resolving ||
-			m.id != a.resolveID {
+	case MessageArtifactResolutionResult:
+		if m.incarnation != a.resolver.incarnation || !a.resolving {
 			return nil
 		}
 		a.resolving = false
+		a.resolver.status.Availability = runtime.AvailabilityReady
+		a.resolver.status.LastError = nil
 
 		if a.current == nil || m.snapshotGeneration != a.current.Generation {
 			a.dirty = true
@@ -259,12 +241,17 @@ func (a *desiredStateReconcilerActor[T]) HandleMessage(_ gen.PID, message any) e
 		if a.dirty {
 			return a.requestResolve()
 		}
+		if !m.complete {
+			a.dirty = true
+			a.deferred = true
+			a.publishStatus()
+			return a.scheduleDesiredStateResolutionRetry()
+		}
 
 		a.revision++
 		a.deferred = m.deferred
-		if err := a.Send(a.Parent(), runtimeApplyDesired{
-			generation: a.actorGeneration,
-			desired: catalogApplyDesired{
+		if err := a.Send(a.Parent(), MessageApplyDesiredState{
+			desired: MessageApplyCatalogDesiredState{
 				desiredRevision: a.revision,
 				desired:         m.desired,
 			},
@@ -278,8 +265,8 @@ func (a *desiredStateReconcilerActor[T]) HandleMessage(_ gen.PID, message any) e
 		}
 		a.resetDesiredStateResolutionBackoff()
 
-	case artifactDirectoryChanged:
-		if m.generation != a.watcher.generation ||
+	case MessageArtifactDirectoryChanged:
+		if m.incarnation != a.watcher.incarnation ||
 			a.watcher.alias == (gen.Alias{}) ||
 			a.current == nil {
 			return nil
@@ -291,33 +278,33 @@ func (a *desiredStateReconcilerActor[T]) HandleMessage(_ gen.PID, message any) e
 		a.cancelDesiredStateResolutionRetry(false)
 		return a.requestResolve()
 
-	case desiredStateResolutionRetry:
-		if !a.resolutionRetry.pending || a.resolutionRetry.token != m.token {
+	case MessageDesiredStateResolutionRetry:
+		if !a.resolutionRetry.Pending || a.resolutionRetry.Token != m.token {
 			return nil
 		}
-		a.resolutionRetry.pending = false
-		a.resolutionRetry.cancel = nil
+		a.resolutionRetry.Pending = false
+		a.resolutionRetry.Cancel = nil
 		a.dirty = true
 		return a.requestResolve()
 
-	case artifactResolverRestart:
-		if !a.resolver.restart.pending ||
-			a.resolver.restart.token != m.token ||
+	case MessageArtifactResolverRestart:
+		if !a.resolver.restart.Pending ||
+			a.resolver.restart.Token != m.token ||
 			a.resolver.alias != (gen.Alias{}) {
 			return nil
 		}
-		a.resolver.restart.pending = false
-		a.resolver.restart.cancel = nil
+		a.resolver.restart.Pending = false
+		a.resolver.restart.Cancel = nil
 		return a.startArtifactResolverMeta()
 
-	case artifactWatcherRestart:
-		if !a.watcher.restart.pending ||
-			a.watcher.restart.token != m.token ||
+	case MessageArtifactWatcherRestart:
+		if !a.watcher.restart.Pending ||
+			a.watcher.restart.Token != m.token ||
 			a.watcher.alias != (gen.Alias{}) {
 			return nil
 		}
-		a.watcher.restart.pending = false
-		a.watcher.restart.cancel = nil
+		a.watcher.restart.Pending = false
+		a.watcher.restart.Cancel = nil
 		return a.startArtifactWatcherMeta()
 
 	case gen.MessageDownAlias:
@@ -326,9 +313,8 @@ func (a *desiredStateReconcilerActor[T]) HandleMessage(_ gen.PID, message any) e
 			a.resolver.alias = gen.Alias{}
 			a.resolver.status.Lifecycle = ArtifactResolverRestarting
 			a.resolver.status.Availability = runtime.AvailabilityUnavailable
-			a.resolver.status.LastError = errorText(m.Reason)
+			a.resolver.status.LastError = m.Reason
 			a.resolving = false
-			a.resolveID++
 			a.dirty = a.current != nil
 			a.cancelDesiredStateResolutionRetry(false)
 			a.publishStatus()
@@ -340,7 +326,7 @@ func (a *desiredStateReconcilerActor[T]) HandleMessage(_ gen.PID, message any) e
 			a.watcher.status.Availability = runtime.AvailabilityUnavailable
 			a.watcher.status.DirectoryReadable = false
 			a.watcher.status.WatchingDirectory = false
-			a.watcher.status.LastError = errorText(m.Reason)
+			a.watcher.status.LastError = m.Reason
 			a.publishStatus()
 			return a.scheduleWatcherRestart()
 		}
@@ -357,11 +343,12 @@ func (a *desiredStateReconcilerActor[T]) HandleEvent(event gen.MessageEvent) err
 	return a.acceptEvent(event)
 }
 
-func (a *desiredStateReconcilerActor[T]) HandleCall(gen.PID, gen.Ref, any) (any, error) {
-	return nil, nil
+func (a *desiredStateReconcilerActor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
+	return nil, fmt.Errorf("actorruntime: unsupported desired-state reconciler call %T", request)
 }
 
 func (a *desiredStateReconcilerActor[T]) Terminate(error) {
+	a.lifecycle = DesiredStateReconcilerStopped
 	a.cancelDesiredStateResolutionRetry(false)
 	a.cancelResolverRestart(false)
 	a.cancelWatcherRestart(false)
@@ -378,24 +365,24 @@ func (a *desiredStateReconcilerActor[T]) startArtifactResolverMeta() error {
 		return nil
 	}
 
-	if a.resolver.generation > 0 {
+	if a.resolver.incarnation > 0 {
 		a.resolver.restartCount++
 	}
-	a.resolver.generation++
+	a.resolver.incarnation++
 	a.resolver.status.Lifecycle = ArtifactResolverStarting
 	a.resolver.status.Availability = runtime.AvailabilityUnavailable
 	a.publishStatus()
 	alias, err := a.SpawnMeta(
 		&artifactResolverMeta[T]{
-			directory:  a.directory,
-			adapter:    a.adapter,
-			generation: a.resolver.generation,
+			directory:   a.directory,
+			adapter:     a.adapter,
+			incarnation: a.resolver.incarnation,
 		},
 		gen.MetaOptions{},
 	)
 	if err != nil {
 		a.resolver.status.Lifecycle = ArtifactResolverRestarting
-		a.resolver.status.LastError = fmt.Sprintf("spawn artifact resolver meta: %v", err)
+		a.resolver.status.LastError = fmt.Errorf("%w: spawn meta: %w", runtime.ErrArtifactResolve, err)
 		a.publishStatus()
 		if retryErr := a.scheduleResolverRestart(); retryErr != nil {
 			return fmt.Errorf("spawn artifact resolver meta: %v; schedule restart: %w", err, retryErr)
@@ -405,7 +392,7 @@ func (a *desiredStateReconcilerActor[T]) startArtifactResolverMeta() error {
 	if err := a.MonitorAlias(alias); err != nil {
 		_ = a.SendExitMeta(alias, gen.TerminateReasonShutdown)
 		a.resolver.status.Lifecycle = ArtifactResolverRestarting
-		a.resolver.status.LastError = fmt.Sprintf("monitor artifact resolver meta: %v", err)
+		a.resolver.status.LastError = fmt.Errorf("%w: monitor meta: %w", runtime.ErrArtifactResolve, err)
 		a.publishStatus()
 		if retryErr := a.scheduleResolverRestart(); retryErr != nil {
 			return fmt.Errorf("monitor artifact resolver meta: %v; schedule restart: %w", err, retryErr)
@@ -421,10 +408,10 @@ func (a *desiredStateReconcilerActor[T]) startArtifactWatcherMeta() error {
 		return nil
 	}
 
-	if a.watcher.generation > 0 {
+	if a.watcher.incarnation > 0 {
 		a.watcher.restartCount++
 	}
-	a.watcher.generation++
+	a.watcher.incarnation++
 	a.watcher.status.Lifecycle = ArtifactWatcherStarting
 	a.watcher.status.Availability = runtime.AvailabilityUnavailable
 	a.watcher.status.DirectoryReadable = false
@@ -432,14 +419,14 @@ func (a *desiredStateReconcilerActor[T]) startArtifactWatcherMeta() error {
 	a.publishStatus()
 	alias, err := a.SpawnMeta(
 		&artifactWatcherMeta{
-			directory:  a.directory,
-			generation: a.watcher.generation,
+			directory:   a.directory,
+			incarnation: a.watcher.incarnation,
 		},
 		gen.MetaOptions{},
 	)
 	if err != nil {
 		a.watcher.status.Lifecycle = ArtifactWatcherRestarting
-		a.watcher.status.LastError = fmt.Sprintf("spawn artifact watcher meta: %v", err)
+		a.watcher.status.LastError = fmt.Errorf("%w: spawn meta: %w", runtime.ErrArtifactWatch, err)
 		a.publishStatus()
 		if retryErr := a.scheduleWatcherRestart(); retryErr != nil {
 			return fmt.Errorf("spawn artifact watcher meta: %v; schedule restart: %w", err, retryErr)
@@ -449,7 +436,7 @@ func (a *desiredStateReconcilerActor[T]) startArtifactWatcherMeta() error {
 	if err := a.MonitorAlias(alias); err != nil {
 		_ = a.SendExitMeta(alias, gen.TerminateReasonShutdown)
 		a.watcher.status.Lifecycle = ArtifactWatcherRestarting
-		a.watcher.status.LastError = fmt.Sprintf("monitor artifact watcher meta: %v", err)
+		a.watcher.status.LastError = fmt.Errorf("%w: monitor meta: %w", runtime.ErrArtifactWatch, err)
 		a.publishStatus()
 		if retryErr := a.scheduleWatcherRestart(); retryErr != nil {
 			return fmt.Errorf("monitor artifact watcher meta: %v; schedule restart: %w", err, retryErr)
@@ -500,7 +487,7 @@ func (a *desiredStateReconcilerActor[T]) acceptEvent(event gen.MessageEvent) err
 		a.cancelDesiredStateResolutionRetry(false)
 	}
 
-	a.current = snap
+	a.current = snap.Clone()
 	a.dirty = true
 	a.deferred = false
 	a.publishStatus()
@@ -517,16 +504,16 @@ func (a *desiredStateReconcilerActor[T]) requestResolve() error {
 
 	a.resolving = true
 	a.dirty = false
-	a.resolveID++
 	a.publishStatus()
-	if err := a.Send(a.resolver.alias, artifactResolve{
-		id:                 a.resolveID,
-		resolverGeneration: a.resolver.generation,
-		snapshotGeneration: a.current.Generation,
-		snapshot:           a.current,
+	snap := a.current.Clone()
+	if err := a.Send(a.resolver.alias, MessageResolveArtifacts{
+		incarnation: a.resolver.incarnation,
+		snapshot:    *snap,
 	}); err != nil {
 		a.resolving = false
 		a.dirty = true
+		a.resolver.status.LastError = fmt.Errorf("%w: queue request: %w", runtime.ErrArtifactResolve, err)
+		a.resolver.status.Availability = runtime.AvailabilityDegraded
 		a.publishStatus()
 		if retryErr := a.scheduleDesiredStateResolutionRetry(); retryErr != nil {
 			return fmt.Errorf("send artifact resolve request: %v; schedule retry: %w", err, retryErr)
@@ -536,44 +523,44 @@ func (a *desiredStateReconcilerActor[T]) requestResolve() error {
 }
 
 func (a *desiredStateReconcilerActor[T]) scheduleDesiredStateResolutionRetry() error {
-	if a.resolutionRetry.pending {
+	if a.resolutionRetry.Pending {
 		return nil
 	}
 
-	delay := a.resolutionRetry.strategy.NextBackOff()
+	delay := a.resolutionRetry.Strategy.NextBackOff()
 	if delay == backoff.Stop {
 		return fmt.Errorf("desired-state resolution retry backoff stopped")
 	}
 
-	a.resolutionRetry.token++
-	token := a.resolutionRetry.token
-	cancel, err := a.SendAfter(a.PID(), desiredStateResolutionRetry{token: token}, delay)
+	a.resolutionRetry.Token++
+	token := a.resolutionRetry.Token
+	cancel, err := a.SendAfter(a.PID(), MessageDesiredStateResolutionRetry{token: token}, delay)
 	if err != nil {
 		return fmt.Errorf("schedule desired-state resolution retry: %w", err)
 	}
-	a.resolutionRetry.pending = true
-	a.resolutionRetry.cancel = cancel
+	a.resolutionRetry.Pending = true
+	a.resolutionRetry.Cancel = cancel
 	return nil
 }
 
 func (a *desiredStateReconcilerActor[T]) scheduleResolverRestart() error {
-	if a.resolver.restart.pending {
+	if a.resolver.restart.Pending {
 		return nil
 	}
 
-	delay := a.resolver.restart.strategy.NextBackOff()
+	delay := a.resolver.restart.Strategy.NextBackOff()
 	if delay == backoff.Stop {
 		return fmt.Errorf("artifact resolver restart backoff stopped")
 	}
 
-	a.resolver.restart.token++
-	token := a.resolver.restart.token
-	cancel, err := a.SendAfter(a.PID(), artifactResolverRestart{token: token}, delay)
+	a.resolver.restart.Token++
+	token := a.resolver.restart.Token
+	cancel, err := a.SendAfter(a.PID(), MessageArtifactResolverRestart{token: token}, delay)
 	if err != nil {
 		return fmt.Errorf("schedule artifact resolver restart: %w", err)
 	}
-	a.resolver.restart.pending = true
-	a.resolver.restart.cancel = cancel
+	a.resolver.restart.Pending = true
+	a.resolver.restart.Cancel = cancel
 	a.resolver.status.Lifecycle = ArtifactResolverRestarting
 	a.resolver.status.Availability = runtime.AvailabilityUnavailable
 	a.publishStatus()
@@ -581,23 +568,23 @@ func (a *desiredStateReconcilerActor[T]) scheduleResolverRestart() error {
 }
 
 func (a *desiredStateReconcilerActor[T]) scheduleWatcherRestart() error {
-	if a.watcher.restart.pending {
+	if a.watcher.restart.Pending {
 		return nil
 	}
 
-	delay := a.watcher.restart.strategy.NextBackOff()
+	delay := a.watcher.restart.Strategy.NextBackOff()
 	if delay == backoff.Stop {
 		return fmt.Errorf("artifact watcher restart backoff stopped")
 	}
 
-	a.watcher.restart.token++
-	token := a.watcher.restart.token
-	cancel, err := a.SendAfter(a.PID(), artifactWatcherRestart{token: token}, delay)
+	a.watcher.restart.Token++
+	token := a.watcher.restart.Token
+	cancel, err := a.SendAfter(a.PID(), MessageArtifactWatcherRestart{token: token}, delay)
 	if err != nil {
 		return fmt.Errorf("schedule artifact watcher restart: %w", err)
 	}
-	a.watcher.restart.pending = true
-	a.watcher.restart.cancel = cancel
+	a.watcher.restart.Pending = true
+	a.watcher.restart.Cancel = cancel
 	a.watcher.status.Lifecycle = ArtifactWatcherRestarting
 	a.watcher.status.Availability = runtime.AvailabilityUnavailable
 	a.publishStatus()
@@ -605,15 +592,15 @@ func (a *desiredStateReconcilerActor[T]) scheduleWatcherRestart() error {
 }
 
 func (a *desiredStateReconcilerActor[T]) cancelDesiredStateResolutionRetry(reset bool) {
-	a.resolutionRetry.cancelScheduled(reset)
+	a.resolutionRetry.CancelScheduled(reset)
 }
 
 func (a *desiredStateReconcilerActor[T]) cancelResolverRestart(reset bool) {
-	a.resolver.restart.cancelScheduled(reset)
+	a.resolver.restart.CancelScheduled(reset)
 }
 
 func (a *desiredStateReconcilerActor[T]) cancelWatcherRestart(reset bool) {
-	a.watcher.restart.cancelScheduled(reset)
+	a.watcher.restart.CancelScheduled(reset)
 }
 
 func (a *desiredStateReconcilerActor[T]) resetDesiredStateResolutionBackoff() {
@@ -629,33 +616,27 @@ func (a *desiredStateReconcilerActor[T]) resetWatcherRestartBackoff() {
 }
 
 func (a *desiredStateReconcilerActor[T]) publishStatus() {
-	if !a.activated {
+	if a.lifecycle != DesiredStateReconcilerRunning {
 		return
 	}
-	_ = a.Send(a.Parent(), desiredStateReconcilerStatusChanged{
-		generation: a.actorGeneration,
-		status:     a.currentStatus(),
+	_ = a.Send(a.Parent(), MessageDesiredStateReconcilerStatusChanged{
+		status: a.currentStatus(),
 	})
 }
 
 func (a *desiredStateReconcilerActor[T]) currentStatus() DesiredStateReconcilerStatus {
-	lifecycle := DesiredStateReconcilerStarting
-	if a.activated {
-		lifecycle = DesiredStateReconcilerRunning
-	}
-
 	resolver := a.resolver.status
-	resolver.Generation = a.resolver.generation
+	resolver.Incarnation = a.resolver.incarnation
 	resolver.RestartCount = a.resolver.restartCount
-	resolver.RestartPending = a.resolver.restart != nil && a.resolver.restart.pending
+	resolver.RestartPending = a.resolver.restart != nil && a.resolver.restart.Pending
 	watcher := a.watcher.status
-	watcher.Generation = a.watcher.generation
+	watcher.Incarnation = a.watcher.incarnation
 	watcher.RestartCount = a.watcher.restartCount
-	watcher.RestartPending = a.watcher.restart != nil && a.watcher.restart.pending
+	watcher.RestartPending = a.watcher.restart != nil && a.watcher.restart.Pending
 
 	availability := runtime.AvailabilityReady
 	switch {
-	case !a.activated || a.current == nil || resolver.Availability == runtime.AvailabilityUnavailable:
+	case a.lifecycle != DesiredStateReconcilerRunning || a.current == nil || resolver.Availability == runtime.AvailabilityUnavailable:
 		availability = runtime.AvailabilityUnavailable
 	case watcher.Availability != runtime.AvailabilityReady || a.deferred:
 		availability = runtime.AvailabilityDegraded
@@ -667,9 +648,8 @@ func (a *desiredStateReconcilerActor[T]) currentStatus() DesiredStateReconcilerS
 	}
 
 	return DesiredStateReconcilerStatus{
-		Lifecycle:          lifecycle,
+		Lifecycle:          a.lifecycle,
 		Availability:       availability,
-		ActorGeneration:    a.actorGeneration,
 		SnapshotGeneration: snapshotGeneration,
 		Revision:           a.revision,
 		Resolving:          a.resolving,

@@ -65,7 +65,7 @@ type catalogActor[T plugin.Syncable] struct {
 	actorGeneration uint64
 	activated       bool
 	routers         map[string]*routerState
-	desired         map[string]routerApplyDesired
+	desired         map[string]MessageApplyRouterDesiredState
 	inFlightCalls   map[uint64]gen.PID
 	desiredRevision uint64
 	draining        bool
@@ -76,9 +76,9 @@ type catalogActor[T plugin.Syncable] struct {
 
 type catalogActivate struct{ generation uint64 }
 
-type catalogApplyDesired struct {
+type MessageApplyCatalogDesiredState struct {
 	desiredRevision uint64
-	desired         map[string]routerApplyDesired
+	desired         map[string]MessageApplyRouterDesiredState
 }
 
 type catalogDrained struct {
@@ -105,7 +105,7 @@ func newCatalogActor[T plugin.Syncable](deps actorDependencies[T]) gen.ProcessBe
 
 func (a *catalogActor[T]) Init(...any) error {
 	a.routers = make(map[string]*routerState)
-	a.desired = make(map[string]routerApplyDesired)
+	a.desired = make(map[string]MessageApplyRouterDesiredState)
 	a.inFlightCalls = make(map[uint64]gen.PID)
 	return nil
 }
@@ -126,7 +126,7 @@ func (a *catalogActor[T]) HandleMessage(_ gen.PID, message any) error {
 		a.activated = true
 		a.reconcileStatus()
 
-	case catalogApplyDesired:
+	case MessageApplyCatalogDesiredState:
 		if !a.activated || a.draining || m.desiredRevision < a.desiredRevision {
 			return nil
 		}

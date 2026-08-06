@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"ergo.services/ergo/gen"
@@ -37,12 +35,12 @@ const (
 type ArtifactWatcherStatus struct {
 	Lifecycle         ArtifactWatcherLifecycle
 	Availability      runtime.Availability
-	Generation        uint64
+	Incarnation       uint64
 	RestartCount      uint64
 	RestartPending    bool
 	DirectoryReadable bool
 	WatchingDirectory bool
-	LastError         string
+	LastError         error
 }
 
 // artifactWatcherMeta owns one watcher incarnation. fsnotify provides
@@ -51,23 +49,22 @@ type ArtifactWatcherStatus struct {
 // absent directory is treated as artifact drift, not as a fatal watcher error;
 // the meta-process keeps polling and reattaches fsnotify when the directory
 // returns. The parent actor owns restart policy and fences notifications by
-// generation.
+// incarnation.
 type artifactWatcherMeta struct {
 	gen.MetaProcess
 
-	directory  string
-	generation uint64
-	watcher    *fsnotify.Watcher
-	runCtx     context.Context
-	cancelRun  context.CancelFunc
-	closeOnce  sync.Once
+	directory   string
+	incarnation uint64
+	runCtx      context.Context
+	cancelRun   context.CancelFunc
+}
 
-	fingerprint       [sha256.Size]byte
-	directoryReadable atomic.Bool
-	watchingDirectory atomic.Bool
-
-	stateMu             sync.RWMutex
-	watchError          string
+type artifactWatcherRunState struct {
+	watcher             *fsnotify.Watcher
+	fingerprint         [sha256.Size]byte
+	directoryReadable   bool
+	watchingDirectory   bool
+	watchError          error
 	statePublished      bool
 	publishedReadable   bool
 	publishedWatching   bool
@@ -75,36 +72,40 @@ type artifactWatcherMeta struct {
 }
 
 func (m *artifactWatcherMeta) Init(process gen.MetaProcess) error {
+	if m.directory == "" {
+		return fmt.Errorf("artifact watcher meta: directory is required")
+	}
 	m.MetaProcess = process
 	m.runCtx, m.cancelRun = context.WithCancel(context.Background())
-
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		return fmt.Errorf("create artifact watcher: %w", err)
-	}
-	m.watcher = watcher
-
-	// Directory availability is an external condition. Do not fail process
-	// initialization when the mount or directory is temporarily absent.
-	if err := m.tryAttachWatch(); err != nil {
-		m.watchingDirectory.Store(false)
-		m.setWatchError(err)
-	}
-	if fingerprint, err := artifactDirectoryFingerprint(m.directory); err == nil {
-		m.fingerprint = fingerprint
-		m.directoryReadable.Store(true)
-	} else {
-		m.directoryReadable.Store(false)
-		m.setWatchError(fmt.Errorf("fingerprint artifact directory %q: %w", m.directory, err))
-	}
 	return nil
 }
 
 func (m *artifactWatcherMeta) Start() error {
-	if err := m.Send(m.Parent(), artifactWatcherStarted{generation: m.generation}); err != nil {
-		return fmt.Errorf("announce artifact watcher start: %w", err)
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return fmt.Errorf("%w: create watcher: %w", runtime.ErrArtifactWatch, err)
 	}
-	if err := m.publishWatchState(); err != nil {
+	defer watcher.Close()
+	state := artifactWatcherRunState{watcher: watcher}
+
+	// Directory availability is external. Keep polling when the mount or
+	// directory is temporarily absent instead of failing this process.
+	if err := m.tryAttachWatch(&state); err != nil {
+		state.watchError = err
+	}
+	if fingerprint, err := artifactDirectoryFingerprint(m.directory); err == nil {
+		state.fingerprint = fingerprint
+		state.directoryReadable = true
+	} else {
+		state.directoryReadable = false
+		state.watchingDirectory = false
+		state.watchError = fmt.Errorf("%w: fingerprint directory %q: %w", runtime.ErrArtifactWatch, m.directory, err)
+	}
+
+	if err := m.Send(m.Parent(), MessageArtifactWatcherStarted{incarnation: m.incarnation}); err != nil {
+		return fmt.Errorf("%w: announce start: %w", runtime.ErrArtifactWatch, err)
+	}
+	if err := m.publishWatchState(&state); err != nil {
 		return err
 	}
 
@@ -138,18 +139,19 @@ func (m *artifactWatcherMeta) Start() error {
 			}
 			return nil
 
-		case event, ok := <-m.watcher.Events:
+		case event, ok := <-state.watcher.Events:
 			if !ok {
 				if m.runCtx.Err() != nil {
 					return nil
 				}
-				return fmt.Errorf("artifact watcher event channel closed")
+				return fmt.Errorf("%w: event channel closed", runtime.ErrArtifactWatch)
 			}
 			if filepath.Clean(event.Name) == filepath.Clean(m.directory) &&
 				event.Op&(fsnotify.Remove|fsnotify.Rename) != 0 {
-				m.watchingDirectory.Store(false)
-				if err := m.recordWatchError(fmt.Errorf(
-					"artifact directory watch invalidated for %q: %s",
+				state.watchingDirectory = false
+				if err := m.recordWatchError(&state, fmt.Errorf(
+					"%w: directory watch invalidated for %q: %s",
+					runtime.ErrArtifactWatch,
 					m.directory,
 					event.Op,
 				)); err != nil {
@@ -158,38 +160,39 @@ func (m *artifactWatcherMeta) Start() error {
 			}
 			scheduleNotification()
 
-		case err, ok := <-m.watcher.Errors:
+		case err, ok := <-state.watcher.Errors:
 			if !ok {
 				if m.runCtx.Err() != nil {
 					return nil
 				}
-				return fmt.Errorf("artifact watcher error channel closed")
+				return fmt.Errorf("%w: error channel closed", runtime.ErrArtifactWatch)
 			}
 			if m.runCtx.Err() != nil {
 				return nil
 			}
-			return fmt.Errorf("artifact watcher: %w", err)
+			return fmt.Errorf("%w: %w", runtime.ErrArtifactWatch, err)
 
 		case <-debounceC:
 			debounceC = nil
 			// An fsnotify event itself is sufficient evidence of possible drift.
 			// Refresh the poll baseline when possible, then trigger a full resolve.
 			if fingerprint, err := artifactDirectoryFingerprint(m.directory); err == nil {
-				m.fingerprint = fingerprint
-				m.directoryReadable.Store(true)
-				if err := m.tryAttachWatch(); err != nil {
-					m.watchingDirectory.Store(false)
-					if err := m.recordWatchError(err); err != nil {
+				state.fingerprint = fingerprint
+				state.directoryReadable = true
+				if err := m.tryAttachWatch(&state); err != nil {
+					state.watchingDirectory = false
+					if err := m.recordWatchError(&state, err); err != nil {
 						return err
 					}
-				} else if err := m.clearWatchError(); err != nil {
+				} else if err := m.clearWatchError(&state); err != nil {
 					return err
 				}
 			} else {
-				m.directoryReadable.Store(false)
-				m.watchingDirectory.Store(false)
-				if err := m.recordWatchError(fmt.Errorf(
-					"fingerprint artifact directory %q: %w",
+				state.directoryReadable = false
+				state.watchingDirectory = false
+				if err := m.recordWatchError(&state, fmt.Errorf(
+					"%w: fingerprint directory %q: %w",
+					runtime.ErrArtifactWatch,
 					m.directory,
 					err,
 				)); err != nil {
@@ -206,10 +209,12 @@ func (m *artifactWatcherMeta) Start() error {
 				// Missing or unreadable directories invalidate the current resolution.
 				// Notify only on the transition; the reconciler's backoff continues
 				// retries until the directory recovers.
-				wasReadable := m.directoryReadable.Swap(false)
-				m.watchingDirectory.Store(false)
-				if err := m.recordWatchError(fmt.Errorf(
-					"fingerprint artifact directory %q: %w",
+				wasReadable := state.directoryReadable
+				state.directoryReadable = false
+				state.watchingDirectory = false
+				if err := m.recordWatchError(&state, fmt.Errorf(
+					"%w: fingerprint directory %q: %w",
+					runtime.ErrArtifactWatch,
 					m.directory,
 					err,
 				)); err != nil {
@@ -223,21 +228,21 @@ func (m *artifactWatcherMeta) Start() error {
 				continue
 			}
 
-			wasReadable := m.directoryReadable.Load()
-			m.directoryReadable.Store(true)
-			if err := m.tryAttachWatch(); err != nil {
-				m.watchingDirectory.Store(false)
-				if err := m.recordWatchError(err); err != nil {
+			wasReadable := state.directoryReadable
+			state.directoryReadable = true
+			if err := m.tryAttachWatch(&state); err != nil {
+				state.watchingDirectory = false
+				if err := m.recordWatchError(&state, err); err != nil {
 					return err
 				}
-			} else if err := m.clearWatchError(); err != nil {
+			} else if err := m.clearWatchError(&state); err != nil {
 				return err
 			}
 
-			if wasReadable && fingerprint == m.fingerprint {
+			if wasReadable && fingerprint == state.fingerprint {
 				continue
 			}
-			m.fingerprint = fingerprint
+			state.fingerprint = fingerprint
 			if err := m.notifyChanged(); err != nil {
 				return err
 			}
@@ -247,104 +252,76 @@ func (m *artifactWatcherMeta) Start() error {
 
 func (m *artifactWatcherMeta) HandleMessage(gen.PID, any) error { return nil }
 
-func (m *artifactWatcherMeta) HandleCall(gen.PID, gen.Ref, any) (any, error) {
-	return nil, nil
+func (m *artifactWatcherMeta) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
+	return nil, fmt.Errorf("actorruntime: unsupported artifact watcher call %T", request)
 }
 
 func (m *artifactWatcherMeta) Terminate(error) {
-	m.closeOnce.Do(func() {
-		if m.cancelRun != nil {
-			m.cancelRun()
-		}
-		if m.watcher != nil {
-			_ = m.watcher.Close()
-		}
-	})
+	if m.cancelRun != nil {
+		m.cancelRun()
+	}
 }
 
 func (m *artifactWatcherMeta) HandleInspect(gen.PID, ...string) map[string]string {
 	return map[string]string{
-		"directory":          m.directory,
-		"generation":         fmt.Sprintf("%d", m.generation),
-		"directory_readable": fmt.Sprintf("%t", m.directoryReadable.Load()),
-		"watching_directory": fmt.Sprintf("%t", m.watchingDirectory.Load()),
-		"last_watch_error":   m.currentWatchError(),
+		"directory":   m.directory,
+		"incarnation": fmt.Sprintf("%d", m.incarnation),
 	}
 }
 
 func (m *artifactWatcherMeta) notifyChanged() error {
-	if err := m.Send(m.Parent(), artifactDirectoryChanged{
-		generation: m.generation,
+	if err := m.Send(m.Parent(), MessageArtifactDirectoryChanged{
+		incarnation: m.incarnation,
 	}); err != nil {
-		return fmt.Errorf("notify artifact directory change: %w", err)
+		return fmt.Errorf("%w: notify directory change: %w", runtime.ErrArtifactWatch, err)
 	}
 	return nil
 }
 
-func (m *artifactWatcherMeta) tryAttachWatch() error {
-	if m.watcher == nil || m.watchingDirectory.Load() {
+func (m *artifactWatcherMeta) tryAttachWatch(state *artifactWatcherRunState) error {
+	if state.watchingDirectory {
 		return nil
 	}
-	if err := m.watcher.Add(m.directory); err != nil {
-		m.watchingDirectory.Store(false)
-		return fmt.Errorf("watch artifact directory %q: %w", m.directory, err)
+	if err := state.watcher.Add(m.directory); err != nil {
+		state.watchingDirectory = false
+		return fmt.Errorf("%w: watch directory %q: %w", runtime.ErrArtifactWatch, m.directory, err)
 	}
-	m.watchingDirectory.Store(true)
+	state.watchingDirectory = true
 	return nil
 }
 
-func (m *artifactWatcherMeta) recordWatchError(err error) error {
-	m.setWatchError(err)
-	return m.publishWatchState()
+func (m *artifactWatcherMeta) recordWatchError(state *artifactWatcherRunState, err error) error {
+	state.watchError = err
+	return m.publishWatchState(state)
 }
 
-func (m *artifactWatcherMeta) clearWatchError() error {
-	m.setWatchError(nil)
-	return m.publishWatchState()
+func (m *artifactWatcherMeta) clearWatchError(state *artifactWatcherRunState) error {
+	state.watchError = nil
+	return m.publishWatchState(state)
 }
 
-func (m *artifactWatcherMeta) setWatchError(err error) {
-	m.stateMu.Lock()
-	m.watchError = errorText(err)
-	m.stateMu.Unlock()
-}
-
-func (m *artifactWatcherMeta) currentWatchError() string {
-	m.stateMu.RLock()
-	defer m.stateMu.RUnlock()
-	return m.watchError
-}
-
-func (m *artifactWatcherMeta) publishWatchState() error {
-	readable := m.directoryReadable.Load()
-	watching := m.watchingDirectory.Load()
-	watchError := m.currentWatchError()
-
-	m.stateMu.Lock()
-	if m.statePublished &&
-		m.publishedReadable == readable &&
-		m.publishedWatching == watching &&
-		m.publishedWatchError == watchError {
-		m.stateMu.Unlock()
+func (m *artifactWatcherMeta) publishWatchState(state *artifactWatcherRunState) error {
+	watchError := errorText(state.watchError)
+	if state.statePublished &&
+		state.publishedReadable == state.directoryReadable &&
+		state.publishedWatching == state.watchingDirectory &&
+		state.publishedWatchError == watchError {
 		return nil
 	}
-	m.stateMu.Unlock()
 
-	if err := m.Send(m.Parent(), artifactWatcherStateChanged{
-		generation:        m.generation,
-		directoryReadable: readable,
-		watchingDirectory: watching,
-		err:               watchError,
+	if err := m.Send(m.Parent(), MessageArtifactWatcherStateChanged{
+		incarnation:       m.incarnation,
+		directoryReadable: state.directoryReadable,
+		watchingDirectory: state.watchingDirectory,
+		err:               state.watchError,
 	}); err != nil {
-		return fmt.Errorf("publish artifact watcher state: %w", err)
+		return fmt.Errorf("%w: publish watcher state: %w", runtime.ErrArtifactWatch, err)
 	}
 
-	m.stateMu.Lock()
-	m.statePublished = true
-	m.publishedReadable = readable
-	m.publishedWatching = watching
-	m.publishedWatchError = watchError
-	m.stateMu.Unlock()
+	state.statePublished = true
+	state.publishedReadable = state.directoryReadable
+	state.publishedWatching = state.watchingDirectory
+	state.publishedWatchError = watchError
 	return nil
 }
 

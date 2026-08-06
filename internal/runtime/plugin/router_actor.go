@@ -96,7 +96,7 @@ type routerActor[T plugin.Syncable] struct {
 
 type routerActivate struct{ generation uint64 }
 
-type routerApplyDesired struct {
+type MessageApplyRouterDesiredState struct {
 	desiredRevision   uint64
 	primary           *deployment
 	candidate         *deployment
@@ -151,7 +151,7 @@ func (a *routerActor[T]) HandleMessage(_ gen.PID, message any) error {
 		a.activated = true
 		a.reconcileStatus()
 
-	case routerApplyDesired:
+	case MessageApplyRouterDesiredState:
 		if !a.activated || a.draining || m.desiredRevision < a.desiredRevision {
 			return nil
 		}

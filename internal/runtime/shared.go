@@ -17,6 +17,7 @@ var (
 	ErrArtifactMismatch  = errors.New("plugin artifact checksum mismatch")
 	ErrArtifactScan      = errors.New("plugin artifact scan failed")
 	ErrArtifactWatch     = errors.New("plugin artifact watch failed")
+	ErrArtifactResolve   = errors.New("plugin artifact resolution failed")
 	ErrSnapshotLoad      = errors.New("snapshot state load failed")
 	ErrSnapshotPublish   = errors.New("snapshot publication failed")
 	ErrSnapshotRead      = errors.New("snapshot read failed")
@@ -39,20 +40,20 @@ type ActorDependencies[T plugin.Syncable] struct {
 
 type Deployment struct {
 	plugin.BinaryState
-	path       string
-	hash       string
-	rolloutPct float64
+	Path       string
+	Hash       string
+	RolloutPct float64
 }
 
 type DeploymentPoolKey struct {
 	pools.PoolKey
-	maxProcs int
+	MaxProcs int
 }
 
 func (d *Deployment) PoolKey() DeploymentPoolKey {
 	return DeploymentPoolKey{
-		PoolKey:  pools.PoolKey{Id: d.Id, Name: d.Name, Hash: d.hash},
-		maxProcs: d.workerCount(),
+		PoolKey:  pools.PoolKey{Id: d.Id, Name: d.Name, Hash: d.Hash},
+		MaxProcs: d.workerCount(),
 	}
 }
 
