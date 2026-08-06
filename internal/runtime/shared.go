@@ -1,4 +1,4 @@
-package plugin
+package runtime
 
 import (
 	"context"
@@ -15,13 +15,17 @@ var (
 	ErrPluginUnavailable = errors.New("plugin unavailable")
 	ErrQueueFull         = errors.New("plugin queue full")
 	ErrArtifactMismatch  = errors.New("plugin artifact checksum mismatch")
+	ErrArtifactScan      = errors.New("plugin artifact scan failed")
+	ErrArtifactWatch     = errors.New("plugin artifact watch failed")
+	ErrSnapshotLoad      = errors.New("snapshot state load failed")
+	ErrSnapshotPublish   = errors.New("snapshot publication failed")
 	ErrRuntimeNotStarted = errors.New("actor runtime not started")
 	ErrRuntimeStopped    = errors.New("actor runtime stopped")
 	ErrWorkerRecycle     = errors.New("worker recycled after plugin transport failure")
 	ErrWorkerUnhealthy   = errors.New("worker plugin health check failed")
 )
 
-type actorDependencies[T plugin.Syncable] struct {
+type ActorDependencies[T plugin.Syncable] struct {
 	node           gen.Node
 	adapter        *plugin.PluginAdapter[T]
 	queueSize      int
@@ -31,42 +35,42 @@ type actorDependencies[T plugin.Syncable] struct {
 	retryMax       time.Duration
 }
 
-type deployment struct {
+type Deployment struct {
 	plugin.BinaryState
 	path       string
 	hash       string
 	rolloutPct float64
 }
 
-type deploymentPoolKey struct {
+type DeploymentPoolKey struct {
 	pools.PoolKey
 	maxProcs int
 }
 
-func (d *deployment) poolKey() deploymentPoolKey {
-	return deploymentPoolKey{
+func (d *Deployment) poolKey() DeploymentPoolKey {
+	return DeploymentPoolKey{
 		PoolKey:  pools.PoolKey{Id: d.Id, Name: d.Name, Hash: d.hash},
 		maxProcs: d.workerCount(),
 	}
 }
 
-func (d *deployment) workerCount() int {
+func (d *Deployment) workerCount() int {
 	return max(1, d.MaxProcs)
 }
 
-type drain struct{}
-type stop struct{}
+type Drain struct{}
+type Stop struct{}
 
-type scheduledBackoff struct {
-	strategy *backoff.ExponentialBackOff
-	pending  bool
-	token    uint64
-	cancel   gen.CancelFunc
+type ScheduledBackoff struct {
+	Strategy *backoff.ExponentialBackOff
+	Pending  bool
+	Token    uint64
+	Cancel   gen.CancelFunc
 }
 
-func newScheduledBackoff(minDelay, maxDelay time.Duration) *scheduledBackoff {
-	return &scheduledBackoff{
-		strategy: backoff.NewExponentialBackOff(
+func NewScheduledBackoff(minDelay, maxDelay time.Duration) *ScheduledBackoff {
+	return &ScheduledBackoff{
+		Strategy: backoff.NewExponentialBackOff(
 			backoff.WithInitialInterval(minDelay),
 			backoff.WithMaxInterval(maxDelay),
 			backoff.WithMultiplier(2),
@@ -75,23 +79,23 @@ func newScheduledBackoff(minDelay, maxDelay time.Duration) *scheduledBackoff {
 	}
 }
 
-func (s *scheduledBackoff) cancelScheduled(reset bool) {
+func (s *ScheduledBackoff) CancelScheduled(reset bool) {
 	if s == nil {
 		return
 	}
-	if s.cancel != nil {
-		s.cancel()
-		s.cancel = nil
+	if s.Cancel != nil {
+		s.Cancel()
+		s.Cancel = nil
 	}
-	s.pending = false
-	s.token++
+	s.Pending = false
+	s.Token++
 	if reset {
-		s.strategy.Reset()
+		s.Strategy.Reset()
 	}
 }
 
 // Cross-component invocation and lifecycle messages.
-type invokeCall[T plugin.Syncable] struct {
+type InvokeCall[T plugin.Syncable] struct {
 	callID     uint64
 	context    context.Context
 	cancel     context.CancelFunc
@@ -101,12 +105,12 @@ type invokeCall[T plugin.Syncable] struct {
 	shadow     bool
 }
 
-type cancelCall struct {
+type CancelCall struct {
 	callID uint64
 	err    error
 }
 
-type callCompleted struct {
+type CallCompleted struct {
 	callID uint64
 	err    error
 }

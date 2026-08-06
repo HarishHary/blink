@@ -250,21 +250,7 @@ func (r *Runtime[T]) Wait(ctx context.Context) error {
 	}
 }
 
-// StatusEvent returns the buffered Ergo event that publishes live runtime
-// status transitions. The event is registered when Start succeeds and is
-// automatically unregistered when the root supervisor terminates.
-//
-// Actor subscribers should use MonitorEvent rather than LinkEvent unless the
-// subscriber is intentionally coupled to the runtime supervisor lifecycle.
-func (r *Runtime[T]) StatusEvent() gen.Event {
-	return r.events.Status
-}
-
 // Status returns a live snapshot owned by the runtime supervisor.
-//
-// Status is intentionally available only while the supervisor is alive. Once
-// the supervisor terminates, callers receive ErrRuntimeStopped; Runtime does
-// not cache a terminal status snapshot.
 func (r *Runtime[T]) Status(ctx context.Context) (RuntimeStatus, error) {
 	if err := ctx.Err(); err != nil {
 		return RuntimeStatus{}, err
