@@ -56,8 +56,8 @@ type snapshotReaderMeta struct {
 	reader      brokers.Reader
 	incarnation uint64
 
-	runCtx context.Context
-	cancel context.CancelFunc
+	runCtx    context.Context
+	cancelRun context.CancelFunc
 }
 
 func (m *snapshotReaderMeta) Init(process gen.MetaProcess) error {
@@ -65,7 +65,7 @@ func (m *snapshotReaderMeta) Init(process gen.MetaProcess) error {
 		return fmt.Errorf("snapshot reader meta: reader is required")
 	}
 	m.MetaProcess = process
-	m.runCtx, m.cancel = context.WithCancel(context.Background())
+	m.runCtx, m.cancelRun = context.WithCancel(context.Background())
 	return nil
 }
 
@@ -123,8 +123,8 @@ func (m *snapshotReaderMeta) HandleCall(_ gen.PID, _ gen.Ref, request any) (any,
 }
 
 func (m *snapshotReaderMeta) Terminate(error) {
-	if m.cancel != nil {
-		m.cancel()
+	if m.cancelRun != nil {
+		m.cancelRun()
 	}
 	if m.reader != nil {
 		_ = m.reader.Close()

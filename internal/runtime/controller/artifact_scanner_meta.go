@@ -11,10 +11,9 @@ import (
 
 	"ergo.services/ergo/gen"
 	"github.com/fsnotify/fsnotify"
-	"github.com/harishhary/blink/internal/config"
 	"github.com/harishhary/blink/internal/helpers"
-	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/internal/runtime"
+	"github.com/harishhary/blink/internal/runtime/plugin"
 	"github.com/harishhary/blink/internal/snapshot"
 )
 
@@ -57,7 +56,7 @@ type artifactScannerMeta[T plugin.Syncable] struct {
 	gen.MetaProcess
 
 	directory   string
-	loader      config.Loader[T]
+	loader      plugin.Loader[T]
 	incarnation uint64
 
 	parsed  map[string]T

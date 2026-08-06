@@ -32,8 +32,6 @@ type SnapshotReaderStatus struct {
 	Reader       SnapshotReaderMetaStatus
 }
 
-type snapshotEntry = snapshot.EffectiveEntry
-
 type MessageSnapshotReaderRestart struct{ token uint64 }
 
 type snapshotReaderMetaState struct {
@@ -59,7 +57,7 @@ type snapshotReaderActor struct {
 }
 
 func (a *snapshotReaderActor) Init(...any) error {
-	a.entries = make(map[string]snapshotEntry)
+	a.entries = make(map[string]snapshot.EffectiveEntry)
 	a.reader.status = SnapshotReaderMetaStatus{
 		Lifecycle:    SnapshotReaderMetaStarting,
 		Availability: runtime.AvailabilityUnavailable,
@@ -180,7 +178,7 @@ func (a *snapshotReaderActor) startSnapshotReaderMeta() error {
 		Incarnation:  a.reader.incarnation,
 		RestartCount: a.reader.restartCount,
 	}
-	a.entries = make(map[string]snapshotEntry)
+	a.entries = make(map[string]snapshot.EffectiveEntry)
 	a.committed = nil
 	a.publishStatus()
 

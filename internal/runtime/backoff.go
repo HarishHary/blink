@@ -1,14 +1,11 @@
 package runtime
 
 import (
-	"context"
 	"errors"
 	"time"
 
 	"ergo.services/ergo/gen"
 	"github.com/cenkalti/backoff/v4"
-	"github.com/harishhary/blink/internal/plugin"
-	"github.com/harishhary/blink/internal/pools"
 )
 
 var (
@@ -27,42 +24,6 @@ var (
 	ErrWorkerRecycle     = errors.New("worker recycled after plugin transport failure")
 	ErrWorkerUnhealthy   = errors.New("worker plugin health check failed")
 )
-
-type ActorDependencies[T plugin.Syncable] struct {
-	Node           gen.Node
-	Adapter        *plugin.PluginAdapter[T]
-	QueueSize      int
-	DrainTimeout   time.Duration
-	HealthInterval time.Duration
-	RetryMin       time.Duration
-	RetryMax       time.Duration
-}
-
-type Deployment struct {
-	plugin.BinaryState
-	Path       string
-	Hash       string
-	RolloutPct float64
-}
-
-type DeploymentPoolKey struct {
-	pools.PoolKey
-	MaxProcs int
-}
-
-func (d *Deployment) PoolKey() DeploymentPoolKey {
-	return DeploymentPoolKey{
-		PoolKey:  pools.PoolKey{Id: d.Id, Name: d.Name, Hash: d.Hash},
-		MaxProcs: d.WorkerCount(),
-	}
-}
-
-func (d *Deployment) WorkerCount() int {
-	return max(1, d.MaxProcs)
-}
-
-type MessageDrain struct{}
-type MessageStop struct{}
 
 type ScheduledBackoff struct {
 	Strategy *backoff.ExponentialBackOff
@@ -95,25 +56,4 @@ func (s *ScheduledBackoff) CancelScheduled(reset bool) {
 	if reset {
 		s.Strategy.Reset()
 	}
-}
-
-// Cross-component invocation messages.
-type MessageInvokePlugin[T plugin.Syncable] struct {
-	CallID     uint64
-	Context    context.Context
-	Cancel     context.CancelFunc
-	PluginID   string
-	RolloutKey string
-	Fn         func(context.Context, T) error
-	Shadow     bool
-}
-
-type MessageCancelInvocation struct {
-	CallID uint64
-	Err    error
-}
-
-type MessageInvocationCompleted struct {
-	CallID uint64
-	Err    error
 }

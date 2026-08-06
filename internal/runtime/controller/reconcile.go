@@ -2,8 +2,8 @@ package controller
 
 import (
 	"github.com/harishhary/blink/internal/backends"
-	"github.com/harishhary/blink/internal/plugin"
-	"github.com/harishhary/blink/internal/pools"
+	"github.com/harishhary/blink/internal/runtime"
+	"github.com/harishhary/blink/internal/runtime/plugin"
 	"github.com/harishhary/blink/internal/snapshot"
 	"go.yaml.in/yaml/v4"
 )
@@ -20,7 +20,7 @@ func ValidateGroup[T plugin.Syncable](group CatalogGroup[T]) []string {
 	var bgCount, altCount int
 	for _, item := range group.Entries {
 		switch item.Metadata().RolloutMode {
-		case pools.RolloutModeCanary, pools.RolloutModeShadow:
+		case runtime.RolloutModeCanary, runtime.RolloutModeShadow:
 			altCount++
 		default:
 			bgCount++
@@ -54,7 +54,7 @@ func ElectGroup[T plugin.Syncable](id string, group CatalogGroup[T], digests map
 			ref.Spec = b
 		}
 		switch m.RolloutMode {
-		case pools.RolloutModeCanary, pools.RolloutModeShadow:
+		case runtime.RolloutModeCanary, runtime.RolloutModeShadow:
 			e.Candidate = ref
 		default:
 			e.Primary = ref

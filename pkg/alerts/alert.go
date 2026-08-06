@@ -11,7 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/helpers"
-	"github.com/harishhary/blink/internal/pools"
+	"github.com/harishhary/blink/internal/runtime"
 	"github.com/harishhary/blink/pkg/events"
 	"github.com/harishhary/blink/pkg/rules"
 	"github.com/harishhary/blink/pkg/scoring"
@@ -276,9 +276,9 @@ func (a *Alert) MergePartitionKey() string {
 		ruleID = ruleIdentity(a.Rule)
 		version = a.Rule.Version
 	}
-	tenant := pools.NormalizeRolloutKey(nil)
+	tenant := runtime.NormalizeRolloutKey(nil)
 	if a.Event != nil {
-		tenant = pools.NormalizeRolloutKey(a.Event["tenant_id"])
+		tenant = runtime.NormalizeRolloutKey(a.Event["tenant_id"])
 	}
 	parts := []string{
 		"tenant=" + mergeKeyValue(tenant, true),

@@ -11,9 +11,8 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/harishhary/blink/internal/backends"
 	"github.com/harishhary/blink/internal/brokers"
-	"github.com/harishhary/blink/internal/config"
-	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/internal/runtime"
+	"github.com/harishhary/blink/internal/runtime/plugin"
 	"github.com/harishhary/blink/internal/snapshot"
 )
 
@@ -21,9 +20,10 @@ import (
 type ControllerLifecycle string
 
 const (
-	ControllerStarting ControllerLifecycle = "starting"
-	ControllerRunning  ControllerLifecycle = "running"
-	ControllerStopped  ControllerLifecycle = "stopped"
+	ControllerStarting   ControllerLifecycle = "starting"
+	ControllerRunning    ControllerLifecycle = "running"
+	ControllerRestarting ControllerLifecycle = "restarting"
+	ControllerStopped    ControllerLifecycle = "stopped"
 )
 
 // ControllerStatus groups the controller's durable publication state and both metas.
@@ -40,7 +40,7 @@ type ControllerStatus struct {
 // Options configures one controller actor and its scanner/publisher metas.
 type Options[T plugin.Syncable] struct {
 	Directory  string
-	Loader     config.Loader[T]
+	Loader     plugin.Loader[T]
 	Database   backends.Database
 	Writer     brokers.Writer
 	RestartMin time.Duration

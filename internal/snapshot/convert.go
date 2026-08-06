@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"github.com/harishhary/blink/internal/pools"
+	"github.com/harishhary/blink/internal/runtime"
 	"github.com/harishhary/blink/internal/snapshot/pb"
 	"google.golang.org/protobuf/proto"
 )
@@ -56,7 +56,12 @@ func protoToRef(r *pb.ArtifactRef) *ArtifactRef {
 	if r == nil {
 		return nil
 	}
-	return &ArtifactRef{Name: r.GetName(), RolloutMode: pools.RolloutMode(r.GetMode()), Spec: r.GetSpec(), Hash: r.GetHash()}
+	return &ArtifactRef{
+		Name:        r.GetName(),
+		RolloutMode: runtime.RolloutMode(r.GetMode()),
+		Spec:        r.GetSpec(),
+		Hash:        r.GetHash(),
+	}
 }
 
 // --- Generation marker ---

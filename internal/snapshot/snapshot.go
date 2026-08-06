@@ -1,14 +1,14 @@
 // Package snapshot holds the control-plane wire model: the effective desired state the controller
-// publishes and executors consume. Keep it a leaf (import only internal/pools) - importing
+// publishes and executors consume. Keep it a leaf - importing
 // internal/controller would form an import cycle.
 package snapshot
 
-import "github.com/harishhary/blink/internal/pools"
+import "github.com/harishhary/blink/internal/runtime"
 
 // ArtifactRef is one binary artifact for a logical plugin ID.
 type ArtifactRef struct {
-	Name        string            // binary filename (== YAML sidecar stem)
-	RolloutMode pools.RolloutMode // from its YAML sidecar
+	Name        string              // binary filename (== YAML sidecar stem)
+	RolloutMode runtime.RolloutMode // from its YAML sidecar
 
 	// Spec is this artifact's yaml-marshaled plugin metadata, letting a consumer reconstruct the
 	// full plugin config from the snapshot alone (no *_CONFIG_DIR). Empty when unmarshalable.
