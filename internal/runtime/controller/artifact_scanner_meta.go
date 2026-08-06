@@ -44,7 +44,7 @@ const (
 	scannerPoll     = 5 * time.Second
 )
 
-type messageScannerResult struct {
+type MessageArtifactScanResult struct {
 	incarnation uint64
 	complete    bool
 	entries     []snapshot.EffectiveEntry
@@ -152,7 +152,9 @@ func (m *artifactScannerMeta[T]) Start() error {
 
 func (m *artifactScannerMeta[T]) HandleMessage(gen.PID, any) error { return nil }
 
-func (m *artifactScannerMeta[T]) HandleCall(gen.PID, gen.Ref, any) (any, error) { return nil, nil }
+func (m *artifactScannerMeta[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
+	return nil, fmt.Errorf("artifact scanner meta: unsupported call %T", request)
+}
 
 func (m *artifactScannerMeta[T]) Terminate(error) {
 	if m.cancelRun != nil {
@@ -176,7 +178,7 @@ func (m *artifactScannerMeta[T]) sendScan(attachErr error) error {
 	if err == nil && attachErr != nil {
 		err = fmt.Errorf("%w: directory %q: %w", runtime.ErrArtifactWatch, m.directory, attachErr)
 	}
-	if sendErr := m.Send(m.Parent(), messageScannerResult{
+	if sendErr := m.Send(m.Parent(), MessageArtifactScanResult{
 		incarnation: m.incarnation,
 		complete:    complete,
 		entries:     entries,

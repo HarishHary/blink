@@ -38,14 +38,14 @@ type SnapshotReaderMetaStatus struct {
 const snapshotCatchUpPoll = 250 * time.Millisecond
 
 // Reader meta messages are fenced by incarnation in the parent actor.
-type messageSnapshotReaderStarted struct{ incarnation uint64 }
+type MessageSnapshotReaderStarted struct{ incarnation uint64 }
 
-type messageSnapshotRecord struct {
+type MessageSnapshotRecord struct {
 	incarnation uint64
 	message     brokers.Message
 }
 
-type messageSnapshotCaughtUp struct{ incarnation uint64 }
+type MessageSnapshotCaughtUp struct{ incarnation uint64 }
 
 // snapshotReaderMeta owns one concrete broker reader and one blocking read
 // loop. Its parent actor owns reader creation, restart/backoff, public status,
@@ -70,7 +70,7 @@ func (m *snapshotReaderMeta) Init(process gen.MetaProcess) error {
 }
 
 func (m *snapshotReaderMeta) Start() error {
-	if err := m.Send(m.Parent(), messageSnapshotReaderStarted{incarnation: m.incarnation}); err != nil {
+	if err := m.Send(m.Parent(), MessageSnapshotReaderStarted{incarnation: m.incarnation}); err != nil {
 		return fmt.Errorf("%w: announce start: %w", runtime.ErrSnapshotRead, err)
 	}
 
@@ -96,7 +96,7 @@ func (m *snapshotReaderMeta) Start() error {
 				}
 				if lag == 0 {
 					caughtUp = true
-					if sendErr := m.Send(m.Parent(), messageSnapshotCaughtUp{incarnation: m.incarnation}); sendErr != nil {
+					if sendErr := m.Send(m.Parent(), MessageSnapshotCaughtUp{incarnation: m.incarnation}); sendErr != nil {
 						return fmt.Errorf("%w: send caught-up: %w", runtime.ErrSnapshotRead, sendErr)
 					}
 				}
@@ -107,7 +107,7 @@ func (m *snapshotReaderMeta) Start() error {
 
 		message.Key = append([]byte(nil), message.Key...)
 		message.Value = append([]byte(nil), message.Value...)
-		if err := m.Send(m.Parent(), messageSnapshotRecord{
+		if err := m.Send(m.Parent(), MessageSnapshotRecord{
 			incarnation: m.incarnation,
 			message:     message,
 		}); err != nil {
@@ -118,8 +118,8 @@ func (m *snapshotReaderMeta) Start() error {
 
 func (m *snapshotReaderMeta) HandleMessage(gen.PID, any) error { return nil }
 
-func (m *snapshotReaderMeta) HandleCall(gen.PID, gen.Ref, any) (any, error) {
-	return nil, nil
+func (m *snapshotReaderMeta) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
+	return nil, fmt.Errorf("snapshot reader meta: unsupported call %T", request)
 }
 
 func (m *snapshotReaderMeta) Terminate(error) {

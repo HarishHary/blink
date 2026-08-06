@@ -157,7 +157,7 @@ func (c *PluginController[T]) reconcile(ctx context.Context, reason string) erro
 	}
 
 	// -- Step 6: bump generation only if content changed --------------------------
-	changed := snapshotChanged(nextEntries, priorSnap)
+	changed := SnapshotChanged(nextEntries, priorSnap)
 	if changed {
 		generation++
 	}
@@ -173,7 +173,7 @@ func (c *PluginController[T]) reconcile(ctx context.Context, reason string) erro
 		// Publish per-ID: one keyed message per changed entry + a nil-value tombstone per removed ID.
 		// The log-compacted topic converges to one message per key, so a cold reader assembles state
 		// from the compacted set and editing one rule republishes one small message, not all of them.
-		upserts, tombstones := diffEntries(priorSnap, nextEntries, byID)
+		upserts, tombstones := DiffEntries(priorSnap, nextEntries, byID)
 		msgs := make([]brokers.Message, 0, len(upserts)+len(tombstones)+1)
 		for _, e := range upserts {
 			b, err := snapshot.Marshal(e)

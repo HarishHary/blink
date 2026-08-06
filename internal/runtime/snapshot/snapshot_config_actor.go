@@ -18,9 +18,9 @@ const (
 	snapshotConfigRetryMax = 5 * time.Second
 )
 
-// messageSnapshotConfigSubscribe is handled after process initialization because
+// MessageSnapshotConfigSubscribe is handled after process initialization because
 // MonitorEvent is a running-state operation.
-type messageSnapshotConfigSubscribe struct{ token uint64 }
+type MessageSnapshotConfigSubscribe struct{ token uint64 }
 
 type snapshotConfigSubscriptionState struct {
 	snapshot bool
@@ -48,12 +48,12 @@ func (a *snapshotConfigActor[T]) Init(...any) error {
 		return fmt.Errorf("snapshot config actor: cache is required")
 	}
 	a.subscription.retry = runtime.NewScheduledBackoff(snapshotConfigRetryMin, snapshotConfigRetryMax)
-	return a.Send(a.PID(), messageSnapshotConfigSubscribe{})
+	return a.Send(a.PID(), MessageSnapshotConfigSubscribe{})
 }
 
 func (a *snapshotConfigActor[T]) HandleMessage(_ gen.PID, message any) error {
 	switch m := message.(type) {
-	case messageSnapshotConfigSubscribe:
+	case MessageSnapshotConfigSubscribe:
 		if m.token != 0 {
 			if !a.subscription.retry.Pending || m.token != a.subscription.retry.Token {
 				return nil
@@ -79,7 +79,7 @@ func (a *snapshotConfigActor[T]) HandleMessage(_ gen.PID, message any) error {
 		}
 		a.updateReady()
 		a.subscription.retry.CancelScheduled(true)
-		return a.Send(a.PID(), messageSnapshotConfigSubscribe{})
+		return a.Send(a.PID(), MessageSnapshotConfigSubscribe{})
 	}
 	return nil
 }
@@ -89,8 +89,8 @@ func (a *snapshotConfigActor[T]) HandleEvent(event gen.MessageEvent) error {
 	return nil
 }
 
-func (a *snapshotConfigActor[T]) HandleCall(gen.PID, gen.Ref, any) (any, error) {
-	return nil, nil
+func (a *snapshotConfigActor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
+	return nil, fmt.Errorf("snapshot config actor: unsupported call %T", request)
 }
 
 func (a *snapshotConfigActor[T]) Terminate(error) {
@@ -160,7 +160,7 @@ func (a *snapshotConfigActor[T]) scheduleSubscribe() error {
 	}
 	a.subscription.retry.Token++
 	token := a.subscription.retry.Token
-	cancel, err := a.SendAfter(a.PID(), messageSnapshotConfigSubscribe{token: token}, delay)
+	cancel, err := a.SendAfter(a.PID(), MessageSnapshotConfigSubscribe{token: token}, delay)
 	if err != nil {
 		return fmt.Errorf("%w: schedule subscription retry: %w", runtime.ErrSnapshotSubscribe, err)
 	}

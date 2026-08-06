@@ -33,7 +33,7 @@ type SnapshotPublisherStatus struct {
 	LastError      error
 }
 
-type messagePublisherLoadResult struct {
+type MessageSnapshotPublisherLoadResult struct {
 	incarnation uint64
 	records     []backends.ControllerRecord
 	generation  int64
@@ -41,7 +41,7 @@ type messagePublisherLoadResult struct {
 	err         error
 }
 
-type messagePublishSnapshot struct {
+type MessagePublishSnapshot struct {
 	incarnation uint64
 	records     []backends.ControllerRecord
 	next        snapshot.Snapshot
@@ -50,7 +50,7 @@ type messagePublishSnapshot struct {
 	tombstones  []string
 }
 
-type messagePublishResult struct {
+type MessageSnapshotPublicationResult struct {
 	incarnation uint64
 	err         error
 }
@@ -65,7 +65,7 @@ type snapshotPublisherMeta struct {
 
 	runCtx context.Context
 	cancel context.CancelFunc
-	jobs   chan messagePublishSnapshot
+	jobs   chan MessagePublishSnapshot
 }
 
 func (m *snapshotPublisherMeta) Init(process gen.MetaProcess) error {
@@ -74,13 +74,13 @@ func (m *snapshotPublisherMeta) Init(process gen.MetaProcess) error {
 	}
 	m.MetaProcess = process
 	m.runCtx, m.cancel = context.WithCancel(context.Background())
-	m.jobs = make(chan messagePublishSnapshot, 1)
+	m.jobs = make(chan MessagePublishSnapshot, 1)
 	return nil
 }
 
 func (m *snapshotPublisherMeta) Start() error {
 	records, generation, saved, err := m.load()
-	if sendErr := m.Send(m.Parent(), messagePublisherLoadResult{
+	if sendErr := m.Send(m.Parent(), MessageSnapshotPublisherLoadResult{
 		incarnation: m.incarnation, records: records, generation: generation, snapshot: saved, err: err,
 	}); sendErr != nil {
 		return fmt.Errorf("%w: send result: %w", runtime.ErrSnapshotLoad, sendErr)
@@ -92,7 +92,7 @@ func (m *snapshotPublisherMeta) Start() error {
 			return nil
 		case job := <-m.jobs:
 			err := m.publish(job)
-			if sendErr := m.Send(m.Parent(), messagePublishResult{
+			if sendErr := m.Send(m.Parent(), MessageSnapshotPublicationResult{
 				incarnation: m.incarnation, err: err,
 			}); sendErr != nil {
 				return fmt.Errorf("%w: send result: %w", runtime.ErrSnapshotPublish, sendErr)
@@ -102,7 +102,7 @@ func (m *snapshotPublisherMeta) Start() error {
 }
 
 func (m *snapshotPublisherMeta) HandleMessage(_ gen.PID, message any) error {
-	job, ok := message.(messagePublishSnapshot)
+	job, ok := message.(MessagePublishSnapshot)
 	if !ok || job.incarnation != m.incarnation {
 		return nil
 	}
@@ -114,7 +114,9 @@ func (m *snapshotPublisherMeta) HandleMessage(_ gen.PID, message any) error {
 	}
 }
 
-func (m *snapshotPublisherMeta) HandleCall(gen.PID, gen.Ref, any) (any, error) { return nil, nil }
+func (m *snapshotPublisherMeta) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
+	return nil, fmt.Errorf("snapshot publisher meta: unsupported call %T", request)
+}
 
 func (m *snapshotPublisherMeta) Terminate(error) {
 	if m.cancel != nil {
@@ -142,7 +144,7 @@ func (m *snapshotPublisherMeta) load() ([]backends.ControllerRecord, int64, *sna
 	return records, generation, saved, nil
 }
 
-func (m *snapshotPublisherMeta) publish(job messagePublishSnapshot) error {
+func (m *snapshotPublisherMeta) publish(job MessagePublishSnapshot) error {
 	if err := m.database.Upsert(m.runCtx, job.records); err != nil {
 		return fmt.Errorf("%w: upsert records: %w", runtime.ErrSnapshotPublish, err)
 	}

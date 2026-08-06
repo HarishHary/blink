@@ -129,7 +129,7 @@ func DiffEntries(prior *snapshot.Snapshot, next []snapshot.EffectiveEntry, recor
 		priorByID[e.Id] = e
 	}
 	for _, e := range next {
-		if p, ok := priorByID[e.Id]; !ok || !entryEqual(p, e) {
+		if p, ok := priorByID[e.Id]; !ok || !EffectiveEntryEqual(p, e) {
 			upserts = append(upserts, e)
 		}
 	}

@@ -54,11 +54,10 @@ func NewActor[T plugin.Syncable](opts Options[T]) gen.ProcessBehavior {
 	return &controllerActor[T]{opts: defaultOptions(opts)}
 }
 
-type messageControllerActivate struct{}
-type getStatusRequest struct{}
-type messageScannerRestart struct{ token uint64 }
-type messagePublisherRestart struct{ token uint64 }
-type messagePublishRetry struct{ token uint64 }
+type MessageControllerActivate struct{}
+type MessageArtifactScannerRestart struct{ token uint64 }
+type MessageSnapshotPublisherRestart struct{ token uint64 }
+type MessageSnapshotPublishRetry struct{ token uint64 }
 
 const publishUnavailableThreshold = 5
 
@@ -120,19 +119,19 @@ func (a *controllerActor[T]) Init(...any) error {
 		retry:   runtime.NewScheduledBackoff(a.opts.RetryMin, a.opts.RetryMax),
 		status:  SnapshotPublisherStatus{Lifecycle: SnapshotPublisherStarting, Availability: runtime.AvailabilityUnavailable},
 	}
-	return a.Send(a.PID(), messageControllerActivate{})
+	return a.Send(a.PID(), MessageControllerActivate{})
 }
 
 func (a *controllerActor[T]) HandleMessage(_ gen.PID, message any) error {
 	switch m := message.(type) {
-	case messageControllerActivate:
+	case MessageControllerActivate:
 		if a.lifecycle != ControllerStarting {
 			return nil
 		}
 		a.lifecycle = ControllerRunning
 		a.startScanner()
 		a.startPublisher()
-	case messageScannerResult:
+	case MessageArtifactScanResult:
 		if a.scanner.alias == (gen.Alias{}) || m.incarnation != a.scanner.incarnation {
 			return nil
 		}
@@ -159,7 +158,7 @@ func (a *controllerActor[T]) HandleMessage(_ gen.PID, message any) error {
 		}
 		a.scanner.presentIDs = append([]string(nil), m.presentIDs...)
 		a.reconcile()
-	case messagePublisherLoadResult:
+	case MessageSnapshotPublisherLoadResult:
 		if a.publisher.alias == (gen.Alias{}) || m.incarnation != a.publisher.incarnation {
 			return nil
 		}
@@ -196,7 +195,7 @@ func (a *controllerActor[T]) HandleMessage(_ gen.PID, message any) error {
 		} else {
 			a.reconcile()
 		}
-	case messagePublishResult:
+	case MessageSnapshotPublicationResult:
 		if a.publisher.alias == (gen.Alias{}) || m.incarnation != a.publisher.incarnation || a.pending == nil || !a.publisher.status.Publishing {
 			return nil
 		}
@@ -217,21 +216,21 @@ func (a *controllerActor[T]) HandleMessage(_ gen.PID, message any) error {
 		a.publisher.status.Availability = runtime.AvailabilityReady
 		a.publisher.status.LastError = nil
 		a.reconcile()
-	case messagePublishRetry:
+	case MessageSnapshotPublishRetry:
 		if !a.publisher.retry.Pending || m.token != a.publisher.retry.Token {
 			return nil
 		}
 		a.publisher.retry.Pending = false
 		a.publisher.retry.Cancel = nil
 		a.sendPending()
-	case messageScannerRestart:
+	case MessageArtifactScannerRestart:
 		if !a.scanner.restart.Pending || m.token != a.scanner.restart.Token || a.scanner.alias != (gen.Alias{}) {
 			return nil
 		}
 		a.scanner.restart.Pending = false
 		a.scanner.restart.Cancel = nil
 		a.startScanner()
-	case messagePublisherRestart:
+	case MessageSnapshotPublisherRestart:
 		if !a.publisher.restart.Pending || m.token != a.publisher.restart.Token || a.publisher.alias != (gen.Alias{}) {
 			return nil
 		}
@@ -264,10 +263,7 @@ func (a *controllerActor[T]) HandleMessage(_ gen.PID, message any) error {
 }
 
 func (a *controllerActor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
-	if _, ok := request.(getStatusRequest); ok {
-		return a.currentStatus(), nil
-	}
-	return nil, nil
+	return nil, fmt.Errorf("controller actor: unsupported call %T", request)
 }
 
 func (a *controllerActor[T]) Terminate(error) {
@@ -380,7 +376,7 @@ func (a *controllerActor[T]) scheduleScannerRestart() {
 	}
 	a.scanner.restart.Token++
 	token := a.scanner.restart.Token
-	cancel, err := a.SendAfter(a.PID(), messageScannerRestart{token: token}, delay)
+	cancel, err := a.SendAfter(a.PID(), MessageArtifactScannerRestart{token: token}, delay)
 	if err == nil {
 		a.scanner.restart.Pending = true
 		a.scanner.restart.Cancel = cancel
@@ -399,7 +395,7 @@ func (a *controllerActor[T]) schedulePublisherRestart() {
 	}
 	a.publisher.restart.Token++
 	token := a.publisher.restart.Token
-	cancel, err := a.SendAfter(a.PID(), messagePublisherRestart{token: token}, delay)
+	cancel, err := a.SendAfter(a.PID(), MessageSnapshotPublisherRestart{token: token}, delay)
 	if err == nil {
 		a.publisher.restart.Pending = true
 		a.publisher.restart.Cancel = cancel
@@ -418,7 +414,7 @@ func (a *controllerActor[T]) schedulePublishRetry() {
 	}
 	a.publisher.retry.Token++
 	token := a.publisher.retry.Token
-	cancel, err := a.SendAfter(a.PID(), messagePublishRetry{token: token}, delay)
+	cancel, err := a.SendAfter(a.PID(), MessageSnapshotPublishRetry{token: token}, delay)
 	if err == nil {
 		a.publisher.retry.Pending = true
 		a.publisher.retry.Cancel = cancel
@@ -452,7 +448,7 @@ func (a *controllerActor[T]) sendPending() {
 	for i := range upserts {
 		upserts[i] = upserts[i].Clone()
 	}
-	message := messagePublishSnapshot{
+	message := MessagePublishSnapshot{
 		incarnation: a.publisher.incarnation,
 		records:     records,
 		next:        *next,

@@ -44,11 +44,11 @@ func EventsFor(node gen.Node, name gen.Atom) Events {
 }
 
 // The supervisor accepts status only from its current child PID.
-type messageSnapshotReaderStatusChanged struct{ status SnapshotReaderStatus }
+type MessageSnapshotReaderStatusChanged struct{ status SnapshotReaderStatus }
 
-// messageSnapshotReaderActivate delegates the supervisor-owned snapshot event
+// MessageSnapshotReaderActivate delegates the supervisor-owned snapshot event
 // token to the current reader actor.
-type messageSnapshotReaderActivate struct {
+type MessageSnapshotReaderActivate struct {
 	snapshotEventName  gen.Atom
 	snapshotEventToken gen.Ref
 }
@@ -124,7 +124,7 @@ func (s *snapshotReaderSupervisor) HandleChildStart(name gen.Atom, pid gen.PID) 
 	s.status = newSnapshotReaderStatus()
 	s.publishStatus()
 
-	return s.Send(pid, messageSnapshotReaderActivate{
+	return s.Send(pid, MessageSnapshotReaderActivate{
 		snapshotEventName:  s.events.Snapshot.Name,
 		snapshotEventToken: s.snapshotToken,
 	})
@@ -149,7 +149,7 @@ func (s *snapshotReaderSupervisor) HandleChildTerminate(name gen.Atom, pid gen.P
 
 func (s *snapshotReaderSupervisor) HandleMessage(from gen.PID, message any) error {
 	switch m := message.(type) {
-	case messageSnapshotReaderStatusChanged:
+	case MessageSnapshotReaderStatusChanged:
 		if from != s.actorPID {
 			return nil
 		}
@@ -159,8 +159,8 @@ func (s *snapshotReaderSupervisor) HandleMessage(from gen.PID, message any) erro
 	return nil
 }
 
-func (s *snapshotReaderSupervisor) HandleCall(gen.PID, gen.Ref, any) (any, error) {
-	return nil, nil
+func (s *snapshotReaderSupervisor) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
+	return nil, fmt.Errorf("snapshot reader supervisor: unsupported call %T", request)
 }
 
 func (s *snapshotReaderSupervisor) Terminate(error) {

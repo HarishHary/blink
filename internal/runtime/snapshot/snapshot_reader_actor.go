@@ -34,7 +34,7 @@ type SnapshotReaderStatus struct {
 
 type snapshotEntry = snapshot.EffectiveEntry
 
-type messageSnapshotReaderRestart struct{ token uint64 }
+type MessageSnapshotReaderRestart struct{ token uint64 }
 
 type snapshotReaderMetaState struct {
 	alias        gen.Alias
@@ -70,7 +70,7 @@ func (a *snapshotReaderActor) Init(...any) error {
 
 func (a *snapshotReaderActor) HandleMessage(_ gen.PID, message any) error {
 	switch m := message.(type) {
-	case messageSnapshotReaderActivate:
+	case MessageSnapshotReaderActivate:
 		if a.snapshotEventToken != (gen.Ref{}) {
 			return fmt.Errorf("snapshot reader actor already activated")
 		}
@@ -79,7 +79,7 @@ func (a *snapshotReaderActor) HandleMessage(_ gen.PID, message any) error {
 		a.publishStatus()
 		return a.startSnapshotReaderMeta()
 
-	case messageSnapshotReaderStarted:
+	case MessageSnapshotReaderStarted:
 		if m.incarnation != a.reader.incarnation || a.reader.alias == (gen.Alias{}) {
 			return nil
 		}
@@ -90,7 +90,7 @@ func (a *snapshotReaderActor) HandleMessage(_ gen.PID, message any) error {
 		a.reader.status.LastError = nil
 		a.publishStatus()
 
-	case messageSnapshotRecord:
+	case MessageSnapshotRecord:
 		if m.incarnation != a.reader.incarnation || a.reader.alias == (gen.Alias{}) {
 			return nil
 		}
@@ -102,7 +102,7 @@ func (a *snapshotReaderActor) HandleMessage(_ gen.PID, message any) error {
 			a.publishStatus()
 		}
 
-	case messageSnapshotCaughtUp:
+	case MessageSnapshotCaughtUp:
 		if m.incarnation != a.reader.incarnation ||
 			a.reader.alias == (gen.Alias{}) ||
 			a.reader.status.CaughtUp {
@@ -123,7 +123,7 @@ func (a *snapshotReaderActor) HandleMessage(_ gen.PID, message any) error {
 		a.publishSnapshot()
 		a.publishStatus()
 
-	case messageSnapshotReaderRestart:
+	case MessageSnapshotReaderRestart:
 		if !a.reader.restart.Pending ||
 			a.reader.restart.Token != m.token ||
 			a.reader.alias != (gen.Alias{}) {
@@ -153,8 +153,8 @@ func (a *snapshotReaderActor) HandleMessage(_ gen.PID, message any) error {
 	return nil
 }
 
-func (a *snapshotReaderActor) HandleCall(gen.PID, gen.Ref, any) (any, error) {
-	return nil, nil
+func (a *snapshotReaderActor) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
+	return nil, fmt.Errorf("snapshot reader actor: unsupported call %T", request)
 }
 
 func (a *snapshotReaderActor) Terminate(error) {
@@ -233,7 +233,7 @@ func (a *snapshotReaderActor) scheduleSnapshotReaderMetaRestart() error {
 
 	a.reader.restart.Token++
 	token := a.reader.restart.Token
-	cancel, err := a.SendAfter(a.PID(), messageSnapshotReaderRestart{token: token}, delay)
+	cancel, err := a.SendAfter(a.PID(), MessageSnapshotReaderRestart{token: token}, delay)
 	if err != nil {
 		return fmt.Errorf("schedule snapshot reader meta restart: %w", err)
 	}
@@ -308,7 +308,7 @@ func (a *snapshotReaderActor) publishStatus() {
 	if a.snapshotEventToken == (gen.Ref{}) {
 		return
 	}
-	_ = a.Send(a.Parent(), messageSnapshotReaderStatusChanged{status: a.currentStatus()})
+	_ = a.Send(a.Parent(), MessageSnapshotReaderStatusChanged{status: a.currentStatus()})
 }
 
 func (a *snapshotReaderActor) currentStatus() SnapshotReaderStatus {

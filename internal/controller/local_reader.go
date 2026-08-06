@@ -331,7 +331,7 @@ func (r *LocalReader[T]) reelect() (publish bool) {
 		// Each enabled artifact must be a (yaml, binary) pair: an enabled artifact with no binary is
 		// invalid and dropped (honouring the loader's blocking pairing rule). A disabled artifact
 		// needs no binary - it will not run. Dropping the candidate leaves the primary running;
-		// dropping the primary leaves no baseline, so validateGroup then drops the whole plugin.
+		// dropping the primary leaves no baseline, so ValidateGroup then drops the whole plugin.
 		var paired []T
 		for _, item := range byID[id] {
 			m := item.Metadata()
@@ -349,7 +349,7 @@ func (r *LocalReader[T]) reelect() (publish bool) {
 			}
 			continue
 		}
-		if errs := validateGroup(group); len(errs) > 0 {
+		if errs := ValidateGroup(group); len(errs) > 0 {
 			for _, e := range errs {
 				r.logger.ErrorF("local-reader: group %q invalid, dropped: %s", id, e)
 			}
@@ -359,8 +359,8 @@ func (r *LocalReader[T]) reelect() (publish bool) {
 			}
 			continue
 		}
-		e := electGroup(id, group, digests)
-		if old, ok := r.entries[id]; !ok || !entryEqual(old, e) {
+		e := ElectGroup(id, group, digests)
+		if old, ok := r.entries[id]; !ok || !EffectiveEntryEqual(old, e) {
 			r.entries[id] = e
 			entriesChanged = true
 		}
