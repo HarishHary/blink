@@ -6,7 +6,6 @@ import (
 	"ergo.services/ergo/act"
 	"ergo.services/ergo/gen"
 	"github.com/cenkalti/backoff/v4"
-	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/internal/runtime"
 )
 
@@ -59,9 +58,9 @@ type routerState struct {
 	retiring        bool
 }
 
-type catalogActor[T plugin.Syncable] struct {
+type catalogActor[T Syncable] struct {
 	act.Actor
-	deps            runtime.ActorDependencies[T]
+	deps            ActorDependencies[T]
 	actorGeneration uint64
 	activated       bool
 	routers         map[string]*routerState
@@ -99,7 +98,7 @@ type MessageRouterRestart struct {
 	token           uint64
 }
 
-func newCatalogActor[T plugin.Syncable](deps runtime.ActorDependencies[T]) gen.ProcessBehavior {
+func newCatalogActor[T Syncable](deps ActorDependencies[T]) gen.ProcessBehavior {
 	return &catalogActor[T]{deps: deps}
 }
 
@@ -145,11 +144,11 @@ func (a *catalogActor[T]) HandleMessage(_ gen.PID, message any) error {
 				a.retireRouter(id, runtime.ErrPluginUnavailable)
 				continue
 			}
-			_ = a.Send(ref.pid, runtime.MessageDrain{})
+			_ = a.Send(ref.pid, MessageDrain{})
 		}
 		a.reconcileStatus()
 
-	case runtime.MessageInvokePlugin[T]:
+	case MessageInvokePlugin[T]:
 		if a.draining || a.desiredRevision == 0 {
 			a.finishUntrackedCall(m, runtime.ErrPluginUnavailable)
 			return nil
@@ -165,7 +164,7 @@ func (a *catalogActor[T]) HandleMessage(_ gen.PID, message any) error {
 			_ = a.Node().SendExit(ref.pid, fmt.Errorf("forward invocation to router: %w", err))
 		}
 
-	case runtime.MessageCancelInvocation:
+	case MessageCancelInvocation:
 		routerPID, ok := a.inFlightCalls[m.CallID]
 		if !ok {
 			return nil
@@ -174,13 +173,13 @@ func (a *catalogActor[T]) HandleMessage(_ gen.PID, message any) error {
 			a.finishTrackedCall(m.CallID, m.Err)
 		}
 
-	case runtime.MessageInvocationCompleted:
+	case MessageInvocationCompleted:
 		if _, ok := a.inFlightCalls[m.CallID]; ok {
 			delete(a.inFlightCalls, m.CallID)
 			_ = a.Send(a.Parent(), m)
 		}
 
-	case runtime.MessageDrain:
+	case MessageDrain:
 		if a.draining {
 			return nil
 		}
@@ -196,7 +195,7 @@ func (a *catalogActor[T]) HandleMessage(_ gen.PID, message any) error {
 				continue
 			}
 			ref.retiring = true
-			_ = a.Send(ref.pid, runtime.MessageDrain{})
+			_ = a.Send(ref.pid, MessageDrain{})
 		}
 
 	case MessageRouterDrained:
@@ -210,7 +209,7 @@ func (a *catalogActor[T]) HandleMessage(_ gen.PID, message any) error {
 			return nil
 		}
 
-		_ = a.Send(ref.pid, runtime.MessageStop{})
+		_ = a.Send(ref.pid, MessageStop{})
 		a.retireRouter(m.pluginID, runtime.ErrPluginUnavailable)
 
 		if a.draining {
@@ -261,7 +260,7 @@ func (a *catalogActor[T]) HandleMessage(_ gen.PID, message any) error {
 			a.sendDesiredToRouter(m.pluginID)
 		}
 
-	case runtime.MessageStop:
+	case MessageStop:
 		return gen.TerminateReasonNormal
 
 	case gen.MessageDownPID:
@@ -520,8 +519,8 @@ func (a *catalogActor[T]) liveRouterCount() int {
 	return count
 }
 
-func (a *catalogActor[T]) finishUntrackedCall(call runtime.MessageInvokePlugin[T], err error) {
-	_ = a.Send(a.Parent(), runtime.MessageInvocationCompleted{CallID: call.CallID, Err: err})
+func (a *catalogActor[T]) finishUntrackedCall(call MessageInvokePlugin[T], err error) {
+	_ = a.Send(a.Parent(), MessageInvocationCompleted{CallID: call.CallID, Err: err})
 }
 
 func (a *catalogActor[T]) finishTrackedCall(callID uint64, err error) {
@@ -529,7 +528,7 @@ func (a *catalogActor[T]) finishTrackedCall(callID uint64, err error) {
 		return
 	}
 	delete(a.inFlightCalls, callID)
-	_ = a.Send(a.Parent(), runtime.MessageInvocationCompleted{CallID: callID, Err: err})
+	_ = a.Send(a.Parent(), MessageInvocationCompleted{CallID: callID, Err: err})
 }
 
 func (a *catalogActor[T]) reconcileStatus() {
@@ -578,8 +577,10 @@ func (a *catalogActor[T]) reconcileStatus() {
 
 	availability := runtime.AvailabilityUnavailable
 	switch {
-	case a.desiredRevision == 0 || len(a.desired) == 0:
+	case a.desiredRevision == 0:
 		availability = runtime.AvailabilityUnavailable
+	case len(a.desired) == 0:
+		availability = runtime.AvailabilityReady
 	case unavailable == 0 && degraded == 0 && routable == len(a.desired):
 		availability = runtime.AvailabilityReady
 	case routable > 0:

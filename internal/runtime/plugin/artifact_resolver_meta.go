@@ -7,7 +7,6 @@ import (
 
 	"ergo.services/ergo/gen"
 	"github.com/harishhary/blink/internal/helpers"
-	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/internal/runtime"
 	"github.com/harishhary/blink/internal/snapshot"
 )
@@ -37,11 +36,11 @@ type ArtifactResolverStatus struct {
 // readiness checks and binary checksums for complete snapshot-resolution
 // requests. The parent actor owns restart policy and fences requests/results by
 // incarnation.
-type artifactResolverMeta[T plugin.Syncable] struct {
+type artifactResolverMeta[T Syncable] struct {
 	gen.MetaProcess
 
 	directory   string
-	adapter     *plugin.PluginAdapter[T]
+	adapter     *PluginAdapter[T]
 	incarnation uint64
 
 	runCtx    context.Context
@@ -121,6 +120,9 @@ func (m *artifactResolverMeta[T]) buildDesiredRoutes(snap snapshot.Snapshot) (ma
 
 	deferred := false
 	for _, entry := range snap.Entries {
+		if !entry.Enabled {
+			continue
+		}
 		route := MessageApplyRouterDesiredState{}
 		route.primary, route.primaryDeferred = m.resolveDeployment(entry, entry.Primary)
 		route.candidate, route.candidateDeferred = m.resolveDeployment(entry, entry.Candidate)
@@ -133,7 +135,7 @@ func (m *artifactResolverMeta[T]) buildDesiredRoutes(snap snapshot.Snapshot) (ma
 	return desired, deferred, true
 }
 
-func (m *artifactResolverMeta[T]) resolveDeployment(entry snapshot.EffectiveEntry, ref *snapshot.ArtifactRef) (*runtime.Deployment, bool) {
+func (m *artifactResolverMeta[T]) resolveDeployment(entry snapshot.EffectiveEntry, ref *snapshot.ArtifactRef) (*Deployment, bool) {
 	if ref == nil || !entry.Enabled {
 		return nil, false
 	}
@@ -153,7 +155,7 @@ func (m *artifactResolverMeta[T]) resolveDeployment(entry snapshot.EffectiveEntr
 	}
 
 	state.Id, state.Name = entry.Id, ref.Name
-	return &runtime.Deployment{
+	return &Deployment{
 		BinaryState: state,
 		Path:        path,
 		Hash:        digest,

@@ -11,7 +11,6 @@ import (
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/handshake"
 	"github.com/harishhary/blink/internal/helpers"
-	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/internal/runtime"
 	goplugin "github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
@@ -56,11 +55,11 @@ func (s PluginWorkerStatus) healthy() bool {
 	return s.Lifecycle == PluginWorkerRunning && s.Availability.Routable()
 }
 
-type pluginWorkerMeta[T plugin.Syncable] struct {
+type pluginWorkerMeta[T Syncable] struct {
 	gen.MetaProcess
 
-	deps             runtime.ActorDependencies[T]
-	deployment       runtime.Deployment
+	deps             ActorDependencies[T]
+	deployment       Deployment
 	slot             int
 	workerGeneration uint64
 
@@ -72,7 +71,7 @@ type pluginWorkerMeta[T plugin.Syncable] struct {
 	stateMu  sync.RWMutex
 	instance T
 	client   *goplugin.Client
-	rpc      plugin.PluginRPC
+	rpc      PluginRPC
 	ready    bool
 }
 
@@ -89,7 +88,7 @@ type MessagePluginWorkerLaunchFailed struct {
 	err              error
 }
 
-type MessagePluginWorkerInvoke[T plugin.Syncable] struct {
+type MessagePluginWorkerInvoke[T Syncable] struct {
 	callID           uint64
 	context          context.Context
 	fn               func(context.Context, T) error
@@ -257,7 +256,7 @@ func (m *pluginWorkerMeta[T]) reportInvocationFinished(msg MessagePluginWorkerIn
 	})
 }
 
-func (m *pluginWorkerMeta[T]) launchPlugin(ctx context.Context) (T, *goplugin.Client, plugin.PluginRPC, error) {
+func (m *pluginWorkerMeta[T]) launchPlugin(ctx context.Context) (T, *goplugin.Client, PluginRPC, error) {
 	var zero T
 	if err := m.validateArtifact(); err != nil {
 		return zero, nil, nil, err
