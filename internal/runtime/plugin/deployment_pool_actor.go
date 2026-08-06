@@ -7,7 +7,6 @@ import (
 	"ergo.services/ergo/act"
 	"ergo.services/ergo/gen"
 	"github.com/cenkalti/backoff/v4"
-	"github.com/harishhary/blink/internal/plugin"
 	"github.com/harishhary/blink/internal/runtime"
 )
 
@@ -53,27 +52,27 @@ func (s DeploymentPoolStatus) routable() bool {
 	return s.Lifecycle == DeploymentPoolRunning && s.Availability.Routable()
 }
 
-type workerState[T plugin.Syncable] struct {
+type workerState[T Syncable] struct {
 	alias            gen.Alias
 	workerGeneration uint64
 	invocationID     uint64
 	status           PluginWorkerStatus
-	activeCall       *runtime.MessageInvokePlugin[T]
+	activeCall       *MessageInvokePlugin[T]
 	restart          *runtime.ScheduledBackoff
 }
 
-type deploymentPoolActor[T plugin.Syncable] struct {
+type deploymentPoolActor[T Syncable] struct {
 	act.Actor
 
-	deps       runtime.ActorDependencies[T]
-	deployment runtime.Deployment
+	deps       ActorDependencies[T]
+	deployment Deployment
 
 	actorGeneration uint64
 	activated       bool
 	everRoutable    bool
 
 	workers      map[int]workerState[T]
-	pendingCalls []runtime.MessageInvokePlugin[T]
+	pendingCalls []MessageInvokePlugin[T]
 
 	liveStatus  DeploymentPoolStatus
 	statusEpoch uint64
@@ -86,7 +85,7 @@ type deploymentPoolActor[T plugin.Syncable] struct {
 type MessageDeploymentPoolActivate struct{ generation uint64 }
 
 type MessageDeploymentPoolStatusChanged struct {
-	poolKey         runtime.DeploymentPoolKey
+	poolKey         DeploymentPoolKey
 	pid             gen.PID
 	actorGeneration uint64
 	epoch           uint64
@@ -94,7 +93,7 @@ type MessageDeploymentPoolStatusChanged struct {
 }
 
 type MessageDeploymentPoolDrained struct {
-	poolKey         runtime.DeploymentPoolKey
+	poolKey         DeploymentPoolKey
 	pid             gen.PID
 	actorGeneration uint64
 }
@@ -143,7 +142,7 @@ func (a *deploymentPoolActor[T]) HandleMessage(_ gen.PID, message any) error {
 		a.scheduleHealthTick()
 		a.reconcileStatus()
 
-	case runtime.MessageInvokePlugin[T]:
+	case MessageInvokePlugin[T]:
 		if err := m.Context.Err(); err != nil {
 			a.finishCall(m, err)
 			return nil
@@ -160,7 +159,7 @@ func (a *deploymentPoolActor[T]) HandleMessage(_ gen.PID, message any) error {
 		a.pendingCalls = append(a.pendingCalls, m)
 		a.dispatchPendingCalls()
 
-	case runtime.MessageCancelInvocation:
+	case MessageCancelInvocation:
 		for i := range a.pendingCalls {
 			if a.pendingCalls[i].CallID != m.CallID {
 				continue
@@ -277,7 +276,7 @@ func (a *deploymentPoolActor[T]) HandleMessage(_ gen.PID, message any) error {
 			a.scheduleHealthTick()
 		}
 
-	case runtime.MessageDrain:
+	case MessageDrain:
 		if a.draining {
 			return nil
 		}
@@ -305,7 +304,7 @@ func (a *deploymentPoolActor[T]) HandleMessage(_ gen.PID, message any) error {
 		a.stopAllPluginWorkers(gen.TerminateReasonKill)
 		a.advanceDrain()
 
-	case runtime.MessageStop:
+	case MessageStop:
 		return gen.TerminateReasonNormal
 
 	case gen.MessageDownAlias:
@@ -654,7 +653,7 @@ func (a *deploymentPoolActor[T]) cancelQueuedCalls(err error) {
 	a.pendingCalls = nil
 }
 
-func (a *deploymentPoolActor[T]) finishCall(call runtime.MessageInvokePlugin[T], err error) {
+func (a *deploymentPoolActor[T]) finishCall(call MessageInvokePlugin[T], err error) {
 	if call.Cancel != nil {
 		call.Cancel()
 	}
@@ -662,7 +661,7 @@ func (a *deploymentPoolActor[T]) finishCall(call runtime.MessageInvokePlugin[T],
 }
 
 func (a *deploymentPoolActor[T]) completeCall(callID uint64, err error) {
-	_ = a.Send(a.Parent(), runtime.MessageInvocationCompleted{CallID: callID, Err: err})
+	_ = a.Send(a.Parent(), MessageInvocationCompleted{CallID: callID, Err: err})
 }
 
 func (a *deploymentPoolActor[T]) reconcileStatus() {
