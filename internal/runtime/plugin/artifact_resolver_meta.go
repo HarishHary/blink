@@ -133,7 +133,7 @@ func (m *artifactResolverMeta[T]) buildDesiredRoutes(snap snapshot.Snapshot) (ma
 	return desired, deferred, true
 }
 
-func (m *artifactResolverMeta[T]) resolveDeployment(entry snapshot.EffectiveEntry, ref *snapshot.ArtifactRef) (*deployment, bool) {
+func (m *artifactResolverMeta[T]) resolveDeployment(entry snapshot.EffectiveEntry, ref *snapshot.ArtifactRef) (*runtime.Deployment, bool) {
 	if ref == nil || !entry.Enabled {
 		return nil, false
 	}

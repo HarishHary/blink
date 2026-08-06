@@ -54,14 +54,14 @@ type routerState struct {
 	lastEpoch       uint64
 	restartCount    uint64
 	lastError       string
-	restart         *scheduledBackoff
+	restart         *runtime.ScheduledBackoff
 	status          RouterStatus
 	retiring        bool
 }
 
 type catalogActor[T plugin.Syncable] struct {
 	act.Actor
-	deps            actorDependencies[T]
+	deps            runtime.ActorDependencies[T]
 	actorGeneration uint64
 	activated       bool
 	routers         map[string]*routerState
@@ -74,32 +74,32 @@ type catalogActor[T plugin.Syncable] struct {
 	statusEpoch     uint64
 }
 
-type catalogActivate struct{ generation uint64 }
+type MessageCatalogActivate struct{ generation uint64 }
 
 type MessageApplyCatalogDesiredState struct {
 	desiredRevision uint64
 	desired         map[string]MessageApplyRouterDesiredState
 }
 
-type catalogDrained struct {
+type MessageCatalogDrained struct {
 	pid        gen.PID
 	generation uint64
 }
 
-type catalogStatusChanged struct {
+type MessageCatalogStatusChanged struct {
 	pid        gen.PID
 	generation uint64
 	epoch      uint64
 	status     CatalogStatus
 }
 
-type routerRestart struct {
+type MessageRouterRestart struct {
 	pluginID        string
 	desiredRevision uint64
 	token           uint64
 }
 
-func newCatalogActor[T plugin.Syncable](deps actorDependencies[T]) gen.ProcessBehavior {
+func newCatalogActor[T plugin.Syncable](deps runtime.ActorDependencies[T]) gen.ProcessBehavior {
 	return &catalogActor[T]{deps: deps}
 }
 
@@ -112,7 +112,7 @@ func (a *catalogActor[T]) Init(...any) error {
 
 func (a *catalogActor[T]) HandleMessage(_ gen.PID, message any) error {
 	switch m := message.(type) {
-	case catalogActivate:
+	case MessageCatalogActivate:
 		if m.generation <= a.actorGeneration {
 			return nil
 		}
@@ -142,45 +142,45 @@ func (a *catalogActor[T]) HandleMessage(_ gen.PID, message any) error {
 			ref.retiring = true
 			a.cancelRouterRestart(id, false)
 			if ref.pid == (gen.PID{}) {
-				a.retireRouter(id, ErrPluginUnavailable)
+				a.retireRouter(id, runtime.ErrPluginUnavailable)
 				continue
 			}
-			_ = a.Send(ref.pid, drain{})
+			_ = a.Send(ref.pid, runtime.MessageDrain{})
 		}
 		a.reconcileStatus()
 
-	case invokeCall[T]:
+	case runtime.MessageInvokePlugin[T]:
 		if a.draining || a.desiredRevision == 0 {
-			a.finishUntrackedCall(m, ErrPluginUnavailable)
+			a.finishUntrackedCall(m, runtime.ErrPluginUnavailable)
 			return nil
 		}
-		ref := a.routers[m.pluginID]
+		ref := a.routers[m.PluginID]
 		if ref == nil || ref.pid == (gen.PID{}) || ref.retiring {
-			a.finishUntrackedCall(m, ErrPluginUnavailable)
+			a.finishUntrackedCall(m, runtime.ErrPluginUnavailable)
 			return nil
 		}
-		a.inFlightCalls[m.callID] = ref.pid
+		a.inFlightCalls[m.CallID] = ref.pid
 		if err := a.Send(ref.pid, m); err != nil {
-			a.finishTrackedCall(m.callID, ErrPluginUnavailable)
+			a.finishTrackedCall(m.CallID, runtime.ErrPluginUnavailable)
 			_ = a.Node().SendExit(ref.pid, fmt.Errorf("forward invocation to router: %w", err))
 		}
 
-	case cancelCall:
-		routerPID, ok := a.inFlightCalls[m.callID]
+	case runtime.MessageCancelInvocation:
+		routerPID, ok := a.inFlightCalls[m.CallID]
 		if !ok {
 			return nil
 		}
 		if err := a.Send(routerPID, m); err != nil {
-			a.finishTrackedCall(m.callID, m.err)
+			a.finishTrackedCall(m.CallID, m.Err)
 		}
 
-	case callCompleted:
-		if _, ok := a.inFlightCalls[m.callID]; ok {
-			delete(a.inFlightCalls, m.callID)
+	case runtime.MessageInvocationCompleted:
+		if _, ok := a.inFlightCalls[m.CallID]; ok {
+			delete(a.inFlightCalls, m.CallID)
 			_ = a.Send(a.Parent(), m)
 		}
 
-	case drain:
+	case runtime.MessageDrain:
 		if a.draining {
 			return nil
 		}
@@ -196,10 +196,10 @@ func (a *catalogActor[T]) HandleMessage(_ gen.PID, message any) error {
 				continue
 			}
 			ref.retiring = true
-			_ = a.Send(ref.pid, drain{})
+			_ = a.Send(ref.pid, runtime.MessageDrain{})
 		}
 
-	case routerDrained:
+	case MessageRouterDrained:
 		ref := a.routers[m.pluginID]
 		if ref == nil ||
 			ref.pid != m.pid ||
@@ -210,8 +210,8 @@ func (a *catalogActor[T]) HandleMessage(_ gen.PID, message any) error {
 			return nil
 		}
 
-		_ = a.Send(ref.pid, stop{})
-		a.retireRouter(m.pluginID, ErrPluginUnavailable)
+		_ = a.Send(ref.pid, runtime.MessageStop{})
+		a.retireRouter(m.pluginID, runtime.ErrPluginUnavailable)
 
 		if a.draining {
 			a.reconcileStatus()
@@ -226,7 +226,7 @@ func (a *catalogActor[T]) HandleMessage(_ gen.PID, message any) error {
 		}
 		a.reconcileStatus()
 
-	case routerStatusChanged:
+	case MessageRouterStatusChanged:
 		ref := a.routers[m.pluginID]
 		if ref == nil ||
 			ref.pid != m.pid ||
@@ -246,22 +246,22 @@ func (a *catalogActor[T]) HandleMessage(_ gen.PID, message any) error {
 		ref.status = next
 		a.reconcileStatus()
 
-	case routerRestart:
+	case MessageRouterRestart:
 		ref := a.routers[m.pluginID]
 		if ref == nil ||
 			ref.restart == nil ||
-			!ref.restart.pending ||
-			ref.restart.token != m.token {
+			!ref.restart.Pending ||
+			ref.restart.Token != m.token {
 			return nil
 		}
-		ref.restart.pending = false
-		ref.restart.cancel = nil
+		ref.restart.Pending = false
+		ref.restart.Cancel = nil
 		ref.status.RestartPending = false
 		if !a.draining && m.desiredRevision == a.desiredRevision {
 			a.sendDesiredToRouter(m.pluginID)
 		}
 
-	case stop:
+	case runtime.MessageStop:
 		return gen.TerminateReasonNormal
 
 	case gen.MessageDownPID:
@@ -281,7 +281,7 @@ func (a *catalogActor[T]) HandleMessage(_ gen.PID, message any) error {
 
 			_, desired := a.desired[id]
 			if a.draining || ref.retiring || !desired {
-				a.retireRouter(id, ErrPluginUnavailable)
+				a.retireRouter(id, runtime.ErrPluginUnavailable)
 				if a.draining {
 					if a.liveRouterCount() == 0 {
 						a.reportDrained()
@@ -294,7 +294,7 @@ func (a *catalogActor[T]) HandleMessage(_ gen.PID, message any) error {
 				ref.lastEpoch = 0
 				for callID, routerPID := range a.inFlightCalls {
 					if routerPID == m.PID {
-						a.finishTrackedCall(callID, ErrPluginUnavailable)
+						a.finishTrackedCall(callID, runtime.ErrPluginUnavailable)
 					}
 				}
 				_ = a.scheduleRouterRestart(id)
@@ -304,6 +304,10 @@ func (a *catalogActor[T]) HandleMessage(_ gen.PID, message any) error {
 		}
 	}
 	return nil
+}
+
+func (a *catalogActor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
+	return nil, fmt.Errorf("actorruntime: unsupported catalog call %T", request)
 }
 
 func (a *catalogActor[T]) sendDesiredToRouter(id string) {
@@ -385,7 +389,7 @@ func (a *catalogActor[T]) startRouter(id string) (*routerState, error) {
 		ref.status.ActorLastError = ref.lastError
 		return ref, err
 	}
-	if err := a.Send(pid, routerActivate{generation: generation}); err != nil {
+	if err := a.Send(pid, MessageRouterActivate{generation: generation}); err != nil {
 		_ = a.Node().SendExit(pid, fmt.Errorf("activate router: %w", err))
 		return ref, err
 	}
@@ -399,7 +403,7 @@ func (a *catalogActor[T]) retireRouter(id string, callErr error) {
 	}
 
 	if ref.restart != nil {
-		ref.restart.cancelScheduled(false)
+		ref.restart.CancelScheduled(false)
 	}
 
 	retiredPID := ref.pid
@@ -435,14 +439,14 @@ func (a *catalogActor[T]) retireRouter(id string, callErr error) {
 	}
 }
 
-func (a *catalogActor[T]) routerRestartState(id string) *scheduledBackoff {
+func (a *catalogActor[T]) routerRestartState(id string) *runtime.ScheduledBackoff {
 	ref := a.routers[id]
 	if ref == nil {
 		ref = &routerState{}
 		a.routers[id] = ref
 	}
 	if ref.restart == nil {
-		ref.restart = newScheduledBackoff(a.deps.retryMin, a.deps.retryMax)
+		ref.restart = runtime.NewScheduledBackoff(a.deps.RetryMin, a.deps.RetryMax)
 	}
 	return ref.restart
 }
@@ -452,26 +456,26 @@ func (a *catalogActor[T]) scheduleRouterRestart(id string) error {
 		return nil
 	}
 	state := a.routerRestartState(id)
-	if state.pending {
+	if state.Pending {
 		return nil
 	}
 
-	delay := state.strategy.NextBackOff()
+	delay := state.Strategy.NextBackOff()
 	if delay == backoff.Stop {
 		return fmt.Errorf("router restart backoff stopped for %q", id)
 	}
-	state.token++
-	token := state.token
+	state.Token++
+	token := state.Token
 	cancel, err := a.SendAfter(
 		a.PID(),
-		routerRestart{pluginID: id, desiredRevision: a.desiredRevision, token: token},
+		MessageRouterRestart{pluginID: id, desiredRevision: a.desiredRevision, token: token},
 		delay,
 	)
 	if err != nil {
 		return fmt.Errorf("schedule router restart for %q: %w", id, err)
 	}
-	state.pending = true
-	state.cancel = cancel
+	state.Pending = true
+	state.Cancel = cancel
 	if ref := a.routers[id]; ref != nil {
 		ref.status.Lifecycle = RouterRestarting
 		ref.status.Availability = runtime.AvailabilityUnavailable
@@ -485,7 +489,7 @@ func (a *catalogActor[T]) scheduleRouterRestart(id string) error {
 func (a *catalogActor[T]) cancelRouterRestart(id string, reset bool) {
 	if ref := a.routers[id]; ref != nil {
 		if ref.restart != nil {
-			ref.restart.cancelScheduled(reset)
+			ref.restart.CancelScheduled(reset)
 		}
 		ref.status.RestartPending = false
 	}
@@ -503,7 +507,7 @@ func (a *catalogActor[T]) cancelAllRouterRestarts(reset bool) {
 
 func (a *catalogActor[T]) routerRestartPending(id string) bool {
 	ref := a.routers[id]
-	return ref != nil && ref.restart != nil && ref.restart.pending
+	return ref != nil && ref.restart != nil && ref.restart.Pending
 }
 
 func (a *catalogActor[T]) liveRouterCount() int {
@@ -516,8 +520,8 @@ func (a *catalogActor[T]) liveRouterCount() int {
 	return count
 }
 
-func (a *catalogActor[T]) finishUntrackedCall(call invokeCall[T], err error) {
-	_ = a.Send(a.Parent(), callCompleted{callID: call.callID, err: err})
+func (a *catalogActor[T]) finishUntrackedCall(call runtime.MessageInvokePlugin[T], err error) {
+	_ = a.Send(a.Parent(), runtime.MessageInvocationCompleted{CallID: call.CallID, Err: err})
 }
 
 func (a *catalogActor[T]) finishTrackedCall(callID uint64, err error) {
@@ -525,7 +529,7 @@ func (a *catalogActor[T]) finishTrackedCall(callID uint64, err error) {
 		return
 	}
 	delete(a.inFlightCalls, callID)
-	_ = a.Send(a.Parent(), callCompleted{callID: callID, err: err})
+	_ = a.Send(a.Parent(), runtime.MessageInvocationCompleted{CallID: callID, Err: err})
 }
 
 func (a *catalogActor[T]) reconcileStatus() {
@@ -602,7 +606,7 @@ func (a *catalogActor[T]) reconcileStatus() {
 	if !a.activated {
 		return
 	}
-	_ = a.Send(a.Parent(), catalogStatusChanged{
+	_ = a.Send(a.Parent(), MessageCatalogStatusChanged{
 		pid:        a.PID(),
 		generation: a.actorGeneration,
 		epoch:      a.statusEpoch,
@@ -637,7 +641,7 @@ func (a *catalogActor[T]) reportDrained() {
 	}
 	a.drainReported = true
 	a.reconcileStatus()
-	_ = a.Send(a.Parent(), catalogDrained{
+	_ = a.Send(a.Parent(), MessageCatalogDrained{
 		pid:        a.PID(),
 		generation: a.actorGeneration,
 	})

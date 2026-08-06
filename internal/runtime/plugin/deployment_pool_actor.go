@@ -58,22 +58,22 @@ type workerState[T plugin.Syncable] struct {
 	workerGeneration uint64
 	invocationID     uint64
 	status           PluginWorkerStatus
-	activeCall       *invokeCall[T]
-	restart          *scheduledBackoff
+	activeCall       *runtime.MessageInvokePlugin[T]
+	restart          *runtime.ScheduledBackoff
 }
 
 type deploymentPoolActor[T plugin.Syncable] struct {
 	act.Actor
 
-	deps       actorDependencies[T]
-	deployment deployment
+	deps       runtime.ActorDependencies[T]
+	deployment runtime.Deployment
 
 	actorGeneration uint64
 	activated       bool
 	everRoutable    bool
 
 	workers      map[int]workerState[T]
-	pendingCalls []invokeCall[T]
+	pendingCalls []runtime.MessageInvokePlugin[T]
 
 	liveStatus  DeploymentPoolStatus
 	statusEpoch uint64
@@ -83,29 +83,29 @@ type deploymentPoolActor[T plugin.Syncable] struct {
 	drainReported bool
 }
 
-type deploymentPoolActivate struct{ generation uint64 }
+type MessageDeploymentPoolActivate struct{ generation uint64 }
 
-type deploymentPoolStatusChanged struct {
-	poolKey         deploymentPoolKey
+type MessageDeploymentPoolStatusChanged struct {
+	poolKey         runtime.DeploymentPoolKey
 	pid             gen.PID
 	actorGeneration uint64
 	epoch           uint64
 	status          DeploymentPoolStatus
 }
 
-type deploymentPoolDrained struct {
-	poolKey         deploymentPoolKey
+type MessageDeploymentPoolDrained struct {
+	poolKey         runtime.DeploymentPoolKey
 	pid             gen.PID
 	actorGeneration uint64
 }
 
-type pluginWorkerRestart struct {
+type MessagePluginWorkerRestart struct {
 	slot  int
 	token uint64
 }
 
-type deploymentPoolHealthTick struct{}
-type deploymentPoolDrainDeadline struct{}
+type MessageDeploymentPoolHealthTick struct{}
+type MessageDeploymentPoolDrainDeadline struct{}
 
 func (a *deploymentPoolActor[T]) Init(...any) error {
 	if a.workers == nil {
@@ -117,8 +117,8 @@ func (a *deploymentPoolActor[T]) Init(...any) error {
 func (a *deploymentPoolActor[T]) Terminate(error) {
 	a.cancelAllPluginWorkerRestarts(false)
 	for _, call := range a.pendingCalls {
-		if call.cancel != nil {
-			call.cancel()
+		if call.Cancel != nil {
+			call.Cancel()
 		}
 	}
 	for slot := range a.workers {
@@ -128,7 +128,7 @@ func (a *deploymentPoolActor[T]) Terminate(error) {
 
 func (a *deploymentPoolActor[T]) HandleMessage(_ gen.PID, message any) error {
 	switch m := message.(type) {
-	case deploymentPoolActivate:
+	case MessageDeploymentPoolActivate:
 		if m.generation <= a.actorGeneration {
 			return nil
 		}
@@ -137,48 +137,48 @@ func (a *deploymentPoolActor[T]) HandleMessage(_ gen.PID, message any) error {
 		}
 		a.actorGeneration = m.generation
 		a.activated = true
-		for slot := 0; slot < a.deployment.workerCount(); slot++ {
+		for slot := 0; slot < a.deployment.WorkerCount(); slot++ {
 			a.startPluginWorker(slot)
 		}
 		a.scheduleHealthTick()
 		a.reconcileStatus()
 
-	case invokeCall[T]:
-		if err := m.context.Err(); err != nil {
+	case runtime.MessageInvokePlugin[T]:
+		if err := m.Context.Err(); err != nil {
 			a.finishCall(m, err)
 			return nil
 		}
 		if a.draining || !a.liveStatus.routable() {
-			a.finishCall(m, ErrPluginUnavailable)
+			a.finishCall(m, runtime.ErrPluginUnavailable)
 			return nil
 		}
-		if len(a.pendingCalls) >= a.deps.queueSize {
-			a.finishCall(m, ErrQueueFull)
+		if len(a.pendingCalls) >= a.deps.QueueSize {
+			a.finishCall(m, runtime.ErrQueueFull)
 			return nil
 		}
-		m.context, m.cancel = context.WithCancel(m.context)
+		m.Context, m.Cancel = context.WithCancel(m.Context)
 		a.pendingCalls = append(a.pendingCalls, m)
 		a.dispatchPendingCalls()
 
-	case cancelCall:
+	case runtime.MessageCancelInvocation:
 		for i := range a.pendingCalls {
-			if a.pendingCalls[i].callID != m.callID {
+			if a.pendingCalls[i].CallID != m.CallID {
 				continue
 			}
 			call := a.pendingCalls[i]
 			a.pendingCalls = append(a.pendingCalls[:i], a.pendingCalls[i+1:]...)
-			a.finishCall(call, m.err)
+			a.finishCall(call, m.Err)
 			a.advanceDrain()
 			return nil
 		}
 		for _, worker := range a.workers {
-			if worker.activeCall != nil && worker.activeCall.callID == m.callID {
-				worker.activeCall.cancel()
+			if worker.activeCall != nil && worker.activeCall.CallID == m.CallID {
+				worker.activeCall.Cancel()
 				return nil
 			}
 		}
 
-	case pluginWorkerStarted:
+	case MessagePluginWorkerStarted:
 		worker, ok := a.workers[m.slot]
 		if !ok || worker.alias != m.alias || worker.workerGeneration != m.workerGeneration {
 			_ = a.SendExitMeta(m.alias, gen.TerminateReasonShutdown)
@@ -199,7 +199,7 @@ func (a *deploymentPoolActor[T]) HandleMessage(_ gen.PID, message any) error {
 		a.dispatchPendingCalls()
 		a.advanceDrain()
 
-	case pluginWorkerLaunchFailed:
+	case MessagePluginWorkerLaunchFailed:
 		worker, ok := a.workers[m.slot]
 		if !ok || worker.alias != m.alias || worker.workerGeneration != m.workerGeneration {
 			return nil
@@ -209,7 +209,7 @@ func (a *deploymentPoolActor[T]) HandleMessage(_ gen.PID, message any) error {
 		a.workers[m.slot] = worker
 		a.reconcileStatus()
 
-	case pluginWorkerPingResult:
+	case MessagePluginWorkerPingResult:
 		worker, ok := a.workers[m.slot]
 		if !ok || worker.alias != m.alias || worker.workerGeneration != m.workerGeneration {
 			return nil
@@ -221,22 +221,22 @@ func (a *deploymentPoolActor[T]) HandleMessage(_ gen.PID, message any) error {
 			a.reconcileStatus()
 		}
 
-	case pluginWorkerInvocationFinished:
+	case MessagePluginWorkerInvocationFinished:
 		worker, ok := a.workers[m.slot]
 		if !ok || worker.alias != m.alias || worker.workerGeneration != m.workerGeneration || worker.invocationID != m.invocationID {
 			return nil
 		}
-		if worker.activeCall == nil || worker.activeCall.callID != m.callID {
+		if worker.activeCall == nil || worker.activeCall.CallID != m.callID {
 			return nil
 		}
 
-		worker.activeCall.cancel()
+		worker.activeCall.Cancel()
 		worker.activeCall = nil
 		worker.status.InvocationID = worker.invocationID
 		worker.status.Activity = PluginWorkerIdle
 		if m.recycle {
 			worker.status.Availability = runtime.AvailabilityUnavailable
-			worker.status.LastError = errorText(ErrWorkerRecycle)
+			worker.status.LastError = errorText(runtime.ErrWorkerRecycle)
 		} else {
 			worker.status.Lifecycle = PluginWorkerRunning
 			worker.status.Availability = runtime.AvailabilityReady
@@ -249,35 +249,35 @@ func (a *deploymentPoolActor[T]) HandleMessage(_ gen.PID, message any) error {
 		a.dispatchPendingCalls()
 		a.advanceDrain()
 
-	case pluginWorkerRestart:
+	case MessagePluginWorkerRestart:
 		worker, ok := a.workers[m.slot]
-		if !ok || worker.restart == nil || !worker.restart.pending || worker.restart.token != m.token {
+		if !ok || worker.restart == nil || !worker.restart.Pending || worker.restart.Token != m.token {
 			return nil
 		}
 
-		worker.restart.pending = false
-		worker.restart.cancel = nil
+		worker.restart.Pending = false
+		worker.restart.Cancel = nil
 		worker.status.RestartPending = false
 		a.workers[m.slot] = worker
 
-		if !a.draining && m.slot < a.deployment.workerCount() {
+		if !a.draining && m.slot < a.deployment.WorkerCount() {
 			a.startPluginWorker(m.slot)
 		}
 
-	case deploymentPoolHealthTick:
+	case MessageDeploymentPoolHealthTick:
 		if !a.draining {
 			for _, worker := range a.workers {
 				if worker.alias != (gen.Alias{}) &&
 					worker.status.Lifecycle == PluginWorkerRunning &&
 					worker.status.Availability == runtime.AvailabilityReady &&
 					worker.status.Activity == PluginWorkerIdle {
-					_ = a.Send(worker.alias, pluginWorkerPing{})
+					_ = a.Send(worker.alias, MessagePluginWorkerPing{})
 				}
 			}
 			a.scheduleHealthTick()
 		}
 
-	case drain:
+	case runtime.MessageDrain:
 		if a.draining {
 			return nil
 		}
@@ -285,7 +285,7 @@ func (a *deploymentPoolActor[T]) HandleMessage(_ gen.PID, message any) error {
 		a.cancelAllPluginWorkerRestarts(false)
 		for slot, worker := range a.workers {
 			if worker.alias == (gen.Alias{}) {
-				a.retirePluginWorker(slot, ErrPluginUnavailable)
+				a.retirePluginWorker(slot, runtime.ErrPluginUnavailable)
 				continue
 			}
 			worker.status.Lifecycle = PluginWorkerDraining
@@ -293,10 +293,10 @@ func (a *deploymentPoolActor[T]) HandleMessage(_ gen.PID, message any) error {
 			a.workers[slot] = worker
 		}
 		a.reconcileStatus()
-		_, _ = a.SendAfter(a.PID(), deploymentPoolDrainDeadline{}, a.deps.drainTimeout)
+		_, _ = a.SendAfter(a.PID(), MessageDeploymentPoolDrainDeadline{}, a.deps.DrainTimeout)
 		a.advanceDrain()
 
-	case deploymentPoolDrainDeadline:
+	case MessageDeploymentPoolDrainDeadline:
 		if !a.draining || (len(a.pendingCalls) == 0 && a.liveWorkerCount() == 0) {
 			return nil
 		}
@@ -305,7 +305,7 @@ func (a *deploymentPoolActor[T]) HandleMessage(_ gen.PID, message any) error {
 		a.stopAllPluginWorkers(gen.TerminateReasonKill)
 		a.advanceDrain()
 
-	case stop:
+	case runtime.MessageStop:
 		return gen.TerminateReasonNormal
 
 	case gen.MessageDownAlias:
@@ -320,8 +320,12 @@ func (a *deploymentPoolActor[T]) HandleMessage(_ gen.PID, message any) error {
 	return nil
 }
 
+func (a *deploymentPoolActor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
+	return nil, fmt.Errorf("actorruntime: unsupported deployment pool call %T", request)
+}
+
 func (a *deploymentPoolActor[T]) startPluginWorker(slot int) {
-	if a.draining || slot >= a.deployment.workerCount() {
+	if a.draining || slot >= a.deployment.WorkerCount() {
 		return
 	}
 	if current, ok := a.workers[slot]; ok && current.alias != (gen.Alias{}) {
@@ -387,7 +391,7 @@ func (a *deploymentPoolActor[T]) stopPluginWorker(slot int, reason error) {
 	worker.status.Lifecycle = PluginWorkerDraining
 	worker.status.RestartPending = false
 	a.workers[slot] = worker
-	if err := a.Send(alias, pluginWorkerStop{}); err != nil {
+	if err := a.Send(alias, MessagePluginWorkerStop{}); err != nil {
 		_ = a.SendExitMeta(alias, reason)
 	}
 }
@@ -399,7 +403,7 @@ func (a *deploymentPoolActor[T]) retirePluginWorker(slot int, callErr error) {
 	}
 
 	if worker.restart != nil {
-		worker.restart.cancelScheduled(false)
+		worker.restart.CancelScheduled(false)
 	}
 
 	if worker.activeCall != nil {
@@ -428,28 +432,28 @@ func (a *deploymentPoolActor[T]) schedulePluginWorkerRestart(slot int) error {
 	}
 
 	if worker.restart == nil {
-		worker.restart = newScheduledBackoff(a.deps.retryMin, a.deps.retryMax)
+		worker.restart = runtime.NewScheduledBackoff(a.deps.RetryMin, a.deps.RetryMax)
 	}
 
-	if worker.restart.pending {
+	if worker.restart.Pending {
 		a.workers[slot] = worker
 		return nil
 	}
 
-	delay := worker.restart.strategy.NextBackOff()
+	delay := worker.restart.Strategy.NextBackOff()
 	if delay == backoff.Stop {
 		a.workers[slot] = worker
 		return fmt.Errorf("plugin worker restart backoff stopped for slot %d", slot)
 	}
 
-	worker.restart.token++
-	token := worker.restart.token
-	cancel, err := a.SendAfter(a.PID(), pluginWorkerRestart{slot: slot, token: token}, delay)
+	worker.restart.Token++
+	token := worker.restart.Token
+	cancel, err := a.SendAfter(a.PID(), MessagePluginWorkerRestart{slot: slot, token: token}, delay)
 	if err != nil {
 		return fmt.Errorf("schedule plugin worker restart for slot %d: %w", slot, err)
 	}
-	worker.restart.pending = true
-	worker.restart.cancel = cancel
+	worker.restart.Pending = true
+	worker.restart.Cancel = cancel
 
 	worker.status.Lifecycle = PluginWorkerRestarting
 	worker.status.Availability = runtime.AvailabilityUnavailable
@@ -466,7 +470,7 @@ func (a *deploymentPoolActor[T]) cancelPluginWorkerRestart(slot int, reset bool)
 	}
 
 	if worker.restart != nil {
-		worker.restart.cancelScheduled(reset)
+		worker.restart.CancelScheduled(reset)
 	}
 
 	worker.status.RestartPending = false
@@ -484,15 +488,15 @@ func (a *deploymentPoolActor[T]) cancelAllPluginWorkerRestarts(reset bool) {
 }
 
 func (a *deploymentPoolActor[T]) scheduleHealthTick() {
-	if a.deps.healthInterval > 0 && !a.draining {
-		_, _ = a.SendAfter(a.PID(), deploymentPoolHealthTick{}, a.deps.healthInterval)
+	if a.deps.HealthInterval > 0 && !a.draining {
+		_, _ = a.SendAfter(a.PID(), MessageDeploymentPoolHealthTick{}, a.deps.HealthInterval)
 	}
 }
 
 func (a *deploymentPoolActor[T]) dispatchPendingCalls() {
 	for len(a.pendingCalls) > 0 {
 		call := a.pendingCalls[0]
-		if err := call.context.Err(); err != nil {
+		if err := call.Context.Err(); err != nil {
 			a.pendingCalls = a.pendingCalls[1:]
 			a.finishCall(call, err)
 			continue
@@ -511,10 +515,10 @@ func (a *deploymentPoolActor[T]) dispatchPendingCalls() {
 		a.workers[slot] = worker
 		a.reconcileStatus()
 
-		invoke := pluginWorkerInvoke[T]{
-			callID:           call.callID,
-			context:          call.context,
-			fn:               call.fn,
+		invoke := MessagePluginWorkerInvoke[T]{
+			callID:           call.CallID,
+			context:          call.Context,
+			fn:               call.Fn,
 			workerGeneration: worker.workerGeneration,
 			invocationID:     worker.invocationID,
 		}
@@ -526,7 +530,7 @@ func (a *deploymentPoolActor[T]) dispatchPendingCalls() {
 }
 
 func (a *deploymentPoolActor[T]) nextIdlePluginWorker() (int, workerState[T], bool) {
-	for slot := 0; slot < a.deployment.workerCount(); slot++ {
+	for slot := 0; slot < a.deployment.WorkerCount(); slot++ {
 		worker, ok := a.workers[slot]
 		if ok &&
 			worker.alias != (gen.Alias{}) &&
@@ -547,11 +551,11 @@ func (a *deploymentPoolActor[T]) handlePluginWorkerExit(slot int, worker workerS
 		return
 	}
 
-	callErr := ErrPluginUnavailable
+	callErr := runtime.ErrPluginUnavailable
 	if a.drainExpired {
 		callErr = context.DeadlineExceeded
 	} else if current.activeCall != nil {
-		if err := current.activeCall.context.Err(); err != nil {
+		if err := current.activeCall.Context.Err(); err != nil {
 			callErr = err
 		}
 	}
@@ -562,7 +566,7 @@ func (a *deploymentPoolActor[T]) handlePluginWorkerExit(slot int, worker workerS
 	current.status.LastError = errorText(reason)
 	current.status.RestartCount++
 
-	if a.draining || slot >= a.deployment.workerCount() {
+	if a.draining || slot >= a.deployment.WorkerCount() {
 		a.workers[slot] = current
 		a.retirePluginWorker(slot, callErr)
 	} else {
@@ -611,7 +615,7 @@ func (a *deploymentPoolActor[T]) stopAllPluginWorkers(reason error) {
 		}
 
 		if worker.activeCall != nil {
-			worker.activeCall.cancel()
+			worker.activeCall.Cancel()
 		}
 		worker.status.Lifecycle = PluginWorkerDraining
 		a.workers[slot] = worker
@@ -650,15 +654,15 @@ func (a *deploymentPoolActor[T]) cancelQueuedCalls(err error) {
 	a.pendingCalls = nil
 }
 
-func (a *deploymentPoolActor[T]) finishCall(call invokeCall[T], err error) {
-	if call.cancel != nil {
-		call.cancel()
+func (a *deploymentPoolActor[T]) finishCall(call runtime.MessageInvokePlugin[T], err error) {
+	if call.Cancel != nil {
+		call.Cancel()
 	}
-	a.completeCall(call.callID, err)
+	a.completeCall(call.CallID, err)
 }
 
 func (a *deploymentPoolActor[T]) completeCall(callID uint64, err error) {
-	_ = a.Send(a.Parent(), callCompleted{callID: callID, err: err})
+	_ = a.Send(a.Parent(), runtime.MessageInvocationCompleted{CallID: callID, Err: err})
 }
 
 func (a *deploymentPoolActor[T]) reconcileStatus() {
@@ -670,7 +674,7 @@ func (a *deploymentPoolActor[T]) reconcileStatus() {
 		status.Generation = worker.workerGeneration
 		status.InvocationID = worker.invocationID
 		if worker.restart != nil {
-			status.RestartPending = worker.restart.pending
+			status.RestartPending = worker.restart.Pending
 		}
 		workers[slot] = status
 		if status.healthy() {
@@ -681,7 +685,7 @@ func (a *deploymentPoolActor[T]) reconcileStatus() {
 		}
 	}
 
-	desired := a.deployment.workerCount()
+	desired := a.deployment.WorkerCount()
 	if desired > 0 && healthy > 0 {
 		a.everRoutable = true
 	}
@@ -725,8 +729,8 @@ func (a *deploymentPoolActor[T]) reconcileStatus() {
 	if !a.activated {
 		return
 	}
-	_ = a.Send(a.Parent(), deploymentPoolStatusChanged{
-		poolKey:         a.deployment.poolKey(),
+	_ = a.Send(a.Parent(), MessageDeploymentPoolStatusChanged{
+		poolKey:         a.deployment.PoolKey(),
 		pid:             a.PID(),
 		actorGeneration: a.actorGeneration,
 		epoch:           a.statusEpoch,
@@ -760,8 +764,8 @@ func (a *deploymentPoolActor[T]) reportDrained() {
 	}
 	a.drainReported = true
 	a.reconcileStatus()
-	_ = a.Send(a.Parent(), deploymentPoolDrained{
-		poolKey:         a.deployment.poolKey(),
+	_ = a.Send(a.Parent(), MessageDeploymentPoolDrained{
+		poolKey:         a.deployment.PoolKey(),
 		pid:             a.PID(),
 		actorGeneration: a.actorGeneration,
 	})

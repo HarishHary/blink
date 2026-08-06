@@ -29,13 +29,13 @@ var (
 )
 
 type ActorDependencies[T plugin.Syncable] struct {
-	node           gen.Node
-	adapter        *plugin.PluginAdapter[T]
-	queueSize      int
-	drainTimeout   time.Duration
-	healthInterval time.Duration
-	retryMin       time.Duration
-	retryMax       time.Duration
+	Node           gen.Node
+	Adapter        *plugin.PluginAdapter[T]
+	QueueSize      int
+	DrainTimeout   time.Duration
+	HealthInterval time.Duration
+	RetryMin       time.Duration
+	RetryMax       time.Duration
 }
 
 type Deployment struct {
@@ -53,16 +53,16 @@ type DeploymentPoolKey struct {
 func (d *Deployment) PoolKey() DeploymentPoolKey {
 	return DeploymentPoolKey{
 		PoolKey:  pools.PoolKey{Id: d.Id, Name: d.Name, Hash: d.Hash},
-		MaxProcs: d.workerCount(),
+		MaxProcs: d.WorkerCount(),
 	}
 }
 
-func (d *Deployment) workerCount() int {
+func (d *Deployment) WorkerCount() int {
 	return max(1, d.MaxProcs)
 }
 
-type Drain struct{}
-type Stop struct{}
+type MessageDrain struct{}
+type MessageStop struct{}
 
 type ScheduledBackoff struct {
 	Strategy *backoff.ExponentialBackOff
@@ -97,23 +97,23 @@ func (s *ScheduledBackoff) CancelScheduled(reset bool) {
 	}
 }
 
-// Cross-component invocation and lifecycle messages.
-type InvokeCall[T plugin.Syncable] struct {
-	callID     uint64
-	context    context.Context
-	cancel     context.CancelFunc
-	pluginID   string
-	rolloutKey string
-	fn         func(context.Context, T) error
-	shadow     bool
+// Cross-component invocation messages.
+type MessageInvokePlugin[T plugin.Syncable] struct {
+	CallID     uint64
+	Context    context.Context
+	Cancel     context.CancelFunc
+	PluginID   string
+	RolloutKey string
+	Fn         func(context.Context, T) error
+	Shadow     bool
 }
 
-type CancelCall struct {
-	callID uint64
-	err    error
+type MessageCancelInvocation struct {
+	CallID uint64
+	Err    error
 }
 
-type CallCompleted struct {
-	callID uint64
-	err    error
+type MessageInvocationCompleted struct {
+	CallID uint64
+	Err    error
 }

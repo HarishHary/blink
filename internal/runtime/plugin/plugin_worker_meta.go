@@ -59,8 +59,8 @@ func (s PluginWorkerStatus) healthy() bool {
 type pluginWorkerMeta[T plugin.Syncable] struct {
 	gen.MetaProcess
 
-	deps             actorDependencies[T]
-	deployment       deployment
+	deps             runtime.ActorDependencies[T]
+	deployment       runtime.Deployment
 	slot             int
 	workerGeneration uint64
 
@@ -76,20 +76,20 @@ type pluginWorkerMeta[T plugin.Syncable] struct {
 	ready    bool
 }
 
-type pluginWorkerStarted struct {
+type MessagePluginWorkerStarted struct {
 	slot             int
 	alias            gen.Alias
 	workerGeneration uint64
 }
 
-type pluginWorkerLaunchFailed struct {
+type MessagePluginWorkerLaunchFailed struct {
 	slot             int
 	alias            gen.Alias
 	workerGeneration uint64
 	err              error
 }
 
-type pluginWorkerInvoke[T plugin.Syncable] struct {
+type MessagePluginWorkerInvoke[T plugin.Syncable] struct {
 	callID           uint64
 	context          context.Context
 	fn               func(context.Context, T) error
@@ -97,7 +97,7 @@ type pluginWorkerInvoke[T plugin.Syncable] struct {
 	invocationID     uint64
 }
 
-type pluginWorkerInvocationFinished struct {
+type MessagePluginWorkerInvocationFinished struct {
 	slot             int
 	alias            gen.Alias
 	workerGeneration uint64
@@ -107,16 +107,16 @@ type pluginWorkerInvocationFinished struct {
 	recycle          bool
 }
 
-type pluginWorkerPing struct{}
+type MessagePluginWorkerPing struct{}
 
-type pluginWorkerPingResult struct {
+type MessagePluginWorkerPingResult struct {
 	slot             int
 	alias            gen.Alias
 	workerGeneration uint64
 	err              error
 }
 
-type pluginWorkerStop struct{}
+type MessagePluginWorkerStop struct{}
 
 const pluginRetryPolicy = `{
   "methodConfig": [{
@@ -141,7 +141,7 @@ func (m *pluginWorkerMeta[T]) Init(process gen.MetaProcess) error {
 func (m *pluginWorkerMeta[T]) Start() error {
 	instance, client, rpc, err := m.launchPlugin(m.runCtx)
 	if err != nil {
-		_ = m.Send(m.Parent(), pluginWorkerLaunchFailed{
+		_ = m.Send(m.Parent(), MessagePluginWorkerLaunchFailed{
 			slot:             m.slot,
 			alias:            m.ID(),
 			workerGeneration: m.workerGeneration,
@@ -154,7 +154,7 @@ func (m *pluginWorkerMeta[T]) Start() error {
 	m.instance, m.client, m.rpc, m.ready = instance, client, rpc, true
 	m.stateMu.Unlock()
 
-	if err := m.Send(m.Parent(), pluginWorkerStarted{
+	if err := m.Send(m.Parent(), MessagePluginWorkerStarted{
 		slot:             m.slot,
 		alias:            m.ID(),
 		workerGeneration: m.workerGeneration,
@@ -169,9 +169,9 @@ func (m *pluginWorkerMeta[T]) Start() error {
 
 func (m *pluginWorkerMeta[T]) HandleMessage(_ gen.PID, message any) error {
 	switch msg := message.(type) {
-	case pluginWorkerInvoke[T]:
+	case MessagePluginWorkerInvoke[T]:
 		if msg.workerGeneration != m.workerGeneration {
-			m.reportInvocationFinished(msg, ErrPluginUnavailable, false)
+			m.reportInvocationFinished(msg, runtime.ErrPluginUnavailable, false)
 			return nil
 		}
 
@@ -179,7 +179,7 @@ func (m *pluginWorkerMeta[T]) HandleMessage(_ gen.PID, message any) error {
 		instance, ready := m.instance, m.ready
 		m.stateMu.RUnlock()
 		if !ready {
-			m.reportInvocationFinished(msg, ErrPluginUnavailable, false)
+			m.reportInvocationFinished(msg, runtime.ErrPluginUnavailable, false)
 			return nil
 		}
 
@@ -190,7 +190,7 @@ func (m *pluginWorkerMeta[T]) HandleMessage(_ gen.PID, message any) error {
 			m.close()
 		}
 
-	case pluginWorkerPing:
+	case MessagePluginWorkerPing:
 		m.stateMu.RLock()
 		rpc, ready := m.rpc, m.ready
 		m.stateMu.RUnlock()
@@ -201,7 +201,7 @@ func (m *pluginWorkerMeta[T]) HandleMessage(_ gen.PID, message any) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		_, err := rpc.Ping(ctx, &emptypb.Empty{})
 		cancel()
-		_ = m.Send(m.Parent(), pluginWorkerPingResult{
+		_ = m.Send(m.Parent(), MessagePluginWorkerPingResult{
 			slot:             m.slot,
 			alias:            m.ID(),
 			workerGeneration: m.workerGeneration,
@@ -211,14 +211,14 @@ func (m *pluginWorkerMeta[T]) HandleMessage(_ gen.PID, message any) error {
 			m.close()
 		}
 
-	case pluginWorkerStop:
+	case MessagePluginWorkerStop:
 		m.close()
 	}
 	return nil
 }
 
-func (m *pluginWorkerMeta[T]) HandleCall(gen.PID, gen.Ref, any) (any, error) {
-	return nil, nil
+func (m *pluginWorkerMeta[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
+	return nil, fmt.Errorf("actorruntime: unsupported plugin worker call %T", request)
 }
 
 func (m *pluginWorkerMeta[T]) Terminate(error) { m.close() }
@@ -245,8 +245,8 @@ func (m *pluginWorkerMeta[T]) close() {
 	})
 }
 
-func (m *pluginWorkerMeta[T]) reportInvocationFinished(msg pluginWorkerInvoke[T], err error, recycle bool) {
-	_ = m.Send(m.Parent(), pluginWorkerInvocationFinished{
+func (m *pluginWorkerMeta[T]) reportInvocationFinished(msg MessagePluginWorkerInvoke[T], err error, recycle bool) {
+	_ = m.Send(m.Parent(), MessagePluginWorkerInvocationFinished{
 		slot:             m.slot,
 		alias:            m.ID(),
 		workerGeneration: m.workerGeneration,
@@ -267,12 +267,12 @@ func (m *pluginWorkerMeta[T]) launchPlugin(ctx context.Context) (T, *goplugin.Cl
 		HandshakeConfig: goplugin.HandshakeConfig{
 			ProtocolVersion:  handshake.ProtocolVersion,
 			MagicCookieKey:   handshake.CookieKey,
-			MagicCookieValue: m.deps.adapter.MagicValue(),
+			MagicCookieValue: m.deps.Adapter.MagicValue(),
 		},
-		Cmd:              exec.CommandContext(ctx, m.deployment.path),
+		Cmd:              exec.CommandContext(ctx, m.deployment.Path),
 		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
 		Plugins: map[string]goplugin.Plugin{
-			m.deps.adapter.PluginKey(): m.deps.adapter.GRPCPlugin(),
+			m.deps.Adapter.PluginKey(): m.deps.Adapter.GRPCPlugin(),
 		},
 		GRPCDialOptions: []grpc.DialOption{
 			grpc.WithDefaultServiceConfig(pluginRetryPolicy),
@@ -284,7 +284,7 @@ func (m *pluginWorkerMeta[T]) launchPlugin(ctx context.Context) (T, *goplugin.Cl
 		client.Kill()
 		return zero, nil, nil, fmt.Errorf("connect: %w", err)
 	}
-	raw, err := rawClient.Dispense(m.deps.adapter.PluginKey())
+	raw, err := rawClient.Dispense(m.deps.Adapter.PluginKey())
 	if err != nil {
 		client.Kill()
 		return zero, nil, nil, fmt.Errorf("dispense: %w", err)
@@ -292,7 +292,7 @@ func (m *pluginWorkerMeta[T]) launchPlugin(ctx context.Context) (T, *goplugin.Cl
 
 	handshakeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	value, rpc, err := m.deps.adapter.Handshake(handshakeCtx, raw, m.deployment.path, m.deployment.hash)
+	value, rpc, err := m.deps.Adapter.Handshake(handshakeCtx, raw, m.deployment.Path, m.deployment.Hash)
 	if err != nil {
 		client.Kill()
 		return zero, nil, nil, err
@@ -301,12 +301,12 @@ func (m *pluginWorkerMeta[T]) launchPlugin(ctx context.Context) (T, *goplugin.Cl
 }
 
 func (m *pluginWorkerMeta[T]) validateArtifact() error {
-	digest, err := helpers.BinaryChecksum(m.deployment.path)
+	digest, err := helpers.BinaryChecksum(m.deployment.Path)
 	if err != nil {
-		return fmt.Errorf("checksum plugin artifact %s: %w", m.deployment.path, err)
+		return fmt.Errorf("checksum plugin artifact %s: %w", m.deployment.Path, err)
 	}
-	if digest != m.deployment.hash {
-		return fmt.Errorf("%w: %s expected %s, found %s", ErrArtifactMismatch, m.deployment.path, m.deployment.hash, digest)
+	if digest != m.deployment.Hash {
+		return fmt.Errorf("%w: %s expected %s, found %s", runtime.ErrArtifactMismatch, m.deployment.Path, m.deployment.Hash, digest)
 	}
 	return nil
 }

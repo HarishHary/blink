@@ -61,7 +61,7 @@ func RuntimeEventsFor(node gen.Node, name gen.Atom) RuntimeEvents {
 
 type runtimeSupervisorOptions[T plugin.Syncable] struct {
 	Name          gen.Atom
-	Dependencies  actorDependencies[T]
+	Dependencies  runtime.ActorDependencies[T]
 	SnapshotEvent gen.Event
 	Directory     string
 	Stopped       chan<- error
@@ -74,7 +74,13 @@ type runtimeDrainWaiter struct {
 
 func (t runtimeDrainWaiter) alive() bool { return t.ref.IsAlive() }
 
-type runtimeDrainReply struct{ Err error }
+type DrainRequest struct{}
+
+type DrainResponse struct{ Err error }
+
+type RuntimeStatusRequest struct{}
+
+type RuntimeStatusResponse struct{ Status RuntimeStatus }
 
 type runtimeInvocationState struct {
 	catalogPID gen.PID
@@ -120,7 +126,7 @@ type MessageApplyDesiredState struct {
 	desired MessageApplyCatalogDesiredState
 }
 
-type runtimeSubmit[T plugin.Syncable] struct {
+type MessageSubmitInvocation[T plugin.Syncable] struct {
 	callID               uint64
 	context              context.Context
 	pluginID, rolloutKey string
@@ -129,15 +135,13 @@ type runtimeSubmit[T plugin.Syncable] struct {
 	result               *runtime.AsyncResult
 }
 
-type runtimeGetStatus struct{}
-
 func newRuntimeSupervisor[T plugin.Syncable](opts runtimeSupervisorOptions[T]) gen.ProcessBehavior {
 	return &runtimeSupervisor[T]{opts: opts}
 }
 
 func (s *runtimeSupervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 	if s.opts.Name == "" ||
-		s.opts.Dependencies.adapter == nil ||
+		s.opts.Dependencies.Adapter == nil ||
 		s.opts.SnapshotEvent.Name == "" ||
 		s.opts.Directory == "" {
 		return act.SupervisorSpec{}, fmt.Errorf(
@@ -178,9 +182,9 @@ func (s *runtimeSupervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 					return newDesiredStateReconcilerActor(
 						s.opts.SnapshotEvent,
 						s.opts.Directory,
-						s.opts.Dependencies.adapter,
-						s.opts.Dependencies.retryMin,
-						s.opts.Dependencies.retryMax,
+						s.opts.Dependencies.Adapter,
+						s.opts.Dependencies.RetryMin,
+						s.opts.Dependencies.RetryMax,
 					)
 				},
 				Options: gen.ProcessOptions{},
@@ -197,10 +201,10 @@ func (s *runtimeSupervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 }
 
 // HandleCall remains control-plane only. Plugin execution enters through
-// runtimeSubmit in HandleMessage and never blocks an Ergo Call callback.
+// MessageSubmitInvocation in HandleMessage and never blocks an Ergo Call callback.
 func (s *runtimeSupervisor[T]) HandleCall(from gen.PID, ref gen.Ref, request any) (any, error) {
 	switch request.(type) {
-	case drain:
+	case DrainRequest:
 		s.drainWaiters = append(s.drainWaiters, runtimeDrainWaiter{pid: from, ref: ref})
 		if s.draining {
 			return nil, nil
@@ -210,23 +214,23 @@ func (s *runtimeSupervisor[T]) HandleCall(from gen.PID, ref gen.Ref, request any
 		s.reconcileStatus()
 		s.publishStatus()
 		if s.catalog.pid != (gen.PID{}) {
-			_ = s.Send(s.catalog.pid, drain{})
+			_ = s.Send(s.catalog.pid, runtime.MessageDrain{})
 		}
 		return nil, nil
 
-	case runtimeGetStatus:
-		return s.liveStatus.clone(), nil
+	case RuntimeStatusRequest:
+		return RuntimeStatusResponse{Status: s.liveStatus.clone()}, nil
 
 	default:
-		return runtimeDrainReply{Err: fmt.Errorf("actorruntime: unsupported supervisor call %T", request)}, nil
+		return nil, fmt.Errorf("actorruntime: unsupported supervisor call %T", request)
 	}
 }
 
 func (s *runtimeSupervisor[T]) HandleMessage(from gen.PID, message any) error {
 	switch m := message.(type) {
-	case runtimeSubmit[T]:
+	case MessageSubmitInvocation[T]:
 		if s.draining || s.catalog.pid == (gen.PID{}) {
-			m.result.Complete(ErrPluginUnavailable)
+			m.result.Complete(runtime.ErrPluginUnavailable)
 			return nil
 		}
 		if err := m.context.Err(); err != nil {
@@ -239,16 +243,16 @@ func (s *runtimeSupervisor[T]) HandleMessage(from gen.PID, message any) error {
 			catalogPID: catalogPID,
 			result:     m.result,
 		}
-		call := invokeCall[T]{
-			callID:     m.callID,
-			context:    m.context,
-			pluginID:   m.pluginID,
-			rolloutKey: m.rolloutKey,
-			fn:         m.fn,
-			shadow:     m.shadow,
+		call := runtime.MessageInvokePlugin[T]{
+			CallID:     m.callID,
+			Context:    m.context,
+			PluginID:   m.pluginID,
+			RolloutKey: m.rolloutKey,
+			Fn:         m.fn,
+			Shadow:     m.shadow,
 		}
 		if err := s.Send(catalogPID, call); err != nil {
-			s.finishCall(m.callID, ErrPluginUnavailable)
+			s.finishCall(m.callID, runtime.ErrPluginUnavailable)
 			_ = s.Node().SendExit(
 				catalogPID,
 				fmt.Errorf("forward invocation to catalog: %w", err),
@@ -282,19 +286,19 @@ func (s *runtimeSupervisor[T]) HandleMessage(from gen.PID, message any) error {
 		s.reconcileStatus()
 		s.publishStatus()
 
-	case cancelCall:
-		call, ok := s.inFlightInvocations[m.callID]
+	case runtime.MessageCancelInvocation:
+		call, ok := s.inFlightInvocations[m.CallID]
 		if !ok {
 			return nil
 		}
 		if err := s.Send(call.catalogPID, m); err != nil {
-			s.finishCall(m.callID, m.err)
+			s.finishCall(m.CallID, m.Err)
 		}
 
-	case callCompleted:
-		s.finishCall(m.callID, m.err)
+	case runtime.MessageInvocationCompleted:
+		s.finishCall(m.CallID, m.Err)
 
-	case catalogStatusChanged:
+	case MessageCatalogStatusChanged:
 		if from != s.catalog.pid ||
 			m.pid != s.catalog.pid ||
 			m.generation != s.catalog.actorGeneration ||
@@ -307,7 +311,7 @@ func (s *runtimeSupervisor[T]) HandleMessage(from gen.PID, message any) error {
 		s.reconcileStatus()
 		s.publishStatus()
 
-	case catalogDrained:
+	case MessageCatalogDrained:
 		if !s.draining ||
 			from != s.catalog.pid ||
 			m.pid != s.catalog.pid ||
@@ -316,11 +320,11 @@ func (s *runtimeSupervisor[T]) HandleMessage(from gen.PID, message any) error {
 		}
 
 		for callID := range s.inFlightInvocations {
-			s.finishCall(callID, ErrPluginUnavailable)
+			s.finishCall(callID, runtime.ErrPluginUnavailable)
 		}
 		for _, waiter := range s.drainWaiters {
 			if waiter.alive() {
-				_ = s.SendResponse(waiter.pid, waiter.ref, runtimeDrainReply{})
+				_ = s.SendResponse(waiter.pid, waiter.ref, DrainResponse{})
 			}
 		}
 		s.drainWaiters = nil
@@ -356,7 +360,7 @@ func (s *runtimeSupervisor[T]) HandleChildTerminate(name gen.Atom, pid gen.PID, 
 
 func (s *runtimeSupervisor[T]) Terminate(reason error) {
 	for callID := range s.inFlightInvocations {
-		s.finishCall(callID, ErrPluginUnavailable)
+		s.finishCall(callID, runtime.ErrPluginUnavailable)
 	}
 
 	s.liveStatus.Lifecycle = RuntimeStopped
@@ -420,7 +424,7 @@ func (s *runtimeSupervisor[T]) startCatalogIncarnation(pid gen.PID) error {
 	s.reconcileStatus()
 	s.publishStatus()
 
-	if err := s.Send(pid, catalogActivate{generation: state.actorGeneration}); err != nil {
+	if err := s.Send(pid, MessageCatalogActivate{generation: state.actorGeneration}); err != nil {
 		_ = s.Node().SendExit(pid, fmt.Errorf("activate catalog: %w", err))
 		return nil
 	}
@@ -431,7 +435,7 @@ func (s *runtimeSupervisor[T]) startCatalogIncarnation(pid gen.PID) error {
 		}
 	}
 	if s.draining {
-		if err := s.Send(pid, drain{}); err != nil {
+		if err := s.Send(pid, runtime.MessageDrain{}); err != nil {
 			_ = s.Node().SendExit(
 				pid,
 				fmt.Errorf("drain replacement catalog: %w", err),
@@ -478,7 +482,7 @@ func (s *runtimeSupervisor[T]) retireCatalogIncarnation(pid gen.PID, reason erro
 
 	for callID, call := range s.inFlightInvocations {
 		if call.catalogPID == pid {
-			s.finishCall(callID, ErrPluginUnavailable)
+			s.finishCall(callID, runtime.ErrPluginUnavailable)
 		}
 	}
 }

@@ -52,7 +52,7 @@ type Options[T plugin.Syncable] struct {
 // runtimeSupervisor subtree on a shared, process-owned Ergo node.
 type Runtime[T plugin.Syncable] struct {
 	node gen.Node
-	deps actorDependencies[T]
+	deps runtime.ActorDependencies[T]
 
 	name           gen.Atom
 	events         RuntimeEvents
@@ -118,14 +118,14 @@ func NewOnNode[T plugin.Syncable](n gen.Node, opts Options[T]) (*Runtime[T], err
 		opts.CloseTimeout = opts.DrainTimeout + 5*time.Second
 	}
 
-	deps := actorDependencies[T]{
-		node:           n,
-		adapter:        opts.Adapter,
-		queueSize:      opts.QueueSize,
-		drainTimeout:   opts.DrainTimeout,
-		healthInterval: opts.HealthInterval,
-		retryMin:       opts.RetryMin,
-		retryMax:       opts.RetryMax,
+	deps := runtime.ActorDependencies[T]{
+		Node:           n,
+		Adapter:        opts.Adapter,
+		QueueSize:      opts.QueueSize,
+		DrainTimeout:   opts.DrainTimeout,
+		HealthInterval: opts.HealthInterval,
+		RetryMin:       opts.RetryMin,
+		RetryMax:       opts.RetryMax,
 	}
 
 	events := RuntimeEventsFor(n, opts.Name)
@@ -199,9 +199,9 @@ func (r *Runtime[T]) observeSupervisorExit(pid gen.PID, exited <-chan error, roo
 	r.rootReason = reason
 	close(rootDone)
 
-	pendingErr := ErrRuntimeStopped
+	pendingErr := runtime.ErrRuntimeStopped
 	if r.closing {
-		pendingErr = ErrPluginUnavailable
+		pendingErr = runtime.ErrPluginUnavailable
 	}
 	for _, pending := range r.pending {
 		pending.Complete(pendingErr)
@@ -214,7 +214,7 @@ func (r *Runtime[T]) observeSupervisorExit(pid gen.PID, exited <-chan error, roo
 	r.closing = true
 	r.started = false
 	r.closed = true
-	r.closeErr = fmt.Errorf("%w: supervisor %v terminated: %v", ErrRuntimeStopped, pid, reason)
+	r.closeErr = fmt.Errorf("%w: supervisor %v terminated: %v", runtime.ErrRuntimeStopped, pid, reason)
 	if r.closeDone == nil {
 		r.closeDone = make(chan struct{})
 	}
@@ -229,7 +229,7 @@ func (r *Runtime[T]) Wait(ctx context.Context) error {
 	r.mu.Lock()
 	if !r.started && r.rootDone == nil {
 		r.mu.Unlock()
-		return ErrRuntimeNotStarted
+		return runtime.ErrRuntimeNotStarted
 	}
 	rootDone := r.rootDone
 	r.mu.Unlock()
@@ -242,7 +242,7 @@ func (r *Runtime[T]) Wait(ctx context.Context) error {
 			return r.closeErr
 		}
 		if r.rootReason != nil && !errors.Is(r.rootReason, gen.TerminateReasonNormal) {
-			return fmt.Errorf("%w: %v", ErrRuntimeStopped, r.rootReason)
+			return fmt.Errorf("%w: %v", runtime.ErrRuntimeStopped, r.rootReason)
 		}
 		return nil
 	case <-ctx.Done():
@@ -260,34 +260,34 @@ func (r *Runtime[T]) Status(ctx context.Context) (RuntimeStatus, error) {
 	switch {
 	case r.closed:
 		r.mu.Unlock()
-		return RuntimeStatus{}, ErrRuntimeStopped
+		return RuntimeStatus{}, runtime.ErrRuntimeStopped
 	case !r.started:
 		r.mu.Unlock()
-		return RuntimeStatus{}, ErrRuntimeNotStarted
+		return RuntimeStatus{}, runtime.ErrRuntimeNotStarted
 	}
 	n, supervisor, rootDone := r.node, r.supervisor, r.rootDone
 	r.mu.Unlock()
 
-	response, err := callPIDWithContext(ctx, n, supervisor, runtimeGetStatus{}, r.controlTimeout)
+	response, err := callPIDWithContext(ctx, n, supervisor, RuntimeStatusRequest{}, r.controlTimeout)
 	if err != nil {
 		// The supervisor may have terminated between the liveness check and the
 		// request. Prefer the runtime-level terminal error over a transport error.
 		select {
 		case <-rootDone:
-			return RuntimeStatus{}, ErrRuntimeStopped
+			return RuntimeStatus{}, runtime.ErrRuntimeStopped
 		default:
 		}
 		return RuntimeStatus{}, err
 	}
 
-	status, ok := response.(RuntimeStatus)
+	status, ok := response.(RuntimeStatusResponse)
 	if !ok {
 		return RuntimeStatus{}, fmt.Errorf(
 			"actorruntime: unexpected status response %T",
 			response,
 		)
 	}
-	return status, nil
+	return status.Status, nil
 }
 
 // ErrShadowDropped means best-effort shadow admission was full. Production is
@@ -382,7 +382,7 @@ func (r *Runtime[T]) checkAccepting() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if !r.started || r.closing || r.closed {
-		return ErrRuntimeNotStarted
+		return runtime.ErrRuntimeNotStarted
 	}
 	return nil
 }
@@ -402,7 +402,7 @@ func (r *Runtime[T]) submit(ctx context.Context, pluginID string, rolloutKey str
 	r.mu.Lock()
 	if !r.started || r.closing || r.closed {
 		r.mu.Unlock()
-		return fail(ErrRuntimeNotStarted)
+		return fail(runtime.ErrRuntimeNotStarted)
 	}
 	nodeRef, supervisor := r.node, r.supervisor
 	r.mu.Unlock()
@@ -410,18 +410,18 @@ func (r *Runtime[T]) submit(ctx context.Context, pluginID string, rolloutKey str
 	callID := r.nextCallID.Add(1)
 	result := runtime.NewAsyncResult()
 	state := runtime.NewInvocationState(func(err error) {
-		_ = nodeRef.Send(supervisor, cancelCall{callID: callID, err: err})
+		_ = nodeRef.Send(supervisor, runtime.MessageCancelInvocation{CallID: callID, Err: err})
 	})
 
 	r.mu.Lock()
 	if !r.started || r.closing || r.closed {
 		r.mu.Unlock()
-		return fail(ErrRuntimeNotStarted)
+		return fail(runtime.ErrRuntimeNotStarted)
 	}
 	r.pending[callID] = result
 	r.mu.Unlock()
 
-	request := runtimeSubmit[T]{
+	request := MessageSubmitInvocation[T]{
 		callID:     callID,
 		context:    ctx,
 		pluginID:   pluginID,
@@ -519,9 +519,9 @@ func (r *Runtime[T]) Close(ctx context.Context) error {
 }
 
 func (r *Runtime[T]) drainAndStop(ctx context.Context, n gen.Node, supervisor gen.PID, rootDone <-chan struct{}) error {
-	response, err := callPIDWithContext(ctx, n, supervisor, drain{}, r.closeTimeout)
+	response, err := callPIDWithContext(ctx, n, supervisor, DrainRequest{}, r.closeTimeout)
 	if err == nil {
-		reply, ok := response.(runtimeDrainReply)
+		reply, ok := response.(DrainResponse)
 		if !ok {
 			err = fmt.Errorf("actorruntime: unexpected drain response %T", response)
 		} else {
