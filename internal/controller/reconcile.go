@@ -14,9 +14,9 @@ type CatalogGroup[T plugin.Syncable] struct {
 	Entries []T
 }
 
-// validateGroup checks a group's rollout policy: at least one BG (stable baseline), at most one BG,
+// ValidateGroup checks a group's rollout policy: at least one BG (stable baseline), at most one BG,
 // at most one CN/SH. Returns error strings; an empty slice means valid.
-func validateGroup[T plugin.Syncable](group CatalogGroup[T]) []string {
+func ValidateGroup[T plugin.Syncable](group CatalogGroup[T]) []string {
 	var bgCount, altCount int
 	for _, item := range group.Entries {
 		switch item.Metadata().RolloutMode {
@@ -38,10 +38,10 @@ func validateGroup[T plugin.Syncable](group CatalogGroup[T]) []string {
 	return errs
 }
 
-// electGroup derives the EffectiveEntry for one validated group: BG → Primary, CN/SH → Candidate,
+// ElectGroup derives the EffectiveEntry for one validated group: BG → Primary, CN/SH → Candidate,
 // each carrying its yaml-marshaled spec. Called per changed group (incremental), so the marshal cost
 // is per-change; a marshal error leaves Spec nil (a consumer that needs it skips that artifact).
-func electGroup[T plugin.Syncable](id string, group CatalogGroup[T], digests map[string]string) snapshot.EffectiveEntry {
+func ElectGroup[T plugin.Syncable](id string, group CatalogGroup[T], digests map[string]string) snapshot.EffectiveEntry {
 	e := snapshot.EffectiveEntry{Id: id}
 	anyEnabled := false
 	for _, item := range group.Entries {
@@ -64,9 +64,9 @@ func electGroup[T plugin.Syncable](id string, group CatalogGroup[T], digests map
 	return e
 }
 
-// snapshotChanged reports whether next differs from the prior snapshot content.
+// SnapshotChanged reports whether next differs from the prior snapshot content.
 // Generation is excluded - it is set by the caller after this check.
-func snapshotChanged(next []snapshot.EffectiveEntry, prior *snapshot.Snapshot) bool {
+func SnapshotChanged(next []snapshot.EffectiveEntry, prior *snapshot.Snapshot) bool {
 	if prior == nil || len(next) != len(prior.Entries) {
 		return true
 	}
@@ -102,11 +102,11 @@ func snapshotChanged(next []snapshot.EffectiveEntry, prior *snapshot.Snapshot) b
 	return false
 }
 
-// diffEntries computes the per-ID upserts + tombstones to publish on the keyed topic (one compacted
+// DiffEntries computes the per-ID upserts + tombstones to publish on the keyed topic (one compacted
 // message per ID; no whole-snapshot message). On bootstrap (prior == nil) every entry is republished
 // and tombstones come from the store's StatusAbsent records - so a delete that happened while the
 // controller was down is re-emitted and a cold-starting reader never resurrects the ID.
-func diffEntries(prior *snapshot.Snapshot, next []snapshot.EffectiveEntry, records map[string]*backends.ControllerRecord) (upserts []snapshot.EffectiveEntry, tombstones []string) {
+func DiffEntries(prior *snapshot.Snapshot, next []snapshot.EffectiveEntry, records map[string]*backends.ControllerRecord) (upserts []snapshot.EffectiveEntry, tombstones []string) {
 	nextByID := make(map[string]snapshot.EffectiveEntry, len(next))
 	for _, e := range next {
 		nextByID[e.Id] = e
@@ -141,19 +141,19 @@ func diffEntries(prior *snapshot.Snapshot, next []snapshot.EffectiveEntry, recor
 	return upserts, tombstones
 }
 
-// entryEqual reports whether two entries match on everything a consumer routes/configures on,
+// EffectiveEntryEqual reports whether two entries match on everything a consumer routes/configures on,
 // including each artifact's spec - so a metadata-only edit (same binary) is detected as a change.
-func entryEqual(a, b snapshot.EffectiveEntry) bool {
-	return a.Id == b.Id && a.Enabled == b.Enabled &&
-		refEqual(a.Primary, b.Primary) && refEqual(a.Candidate, b.Candidate)
+func EffectiveEntryEqual(left, right snapshot.EffectiveEntry) bool {
+	return left.Id == right.Id && left.Enabled == right.Enabled &&
+		ArtifactRefEqual(left.Primary, right.Primary) && ArtifactRefEqual(left.Candidate, right.Candidate)
 }
 
-func refEqual(a, b *snapshot.ArtifactRef) bool {
-	if (a == nil) != (b == nil) {
+func ArtifactRefEqual(left, right *snapshot.ArtifactRef) bool {
+	if (left == nil) != (right == nil) {
 		return false
 	}
-	if a == nil {
+	if left == nil {
 		return true
 	}
-	return a.Name == b.Name && a.RolloutMode == b.RolloutMode && a.Hash == b.Hash && string(a.Spec) == string(b.Spec)
+	return left.Name == right.Name && left.RolloutMode == right.RolloutMode && left.Hash == right.Hash && string(left.Spec) == string(right.Spec)
 }

@@ -24,3 +24,9 @@ type ControllerRecord struct {
 	Status           RecordStatus
 	ValidationErrors []string
 }
+
+// Clone returns a deep copy of the record.
+func (r ControllerRecord) Clone() ControllerRecord {
+	r.ValidationErrors = append([]string(nil), r.ValidationErrors...)
+	return r
+}
