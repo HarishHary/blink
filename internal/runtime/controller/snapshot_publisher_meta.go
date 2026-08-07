@@ -59,9 +59,10 @@ type MessageSnapshotPublicationResult struct {
 type snapshotPublisherMeta struct {
 	gen.MetaProcess
 
-	database    backends.Database
-	writer      brokers.Writer
-	incarnation uint64
+	database             backends.Database
+	writer               brokers.Writer
+	incarnation          uint64
+	controllerSupervisor gen.PID
 
 	runCtx context.Context
 	cancel context.CancelFunc
@@ -75,13 +76,34 @@ func (m *snapshotPublisherMeta) Init(process gen.MetaProcess) error {
 	m.MetaProcess = process
 	m.runCtx, m.cancel = context.WithCancel(context.Background())
 	m.jobs = make(chan MessagePublishSnapshot, 1)
+	if m.controllerSupervisor != (gen.PID{}) {
+		if err := m.Send(m.controllerSupervisor, MessageSnapshotPublisherIOStarted{
+			Controller:  m.Parent(),
+			Incarnation: m.incarnation,
+		}); err != nil {
+			return fmt.Errorf("snapshot publisher meta: register I/O: %w", err)
+		}
+	}
 	return nil
 }
 
 func (m *snapshotPublisherMeta) Start() error {
+	defer func() {
+		if m.controllerSupervisor != (gen.PID{}) {
+			_ = m.Send(m.controllerSupervisor, MessageSnapshotPublisherIOStopped{
+				Controller:  m.Parent(),
+				Incarnation: m.incarnation,
+			})
+		}
+	}()
+
 	records, generation, saved, err := m.load()
 	if sendErr := m.Send(m.Parent(), MessageSnapshotPublisherLoadResult{
-		incarnation: m.incarnation, records: records, generation: generation, snapshot: saved, err: err,
+		incarnation: m.incarnation, r
+		ecords: records,
+		generation: generation,
+		snapshot: saved,
+		err: err,
 	}); sendErr != nil {
 		return fmt.Errorf("%w: send result: %w", runtime.ErrSnapshotLoad, sendErr)
 	}
@@ -102,16 +124,19 @@ func (m *snapshotPublisherMeta) Start() error {
 }
 
 func (m *snapshotPublisherMeta) HandleMessage(_ gen.PID, message any) error {
-	job, ok := message.(MessagePublishSnapshot)
-	if !ok || job.incarnation != m.incarnation {
-		return nil
+	switch message := message.(type) {
+	case MessagePublishSnapshot:
+		if message.incarnation != m.incarnation {
+			return nil
+		}
+		select {
+		case m.jobs <- message:
+			return nil
+		default:
+			return fmt.Errorf("%w: already queued", runtime.ErrSnapshotPublish)
+		}
 	}
-	select {
-	case m.jobs <- job:
-		return nil
-	default:
-		return fmt.Errorf("%w: already queued", runtime.ErrSnapshotPublish)
-	}
+	return nil
 }
 
 func (m *snapshotPublisherMeta) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
