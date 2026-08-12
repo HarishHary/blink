@@ -17,6 +17,11 @@ import (
 	"github.com/harishhary/blink/internal/snapshot"
 )
 
+const (
+	scannerDebounce = 400 * time.Millisecond
+	scannerPoll     = 5 * time.Second
+)
+
 // ArtifactScannerLifecycle describes the controller-owned scanner meta lifecycle.
 type ArtifactScannerLifecycle string
 
@@ -38,19 +43,6 @@ type ArtifactScannerStatus struct {
 	LastError      error
 }
 
-const (
-	scannerDebounce = 400 * time.Millisecond
-	scannerPoll     = 5 * time.Second
-)
-
-type MessageArtifactScanResult struct {
-	incarnation uint64
-	complete    bool
-	entries     []snapshot.EffectiveEntry
-	presentIDs  []string
-	err         error
-}
-
 // artifactScannerMeta owns filesystem observation and parsing for one controller incarnation.
 type artifactScannerMeta[T plugin.Syncable] struct {
 	gen.MetaProcess
@@ -65,6 +57,18 @@ type artifactScannerMeta[T plugin.Syncable] struct {
 	runCtx    context.Context
 	cancelRun context.CancelFunc
 }
+
+// --- messages ---
+
+type MessageArtifactScanResult struct {
+	incarnation uint64
+	complete    bool
+	entries     []snapshot.EffectiveEntry
+	presentIDs  []string
+	err         error
+}
+
+// --- messages ---
 
 func (m *artifactScannerMeta[T]) Init(process gen.MetaProcess) error {
 	if m.directory == "" || m.loader == nil {
@@ -86,7 +90,7 @@ func (m *artifactScannerMeta[T]) Start() error {
 	if m.runCtx.Err() != nil {
 		return nil
 	}
-	if err := m.sendScan(m.attach(watcher)); err != nil {
+	if err := m.sendScan(watcher); err != nil {
 		return err
 	}
 
@@ -138,11 +142,11 @@ func (m *artifactScannerMeta[T]) Start() error {
 			return fmt.Errorf("%w: %w", runtime.ErrArtifactWatch, err)
 		case <-debounceC:
 			debounceC = nil
-			if err := m.sendScan(m.attach(watcher)); err != nil {
+			if err := m.sendScan(watcher); err != nil {
 				return err
 			}
 		case <-poll.C:
-			if err := m.sendScan(m.attach(watcher)); err != nil {
+			if err := m.sendScan(watcher); err != nil {
 				return err
 			}
 		}
@@ -165,18 +169,16 @@ func (m *artifactScannerMeta[T]) HandleInspect(gen.PID, ...string) map[string]st
 	return map[string]string{"incarnation": fmt.Sprintf("%d", m.incarnation)}
 }
 
-func (m *artifactScannerMeta[T]) attach(watcher *fsnotify.Watcher) error {
-	if err := watcher.Add(m.directory); err != nil && !strings.Contains(err.Error(), "exists") {
-		return err
+func (m *artifactScannerMeta[T]) sendScan(watcher *fsnotify.Watcher) error {
+	attachErr := watcher.Add(m.directory)
+	if attachErr != nil && strings.Contains(attachErr.Error(), "exists") {
+		attachErr = nil
 	}
-	return nil
-}
-
-func (m *artifactScannerMeta[T]) sendScan(attachErr error) error {
 	entries, ids, complete, err := m.scan()
 	if err == nil && attachErr != nil {
 		err = fmt.Errorf("%w: directory %q: %w", runtime.ErrArtifactWatch, m.directory, attachErr)
 	}
+	entries = cloneEntries(entries)
 	if sendErr := m.Send(m.Parent(), MessageArtifactScanResult{
 		incarnation: m.incarnation,
 		complete:    complete,

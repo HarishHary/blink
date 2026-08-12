@@ -33,7 +33,22 @@ type SnapshotPublisherStatus struct {
 	LastError      error
 }
 
-type MessageSnapshotPublisherLoadResult struct {
+// snapshotPublisherMeta owns blocking persistence and broker writes for one controller incarnation.
+type snapshotPublisherMeta struct {
+	gen.MetaProcess
+
+	database    backends.Database
+	writer      brokers.Writer
+	incarnation uint64
+
+	runCtx    context.Context
+	cancelRun context.CancelFunc
+	jobs      chan MessagePublishSnapshot
+}
+
+// --- messages ---
+
+type MessageSnapshotLoadResult struct {
 	incarnation uint64
 	records     []backends.ControllerRecord
 	generation  int64
@@ -41,69 +56,51 @@ type MessageSnapshotPublisherLoadResult struct {
 	err         error
 }
 
-type MessagePublishSnapshot struct {
-	incarnation uint64
-	records     []backends.ControllerRecord
-	next        snapshot.Snapshot
-	changed     bool
-	upserts     []snapshot.EffectiveEntry
-	tombstones  []string
-}
-
-type MessageSnapshotPublicationResult struct {
+type MessageSnapshotPublishResult struct {
 	incarnation uint64
 	err         error
 }
 
-// snapshotPublisherMeta owns blocking persistence and broker writes for one controller incarnation.
-type snapshotPublisherMeta struct {
-	gen.MetaProcess
+// MessageSnapshotPublisherIOStopped proves an accepted meta Start invocation returned.
+type MessageSnapshotPublisherIOStopped struct{ Incarnation uint64 }
 
-	database             backends.Database
-	writer               brokers.Writer
-	incarnation          uint64
-	controllerSupervisor gen.PID
-
-	runCtx context.Context
-	cancel context.CancelFunc
-	jobs   chan MessagePublishSnapshot
-}
+// --- messages ---
 
 func (m *snapshotPublisherMeta) Init(process gen.MetaProcess) error {
 	if m.database == nil || m.writer == nil {
 		return fmt.Errorf("snapshot publisher meta: database and writer are required")
 	}
 	m.MetaProcess = process
-	m.runCtx, m.cancel = context.WithCancel(context.Background())
+	m.runCtx, m.cancelRun = context.WithCancel(context.Background())
 	m.jobs = make(chan MessagePublishSnapshot, 1)
-	if m.controllerSupervisor != (gen.PID{}) {
-		if err := m.Send(m.controllerSupervisor, MessageSnapshotPublisherIOStarted{
-			Controller:  m.Parent(),
-			Incarnation: m.incarnation,
-		}); err != nil {
-			return fmt.Errorf("snapshot publisher meta: register I/O: %w", err)
-		}
-	}
 	return nil
 }
 
 func (m *snapshotPublisherMeta) Start() error {
 	defer func() {
-		if m.controllerSupervisor != (gen.PID{}) {
-			_ = m.Send(m.controllerSupervisor, MessageSnapshotPublisherIOStopped{
-				Controller:  m.Parent(),
-				Incarnation: m.incarnation,
-			})
-		}
+		_ = m.Send(m.Parent(), MessageSnapshotPublisherIOStopped{Incarnation: m.incarnation})
 	}()
 
-	records, generation, saved, err := m.load()
-	if sendErr := m.Send(m.Parent(), MessageSnapshotPublisherLoadResult{
-		incarnation: m.incarnation, r
-		ecords: records,
-		generation: generation,
-		snapshot: saved,
-		err: err,
+	records, err := m.database.LoadAll(m.runCtx)
+	var generation int64
+	var saved *snapshot.Snapshot
+	if err != nil {
+		err = fmt.Errorf("%w: records: %w", runtime.ErrSnapshotLoad, err)
+	} else if generation, err = m.database.LoadGeneration(m.runCtx); err != nil {
+		err = fmt.Errorf("%w: generation: %w", runtime.ErrSnapshotLoad, err)
+	} else if saved, err = m.database.LoadSnapshot(m.runCtx); err != nil {
+		err = fmt.Errorf("%w: snapshot: %w", runtime.ErrSnapshotLoad, err)
+	}
+	records = append([]backends.ControllerRecord(nil), records...)
+	for i := range records {
+		records[i] = records[i].Clone()
+	}
+	if sendErr := m.Send(m.Parent(), MessageSnapshotLoadResult{
+		incarnation: m.incarnation,
+		records:     records,
+		generation:  generation,
+		snapshot:    saved.Clone(),
+		err:         err,
 	}); sendErr != nil {
 		return fmt.Errorf("%w: send result: %w", runtime.ErrSnapshotLoad, sendErr)
 	}
@@ -114,7 +111,7 @@ func (m *snapshotPublisherMeta) Start() error {
 			return nil
 		case job := <-m.jobs:
 			err := m.publish(job)
-			if sendErr := m.Send(m.Parent(), MessageSnapshotPublicationResult{
+			if sendErr := m.Send(m.Parent(), MessageSnapshotPublishResult{
 				incarnation: m.incarnation, err: err,
 			}); sendErr != nil {
 				return fmt.Errorf("%w: send result: %w", runtime.ErrSnapshotPublish, sendErr)
@@ -144,29 +141,13 @@ func (m *snapshotPublisherMeta) HandleCall(_ gen.PID, _ gen.Ref, request any) (a
 }
 
 func (m *snapshotPublisherMeta) Terminate(error) {
-	if m.cancel != nil {
-		m.cancel()
+	if m.cancelRun != nil {
+		m.cancelRun()
 	}
 }
 
 func (m *snapshotPublisherMeta) HandleInspect(gen.PID, ...string) map[string]string {
 	return map[string]string{"incarnation": fmt.Sprintf("%d", m.incarnation)}
-}
-
-func (m *snapshotPublisherMeta) load() ([]backends.ControllerRecord, int64, *snapshot.Snapshot, error) {
-	records, err := m.database.LoadAll(m.runCtx)
-	if err != nil {
-		return nil, 0, nil, fmt.Errorf("%w: records: %w", runtime.ErrSnapshotLoad, err)
-	}
-	generation, err := m.database.LoadGeneration(m.runCtx)
-	if err != nil {
-		return nil, 0, nil, fmt.Errorf("%w: generation: %w", runtime.ErrSnapshotLoad, err)
-	}
-	saved, err := m.database.LoadSnapshot(m.runCtx)
-	if err != nil {
-		return nil, 0, nil, fmt.Errorf("%w: snapshot: %w", runtime.ErrSnapshotLoad, err)
-	}
-	return records, generation, saved, nil
 }
 
 func (m *snapshotPublisherMeta) publish(job MessagePublishSnapshot) error {
