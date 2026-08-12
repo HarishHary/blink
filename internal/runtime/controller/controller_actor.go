@@ -16,17 +16,15 @@ import (
 	"github.com/harishhary/blink/internal/snapshot"
 )
 
-// ControllerLifecycle describes the stable controller actor lifecycle.
 type ControllerLifecycle string
 
 const (
-	ControllerStarting   ControllerLifecycle = "starting"
-	ControllerRunning    ControllerLifecycle = "running"
-	ControllerRestarting ControllerLifecycle = "restarting"
-	ControllerStopped    ControllerLifecycle = "stopped"
+	ControllerStarting ControllerLifecycle = "starting"
+	ControllerRunning  ControllerLifecycle = "running"
+	ControllerDraining ControllerLifecycle = "draining"
+	ControllerStopped  ControllerLifecycle = "stopped"
 )
 
-// ControllerStatus groups the controller's durable publication state and both metas.
 type ControllerStatus struct {
 	Lifecycle    ControllerLifecycle
 	Availability runtime.Availability
@@ -37,7 +35,6 @@ type ControllerStatus struct {
 	Publisher    SnapshotPublisherStatus
 }
 
-// Options configures one controller actor and its scanner/publisher metas.
 type Options[T plugin.Syncable] struct {
 	Directory  string
 	Loader     plugin.Loader[T]
@@ -48,18 +45,6 @@ type Options[T plugin.Syncable] struct {
 	RetryMin   time.Duration
 	RetryMax   time.Duration
 }
-
-// NewActor returns a controller actor behavior suitable for supervisor wiring.
-func NewActor[T plugin.Syncable](opts Options[T]) gen.ProcessBehavior {
-	return &controllerActor[T]{opts: defaultOptions(opts)}
-}
-
-type MessageControllerActivate struct{}
-type MessageArtifactScannerRestart struct{ token uint64 }
-type MessageSnapshotPublisherRestart struct{ token uint64 }
-type MessageSnapshotPublishRetry struct{ token uint64 }
-
-const publishUnavailableThreshold = 5
 
 type scannerMetaState struct {
 	alias        gen.Alias
@@ -79,6 +64,8 @@ type publisherMetaState struct {
 	restart             *runtime.ScheduledBackoff
 	retry               *runtime.ScheduledBackoff
 	status              SnapshotPublisherStatus
+	activeIO            map[uint64]struct{}
+	replacementPending  bool
 }
 
 type reconcilePlan struct {
@@ -102,7 +89,32 @@ type controllerActor[T plugin.Syncable] struct {
 	committed    *snapshot.Snapshot
 	records      map[string]backends.ControllerRecord
 	pending      *reconcilePlan
+
+	fullRepublishRequired bool
 }
+
+func NewActor[T plugin.Syncable](opts Options[T]) gen.ProcessBehavior {
+	return &controllerActor[T]{opts: defaultOptions(opts)}
+}
+
+// --- messages ---
+
+type MessageControllerActivate struct{}
+type MessageArtifactScannerRestart struct{ token uint64 }
+type MessageSnapshotPublisherRestart struct{ token uint64 }
+type MessageSnapshotPublishRetry struct{ token uint64 }
+type MessagePublishSnapshot struct {
+	incarnation uint64
+	records     []backends.ControllerRecord
+	next        snapshot.Snapshot
+	changed     bool
+	upserts     []snapshot.EffectiveEntry
+	tombstones  []string
+}
+
+// --- messages ---
+
+const publishUnavailableThreshold = 5
 
 func (a *controllerActor[T]) Init(...any) error {
 	if a.opts.Directory == "" || a.opts.Loader == nil || a.opts.Database == nil || a.opts.Writer == nil {
@@ -117,20 +129,39 @@ func (a *controllerActor[T]) Init(...any) error {
 	a.publisher = publisherMetaState{
 		restart: runtime.NewScheduledBackoff(a.opts.RestartMin, a.opts.RestartMax),
 		retry:   runtime.NewScheduledBackoff(a.opts.RetryMin, a.opts.RetryMax),
-		status:  SnapshotPublisherStatus{Lifecycle: SnapshotPublisherStarting, Availability: runtime.AvailabilityUnavailable},
+		status:  SnapshotPublisherStatus{Lifecycle: SnapshotPublisherStarting, Availability: runtime.AvailabilityUnavailable}, activeIO: make(map[uint64]struct{}),
 	}
-	return a.Send(a.PID(), MessageControllerActivate{})
+	return nil
 }
 
 func (a *controllerActor[T]) HandleMessage(_ gen.PID, message any) error {
+	defer a.reportStatus()
+	switch message.(type) {
+	case plugin.MessageDrain:
+		return a.beginDrain()
+	case plugin.MessageStop:
+		return gen.TerminateReasonNormal
+	}
+	if a.lifecycle == ControllerDraining {
+		switch message.(type) {
+		case gen.MessageDownAlias, MessageSnapshotPublisherIOStopped:
+		default:
+			return nil
+		}
+	}
 	switch m := message.(type) {
 	case MessageControllerActivate:
 		if a.lifecycle != ControllerStarting {
 			return nil
 		}
 		a.lifecycle = ControllerRunning
-		a.startScanner()
-		a.startPublisher()
+		if err := a.startScanner(); err != nil {
+			return err
+		}
+		if err := a.startPublisher(); err != nil {
+			return err
+		}
+		return nil
 	case MessageArtifactScanResult:
 		if a.scanner.alias == (gen.Alias{}) || m.incarnation != a.scanner.incarnation {
 			return nil
@@ -152,21 +183,18 @@ func (a *controllerActor[T]) HandleMessage(_ gen.PID, message any) error {
 			a.scanner.status.Availability = runtime.AvailabilityReady
 			a.scanner.status.LastError = nil
 		}
-		a.scanner.entries = append([]snapshot.EffectiveEntry(nil), m.entries...)
-		for i := range a.scanner.entries {
-			a.scanner.entries[i] = a.scanner.entries[i].Clone()
-		}
+		a.scanner.entries = cloneEntries(m.entries)
 		a.scanner.presentIDs = append([]string(nil), m.presentIDs...)
-		a.reconcile()
-	case MessageSnapshotPublisherLoadResult:
+		return a.reconcile()
+	case MessageSnapshotLoadResult:
 		if a.publisher.alias == (gen.Alias{}) || m.incarnation != a.publisher.incarnation {
 			return nil
 		}
 		if m.err != nil {
 			a.publisher.status.LastError = m.err
 			a.stopPublisher(gen.TerminateReasonShutdown)
-			a.schedulePublisherRestart()
-			return nil
+			a.publisher.replacementPending = true
+			return a.schedulePublisherRestart()
 		}
 		if !a.bootstrapped {
 			a.bootstrapped = true
@@ -174,148 +202,128 @@ func (a *controllerActor[T]) HandleMessage(_ gen.PID, message any) error {
 			if m.snapshot != nil && m.snapshot.Generation > a.generation {
 				a.generation = m.snapshot.Generation
 			}
+			a.fullRepublishRequired = m.snapshot == nil || m.snapshot.Generation != m.generation
 			a.committed = m.snapshot.Clone()
 			for _, record := range m.records {
 				a.records[record.Id] = record
 			}
 		}
 		a.publisher.restart.CancelScheduled(true)
-		a.cancelPublishRetry(false)
-		a.publisher.status.Lifecycle = SnapshotPublisherRunning
-		if a.publisher.consecutiveFailures >= publishUnavailableThreshold {
-			a.publisher.status.Availability = runtime.AvailabilityUnavailable
-		} else {
+		a.publisher.retry.CancelScheduled(false)
+		a.publisher.status.Lifecycle, a.publisher.status.Loaded, a.publisher.status.RestartPending, a.publisher.status.LastError = SnapshotPublisherRunning, true, false, nil
+		if a.publisher.consecutiveFailures < publishUnavailableThreshold {
 			a.publisher.status.Availability = runtime.AvailabilityReady
 		}
-		a.publisher.status.Loaded = true
-		a.publisher.status.RestartPending = false
-		a.publisher.status.LastError = nil
 		if a.pending != nil {
-			a.sendPending()
-		} else {
-			a.reconcile()
+			return a.sendPending()
 		}
-	case MessageSnapshotPublicationResult:
+		return a.reconcile()
+	case MessageSnapshotPublishResult:
 		if a.publisher.alias == (gen.Alias{}) || m.incarnation != a.publisher.incarnation || a.pending == nil || !a.publisher.status.Publishing {
 			return nil
 		}
 		a.publisher.status.Publishing = false
 		if m.err != nil {
 			a.recordPublishFailure(m.err)
-			a.schedulePublishRetry()
-			return nil
+			return a.schedulePublishRetry()
 		}
-		a.committed = a.pending.next.Clone()
-		a.generation = a.pending.next.Generation
+		a.committed, a.generation, a.fullRepublishRequired = a.pending.next.Clone(), a.pending.next.Generation, false
 		for _, record := range a.pending.recordUpserts {
 			a.records[record.Id] = record
 		}
-		a.pending = nil
-		a.publisher.consecutiveFailures = 0
-		a.cancelPublishRetry(true)
-		a.publisher.status.Availability = runtime.AvailabilityReady
-		a.publisher.status.LastError = nil
-		a.reconcile()
+		a.pending, a.publisher.consecutiveFailures, a.publisher.status.Availability, a.publisher.status.LastError = nil, 0, runtime.AvailabilityReady, nil
+		a.publisher.retry.CancelScheduled(true)
+		return a.reconcile()
 	case MessageSnapshotPublishRetry:
 		if !a.publisher.retry.Pending || m.token != a.publisher.retry.Token {
 			return nil
 		}
 		a.publisher.retry.Pending = false
 		a.publisher.retry.Cancel = nil
-		a.sendPending()
+		return a.sendPending()
 	case MessageArtifactScannerRestart:
 		if !a.scanner.restart.Pending || m.token != a.scanner.restart.Token || a.scanner.alias != (gen.Alias{}) {
 			return nil
 		}
-		a.scanner.restart.Pending = false
-		a.scanner.restart.Cancel = nil
-		a.startScanner()
+		a.scanner.restart.Pending, a.scanner.restart.Cancel = false, nil
+		return a.startScanner()
 	case MessageSnapshotPublisherRestart:
-		if !a.publisher.restart.Pending || m.token != a.publisher.restart.Token || a.publisher.alias != (gen.Alias{}) {
+		if !a.publisher.restart.Pending || m.token != a.publisher.restart.Token || a.publisher.alias != (gen.Alias{}) || len(a.publisher.activeIO) != 0 {
 			return nil
 		}
-		a.publisher.restart.Pending = false
-		a.publisher.restart.Cancel = nil
-		a.startPublisher()
+		a.publisher.restart.Pending, a.publisher.restart.Cancel, a.publisher.replacementPending = false, nil, false
+		return a.startPublisher()
 	case gen.MessageDownAlias:
 		switch m.Alias {
 		case a.scanner.alias:
 			a.scanner.alias = gen.Alias{}
-			a.scanner.status.Lifecycle = ArtifactScannerRestarting
-			a.scanner.status.Availability = runtime.AvailabilityUnavailable
-			a.scanner.status.Complete = false
-			a.scanner.status.LastError = m.Reason
-			a.scheduleScannerRestart()
+			if a.lifecycle == ControllerDraining {
+				a.scanner.status.Lifecycle, a.scanner.status.Availability = ArtifactScannerStopped, runtime.AvailabilityUnavailable
+				return nil
+			}
+			a.scanner.status.Lifecycle, a.scanner.status.Availability, a.scanner.status.Complete, a.scanner.status.LastError = ArtifactScannerRestarting, runtime.AvailabilityUnavailable, false, m.Reason
+			return a.scheduleScannerRestart()
 		case a.publisher.alias:
 			a.publisher.alias = gen.Alias{}
-			a.publisher.status.Lifecycle = SnapshotPublisherRestarting
-			a.publisher.status.Availability = runtime.AvailabilityUnavailable
-			a.publisher.status.Loaded = false
-			a.publisher.status.Publishing = false
-			a.publisher.status.LastError = m.Reason
-			// A retry bound to the dead publisher must not suppress retransmission
-			// after the replacement's successful load.
-			a.cancelPublishRetry(false)
-			a.schedulePublisherRestart()
+			a.publisher.status.Lifecycle, a.publisher.status.Availability, a.publisher.status.Loaded, a.publisher.status.Publishing, a.publisher.status.LastError = SnapshotPublisherRestarting, runtime.AvailabilityUnavailable, false, false, m.Reason
+			a.publisher.retry.CancelScheduled(false)
+			if a.lifecycle == ControllerDraining {
+				return a.maybeDrained()
+			}
+			a.publisher.replacementPending = true
+			return a.schedulePublisherRestart()
 		}
+	case MessageSnapshotPublisherIOStopped:
+		if _, ok := a.publisher.activeIO[m.Incarnation]; !ok {
+			return nil
+		}
+		delete(a.publisher.activeIO, m.Incarnation)
+		if a.lifecycle == ControllerDraining {
+			return a.maybeDrained()
+		}
+		return a.schedulePublisherRestart()
 	}
 	return nil
 }
 
-func (a *controllerActor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
-	return nil, fmt.Errorf("controller actor: unsupported call %T", request)
-}
-
 func (a *controllerActor[T]) Terminate(error) {
 	a.lifecycle = ControllerStopped
-	a.cancelPublishRetry(false)
+	a.publisher.retry.CancelScheduled(false)
 	a.scanner.restart.CancelScheduled(false)
 	a.publisher.restart.CancelScheduled(false)
 	a.stopScanner(gen.TerminateReasonShutdown)
 	a.stopPublisher(gen.TerminateReasonShutdown)
-	a.scanner.status.Lifecycle = ArtifactScannerStopped
-	a.scanner.status.Availability = runtime.AvailabilityUnavailable
-	a.publisher.status.Lifecycle = SnapshotPublisherStopped
-	a.publisher.status.Availability = runtime.AvailabilityUnavailable
-	a.publisher.status.Publishing = false
+	a.scanner.status.Lifecycle, a.scanner.status.Availability = ArtifactScannerStopped, runtime.AvailabilityUnavailable
+	a.publisher.status.Lifecycle, a.publisher.status.Availability, a.publisher.status.Publishing = SnapshotPublisherStopped, runtime.AvailabilityUnavailable, false
+	a.reportStatus()
 }
 
-func (a *controllerActor[T]) startScanner() {
+func (a *controllerActor[T]) startScanner() error {
 	if a.scanner.alias != (gen.Alias{}) {
-		return
+		return nil
 	}
 	if a.scanner.incarnation > 0 {
 		a.scanner.restartCount++
 	}
 	a.scanner.incarnation++
-	a.scanner.status = ArtifactScannerStatus{
-		Lifecycle:    ArtifactScannerStarting,
-		Availability: runtime.AvailabilityUnavailable,
-		Incarnation:  a.scanner.incarnation,
-		RestartCount: a.scanner.restartCount,
-	}
-	alias, err := a.SpawnMeta(&artifactScannerMeta[T]{
-		directory:   a.opts.Directory,
-		loader:      a.opts.Loader,
-		incarnation: a.scanner.incarnation,
-	}, gen.MetaOptions{})
-	if err == nil {
-		err = a.MonitorAlias(alias)
-	}
+	a.scanner.status = ArtifactScannerStatus{Lifecycle: ArtifactScannerStarting, Availability: runtime.AvailabilityUnavailable, Incarnation: a.scanner.incarnation, RestartCount: a.scanner.restartCount}
+	alias, err := a.SpawnMeta(&artifactScannerMeta[T]{directory: a.opts.Directory, loader: a.opts.Loader, incarnation: a.scanner.incarnation}, gen.MetaOptions{})
 	if err != nil {
-		if alias != (gen.Alias{}) {
-			_ = a.SendExitMeta(alias, gen.TerminateReasonShutdown)
-		}
-		a.scanner.status.LastError = fmt.Errorf("start artifact scanner meta: %w", err)
-		a.scheduleScannerRestart()
-		return
+		a.scanner.status.LastError = fmt.Errorf("spawn artifact scanner meta: %w", err)
+		return a.scheduleScannerRestart()
+	}
+	if err := a.MonitorAlias(alias); err != nil {
+		_ = a.SendExitMeta(alias, gen.TerminateReasonShutdown)
+		a.scanner.status.LastError = fmt.Errorf("monitor artifact scanner meta: %w", err)
+		return a.scheduleScannerRestart()
 	}
 	a.scanner.alias = alias
+	return nil
 }
 
-func (a *controllerActor[T]) startPublisher() {
-	if a.publisher.alias != (gen.Alias{}) {
-		return
+func (a *controllerActor[T]) startPublisher() error {
+	if a.publisher.alias != (gen.Alias{}) || len(a.publisher.activeIO) != 0 || a.lifecycle != ControllerRunning {
+		return nil
 	}
 	if a.publisher.incarnation > 0 {
 		a.publisher.restartCount++
@@ -332,177 +340,193 @@ func (a *controllerActor[T]) startPublisher() {
 		writer:      a.opts.Writer,
 		incarnation: a.publisher.incarnation,
 	}, gen.MetaOptions{})
-	if err == nil {
-		err = a.MonitorAlias(alias)
-	}
 	if err != nil {
-		if alias != (gen.Alias{}) {
-			_ = a.SendExitMeta(alias, gen.TerminateReasonShutdown)
-		}
-		a.publisher.status.LastError = fmt.Errorf("start snapshot publisher meta: %w", err)
-		a.schedulePublisherRestart()
-		return
+		a.publisher.status.LastError, a.publisher.replacementPending = fmt.Errorf("spawn snapshot publisher meta: %w", err), true
+		return a.schedulePublisherRestart()
 	}
-	a.publisher.alias = alias
+	a.publisher.activeIO[a.publisher.incarnation] = struct{}{}
+	if err := a.MonitorAlias(alias); err != nil {
+		_ = a.SendExitMeta(alias, gen.TerminateReasonShutdown)
+		a.publisher.status.LastError, a.publisher.replacementPending = fmt.Errorf("monitor snapshot publisher meta: %w", err), true
+		return a.schedulePublisherRestart()
+	}
+	a.publisher.alias, a.publisher.replacementPending = alias, false
+	return nil
 }
 
 func (a *controllerActor[T]) stopScanner(reason error) {
-	if a.scanner.alias == (gen.Alias{}) {
-		return
+	if a.scanner.alias != (gen.Alias{}) {
+		alias := a.scanner.alias
+		a.scanner.alias = gen.Alias{}
+		_ = a.DemonitorAlias(alias)
+		_ = a.SendExitMeta(alias, reason)
 	}
-	alias := a.scanner.alias
-	a.scanner.alias = gen.Alias{}
-	_ = a.DemonitorAlias(alias)
-	_ = a.SendExitMeta(alias, reason)
 }
 
 func (a *controllerActor[T]) stopPublisher(reason error) {
-	if a.publisher.alias == (gen.Alias{}) {
-		return
+	if a.publisher.alias != (gen.Alias{}) {
+		alias := a.publisher.alias
+		a.publisher.alias = gen.Alias{}
+		_ = a.DemonitorAlias(alias)
+		_ = a.SendExitMeta(alias, reason)
 	}
-	alias := a.publisher.alias
-	a.publisher.alias = gen.Alias{}
-	_ = a.DemonitorAlias(alias)
-	_ = a.SendExitMeta(alias, reason)
 }
 
-func (a *controllerActor[T]) scheduleScannerRestart() {
-	if a.scanner.restart.Pending {
-		return
+func (a *controllerActor[T]) scheduleScannerRestart() error {
+	if a.lifecycle != ControllerRunning || a.scanner.restart.Pending {
+		return nil
 	}
 	delay := a.scanner.restart.Strategy.NextBackOff()
 	if delay == backoff.Stop {
-		return
+		return fmt.Errorf("artifact scanner restart backoff stopped")
 	}
 	a.scanner.restart.Token++
 	token := a.scanner.restart.Token
 	cancel, err := a.SendAfter(a.PID(), MessageArtifactScannerRestart{token: token}, delay)
-	if err == nil {
-		a.scanner.restart.Pending = true
-		a.scanner.restart.Cancel = cancel
-		a.scanner.status.Lifecycle = ArtifactScannerRestarting
-		a.scanner.status.RestartPending = true
+	if err != nil {
+		return fmt.Errorf("schedule artifact scanner restart: %w", err)
 	}
+	a.scanner.restart.Pending = true
+	a.scanner.restart.Cancel = cancel
+	a.scanner.status.Lifecycle = ArtifactScannerRestarting
+	a.scanner.status.RestartPending = true
+	return nil
 }
 
-func (a *controllerActor[T]) schedulePublisherRestart() {
-	if a.publisher.restart.Pending {
-		return
+func (a *controllerActor[T]) schedulePublisherRestart() error {
+	if a.lifecycle != ControllerRunning || !a.publisher.replacementPending || a.publisher.alias != (gen.Alias{}) || len(a.publisher.activeIO) != 0 || a.publisher.restart.Pending {
+		return nil
 	}
 	delay := a.publisher.restart.Strategy.NextBackOff()
 	if delay == backoff.Stop {
-		return
+		return fmt.Errorf("snapshot publisher restart backoff stopped")
 	}
 	a.publisher.restart.Token++
 	token := a.publisher.restart.Token
 	cancel, err := a.SendAfter(a.PID(), MessageSnapshotPublisherRestart{token: token}, delay)
-	if err == nil {
-		a.publisher.restart.Pending = true
-		a.publisher.restart.Cancel = cancel
-		a.publisher.status.Lifecycle = SnapshotPublisherRestarting
-		a.publisher.status.RestartPending = true
+	if err != nil {
+		return fmt.Errorf("schedule snapshot publisher restart: %w", err)
 	}
+	a.publisher.restart.Pending = true
+	a.publisher.restart.Cancel = cancel
+	a.publisher.status.Lifecycle = SnapshotPublisherRestarting
+	a.publisher.status.RestartPending = true
+	return nil
 }
 
-func (a *controllerActor[T]) schedulePublishRetry() {
-	if a.publisher.retry.Pending {
-		return
+func (a *controllerActor[T]) schedulePublishRetry() error {
+	if a.lifecycle != ControllerRunning || a.publisher.retry.Pending {
+		return nil
 	}
 	delay := a.publisher.retry.Strategy.NextBackOff()
 	if delay == backoff.Stop {
-		return
+		return fmt.Errorf("snapshot publish retry backoff stopped")
 	}
 	a.publisher.retry.Token++
 	token := a.publisher.retry.Token
 	cancel, err := a.SendAfter(a.PID(), MessageSnapshotPublishRetry{token: token}, delay)
-	if err == nil {
-		a.publisher.retry.Pending = true
-		a.publisher.retry.Cancel = cancel
+	if err != nil {
+		return fmt.Errorf("schedule snapshot publish retry: %w", err)
 	}
+	a.publisher.retry.Pending = true
+	a.publisher.retry.Cancel = cancel
+	return nil
 }
 
-func (a *controllerActor[T]) cancelPublishRetry(reset bool) {
-	a.publisher.retry.CancelScheduled(reset)
-}
-
-func (a *controllerActor[T]) reconcile() {
+func (a *controllerActor[T]) reconcile() error {
 	if !a.bootstrapped || !a.scanner.status.Complete || a.pending != nil {
-		return
+		return nil
 	}
-	plan := makePlan(a.committed, a.generation, a.records, a.scanner.entries, a.scanner.presentIDs, time.Now())
+	plan := makePlan(a.committed, a.generation, a.records, a.scanner.entries, a.scanner.presentIDs, a.fullRepublishRequired, time.Now())
 	a.pending = &plan
-	a.sendPending()
+	return a.sendPending()
 }
 
-func (a *controllerActor[T]) sendPending() {
-	if a.pending == nil || a.publisher.status.Publishing || a.publisher.alias == (gen.Alias{}) || !a.publisher.status.Loaded {
-		return
+func (a *controllerActor[T]) sendPending() error {
+	if a.pending == nil || a.publisher.status.Publishing || a.publisher.alias == (gen.Alias{}) || !a.publisher.status.Loaded || a.lifecycle != ControllerRunning {
+		return nil
 	}
 	a.publisher.status.Publishing = true
-	next := a.pending.next.Clone()
-	records := append([]backends.ControllerRecord(nil), a.pending.recordUpserts...)
-	for i := range records {
-		records[i] = records[i].Clone()
-	}
-	upserts := append([]snapshot.EffectiveEntry(nil), a.pending.entryUpserts...)
-	for i := range upserts {
-		upserts[i] = upserts[i].Clone()
-	}
 	message := MessagePublishSnapshot{
 		incarnation: a.publisher.incarnation,
-		records:     records,
-		next:        *next,
+		records:     append([]backends.ControllerRecord(nil), a.pending.recordUpserts...),
+		next:        *a.pending.next.Clone(),
 		changed:     a.pending.next.Generation != a.generation,
-		upserts:     upserts,
+		upserts:     cloneEntries(a.pending.entryUpserts),
 		tombstones:  append([]string(nil), a.pending.tombstones...),
+	}
+	for i := range message.records {
+		message.records[i] = message.records[i].Clone()
 	}
 	if err := a.Send(a.publisher.alias, message); err != nil {
 		a.publisher.status.Publishing = false
 		a.recordPublishFailure(fmt.Errorf("%w: queue publication: %w", runtime.ErrSnapshotPublish, err))
-		a.schedulePublishRetry()
+		return a.schedulePublishRetry()
 	}
+	return nil
 }
 
 func (a *controllerActor[T]) recordPublishFailure(err error) {
 	a.publisher.consecutiveFailures++
 	a.publisher.status.Availability = runtime.AvailabilityDegraded
+	a.publisher.status.LastError = err
 	if a.publisher.consecutiveFailures >= publishUnavailableThreshold {
 		a.publisher.status.Availability = runtime.AvailabilityUnavailable
 	}
-	a.publisher.status.LastError = err
+}
+
+func (a *controllerActor[T]) beginDrain() error {
+	if a.lifecycle == ControllerDraining || a.lifecycle == ControllerStopped {
+		return nil
+	}
+	a.lifecycle = ControllerDraining
+	a.publisher.retry.CancelScheduled(false)
+	a.scanner.restart.CancelScheduled(false)
+	a.publisher.restart.CancelScheduled(false)
+	a.stopScanner(gen.TerminateReasonShutdown)
+	a.stopPublisher(gen.TerminateReasonShutdown)
+	return a.maybeDrained()
+}
+
+func (a *controllerActor[T]) maybeDrained() error {
+	if len(a.publisher.activeIO) != 0 {
+		return nil
+	}
+	return a.Send(a.Parent(), MessageControllerDrained{})
+}
+
+func (a *controllerActor[T]) reportStatus() {
+	_ = a.Send(a.Parent(), MessageControllerStatusChanged{status: a.currentStatus()})
 }
 
 func (a *controllerActor[T]) currentStatus() ControllerStatus {
 	availability := runtime.AvailabilityUnavailable
 	if a.lifecycle == ControllerRunning {
 		availability = runtime.AvailabilityDegraded
-		if a.scanner.status.Complete &&
-			a.scanner.status.Availability == runtime.AvailabilityReady &&
-			a.publisher.status.Loaded &&
-			a.publisher.status.Availability == runtime.AvailabilityReady {
+		if a.scanner.status.Complete && a.scanner.status.Availability == runtime.AvailabilityReady && a.publisher.status.Loaded && a.publisher.status.Availability == runtime.AvailabilityReady {
 			availability = runtime.AvailabilityReady
 		}
 	}
-	return ControllerStatus{
-		Lifecycle:    a.lifecycle,
-		Availability: availability,
-		Generation:   a.generation,
-		Pending:      a.pending != nil,
-		Publishing:   a.publisher.status.Publishing,
-		Scanner:      a.scanner.status,
-		Publisher:    a.publisher.status,
-	}
+	return ControllerStatus{Lifecycle: a.lifecycle, Availability: availability, Generation: a.generation, Pending: a.pending != nil, Publishing: a.publisher.status.Publishing, Scanner: a.scanner.status, Publisher: a.publisher.status}
 }
 
-func makePlan(prior *snapshot.Snapshot, generation int64, records map[string]backends.ControllerRecord, entries []snapshot.EffectiveEntry, presentIDs []string, now time.Time) reconcilePlan {
+func cloneEntries(entries []snapshot.EffectiveEntry) []snapshot.EffectiveEntry {
+	cloned := append([]snapshot.EffectiveEntry(nil), entries...)
+	for i := range cloned {
+		cloned[i] = cloned[i].Clone()
+	}
+	return cloned
+}
+
+func makePlan(prior *snapshot.Snapshot, generation int64, records map[string]backends.ControllerRecord, entries []snapshot.EffectiveEntry, presentIDs []string, force bool, now time.Time) reconcilePlan {
 	present := make(map[string]struct{}, len(presentIDs))
 	for _, id := range presentIDs {
 		present[id] = struct{}{}
 	}
 	priorRecords := make(map[string]*backends.ControllerRecord, len(records))
 	for id, record := range records {
-		recordCopy := record
-		priorRecords[id] = &recordCopy
+		copy := record
+		priorRecords[id] = &copy
 	}
 	upsertRecords := make([]backends.ControllerRecord, 0, len(records)+len(presentIDs))
 	for _, id := range presentIDs {
@@ -513,6 +537,8 @@ func makePlan(prior *snapshot.Snapshot, generation int64, records map[string]bac
 		record.LastSeenAt = now
 		record.Status = backends.StatusActive
 		upsertRecords = append(upsertRecords, record)
+		copy := record
+		priorRecords[id] = &copy
 	}
 	previousIDs := make([]string, 0, len(records))
 	for id := range records {
@@ -526,30 +552,35 @@ func makePlan(prior *snapshot.Snapshot, generation int64, records map[string]bac
 		record := records[id]
 		record.Status = backends.StatusAbsent
 		upsertRecords = append(upsertRecords, record)
+		copy := record
+		priorRecords[id] = &copy
 	}
-
-	nextEntries := append([]snapshot.EffectiveEntry(nil), entries...)
+	nextEntries := cloneEntries(entries)
 	valid := make(map[string]struct{}, len(nextEntries))
 	for _, entry := range nextEntries {
 		valid[entry.Id] = struct{}{}
 	}
 	if prior != nil {
 		for _, entry := range prior.Entries {
-			if _, isValid := valid[entry.Id]; !isValid {
-				if _, ok := present[entry.Id]; ok {
+			if _, ok := valid[entry.Id]; !ok {
+				if _, present := present[entry.Id]; present {
 					nextEntries = append(nextEntries, entry)
 				}
 			}
 		}
 	}
 	sort.Slice(nextEntries, func(i, j int) bool { return nextEntries[i].Id < nextEntries[j].Id })
-	changed := SnapshotChanged(nextEntries, prior)
+	changed := force || SnapshotChanged(nextEntries, prior)
 	nextGeneration := generation
 	if changed {
 		nextGeneration++
 	}
 	next := snapshot.Snapshot{Generation: nextGeneration, Entries: nextEntries}
-	upserts, tombstones := DiffEntries(prior, nextEntries, priorRecords)
+	diffPrior := prior
+	if force {
+		diffPrior = nil
+	}
+	upserts, tombstones := DiffEntries(diffPrior, nextEntries, priorRecords)
 	sort.Slice(upserts, func(i, j int) bool { return upserts[i].Id < upserts[j].Id })
 	sort.Strings(tombstones)
 	return reconcilePlan{recordUpserts: upsertRecords, next: next, entryUpserts: upserts, tombstones: tombstones}
