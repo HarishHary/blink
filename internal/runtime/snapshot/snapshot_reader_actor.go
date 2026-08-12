@@ -22,9 +22,9 @@ const (
 	SnapshotReaderStopped    SnapshotReaderLifecycle = "stopped"
 )
 
-// SnapshotReaderStatus is the public status value published by the supervisor.
+// SnapshotReaderActorStatus is the public status value published by the supervisor.
 // Reader contains the independently managed broker-reader meta-process state.
-type SnapshotReaderStatus struct {
+type SnapshotReaderActorStatus struct {
 	Lifecycle    SnapshotReaderLifecycle
 	Availability runtime.Availability
 	LastError    error
@@ -32,20 +32,16 @@ type SnapshotReaderStatus struct {
 	Reader       SnapshotReaderMetaStatus
 }
 
-type MessageSnapshotReaderRestart struct{ token uint64 }
-
 type snapshotReaderMetaState struct {
-	alias        gen.Alias
-	incarnation  uint64
-	restartCount uint64
-	restart      *runtime.ScheduledBackoff
-	status       SnapshotReaderMetaStatus
+	alias   gen.Alias
+	restart *runtime.ScheduledBackoff
+	status  SnapshotReaderMetaStatus
 }
 
 type snapshotReaderActor struct {
 	act.Actor
 
-	opts Options
+	opts SnapshotReaderSupervisorOptions
 
 	snapshotEventName  gen.Atom
 	snapshotEventToken gen.Ref
@@ -55,6 +51,17 @@ type snapshotReaderActor struct {
 	entries   map[string]snapshot.EffectiveEntry
 	committed *snapshot.Snapshot
 }
+
+// --- messages ---
+
+type MessageSnapshotReaderRestart struct{ token uint64 }
+
+type MessageSnapshotReaderActivate struct {
+	snapshotEventName  gen.Atom
+	snapshotEventToken gen.Ref
+}
+
+// --- messages ---
 
 func (a *snapshotReaderActor) Init(...any) error {
 	a.entries = make(map[string]snapshot.EffectiveEntry)
@@ -77,20 +84,17 @@ func (a *snapshotReaderActor) HandleMessage(_ gen.PID, message any) error {
 		a.publishStatus()
 		return a.startSnapshotReaderMeta()
 
-	case MessageSnapshotReaderStarted:
-		if m.incarnation != a.reader.incarnation || a.reader.alias == (gen.Alias{}) {
+	case MessageSnapshotRecord:
+		if m.incarnation != a.reader.status.Incarnation || a.reader.alias == (gen.Alias{}) {
 			return nil
 		}
-		a.reader.status.Lifecycle = SnapshotReaderMetaRunning
-		a.reader.status.Availability = runtime.AvailabilityDegraded
-		a.reader.status.CaughtUp = false
-		a.reader.status.RestartPending = false
-		a.reader.status.LastError = nil
-		a.publishStatus()
-
-	case MessageSnapshotRecord:
-		if m.incarnation != a.reader.incarnation || a.reader.alias == (gen.Alias{}) {
-			return nil
+		started := a.reader.status.Lifecycle != SnapshotReaderMetaRunning
+		if started {
+			a.reader.status.Lifecycle = SnapshotReaderMetaRunning
+			a.reader.status.Availability = runtime.AvailabilityDegraded
+			a.reader.status.CaughtUp = false
+			a.reader.status.RestartPending = false
+			a.reader.status.LastError = nil
 		}
 		committed := a.apply(m.message)
 		if committed && a.reader.status.CaughtUp {
@@ -98,10 +102,12 @@ func (a *snapshotReaderActor) HandleMessage(_ gen.PID, message any) error {
 			a.reader.status.LastError = nil
 			a.publishSnapshot()
 			a.publishStatus()
+		} else if started {
+			a.publishStatus()
 		}
 
 	case MessageSnapshotCaughtUp:
-		if m.incarnation != a.reader.incarnation ||
+		if m.incarnation != a.reader.status.Incarnation ||
 			a.reader.alias == (gen.Alias{}) ||
 			a.reader.status.CaughtUp {
 			return nil
@@ -142,7 +148,7 @@ func (a *snapshotReaderActor) HandleMessage(_ gen.PID, message any) error {
 		a.reader.status.LastError = m.Reason
 		a.opts.Logger.ErrorF(
 			"snapshot reader actor: reader incarnation %d stopped: %v",
-			a.reader.incarnation,
+			a.reader.status.Incarnation,
 			m.Reason,
 		)
 		a.publishStatus()
@@ -168,15 +174,16 @@ func (a *snapshotReaderActor) Terminate(error) {
 // available to subscribers while this incarnation catches up.
 func (a *snapshotReaderActor) startSnapshotReaderMeta() error {
 	a.stopSnapshotReaderMeta(gen.TerminateReasonShutdown)
-	if a.reader.incarnation > 0 {
-		a.reader.restartCount++
+	restartCount := a.reader.status.RestartCount
+	if a.reader.status.Incarnation > 0 {
+		restartCount++
 	}
-	a.reader.incarnation++
+	incarnation := a.reader.status.Incarnation + 1
 	a.reader.status = SnapshotReaderMetaStatus{
 		Lifecycle:    SnapshotReaderMetaStarting,
 		Availability: runtime.AvailabilityUnavailable,
-		Incarnation:  a.reader.incarnation,
-		RestartCount: a.reader.restartCount,
+		Incarnation:  incarnation,
+		RestartCount: restartCount,
 	}
 	a.entries = make(map[string]snapshot.EffectiveEntry)
 	a.committed = nil
@@ -190,7 +197,7 @@ func (a *snapshotReaderActor) startSnapshotReaderMeta() error {
 		return a.scheduleSnapshotReaderMetaRestart()
 	}
 
-	alias, err := a.SpawnMeta(&snapshotReaderMeta{reader: reader, incarnation: a.reader.incarnation}, gen.MetaOptions{})
+	alias, err := a.SpawnMeta(&snapshotReaderMeta{reader: reader, incarnation: incarnation}, gen.MetaOptions{})
 	if err != nil {
 		_ = reader.Close()
 		a.reader.status.Lifecycle = SnapshotReaderMetaRestarting
@@ -309,7 +316,7 @@ func (a *snapshotReaderActor) publishStatus() {
 	_ = a.Send(a.Parent(), MessageSnapshotReaderStatusChanged{status: a.currentStatus()})
 }
 
-func (a *snapshotReaderActor) currentStatus() SnapshotReaderStatus {
+func (a *snapshotReaderActor) currentStatus() SnapshotReaderActorStatus {
 	availability := runtime.AvailabilityUnavailable
 	switch a.reader.status.Availability {
 	case runtime.AvailabilityReady:
@@ -318,7 +325,7 @@ func (a *snapshotReaderActor) currentStatus() SnapshotReaderStatus {
 		availability = runtime.AvailabilityDegraded
 	}
 
-	status := SnapshotReaderStatus{
+	status := SnapshotReaderActorStatus{
 		Lifecycle:    SnapshotReaderRunning,
 		Availability: availability,
 		Reader:       a.reader.status,

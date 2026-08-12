@@ -11,6 +11,8 @@ import (
 	"github.com/harishhary/blink/internal/runtime"
 )
 
+const snapshotCatchUpPoll = 250 * time.Millisecond
+
 // SnapshotReaderMetaLifecycle describes one blocking broker-reader
 // meta-process incarnation.
 type SnapshotReaderMetaLifecycle string
@@ -30,22 +32,10 @@ type SnapshotReaderMetaStatus struct {
 	Availability   runtime.Availability
 	Incarnation    uint64
 	RestartCount   uint64
-	CaughtUp       bool
 	RestartPending bool
+	CaughtUp       bool
 	LastError      error
 }
-
-const snapshotCatchUpPoll = 250 * time.Millisecond
-
-// Reader meta messages are fenced by incarnation in the parent actor.
-type MessageSnapshotReaderStarted struct{ incarnation uint64 }
-
-type MessageSnapshotRecord struct {
-	incarnation uint64
-	message     brokers.Message
-}
-
-type MessageSnapshotCaughtUp struct{ incarnation uint64 }
 
 // snapshotReaderMeta owns one concrete broker reader and one blocking read
 // loop. Its parent actor owns reader creation, restart/backoff, public status,
@@ -60,6 +50,17 @@ type snapshotReaderMeta struct {
 	cancelRun context.CancelFunc
 }
 
+// --- messages ---
+
+// Reader meta messages are fenced by incarnation in the parent actor.
+type MessageSnapshotRecord struct {
+	incarnation uint64
+	message     brokers.Message
+}
+type MessageSnapshotCaughtUp struct{ incarnation uint64 }
+
+// --- messages ---
+
 func (m *snapshotReaderMeta) Init(process gen.MetaProcess) error {
 	if m.reader == nil {
 		return fmt.Errorf("snapshot reader meta: reader is required")
@@ -70,10 +71,6 @@ func (m *snapshotReaderMeta) Init(process gen.MetaProcess) error {
 }
 
 func (m *snapshotReaderMeta) Start() error {
-	if err := m.Send(m.Parent(), MessageSnapshotReaderStarted{incarnation: m.incarnation}); err != nil {
-		return fmt.Errorf("%w: announce start: %w", runtime.ErrSnapshotRead, err)
-	}
-
 	caughtUp := false
 	for {
 		readCtx := m.runCtx
