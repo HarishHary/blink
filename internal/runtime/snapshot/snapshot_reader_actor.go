@@ -158,7 +158,7 @@ func (a *snapshotReaderActor) HandleMessage(_ gen.PID, message any) error {
 }
 
 func (a *snapshotReaderActor) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
-	return nil, fmt.Errorf("snapshot reader actor: unsupported call %T", request)
+	return fmt.Errorf("snapshot reader actor: unsupported call %T", request), nil
 }
 
 func (a *snapshotReaderActor) Terminate(error) {

@@ -116,7 +116,7 @@ func (m *snapshotReaderMeta) Start() error {
 func (m *snapshotReaderMeta) HandleMessage(gen.PID, any) error { return nil }
 
 func (m *snapshotReaderMeta) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
-	return nil, fmt.Errorf("snapshot reader meta: unsupported call %T", request)
+	return fmt.Errorf("snapshot reader meta: unsupported call %T", request), nil
 }
 
 func (m *snapshotReaderMeta) Terminate(error) {
