@@ -9,7 +9,11 @@ import (
 	"github.com/segmentio/kafka-go"
 )
 
-const kafkaBatchLinger = 100 * time.Millisecond
+const (
+	kafkaBatchLinger = 100 * time.Millisecond
+	kafkaIOTimeout   = 5 * time.Second
+	kafkaMaxAttempts = 3
+)
 
 // KafkaConfig configures a Kafka Broker.
 type KafkaConfig struct {
@@ -66,6 +70,10 @@ func (kb *kafkaBroker) NewWriter(topic string) Writer {
 		// Hash keeps equal keys on one partition; nil keys fall back to round-robin.
 		Balancer:     &kafka.Hash{},
 		Dialer:       &kafka.Dialer{Timeout: kb.dialTimeout},
+		MaxAttempts:  kafkaMaxAttempts,
+		BatchTimeout: kafkaBatchLinger,
+		ReadTimeout:  kafkaIOTimeout,
+		WriteTimeout: kafkaIOTimeout,
 		RequiredAcks: int(kafka.RequireAll),
 		Async:        false,
 	})
