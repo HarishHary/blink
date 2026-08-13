@@ -101,21 +101,12 @@ func (a *ControllerApplication[T]) Terminate(error) {}
 
 // Close closes application-owned resources before start or after a proven drain.
 func (a *ControllerApplication[T]) Close(ctx context.Context) error {
-	return a.close(ctx, false)
-}
-
-// CloseAfterNodeStop closes resources when node shutdown has made further I/O impossible.
-func (a *ControllerApplication[T]) CloseAfterNodeStop(ctx context.Context) error {
-	return a.close(ctx, true)
-}
-
-func (a *ControllerApplication[T]) close(ctx context.Context, nodeStopped bool) error {
 	a.mu.Lock()
 	if a.closed {
 		a.mu.Unlock()
 		return nil
 	}
-	if a.started && !a.drained && !nodeStopped {
+	if a.started && !a.drained {
 		a.mu.Unlock()
 		return errors.New("controller application has not drained")
 	}

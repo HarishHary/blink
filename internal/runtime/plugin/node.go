@@ -25,6 +25,7 @@ type NodeHost struct {
 type NodeOptions struct {
 	Name            gen.Atom
 	ShutdownTimeout time.Duration
+	Applications    []gen.ApplicationBehavior
 }
 
 func Start(opts NodeOptions) (*NodeHost, error) {
@@ -39,6 +40,7 @@ func Start(opts NodeOptions) (*NodeHost, error) {
 		opts.Name,
 		gen.NodeOptions{
 			ShutdownTimeout: opts.ShutdownTimeout,
+			Applications:    opts.Applications,
 			Network: gen.NetworkOptions{
 				Mode: gen.NetworkModeDisabled,
 			},
