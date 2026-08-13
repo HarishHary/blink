@@ -10,7 +10,6 @@ import (
 	"ergo.services/ergo/gen"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/harishhary/blink/internal/backends"
-	"github.com/harishhary/blink/internal/brokers"
 	"github.com/harishhary/blink/internal/runtime"
 	"github.com/harishhary/blink/internal/runtime/plugin"
 	"github.com/harishhary/blink/internal/snapshot"
@@ -35,17 +34,6 @@ type ControllerActorStatus struct {
 	Publishing   bool
 	Scanner      ArtifactScannerStatus
 	Publisher    SnapshotPublisherStatus
-}
-
-type ActorOptions[T plugin.Syncable] struct {
-	Directory  string
-	Loader     plugin.Loader[T]
-	Database   backends.Database
-	Writer     brokers.Writer
-	RestartMin time.Duration
-	RestartMax time.Duration
-	RetryMin   time.Duration
-	RetryMax   time.Duration
 }
 
 type scannerMetaState struct {
@@ -76,7 +64,7 @@ type reconcilePlan struct {
 type controllerActor[T plugin.Syncable] struct {
 	act.Actor
 
-	opts ActorOptions[T]
+	opts ControllerActorOptions[T]
 
 	lifecycle ControllerActorLifecycle
 	scanner   scannerMetaState
@@ -91,8 +79,8 @@ type controllerActor[T plugin.Syncable] struct {
 	fullRepublishRequired bool
 }
 
-func NewActor[T plugin.Syncable](opts ActorOptions[T]) gen.ProcessBehavior {
-	return &controllerActor[T]{opts: defaultOptions(opts)}
+func NewActor[T plugin.Syncable](opts ControllerActorOptions[T]) gen.ProcessBehavior {
+	return &controllerActor[T]{opts: controllerActorOptionsWithDefaults(opts)}
 }
 
 // --- messages ---
@@ -599,20 +587,4 @@ func makePlan(prior *snapshot.Snapshot, generation int64, records map[string]bac
 	sort.Slice(upserts, func(i, j int) bool { return upserts[i].Id < upserts[j].Id })
 	sort.Strings(tombstones)
 	return reconcilePlan{recordUpserts: upsertRecords, next: next, entryUpserts: upserts, tombstones: tombstones}
-}
-
-func defaultOptions[T plugin.Syncable](opts ActorOptions[T]) ActorOptions[T] {
-	if opts.RestartMin <= 0 {
-		opts.RestartMin = 100 * time.Millisecond
-	}
-	if opts.RestartMax < opts.RestartMin {
-		opts.RestartMax = 5 * time.Second
-	}
-	if opts.RetryMin <= 0 {
-		opts.RetryMin = opts.RestartMin
-	}
-	if opts.RetryMax < opts.RetryMin {
-		opts.RetryMax = opts.RestartMax
-	}
-	return opts
 }

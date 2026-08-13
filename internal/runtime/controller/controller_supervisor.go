@@ -27,7 +27,7 @@ type controllerActorState struct {
 
 type ControllerSupervisorOptions[T plugin.Syncable] struct {
 	ActorName    gen.Atom
-	ActorOptions ActorOptions[T]
+	ActorOptions ControllerActorOptions[T]
 	OnStopped    func(ControllerSupervisorStopped)
 }
 

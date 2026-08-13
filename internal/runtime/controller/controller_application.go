@@ -13,21 +13,9 @@ import (
 	"github.com/harishhary/blink/internal/runtime/plugin"
 )
 
-// ApplicationOptions configures one plugin-type controller application.
-type ApplicationOptions[T plugin.Syncable] struct {
-	Name           gen.Atom
-	SupervisorName gen.Atom
-	ActorName      gen.Atom
-	DatabaseDSN    string
-	Namespace      string
-	Topic          string
-	Broker         brokers.Broker
-	Actor          ActorOptions[T]
-}
-
-// Application owns the resources for one plugin-type controller application.
-type Application[T plugin.Syncable] struct {
-	opts ApplicationOptions[T]
+// ControllerApplication owns the resources for one plugin-type controller application.
+type ControllerApplication[T plugin.Syncable] struct {
+	opts ControllerApplicationOptions[T]
 
 	mu       sync.Mutex
 	database *sql.DB
@@ -39,15 +27,21 @@ type Application[T plugin.Syncable] struct {
 }
 
 // NewApplication creates an unloaded application for one plugin type.
-func NewApplication[T plugin.Syncable](opts ApplicationOptions[T]) *Application[T] {
-	return &Application[T]{opts: opts, stopped: make(chan ControllerSupervisorStopped, 1)}
+func NewApplication[T plugin.Syncable](opts ControllerApplicationOptions[T]) *ControllerApplication[T] {
+	return &ControllerApplication[T]{opts: controllerApplicationOptionsWithDefaults(opts), stopped: make(chan ControllerSupervisorStopped, 1)}
 }
 
+// Name returns the application name after defaults are applied.
+func (a *ControllerApplication[T]) Name() gen.Atom { return a.opts.Name }
+
+// SupervisorName returns the root supervisor name after defaults are applied.
+func (a *ControllerApplication[T]) SupervisorName() gen.Atom { return a.opts.SupervisorName }
+
 // Stopped reports the supervisor's terminal state.
-func (a *Application[T]) Stopped() <-chan ControllerSupervisorStopped { return a.stopped }
+func (a *ControllerApplication[T]) Stopped() <-chan ControllerSupervisorStopped { return a.stopped }
 
 // Load opens the application-owned resources and describes its one supervisor.
-func (a *Application[T]) Load(_ gen.Node, _ ...any) (gen.ApplicationSpec, error) {
+func (a *ControllerApplication[T]) Load(_ gen.Node, _ ...any) (gen.ApplicationSpec, error) {
 	if a.opts.Name == "" || a.opts.SupervisorName == "" || a.opts.Namespace == "" || a.opts.Topic == "" || a.opts.Broker == nil {
 		return gen.ApplicationSpec{}, fmt.Errorf("controller application: name, supervisor name, namespace, topic, and broker are required")
 	}
@@ -95,7 +89,7 @@ func (a *Application[T]) Load(_ gen.Node, _ ...any) (gen.ApplicationSpec, error)
 }
 
 // Start records that resource cleanup must wait for a proven controller drain.
-func (a *Application[T]) Start(gen.ApplicationMode) {
+func (a *ControllerApplication[T]) Start(gen.ApplicationMode) {
 	a.mu.Lock()
 	a.started = true
 	a.mu.Unlock()
@@ -103,19 +97,19 @@ func (a *Application[T]) Start(gen.ApplicationMode) {
 
 // Terminate cannot close started application resources because Ergo invokes it
 // before the supervisor's Terminate callback records the drain proof.
-func (a *Application[T]) Terminate(error) {}
+func (a *ControllerApplication[T]) Terminate(error) {}
 
 // Close closes application-owned resources before start or after a proven drain.
-func (a *Application[T]) Close(ctx context.Context) error {
+func (a *ControllerApplication[T]) Close(ctx context.Context) error {
 	return a.close(ctx, false)
 }
 
 // CloseAfterNodeStop closes resources when node shutdown has made further I/O impossible.
-func (a *Application[T]) CloseAfterNodeStop(ctx context.Context) error {
+func (a *ControllerApplication[T]) CloseAfterNodeStop(ctx context.Context) error {
 	return a.close(ctx, true)
 }
 
-func (a *Application[T]) close(ctx context.Context, nodeStopped bool) error {
+func (a *ControllerApplication[T]) close(ctx context.Context, nodeStopped bool) error {
 	a.mu.Lock()
 	if a.closed {
 		a.mu.Unlock()
@@ -158,7 +152,7 @@ func (a *Application[T]) close(ctx context.Context, nodeStopped bool) error {
 	return errors.Join(errs...)
 }
 
-func (a *Application[T]) recordStopped(stopped ControllerSupervisorStopped) {
+func (a *ControllerApplication[T]) recordStopped(stopped ControllerSupervisorStopped) {
 	a.mu.Lock()
 	a.drained = stopped.Drained
 	a.mu.Unlock()
