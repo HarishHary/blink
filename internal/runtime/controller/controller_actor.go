@@ -80,7 +80,7 @@ type controllerActor[T plugin.Syncable] struct {
 }
 
 func NewActor[T plugin.Syncable](opts ControllerActorOptions[T]) gen.ProcessBehavior {
-	return &controllerActor[T]{opts: controllerActorOptionsWithDefaults(opts)}
+	return &controllerActor[T]{opts: controllerActorOptionsWithDefaults("", opts)}
 }
 
 // --- messages ---

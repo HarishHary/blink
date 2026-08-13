@@ -35,14 +35,14 @@ func NewApplication[T plugin.Syncable](opts ControllerApplicationOptions[T]) *Co
 func (a *ControllerApplication[T]) Name() gen.Atom { return a.opts.Name }
 
 // SupervisorName returns the root supervisor name after defaults are applied.
-func (a *ControllerApplication[T]) SupervisorName() gen.Atom { return a.opts.SupervisorName }
+func (a *ControllerApplication[T]) SupervisorName() gen.Atom { return a.opts.SupervisorOptions.Name }
 
 // Stopped reports the supervisor's terminal state.
 func (a *ControllerApplication[T]) Stopped() <-chan ControllerSupervisorStopped { return a.stopped }
 
 // Load opens the application-owned resources and describes its one supervisor.
 func (a *ControllerApplication[T]) Load(_ gen.Node, _ ...any) (gen.ApplicationSpec, error) {
-	if a.opts.Name == "" || a.opts.SupervisorName == "" || a.opts.Namespace == "" || a.opts.Topic == "" || a.opts.Broker == nil {
+	if a.opts.Name == "" || a.opts.SupervisorOptions.Name == "" || a.opts.Namespace == "" || a.opts.Topic == "" || a.opts.Broker == nil {
 		return gen.ApplicationSpec{}, fmt.Errorf("controller application: name, supervisor name, namespace, topic, and broker are required")
 	}
 
@@ -65,9 +65,12 @@ func (a *ControllerApplication[T]) Load(_ gen.Node, _ ...any) (gen.ApplicationSp
 	}
 	a.database = database
 	a.writer = a.opts.Broker.NewWriter(a.opts.Topic)
-	controllerOpts := a.opts.Actor
+	supervisorOpts := a.opts.SupervisorOptions
+	controllerOpts := supervisorOpts.ActorOptions
 	controllerOpts.Database = store
 	controllerOpts.Writer = a.writer
+	supervisorOpts.ActorOptions = controllerOpts
+	supervisorOpts.onStopped = a.recordStopped
 	a.mu.Unlock()
 
 	return gen.ApplicationSpec{
@@ -75,16 +78,12 @@ func (a *ControllerApplication[T]) Load(_ gen.Node, _ ...any) (gen.ApplicationSp
 		Description: fmt.Sprintf("Blink %s controller", a.opts.Namespace),
 		Mode:        gen.ApplicationModeTransient,
 		Group: []gen.ApplicationMemberSpec{{
-			Name: a.opts.SupervisorName,
+			Name: a.opts.SupervisorOptions.Name,
 			Factory: func() gen.ProcessBehavior {
-				return NewSupervisor(ControllerSupervisorOptions[T]{
-					ActorName:    a.opts.ActorName,
-					ActorOptions: controllerOpts,
-					OnStopped:    a.recordStopped,
-				})
+				return NewSupervisor(supervisorOpts)
 			},
 		}},
-		Map: map[string]gen.Atom{"supervisor": a.opts.SupervisorName},
+		Map: map[string]gen.Atom{"supervisor": a.opts.SupervisorOptions.Name},
 	}, nil
 }
 

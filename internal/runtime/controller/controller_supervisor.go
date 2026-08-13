@@ -25,12 +25,6 @@ type controllerActorState struct {
 	status ControllerActorStatus
 }
 
-type ControllerSupervisorOptions[T plugin.Syncable] struct {
-	ActorName    gen.Atom
-	ActorOptions ControllerActorOptions[T]
-	OnStopped    func(ControllerSupervisorStopped)
-}
-
 type controllerSupervisor[T plugin.Syncable] struct {
 	act.Supervisor
 
@@ -41,10 +35,7 @@ type controllerSupervisor[T plugin.Syncable] struct {
 }
 
 func NewSupervisor[T plugin.Syncable](opts ControllerSupervisorOptions[T]) gen.ProcessBehavior {
-	if opts.ActorName == "" {
-		opts.ActorName = "controller"
-	}
-	return &controllerSupervisor[T]{opts: opts}
+	return &controllerSupervisor[T]{opts: controllerSupervisorOptionsWithDefaults("", opts)}
 }
 
 // --- messages ---
@@ -63,7 +54,7 @@ type MessageControllerSupervisorShutdown struct{}
 // --- messages ---
 
 func (s *controllerSupervisor[T]) Init(...any) (act.SupervisorSpec, error) {
-	if s.opts.ActorName == "" {
+	if s.opts.ActorOptions.Name == "" {
 		return act.SupervisorSpec{}, fmt.Errorf("controller supervisor: actor name is required")
 	}
 	s.controller.status = ControllerActorStatus{
@@ -81,7 +72,7 @@ func (s *controllerSupervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 			Strategy: act.SupervisorStrategyTemporary,
 		},
 		Children: []act.SupervisorChildSpec{{
-			Name: s.opts.ActorName,
+			Name: s.opts.ActorOptions.Name,
 			Factory: func() gen.ProcessBehavior {
 				return NewActor(s.opts.ActorOptions)
 			},
@@ -113,7 +104,7 @@ func (s *controllerSupervisor[T]) HandleMessage(from gen.PID, message any) error
 }
 
 func (s *controllerSupervisor[T]) HandleChildStart(name gen.Atom, pid gen.PID) error {
-	if name != s.opts.ActorName || s.controller.pid != (gen.PID{}) {
+	if name != s.opts.ActorOptions.Name || s.controller.pid != (gen.PID{}) {
 		return nil
 	}
 	s.controller.pid = pid
@@ -134,7 +125,7 @@ func (s *controllerSupervisor[T]) HandleChildStart(name gen.Atom, pid gen.PID) e
 }
 
 func (s *controllerSupervisor[T]) HandleChildTerminate(name gen.Atom, pid gen.PID, reason error) error {
-	if name != s.opts.ActorName || s.controller.pid != pid {
+	if name != s.opts.ActorOptions.Name || s.controller.pid != pid {
 		return nil
 	}
 	s.controller.pid = gen.PID{}
@@ -148,8 +139,8 @@ func (s *controllerSupervisor[T]) Terminate(reason error) {
 	drained := s.lifecycle == ControllerSupervisorLifecycleStopping && s.controller.pid == (gen.PID{})
 	s.lifecycle = ControllerSupervisorLifecycleStopped
 	stopped := ControllerSupervisorStopped{Reason: reason, Drained: drained}
-	if s.opts.OnStopped != nil {
-		s.opts.OnStopped(stopped)
+	if s.opts.onStopped != nil {
+		s.opts.onStopped(stopped)
 	}
 }
 

@@ -16,17 +16,22 @@ func controllerApplicationOptionsWithDefaults[T plugin.Syncable](opts Controller
 	if opts.Name == "" {
 		opts.Name = gen.Atom("controller-" + opts.Namespace)
 	}
-	if opts.SupervisorName == "" {
-		opts.SupervisorName = opts.Name + "-supervisor"
-	}
-	if opts.ActorName == "" {
-		opts.ActorName = opts.Name + "-actor"
-	}
-	opts.Actor = controllerActorOptionsWithDefaults(opts.Actor)
+	opts.SupervisorOptions = controllerSupervisorOptionsWithDefaults(opts.Name, opts.SupervisorOptions)
 	return opts
 }
 
-func controllerActorOptionsWithDefaults[T plugin.Syncable](opts ControllerActorOptions[T]) ControllerActorOptions[T] {
+func controllerSupervisorOptionsWithDefaults[T plugin.Syncable](applicationName gen.Atom, opts ControllerSupervisorOptions[T]) ControllerSupervisorOptions[T] {
+	if opts.Name == "" {
+		opts.Name = applicationName + "-supervisor"
+	}
+	opts.ActorOptions = controllerActorOptionsWithDefaults(applicationName, opts.ActorOptions)
+	return opts
+}
+
+func controllerActorOptionsWithDefaults[T plugin.Syncable](applicationName gen.Atom, opts ControllerActorOptions[T]) ControllerActorOptions[T] {
+	if opts.Name == "" {
+		opts.Name = applicationName + "-actor"
+	}
 	if opts.RestartMin <= 0 {
 		opts.RestartMin = DefaultRestartMin
 	}
