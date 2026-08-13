@@ -20,40 +20,31 @@ const (
 	ControllerSupervisorLifecycleStopped  ControllerSupervisorLifecycle = "stopped"
 )
 
-type SupervisorChild struct {
-	name    gen.Atom
-	factory gen.ProcessFactory
-}
-
-func NewSupervisorChild[T plugin.Syncable](name gen.Atom, opts Options[T]) SupervisorChild {
-	return SupervisorChild{name: name, factory: func() gen.ProcessBehavior { return NewActor(opts) }}
-}
-
 type controllerActorState struct {
 	pid    gen.PID
 	status ControllerActorStatus
 }
 
-type ControllerSupervisorOptions struct {
-	Name     gen.Atom
-	Children []SupervisorChild
-	Stopped  chan<- ControllerSupervisorStopped
+type ControllerSupervisorOptions[T plugin.Syncable] struct {
+	ActorName    gen.Atom
+	ActorOptions ActorOptions[T]
+	OnStopped    func(ControllerSupervisorStopped)
 }
 
-type controllerSupervisor struct {
+type controllerSupervisor[T plugin.Syncable] struct {
 	act.Supervisor
 
-	opts ControllerSupervisorOptions
+	opts ControllerSupervisorOptions[T]
 
-	lifecycle   ControllerSupervisorLifecycle
-	controllers map[gen.Atom]*controllerActorState
+	lifecycle  ControllerSupervisorLifecycle
+	controller controllerActorState
 }
 
-func NewSupervisor(opts ControllerSupervisorOptions) gen.ProcessBehavior {
-	if opts.Name == "" {
-		opts.Name = "controller-supervisor"
+func NewSupervisor[T plugin.Syncable](opts ControllerSupervisorOptions[T]) gen.ProcessBehavior {
+	if opts.ActorName == "" {
+		opts.ActorName = "controller"
 	}
-	return &controllerSupervisor{opts: opts}
+	return &controllerSupervisor[T]{opts: opts}
 }
 
 // --- messages ---
@@ -66,30 +57,20 @@ type ControllerSupervisorStopped struct {
 	Reason  error
 	Drained bool
 }
+
 type MessageControllerSupervisorShutdown struct{}
 
 // --- messages ---
 
-func (s *controllerSupervisor) Init(...any) (act.SupervisorSpec, error) {
-	if len(s.opts.Children) == 0 {
-		return act.SupervisorSpec{}, fmt.Errorf("controller supervisor: children are required")
+func (s *controllerSupervisor[T]) Init(...any) (act.SupervisorSpec, error) {
+	if s.opts.ActorName == "" {
+		return act.SupervisorSpec{}, fmt.Errorf("controller supervisor: actor name is required")
 	}
-	children := make([]act.SupervisorChildSpec, 0, len(s.opts.Children))
-	s.controllers = make(map[gen.Atom]*controllerActorState, len(s.opts.Children))
-	for _, child := range s.opts.Children {
-		if child.name == "" || child.factory == nil {
-			return act.SupervisorSpec{}, fmt.Errorf("controller supervisor: child name and factory are required")
-		}
-		if _, exists := s.controllers[child.name]; exists {
-			return act.SupervisorSpec{}, fmt.Errorf("controller supervisor: duplicate child %q", child.name)
-		}
-		s.controllers[child.name] = &controllerActorState{status: ControllerActorStatus{
-			Lifecycle:    ControllerActorStarting,
-			Availability: runtime.AvailabilityUnavailable,
-			Scanner:      ArtifactScannerStatus{Lifecycle: ArtifactScannerStarting, Availability: runtime.AvailabilityUnavailable},
-			Publisher:    SnapshotPublisherStatus{Lifecycle: SnapshotPublisherStarting, Availability: runtime.AvailabilityUnavailable},
-		}}
-		children = append(children, act.SupervisorChildSpec{Name: child.name, Factory: child.factory})
+	s.controller.status = ControllerActorStatus{
+		Lifecycle:    ControllerActorStarting,
+		Availability: runtime.AvailabilityUnavailable,
+		Scanner:      ArtifactScannerStatus{Lifecycle: ArtifactScannerStarting, Availability: runtime.AvailabilityUnavailable},
+		Publisher:    SnapshotPublisherStatus{Lifecycle: SnapshotPublisherStarting, Availability: runtime.AvailabilityUnavailable},
 	}
 	s.lifecycle = ControllerSupervisorLifecycleStarting
 	return act.SupervisorSpec{
@@ -99,15 +80,20 @@ func (s *controllerSupervisor) Init(...any) (act.SupervisorSpec, error) {
 		Restart: act.SupervisorRestart{
 			Strategy: act.SupervisorStrategyTemporary,
 		},
-		Children: children,
+		Children: []act.SupervisorChildSpec{{
+			Name: s.opts.ActorName,
+			Factory: func() gen.ProcessBehavior {
+				return NewActor(s.opts.ActorOptions)
+			},
+		}},
 	}, nil
 }
 
-func (s *controllerSupervisor) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
+func (s *controllerSupervisor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
 	return fmt.Errorf("controller supervisor: unsupported call %T", request), nil
 }
 
-func (s *controllerSupervisor) HandleMessage(from gen.PID, message any) error {
+func (s *controllerSupervisor[T]) HandleMessage(from gen.PID, message any) error {
 	switch m := message.(type) {
 	case MessageControllerSupervisorShutdown:
 		if s.lifecycle != ControllerSupervisorLifecycleRunning {
@@ -115,131 +101,101 @@ func (s *controllerSupervisor) HandleMessage(from gen.PID, message any) error {
 		}
 		return s.beginDrain()
 	case MessageControllerStatusChanged:
-		for _, child := range s.controllers {
-			if child.pid != from {
-				continue
-			}
-			child.status = m.status
-			if s.lifecycle == ControllerSupervisorLifecycleDraining {
-				return s.advanceShutdown()
-			}
-			break
+		if s.controller.pid != from {
+			return nil
+		}
+		s.controller.status = m.status
+		if s.lifecycle == ControllerSupervisorLifecycleDraining {
+			return s.advanceShutdown()
 		}
 	}
 	return nil
 }
 
-func (s *controllerSupervisor) HandleChildStart(name gen.Atom, pid gen.PID) error {
-	child, ok := s.controllers[name]
-	if !ok || child.pid != (gen.PID{}) {
+func (s *controllerSupervisor[T]) HandleChildStart(name gen.Atom, pid gen.PID) error {
+	if name != s.opts.ActorName || s.controller.pid != (gen.PID{}) {
 		return nil
 	}
-	child.pid = pid
+	s.controller.pid = pid
 	if s.lifecycle == ControllerSupervisorLifecycleDraining {
 		if err := s.Send(pid, MessageControllerActivate{}); err != nil && !stalePIDSendFailure(err) {
 			return fmt.Errorf("activate draining controller %s: %w", pid, err)
 		}
-		return s.sendDrain(child)
+		return s.sendDrain()
 	}
 	if s.lifecycle == ControllerSupervisorLifecycleStopping || s.lifecycle == ControllerSupervisorLifecycleStopped {
-		return s.sendStop(child)
+		return s.sendStop()
 	}
 	if err := s.Send(pid, MessageControllerActivate{}); err != nil && !stalePIDSendFailure(err) {
 		return fmt.Errorf("activate controller %s: %w", pid, err)
-	}
-	for _, child := range s.controllers {
-		if child.pid == (gen.PID{}) {
-			return nil
-		}
 	}
 	s.lifecycle = ControllerSupervisorLifecycleRunning
 	return nil
 }
 
-func (s *controllerSupervisor) HandleChildTerminate(name gen.Atom, pid gen.PID, reason error) error {
-	child, ok := s.controllers[name]
-	if !ok || child.pid != pid {
+func (s *controllerSupervisor[T]) HandleChildTerminate(name gen.Atom, pid gen.PID, reason error) error {
+	if name != s.opts.ActorName || s.controller.pid != pid {
 		return nil
 	}
-	child.pid = gen.PID{}
+	s.controller.pid = gen.PID{}
 	if s.lifecycle == ControllerSupervisorLifecycleStopping && reason == gen.TerminateReasonNormal {
 		return s.advanceShutdown()
 	}
-	err := fmt.Errorf("controller supervisor: child %s (%s) exited unexpectedly: %w", name, pid, reason)
-	return err
+	return fmt.Errorf("controller supervisor: child %s (%s) exited unexpectedly: %w", name, pid, reason)
 }
 
-func (s *controllerSupervisor) Terminate(reason error) {
-	drained := s.lifecycle == ControllerSupervisorLifecycleStopping
-	for _, child := range s.controllers {
-		if child.pid != (gen.PID{}) {
-			drained = false
-			break
-		}
-	}
+func (s *controllerSupervisor[T]) Terminate(reason error) {
+	drained := s.lifecycle == ControllerSupervisorLifecycleStopping && s.controller.pid == (gen.PID{})
 	s.lifecycle = ControllerSupervisorLifecycleStopped
-	if s.opts.Stopped != nil {
-		select {
-		case s.opts.Stopped <- ControllerSupervisorStopped{Reason: reason, Drained: drained}:
-		default:
-		}
+	stopped := ControllerSupervisorStopped{Reason: reason, Drained: drained}
+	if s.opts.OnStopped != nil {
+		s.opts.OnStopped(stopped)
 	}
 }
 
-func (s *controllerSupervisor) beginDrain() error {
+func (s *controllerSupervisor[T]) beginDrain() error {
 	if s.lifecycle != ControllerSupervisorLifecycleRunning {
 		return fmt.Errorf("controller supervisor: cannot drain while %s", s.lifecycle)
 	}
 	s.lifecycle = ControllerSupervisorLifecycleDraining
-	for _, child := range s.controllers {
-		if err := s.sendDrain(child); err != nil {
-			return err
-		}
+	if err := s.sendDrain(); err != nil {
+		return err
 	}
 	return s.advanceShutdown()
 }
 
-func (s *controllerSupervisor) advanceShutdown() error {
+func (s *controllerSupervisor[T]) advanceShutdown() error {
 	if s.lifecycle == ControllerSupervisorLifecycleDraining {
-		for _, child := range s.controllers {
-			if child.pid != (gen.PID{}) && child.status.Lifecycle != ControllerActorDrained {
-				return nil
-			}
+		if s.controller.pid != (gen.PID{}) && s.controller.status.Lifecycle != ControllerActorDrained {
+			return nil
 		}
 		s.lifecycle = ControllerSupervisorLifecycleStopping
-		for _, child := range s.controllers {
-			if err := s.sendStop(child); err != nil {
-				return err
-			}
+		if err := s.sendStop(); err != nil {
+			return err
 		}
 	}
-	if s.lifecycle == ControllerSupervisorLifecycleStopping {
-		for _, child := range s.controllers {
-			if child.pid != (gen.PID{}) {
-				return nil
-			}
-		}
+	if s.lifecycle == ControllerSupervisorLifecycleStopping && s.controller.pid == (gen.PID{}) {
 		return gen.TerminateReasonNormal
 	}
 	return nil
 }
 
-func (s *controllerSupervisor) sendDrain(child *controllerActorState) error {
-	if child.pid == (gen.PID{}) {
+func (s *controllerSupervisor[T]) sendDrain() error {
+	if s.controller.pid == (gen.PID{}) {
 		return nil
 	}
-	if err := s.Send(child.pid, plugin.MessageDrain{}); err != nil && !stalePIDSendFailure(err) {
-		return fmt.Errorf("drain controller %s: %w", child.pid, err)
+	if err := s.Send(s.controller.pid, plugin.MessageDrain{}); err != nil && !stalePIDSendFailure(err) {
+		return fmt.Errorf("drain controller %s: %w", s.controller.pid, err)
 	}
 	return nil
 }
 
-func (s *controllerSupervisor) sendStop(child *controllerActorState) error {
-	if child.pid == (gen.PID{}) {
+func (s *controllerSupervisor[T]) sendStop() error {
+	if s.controller.pid == (gen.PID{}) {
 		return nil
 	}
-	if err := s.Send(child.pid, plugin.MessageStop{}); err != nil && !stalePIDSendFailure(err) {
-		return fmt.Errorf("stop controller %s: %w", child.pid, err)
+	if err := s.Send(s.controller.pid, plugin.MessageStop{}); err != nil && !stalePIDSendFailure(err) {
+		return fmt.Errorf("stop controller %s: %w", s.controller.pid, err)
 	}
 	return nil
 }

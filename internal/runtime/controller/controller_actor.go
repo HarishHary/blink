@@ -37,7 +37,7 @@ type ControllerActorStatus struct {
 	Publisher    SnapshotPublisherStatus
 }
 
-type Options[T plugin.Syncable] struct {
+type ActorOptions[T plugin.Syncable] struct {
 	Directory  string
 	Loader     plugin.Loader[T]
 	Database   backends.Database
@@ -76,7 +76,7 @@ type reconcilePlan struct {
 type controllerActor[T plugin.Syncable] struct {
 	act.Actor
 
-	opts Options[T]
+	opts ActorOptions[T]
 
 	lifecycle ControllerActorLifecycle
 	scanner   scannerMetaState
@@ -91,7 +91,7 @@ type controllerActor[T plugin.Syncable] struct {
 	fullRepublishRequired bool
 }
 
-func NewActor[T plugin.Syncable](opts Options[T]) gen.ProcessBehavior {
+func NewActor[T plugin.Syncable](opts ActorOptions[T]) gen.ProcessBehavior {
 	return &controllerActor[T]{opts: defaultOptions(opts)}
 }
 
@@ -601,7 +601,7 @@ func makePlan(prior *snapshot.Snapshot, generation int64, records map[string]bac
 	return reconcilePlan{recordUpserts: upsertRecords, next: next, entryUpserts: upserts, tombstones: tombstones}
 }
 
-func defaultOptions[T plugin.Syncable](opts Options[T]) Options[T] {
+func defaultOptions[T plugin.Syncable](opts ActorOptions[T]) ActorOptions[T] {
 	if opts.RestartMin <= 0 {
 		opts.RestartMin = 100 * time.Millisecond
 	}
