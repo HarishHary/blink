@@ -461,7 +461,7 @@ func (a *catalogActor[T]) scheduleRouterRestart(id string) error {
 
 	delay := state.Strategy.NextBackOff()
 	if delay == backoff.Stop {
-		return fmt.Errorf("router restart backoff stopped for %q", id)
+		return fmt.Errorf("router restart for %q: %w", id, runtime.ErrBackoffStopped)
 	}
 	state.Token++
 	token := state.Token

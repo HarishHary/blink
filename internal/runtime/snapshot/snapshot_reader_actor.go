@@ -233,7 +233,7 @@ func (a *snapshotReaderActor) scheduleSnapshotReaderMetaRestart() error {
 
 	delay := a.reader.restart.Strategy.NextBackOff()
 	if delay == backoff.Stop {
-		return fmt.Errorf("snapshot reader meta restart backoff stopped")
+		return fmt.Errorf("snapshot reader meta restart: %w", runtime.ErrBackoffStopped)
 	}
 
 	a.reader.restart.Token++

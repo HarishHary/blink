@@ -392,7 +392,7 @@ func (a *controllerActor[T]) scheduleScannerRestart() error {
 	}
 	delay := a.scanner.restart.Strategy.NextBackOff()
 	if delay == backoff.Stop {
-		return fmt.Errorf("artifact scanner restart backoff stopped")
+		return fmt.Errorf("artifact scanner restart: %w", runtime.ErrBackoffStopped)
 	}
 	a.scanner.restart.Token++
 	token := a.scanner.restart.Token
@@ -413,7 +413,7 @@ func (a *controllerActor[T]) schedulePublisherRestart() error {
 	}
 	delay := a.publisher.restart.Strategy.NextBackOff()
 	if delay == backoff.Stop {
-		return fmt.Errorf("snapshot publisher restart backoff stopped")
+		return fmt.Errorf("snapshot publisher restart: %w", runtime.ErrBackoffStopped)
 	}
 	a.publisher.restart.Token++
 	token := a.publisher.restart.Token
@@ -434,7 +434,7 @@ func (a *controllerActor[T]) schedulePublishRetry() error {
 	}
 	delay := a.publisher.retry.Strategy.NextBackOff()
 	if delay == backoff.Stop {
-		return fmt.Errorf("snapshot publish retry backoff stopped")
+		return fmt.Errorf("snapshot publish retry: %w", runtime.ErrBackoffStopped)
 	}
 	a.publisher.retry.Token++
 	token := a.publisher.retry.Token

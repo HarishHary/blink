@@ -102,9 +102,6 @@ func (m *artifactWatcherMeta) Start() error {
 		state.watchError = fmt.Errorf("%w: fingerprint directory %q: %w", runtime.ErrArtifactWatch, m.directory, err)
 	}
 
-	if err := m.Send(m.Parent(), MessageArtifactWatcherStarted{incarnation: m.incarnation}); err != nil {
-		return fmt.Errorf("%w: announce start: %w", runtime.ErrArtifactWatch, err)
-	}
 	if err := m.publishWatchState(&state); err != nil {
 		return err
 	}

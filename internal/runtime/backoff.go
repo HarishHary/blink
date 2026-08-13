@@ -19,6 +19,7 @@ var (
 	ErrSnapshotPublish   = errors.New("snapshot publication failed")
 	ErrSnapshotRead      = errors.New("snapshot read failed")
 	ErrSnapshotSubscribe = errors.New("snapshot event subscription failed")
+	ErrBackoffStopped    = errors.New("scheduled backoff stopped")
 	ErrRuntimeNotStarted = errors.New("actor runtime not started")
 	ErrRuntimeStopped    = errors.New("actor runtime stopped")
 	ErrWorkerRecycle     = errors.New("worker recycled after plugin transport failure")

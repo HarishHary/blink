@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"context"
+	"crypto/sha256"
 	"time"
 
 	"ergo.services/ergo/gen"
@@ -16,24 +17,32 @@ type ActorDependencies[T Syncable] struct {
 	HealthInterval time.Duration
 	RetryMin       time.Duration
 	RetryMax       time.Duration
+	ControlTimeout time.Duration
 }
 
 type Deployment struct {
-	BinaryState
+	Id         string
+	Name       string
+	Enabled    bool
+	Mode       runtime.RolloutMode
+	RolloutPct float64
+	MaxProcs   int
 	Path       string
 	Hash       string
-	RolloutPct float64
+	Spec       []byte
 }
 
 type DeploymentPoolKey struct {
 	runtime.PoolKey
 	MaxProcs int
+	SpecHash [sha256.Size]byte
 }
 
 func (d *Deployment) PoolKey() DeploymentPoolKey {
 	return DeploymentPoolKey{
 		PoolKey:  runtime.PoolKey{Id: d.Id, Name: d.Name, Hash: d.Hash},
 		MaxProcs: d.WorkerCount(),
+		SpecHash: sha256.Sum256(d.Spec),
 	}
 }
 
