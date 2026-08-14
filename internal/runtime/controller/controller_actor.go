@@ -10,6 +10,7 @@ import (
 	"ergo.services/ergo/gen"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/harishhary/blink/internal/backends"
+	"github.com/harishhary/blink/internal/brokers"
 	"github.com/harishhary/blink/internal/runtime"
 	"github.com/harishhary/blink/internal/runtime/plugin"
 	"github.com/harishhary/blink/internal/snapshot"
@@ -64,6 +65,9 @@ type reconcilePlan struct {
 type controllerActor[T plugin.Syncable] struct {
 	act.Actor
 	opts                  ControllerActorOptions[T]
+	database              backends.Database
+	writer                brokers.Writer
+	barrier               *publisherIOBarrier
 	lifecycle             ControllerActorLifecycle
 	scanner               scannerMetaState
 	publisher             publisherMetaState
@@ -75,8 +79,8 @@ type controllerActor[T plugin.Syncable] struct {
 	fullRepublishRequired bool
 }
 
-func NewActor[T plugin.Syncable](opts ControllerActorOptions[T]) gen.ProcessBehavior {
-	return &controllerActor[T]{opts: controllerActorOptionsWithDefaults("", opts)}
+func newActor[T plugin.Syncable](opts ControllerActorOptions[T], database backends.Database, writer brokers.Writer, barrier *publisherIOBarrier) gen.ProcessBehavior {
+	return &controllerActor[T]{opts: controllerActorOptionsWithDefaults("", opts), database: database, writer: writer, barrier: barrier}
 }
 
 // --- messages ---
@@ -99,8 +103,8 @@ type MessagePublishSnapshot struct {
 const publishUnavailableThreshold = 5
 
 func (a *controllerActor[T]) Init(...any) error {
-	if a.opts.Directory == "" || a.opts.Loader == nil || a.opts.Database == nil || a.opts.Writer == nil {
-		return fmt.Errorf("controller actor: directory, loader, database, and writer are required")
+	if a.opts.Directory == "" || a.opts.Loader == nil || a.database == nil || a.writer == nil || a.barrier == nil {
+		return fmt.Errorf("controller actor: directory, loader, database, writer, and barrier are required")
 	}
 	a.lifecycle = ControllerActorStarting
 	a.records = make(map[string]backends.ControllerRecord)
@@ -334,8 +338,9 @@ func (a *controllerActor[T]) startPublisher() error {
 		RestartCount: restartCount,
 	}
 	alias, err := a.SpawnMeta(&snapshotPublisherMeta{
-		database:    a.opts.Database,
-		writer:      a.opts.Writer,
+		database:    a.database,
+		writer:      a.writer,
+		barrier:     a.barrier,
 		supervisor:  a.Parent(),
 		incarnation: incarnation,
 	}, gen.MetaOptions{})
