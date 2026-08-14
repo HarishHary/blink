@@ -74,5 +74,6 @@ docs/*
 bin/*
 .serena/*
 openwiki/*
+.DS_Store
 # CocoIndex Code (ccc)
 .cocoindex_code/
