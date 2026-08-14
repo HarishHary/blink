@@ -246,6 +246,18 @@ func (a *controllerActor[T]) HandleMessage(from gen.PID, message any) error {
 		}
 		a.publisher.restart.Pending, a.publisher.restart.Cancel, a.publisher.replacementPending = false, nil, false
 		return a.startPublisher()
+	case MessageSnapshotPublisherIOStopped:
+		if from != a.Parent() {
+			return nil
+		}
+		if _, ok := a.publisher.activeIO[m.Incarnation]; !ok {
+			return nil
+		}
+		delete(a.publisher.activeIO, m.Incarnation)
+		if a.lifecycle == ControllerActorDraining || a.lifecycle == ControllerActorDrained {
+			return a.maybeDrained()
+		}
+		return a.schedulePublisherRestart()
 	case gen.MessageDownAlias:
 		switch m.Alias {
 		case a.scanner.alias:
@@ -266,18 +278,6 @@ func (a *controllerActor[T]) HandleMessage(from gen.PID, message any) error {
 			a.publisher.replacementPending = true
 			return a.schedulePublisherRestart()
 		}
-	case MessageSnapshotPublisherIOStopped:
-		if from != a.Parent() {
-			return nil
-		}
-		if _, ok := a.publisher.activeIO[m.Incarnation]; !ok {
-			return nil
-		}
-		delete(a.publisher.activeIO, m.Incarnation)
-		if a.lifecycle == ControllerActorDraining || a.lifecycle == ControllerActorDrained {
-			return a.maybeDrained()
-		}
-		return a.schedulePublisherRestart()
 	}
 	return nil
 }
@@ -292,10 +292,6 @@ func (a *controllerActor[T]) Terminate(error) {
 	a.scanner.status.Lifecycle, a.scanner.status.Availability = ArtifactScannerStopped, runtime.AvailabilityUnavailable
 	a.publisher.status.Lifecycle, a.publisher.status.Availability, a.publisher.status.Publishing = SnapshotPublisherStopped, runtime.AvailabilityUnavailable, false
 	a.reportStatus()
-}
-
-func (a *controllerActor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
-	return fmt.Errorf("controller actor: unsupported call %T", request), nil
 }
 
 func (a *controllerActor[T]) startScanner() error {
@@ -589,4 +585,8 @@ func makePlan(prior *snapshot.Snapshot, generation int64, records map[string]bac
 	sort.Slice(upserts, func(i, j int) bool { return upserts[i].Id < upserts[j].Id })
 	sort.Strings(tombstones)
 	return reconcilePlan{recordUpserts: upsertRecords, next: next, entryUpserts: upserts, tombstones: tombstones}
+}
+
+func (a *controllerActor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
+	return fmt.Errorf("controller actor: unsupported call %T", request), nil
 }

@@ -27,9 +27,9 @@ const (
 )
 
 type controllerActorState struct {
-	pid       gen.PID
-	status    ControllerActorStatus
-	activated bool
+	pid            gen.PID
+	status         ControllerActorStatus
+	activationSent bool
 }
 
 type controllerSupervisor[T plugin.Syncable] struct {
@@ -201,13 +201,13 @@ func (s *controllerSupervisor[T]) reconcileController() error {
 		s.lifecycle = ControllerSupervisorLifecycleStopping
 		return s.sendStop()
 	}
-	if len(s.publisherFences) != 0 || s.controllerActor.activated {
+	if len(s.publisherFences) != 0 || s.controllerActor.activationSent {
 		return nil
 	}
 	if err := s.Send(s.controllerActor.pid, MessageControllerActivate{}); err != nil && !stalePIDSendFailure(err) {
 		return fmt.Errorf("activate controller %s: %w", s.controllerActor.pid, err)
 	}
-	s.controllerActor.activated = true
+	s.controllerActor.activationSent = true
 	s.lifecycle = ControllerSupervisorLifecycleRunning
 	return nil
 }
