@@ -69,6 +69,7 @@ type MessageSnapshotPublisherIOStopped struct{ Incarnation uint64 }
 
 // --- messages ---
 
+// Init reserves publisher I/O and initializes the work queue.
 func (m *snapshotPublisherMeta) Init(process gen.MetaProcess) error {
 	if m.database == nil || m.writer == nil || m.barrier == nil {
 		return fmt.Errorf("snapshot publisher meta: database, writer, and barrier are required")
@@ -87,6 +88,7 @@ func (m *snapshotPublisherMeta) Init(process gen.MetaProcess) error {
 	return nil
 }
 
+// Start loads persisted state and publishes queued updates.
 func (m *snapshotPublisherMeta) Start() error {
 	defer func() { _ = m.Send(m.supervisor, MessageSnapshotPublisherIOStopped{Incarnation: m.incarnation}) }()
 	defer m.barrier.Release()
@@ -130,6 +132,7 @@ func (m *snapshotPublisherMeta) Start() error {
 	}
 }
 
+// HandleMessage queues a publication for this publisher incarnation.
 func (m *snapshotPublisherMeta) HandleMessage(_ gen.PID, message any) error {
 	switch message := message.(type) {
 	case MessagePublishSnapshot:
@@ -146,6 +149,7 @@ func (m *snapshotPublisherMeta) HandleMessage(_ gen.PID, message any) error {
 	return nil
 }
 
+// publish persists records and emits changed keyed snapshot entries.
 func (m *snapshotPublisherMeta) publish(job MessagePublishSnapshot) error {
 	if err := m.database.Upsert(m.runCtx, job.records); err != nil {
 		return fmt.Errorf("%w: upsert records: %w", runtime.ErrSnapshotPublish, err)
@@ -182,16 +186,19 @@ func (m *snapshotPublisherMeta) publish(job MessagePublishSnapshot) error {
 	return nil
 }
 
+// HandleCall rejects unsupported publisher calls.
 func (m *snapshotPublisherMeta) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
 	return nil, fmt.Errorf("snapshot publisher meta: unsupported call %T", request)
 }
 
+// Terminate cancels active publisher work.
 func (m *snapshotPublisherMeta) Terminate(error) {
 	if m.cancelRun != nil {
 		m.cancelRun()
 	}
 }
 
+// HandleInspect reports the publisher incarnation.
 func (m *snapshotPublisherMeta) HandleInspect(gen.PID, ...string) map[string]string {
 	return map[string]string{"incarnation": fmt.Sprintf("%d", m.incarnation)}
 }

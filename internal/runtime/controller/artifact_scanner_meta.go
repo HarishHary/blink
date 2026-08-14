@@ -67,6 +67,7 @@ type MessageArtifactScanResult struct {
 
 // --- messages ---
 
+// Init prepares scanner state and its cancellation context.
 func (m *artifactScannerMeta[T]) Init(process gen.MetaProcess) error {
 	if m.directory == "" || m.loader == nil {
 		return fmt.Errorf("artifact scanner meta: directory and loader are required")
@@ -78,6 +79,7 @@ func (m *artifactScannerMeta[T]) Init(process gen.MetaProcess) error {
 	return nil
 }
 
+// Start watches and periodically scans the artifact directory.
 func (m *artifactScannerMeta[T]) Start() error {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -150,22 +152,27 @@ func (m *artifactScannerMeta[T]) Start() error {
 	}
 }
 
+// HandleMessage ignores messages because scans run in Start.
 func (m *artifactScannerMeta[T]) HandleMessage(gen.PID, any) error { return nil }
 
+// HandleCall rejects unsupported scanner calls.
 func (m *artifactScannerMeta[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
 	return nil, fmt.Errorf("artifact scanner meta: unsupported call %T", request)
 }
 
+// Terminate cancels active filesystem observation.
 func (m *artifactScannerMeta[T]) Terminate(error) {
 	if m.cancelRun != nil {
 		m.cancelRun()
 	}
 }
 
+// HandleInspect reports the scanner incarnation.
 func (m *artifactScannerMeta[T]) HandleInspect(gen.PID, ...string) map[string]string {
 	return map[string]string{"incarnation": fmt.Sprintf("%d", m.incarnation)}
 }
 
+// sendScan observes the directory and forwards its effective catalog.
 func (m *artifactScannerMeta[T]) sendScan(watcher *fsnotify.Watcher) error {
 	attachErr := watcher.Add(m.directory)
 	if attachErr != nil && strings.Contains(attachErr.Error(), "exists") {
@@ -188,8 +195,7 @@ func (m *artifactScannerMeta[T]) sendScan(watcher *fsnotify.Watcher) error {
 	return nil
 }
 
-// scan keeps individually unreadable, unparseable, or unhashable files at their last-good state.
-// Only ReadDir failure makes the scan incomplete.
+// scan retains last-good artifacts unless the directory itself cannot be read.
 func (m *artifactScannerMeta[T]) scan() ([]snapshot.EffectiveEntry, []string, bool, error) {
 	files, err := os.ReadDir(m.directory)
 	if err != nil {
@@ -277,6 +283,7 @@ func (m *artifactScannerMeta[T]) scan() ([]snapshot.EffectiveEntry, []string, bo
 	return entries, ids, true, nil
 }
 
+// isYAML reports whether name has a supported YAML extension.
 func isYAML(name string) bool {
 	return strings.HasSuffix(name, ".yaml") || strings.HasSuffix(name, ".yml")
 }

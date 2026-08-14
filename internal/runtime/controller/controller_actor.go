@@ -79,6 +79,7 @@ type controllerActor[T plugin.Syncable] struct {
 	fullRepublishRequired bool
 }
 
+// newActor constructs the controller actor with normalized options.
 func newActor[T plugin.Syncable](opts ControllerActorOptions[T], database backends.Database, writer brokers.Writer, barrier *publisherIOBarrier) gen.ProcessBehavior {
 	return &controllerActor[T]{opts: controllerActorOptionsWithDefaults("", opts), database: database, writer: writer, barrier: barrier}
 }
@@ -102,6 +103,7 @@ type MessagePublishSnapshot struct {
 
 const publishUnavailableThreshold = 5
 
+// Init validates dependencies and initializes controller state.
 func (a *controllerActor[T]) Init(...any) error {
 	if a.opts.Directory == "" || a.opts.Loader == nil || a.database == nil || a.writer == nil || a.barrier == nil {
 		return fmt.Errorf("controller actor: directory, loader, database, writer, and barrier are required")
@@ -120,6 +122,7 @@ func (a *controllerActor[T]) Init(...any) error {
 	return nil
 }
 
+// HandleMessage advances controller state from lifecycle and worker messages.
 func (a *controllerActor[T]) HandleMessage(from gen.PID, message any) error {
 	defer a.reportStatus()
 	switch message.(type) {
@@ -282,6 +285,7 @@ func (a *controllerActor[T]) HandleMessage(from gen.PID, message any) error {
 	return nil
 }
 
+// Terminate stops workers and reports the final controller state.
 func (a *controllerActor[T]) Terminate(error) {
 	a.lifecycle = ControllerActorStopped
 	a.publisher.retry.CancelScheduled(false)
@@ -294,6 +298,7 @@ func (a *controllerActor[T]) Terminate(error) {
 	a.reportStatus()
 }
 
+// startScanner starts a new artifact scanner incarnation.
 func (a *controllerActor[T]) startScanner() error {
 	if a.scanner.alias != (gen.Alias{}) {
 		return nil
@@ -318,6 +323,7 @@ func (a *controllerActor[T]) startScanner() error {
 	return nil
 }
 
+// startPublisher starts a new snapshot publisher when I/O is unfenced.
 func (a *controllerActor[T]) startPublisher() error {
 	if a.publisher.alias != (gen.Alias{}) || len(a.publisher.activeIO) != 0 || a.lifecycle != ControllerActorRunning {
 		return nil
@@ -354,6 +360,7 @@ func (a *controllerActor[T]) startPublisher() error {
 	return nil
 }
 
+// stopScanner terminates the active artifact scanner.
 func (a *controllerActor[T]) stopScanner(reason error) {
 	if a.scanner.alias != (gen.Alias{}) {
 		alias := a.scanner.alias
@@ -363,6 +370,7 @@ func (a *controllerActor[T]) stopScanner(reason error) {
 	}
 }
 
+// stopPublisher terminates the active snapshot publisher.
 func (a *controllerActor[T]) stopPublisher(reason error) {
 	if a.publisher.alias != (gen.Alias{}) {
 		alias := a.publisher.alias
@@ -372,6 +380,7 @@ func (a *controllerActor[T]) stopPublisher(reason error) {
 	}
 }
 
+// scheduleScannerRestart arranges the next scanner restart attempt.
 func (a *controllerActor[T]) scheduleScannerRestart() error {
 	if a.lifecycle != ControllerActorRunning || a.scanner.restart.Pending {
 		return nil
@@ -393,6 +402,7 @@ func (a *controllerActor[T]) scheduleScannerRestart() error {
 	return nil
 }
 
+// schedulePublisherRestart arranges a publisher restart after its I/O stops.
 func (a *controllerActor[T]) schedulePublisherRestart() error {
 	if a.lifecycle != ControllerActorRunning || !a.publisher.replacementPending || a.publisher.alias != (gen.Alias{}) || len(a.publisher.activeIO) != 0 || a.publisher.restart.Pending {
 		return nil
@@ -414,6 +424,7 @@ func (a *controllerActor[T]) schedulePublisherRestart() error {
 	return nil
 }
 
+// schedulePublishRetry arranges the next pending publication attempt.
 func (a *controllerActor[T]) schedulePublishRetry() error {
 	if a.lifecycle != ControllerActorRunning || a.publisher.retry.Pending {
 		return nil
@@ -433,6 +444,7 @@ func (a *controllerActor[T]) schedulePublishRetry() error {
 	return nil
 }
 
+// reconcile builds and queues a plan when both inputs are ready.
 func (a *controllerActor[T]) reconcile() error {
 	if !a.bootstrapped || !a.scanner.status.Complete || a.pending != nil {
 		return nil
@@ -442,6 +454,7 @@ func (a *controllerActor[T]) reconcile() error {
 	return a.sendPending()
 }
 
+// sendPending queues the current plan with the active publisher.
 func (a *controllerActor[T]) sendPending() error {
 	if a.pending == nil || a.publisher.status.Publishing || a.publisher.alias == (gen.Alias{}) || !a.publisher.status.Loaded || a.lifecycle != ControllerActorRunning {
 		return nil
@@ -466,6 +479,7 @@ func (a *controllerActor[T]) sendPending() error {
 	return nil
 }
 
+// recordPublishFailure updates publisher health after a failed publication.
 func (a *controllerActor[T]) recordPublishFailure(err error) {
 	a.publisher.consecutiveFailures++
 	a.publisher.status.Availability = runtime.AvailabilityDegraded
@@ -475,6 +489,7 @@ func (a *controllerActor[T]) recordPublishFailure(err error) {
 	}
 }
 
+// beginDrain stops workers and waits for accepted publisher I/O.
 func (a *controllerActor[T]) beginDrain() error {
 	if a.lifecycle == ControllerActorDraining || a.lifecycle == ControllerActorDrained || a.lifecycle == ControllerActorStopped {
 		return nil
@@ -488,6 +503,7 @@ func (a *controllerActor[T]) beginDrain() error {
 	return a.maybeDrained()
 }
 
+// maybeDrained marks the controller drained after publisher I/O completes.
 func (a *controllerActor[T]) maybeDrained() error {
 	if len(a.publisher.activeIO) != 0 {
 		return nil
@@ -496,10 +512,12 @@ func (a *controllerActor[T]) maybeDrained() error {
 	return nil
 }
 
+// reportStatus sends the current status to the supervisor.
 func (a *controllerActor[T]) reportStatus() {
 	_ = a.Send(a.Parent(), MessageControllerStatusChanged{status: a.currentStatus()})
 }
 
+// currentStatus derives aggregate controller health.
 func (a *controllerActor[T]) currentStatus() ControllerActorStatus {
 	availability := runtime.AvailabilityUnavailable
 	if a.lifecycle == ControllerActorRunning {
@@ -511,6 +529,7 @@ func (a *controllerActor[T]) currentStatus() ControllerActorStatus {
 	return ControllerActorStatus{Lifecycle: a.lifecycle, Availability: availability, Generation: a.generation, Pending: a.pending != nil, Publishing: a.publisher.status.Publishing, Scanner: a.scanner.status, Publisher: a.publisher.status}
 }
 
+// cloneEntries returns independent copies of catalog entries.
 func cloneEntries(entries []snapshot.EffectiveEntry) []snapshot.EffectiveEntry {
 	cloned := append([]snapshot.EffectiveEntry(nil), entries...)
 	for i := range cloned {
@@ -519,6 +538,7 @@ func cloneEntries(entries []snapshot.EffectiveEntry) []snapshot.EffectiveEntry {
 	return cloned
 }
 
+// makePlan derives persistence updates and keyed snapshot changes.
 func makePlan(prior *snapshot.Snapshot, generation int64, records map[string]backends.ControllerRecord, entries []snapshot.EffectiveEntry, presentIDs []string, fullRepublishRequired bool, now time.Time) reconcilePlan {
 	present := make(map[string]struct{}, len(presentIDs))
 	for _, id := range presentIDs {
@@ -587,6 +607,7 @@ func makePlan(prior *snapshot.Snapshot, generation int64, records map[string]bac
 	return reconcilePlan{recordUpserts: upsertRecords, next: next, entryUpserts: upserts, tombstones: tombstones}
 }
 
+// HandleCall rejects unsupported controller calls.
 func (a *controllerActor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
 	return fmt.Errorf("controller actor: unsupported call %T", request), nil
 }

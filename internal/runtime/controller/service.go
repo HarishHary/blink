@@ -59,8 +59,7 @@ func (s *Service[T]) Run(ctx context.Context) errs.Error {
 	}
 }
 
-// cleanupAttempt waits indefinitely while the service is running, then gives
-// cleanup a bounded budget when service shutdown begins.
+// cleanupAttempt closes and unloads an application with a shutdown budget.
 func (s *Service[T]) cleanupAttempt(ctx context.Context, app *ControllerApplication[T], name gen.Atom) error {
 	cleanupCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -109,6 +108,7 @@ func (s *Service[T]) cleanupAttempt(ctx context.Context, app *ControllerApplicat
 	return closeErr
 }
 
+// gracefulStop drains the application before forcing it to stop.
 func (s *Service[T]) gracefulStop(app *ControllerApplication[T], name gen.Atom) error {
 	app.Seal()
 	pid, err := s.node.ProcessPID(app.SupervisorName())
@@ -129,6 +129,7 @@ func (s *Service[T]) gracefulStop(app *ControllerApplication[T], name gen.Atom) 
 	}
 }
 
+// forceStop stops an application when graceful shutdown cannot finish.
 func (s *Service[T]) forceStop(name gen.Atom) error {
 	if err := s.node.ApplicationStopForce(name); err != nil {
 		if errors.Is(err, gen.ErrApplicationUnknown) || errors.Is(err, gen.ErrNodeTerminated) || errors.Is(err, gen.ErrApplicationStopping) {

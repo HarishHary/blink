@@ -83,6 +83,7 @@ func (a *ControllerApplication[T]) Load(_ gen.Node, _ ...any) (gen.ApplicationSp
 	}, nil
 }
 
+// Start needs no work because Load created the supervisor specification.
 func (a *ControllerApplication[T]) Start(gen.ApplicationMode) {}
 
 // Terminate only seals and reports. Waiting and closing belong to the service.

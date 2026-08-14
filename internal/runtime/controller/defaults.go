@@ -12,6 +12,7 @@ const (
 	DefaultRestartMax = 5 * time.Second
 )
 
+// controllerApplicationOptionsWithDefaults fills application option defaults.
 func controllerApplicationOptionsWithDefaults[T plugin.Syncable](opts ControllerApplicationOptions[T]) ControllerApplicationOptions[T] {
 	if opts.Name == "" {
 		opts.Name = gen.Atom("controller-" + opts.Namespace)
@@ -20,6 +21,7 @@ func controllerApplicationOptionsWithDefaults[T plugin.Syncable](opts Controller
 	return opts
 }
 
+// controllerSupervisorOptionsWithDefaults fills supervisor option defaults.
 func controllerSupervisorOptionsWithDefaults[T plugin.Syncable](applicationName gen.Atom, opts ControllerSupervisorOptions[T]) ControllerSupervisorOptions[T] {
 	if opts.Name == "" {
 		opts.Name = applicationName + "-supervisor"
@@ -28,6 +30,7 @@ func controllerSupervisorOptionsWithDefaults[T plugin.Syncable](applicationName 
 	return opts
 }
 
+// controllerActorOptionsWithDefaults fills actor names and timing defaults.
 func controllerActorOptionsWithDefaults[T plugin.Syncable](applicationName gen.Atom, opts ControllerActorOptions[T]) ControllerActorOptions[T] {
 	if opts.Name == "" {
 		opts.Name = applicationName + "-actor"

@@ -43,6 +43,7 @@ type controllerSupervisor[T plugin.Syncable] struct {
 	publisherFences map[uint64]gen.PID
 }
 
+// newSupervisor constructs the controller supervisor with normalized options.
 func newSupervisor[T plugin.Syncable](opts ControllerSupervisorOptions[T], database backends.Database, writer brokers.Writer, barrier *publisherIOBarrier) gen.ProcessBehavior {
 	return &controllerSupervisor[T]{opts: controllerSupervisorOptionsWithDefaults("", opts), database: database, writer: writer, barrier: barrier}
 }
@@ -57,6 +58,7 @@ type MessageControllerSupervisorShutdown struct{}
 
 // --- messages ---
 
+// Init configures the supervised controller actor.
 func (s *controllerSupervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 	if s.opts.ActorOptions.Name == "" {
 		return act.SupervisorSpec{}, fmt.Errorf("controller supervisor: actor name is required")
@@ -87,6 +89,7 @@ func (s *controllerSupervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 	}, nil
 }
 
+// HandleMessage coordinates controller lifecycle and publisher I/O fences.
 func (s *controllerSupervisor[T]) HandleMessage(from gen.PID, message any) error {
 	switch m := message.(type) {
 	case MessageControllerSupervisorShutdown:
@@ -130,6 +133,7 @@ func (s *controllerSupervisor[T]) HandleMessage(from gen.PID, message any) error
 	return nil
 }
 
+// HandleChildStart tracks a newly started controller actor.
 func (s *controllerSupervisor[T]) HandleChildStart(name gen.Atom, pid gen.PID) error {
 	if name != s.opts.ActorOptions.Name || s.controllerActor.pid != (gen.PID{}) {
 		return nil
@@ -152,6 +156,7 @@ func (s *controllerSupervisor[T]) HandleChildStart(name gen.Atom, pid gen.PID) e
 	return s.reconcileController()
 }
 
+// HandleChildTerminate handles the tracked controller actor exiting.
 func (s *controllerSupervisor[T]) HandleChildTerminate(name gen.Atom, pid gen.PID, reason error) error {
 	if name != s.opts.ActorOptions.Name || s.controllerActor.pid != pid {
 		return nil
@@ -168,6 +173,7 @@ func (s *controllerSupervisor[T]) HandleChildTerminate(name gen.Atom, pid gen.PI
 	return nil
 }
 
+// advanceShutdown stops the actor after draining publisher I/O.
 func (s *controllerSupervisor[T]) advanceShutdown() error {
 	if s.lifecycle == ControllerSupervisorLifecycleDraining {
 		if s.controllerActor.pid != (gen.PID{}) && s.controllerActor.status.Lifecycle != ControllerActorDrained {
@@ -187,6 +193,7 @@ func (s *controllerSupervisor[T]) advanceShutdown() error {
 	return nil
 }
 
+// reconcileController activates or stops the current controller actor.
 func (s *controllerSupervisor[T]) reconcileController() error {
 	if s.controllerActor.pid == (gen.PID{}) {
 		return s.advanceShutdown()
@@ -212,6 +219,7 @@ func (s *controllerSupervisor[T]) reconcileController() error {
 	return nil
 }
 
+// sendDrain asks the controller actor to drain.
 func (s *controllerSupervisor[T]) sendDrain() error {
 	if s.controllerActor.pid == (gen.PID{}) {
 		return nil
@@ -222,6 +230,7 @@ func (s *controllerSupervisor[T]) sendDrain() error {
 	return nil
 }
 
+// sendStop asks the controller actor to stop.
 func (s *controllerSupervisor[T]) sendStop() error {
 	if s.controllerActor.pid == (gen.PID{}) {
 		return nil
@@ -232,10 +241,12 @@ func (s *controllerSupervisor[T]) sendStop() error {
 	return nil
 }
 
+// stalePIDSendFailure reports sends lost to an exiting process.
 func stalePIDSendFailure(err error) bool {
 	return errors.Is(err, gen.ErrProcessUnknown) || errors.Is(err, gen.ErrProcessTerminated)
 }
 
+// HandleCall rejects unsupported supervisor calls.
 func (s *controllerSupervisor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
 	return fmt.Errorf("controller supervisor: unsupported call %T", request), nil
 }

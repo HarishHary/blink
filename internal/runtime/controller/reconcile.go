@@ -14,8 +14,7 @@ type CatalogGroup[T plugin.Syncable] struct {
 	Entries []T
 }
 
-// ValidateGroup checks a group's rollout policy: at least one BG (stable baseline), at most one BG,
-// at most one CN/SH. Returns error strings; an empty slice means valid.
+// ValidateGroup returns rollout-policy violations for a catalog group.
 func ValidateGroup[T plugin.Syncable](group CatalogGroup[T]) []string {
 	var bgCount, altCount int
 	for _, item := range group.Entries {
@@ -38,9 +37,7 @@ func ValidateGroup[T plugin.Syncable](group CatalogGroup[T]) []string {
 	return errs
 }
 
-// ElectGroup derives the EffectiveEntry for one validated group: BG → Primary, CN/SH → Candidate,
-// each carrying its yaml-marshaled spec. Called per changed group (incremental), so the marshal cost
-// is per-change; a marshal error leaves Spec nil (a consumer that needs it skips that artifact).
+// ElectGroup derives an effective entry from a validated catalog group.
 func ElectGroup[T plugin.Syncable](id string, group CatalogGroup[T], digests map[string]string) snapshot.EffectiveEntry {
 	e := snapshot.EffectiveEntry{Id: id}
 	anyEnabled := false
@@ -64,8 +61,7 @@ func ElectGroup[T plugin.Syncable](id string, group CatalogGroup[T], digests map
 	return e
 }
 
-// SnapshotChanged reports whether next differs from the prior snapshot content.
-// Generation is excluded - it is set by the caller after this check.
+// SnapshotChanged reports whether entries differ from the prior snapshot.
 func SnapshotChanged(next []snapshot.EffectiveEntry, prior *snapshot.Snapshot) bool {
 	if prior == nil || len(next) != len(prior.Entries) {
 		return true
@@ -102,10 +98,7 @@ func SnapshotChanged(next []snapshot.EffectiveEntry, prior *snapshot.Snapshot) b
 	return false
 }
 
-// DiffEntries computes the per-ID upserts + tombstones to publish on the keyed topic (one compacted
-// message per ID; no whole-snapshot message). On bootstrap (prior == nil) every entry is republished
-// and tombstones come from the store's StatusAbsent records - so a delete that happened while the
-// controller was down is re-emitted and a cold-starting reader never resurrects the ID.
+// DiffEntries computes keyed upserts and tombstones between catalog versions.
 func DiffEntries(prior *snapshot.Snapshot, next []snapshot.EffectiveEntry, records map[string]*backends.ControllerRecord) (upserts []snapshot.EffectiveEntry, tombstones []string) {
 	nextByID := make(map[string]snapshot.EffectiveEntry, len(next))
 	for _, e := range next {
@@ -141,13 +134,13 @@ func DiffEntries(prior *snapshot.Snapshot, next []snapshot.EffectiveEntry, recor
 	return upserts, tombstones
 }
 
-// EffectiveEntryEqual reports whether two entries match on everything a consumer routes/configures on,
-// including each artifact's spec - so a metadata-only edit (same binary) is detected as a change.
+// EffectiveEntryEqual reports whether two entries have identical routing data.
 func EffectiveEntryEqual(left, right snapshot.EffectiveEntry) bool {
 	return left.Id == right.Id && left.Enabled == right.Enabled &&
 		ArtifactRefEqual(left.Primary, right.Primary) && ArtifactRefEqual(left.Candidate, right.Candidate)
 }
 
+// ArtifactRefEqual reports whether two artifact references match.
 func ArtifactRefEqual(left, right *snapshot.ArtifactRef) bool {
 	if (left == nil) != (right == nil) {
 		return false
