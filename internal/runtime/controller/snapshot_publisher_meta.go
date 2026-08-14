@@ -38,6 +38,7 @@ type snapshotPublisherMeta struct {
 	gen.MetaProcess
 	database    backends.Database
 	writer      brokers.Writer
+	barrier     *publisherIOBarrier
 	incarnation uint64
 	supervisor  gen.PID
 	runCtx      context.Context
@@ -69,22 +70,26 @@ type MessageSnapshotPublisherIOStopped struct{ Incarnation uint64 }
 // --- messages ---
 
 func (m *snapshotPublisherMeta) Init(process gen.MetaProcess) error {
-	if m.database == nil || m.writer == nil {
-		return fmt.Errorf("snapshot publisher meta: database and writer are required")
+	if m.database == nil || m.writer == nil || m.barrier == nil {
+		return fmt.Errorf("snapshot publisher meta: database, writer, and barrier are required")
+	}
+	if !m.barrier.Acquire() {
+		return fmt.Errorf("snapshot publisher meta: application is stopping")
 	}
 	m.MetaProcess = process
 	m.runCtx, m.cancelRun = context.WithCancel(context.Background())
 	m.jobs = make(chan MessagePublishSnapshot, 1)
 	if err := m.Send(m.supervisor, MessageSnapshotPublisherIOStarted{Incarnation: m.incarnation}); err != nil {
+		m.cancelRun()
+		m.barrier.Release()
 		return fmt.Errorf("snapshot publisher meta: register I/O: %w", err)
 	}
 	return nil
 }
 
 func (m *snapshotPublisherMeta) Start() error {
-	defer func() {
-		_ = m.Send(m.supervisor, MessageSnapshotPublisherIOStopped{Incarnation: m.incarnation})
-	}()
+	defer func() { _ = m.Send(m.supervisor, MessageSnapshotPublisherIOStopped{Incarnation: m.incarnation}) }()
+	defer m.barrier.Release()
 
 	records, err := m.database.LoadAll(m.runCtx)
 	var generation int64
@@ -141,20 +146,6 @@ func (m *snapshotPublisherMeta) HandleMessage(_ gen.PID, message any) error {
 	return nil
 }
 
-func (m *snapshotPublisherMeta) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
-	return nil, fmt.Errorf("snapshot publisher meta: unsupported call %T", request)
-}
-
-func (m *snapshotPublisherMeta) Terminate(error) {
-	if m.cancelRun != nil {
-		m.cancelRun()
-	}
-}
-
-func (m *snapshotPublisherMeta) HandleInspect(gen.PID, ...string) map[string]string {
-	return map[string]string{"incarnation": fmt.Sprintf("%d", m.incarnation)}
-}
-
 func (m *snapshotPublisherMeta) publish(job MessagePublishSnapshot) error {
 	if err := m.database.Upsert(m.runCtx, job.records); err != nil {
 		return fmt.Errorf("%w: upsert records: %w", runtime.ErrSnapshotPublish, err)
@@ -189,4 +180,18 @@ func (m *snapshotPublisherMeta) publish(job MessagePublishSnapshot) error {
 		return fmt.Errorf("%w: save snapshot: %w", runtime.ErrSnapshotPublish, err)
 	}
 	return nil
+}
+
+func (m *snapshotPublisherMeta) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
+	return nil, fmt.Errorf("snapshot publisher meta: unsupported call %T", request)
+}
+
+func (m *snapshotPublisherMeta) Terminate(error) {
+	if m.cancelRun != nil {
+		m.cancelRun()
+	}
+}
+
+func (m *snapshotPublisherMeta) HandleInspect(gen.PID, ...string) map[string]string {
+	return map[string]string{"incarnation": fmt.Sprintf("%d", m.incarnation)}
 }
