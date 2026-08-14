@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -43,13 +43,14 @@ func main() {
 
 	var cfg controllerConfig
 	if err := services.LoadFromEnvironment(&cfg); err != nil {
-		log.Fatalf("config: %v", err)
+		slog.Error("load controller config", "error", err)
+		os.Exit(1)
 	}
 	broker := brokers.NewKafkaBroker(cfg.Kafka)
 	rootLogger := logger.New("controller", cfg.Env)
 	host, err := plugin.Start(plugin.NodeOptions{Name: "controller@localhost", ShutdownTimeout: runtimeShutdownTimeout})
 	if err != nil {
-		log.Fatalf("start controller node: %v", err)
+		rootLogger.FatalF("start controller node: %v", err)
 	}
 
 	node := host.Node()
@@ -123,8 +124,7 @@ func main() {
 	err = host.Close(closeCtx)
 	cancel()
 	if err != nil {
-		rootLogger.ErrorF("close controller node: %v", err)
-		os.Exit(1)
+		rootLogger.FatalF("close controller node: %v", err)
 	}
 	rootLogger.Info("controller stopped")
 }

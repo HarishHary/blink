@@ -2,7 +2,6 @@ package services
 
 import (
 	"net/http"
-	"os"
 
 	"github.com/harishhary/blink/internal/logger"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -21,7 +20,6 @@ func ServeHealth(logger *logger.Logger, addr string, readyFn func() bool) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	})
 	if err := http.ListenAndServe(addr, mux); err != nil {
-		logger.ErrorF("health server failed: %v", err)
-		os.Exit(1)
+		logger.FatalF("health server failed: %v", err)
 	}
 }

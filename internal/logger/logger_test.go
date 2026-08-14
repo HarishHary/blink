@@ -3,6 +3,8 @@ package logger
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"os/exec"
 	"testing"
 
 	"github.com/harishhary/blink/internal/errors"
@@ -64,5 +66,29 @@ func TestLoggerLevelsAndErrors(t *testing.T) {
 				t.Fatalf("ErrorF record was not preserved: %#v", records[len(records)-1])
 			}
 		})
+	}
+}
+
+func TestLoggerFatalF(t *testing.T) {
+	cmd := exec.Command(os.Args[0], "-test.run=^TestLoggerFatalFHelper$")
+	cmd.Env = append(os.Environ(), "LOGGER_FATALF_HELPER=1")
+	output, err := cmd.Output()
+	exitErr, ok := err.(*exec.ExitError)
+	if !ok || exitErr.ExitCode() != 1 {
+		t.Fatalf("want exit code 1, got %v", err)
+	}
+
+	var record map[string]any
+	if err := json.Unmarshal(output, &record); err != nil {
+		t.Fatal(err)
+	}
+	if record["level"] != "ERROR" || record["msg"] != "fatal 1" {
+		t.Fatalf("unexpected fatal record: %#v", record)
+	}
+}
+
+func TestLoggerFatalFHelper(t *testing.T) {
+	if os.Getenv("LOGGER_FATALF_HELPER") == "1" {
+		newLogger(os.Stdout, "test", "dev").FatalF("fatal %d", 1)
 	}
 }
