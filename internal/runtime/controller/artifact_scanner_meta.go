@@ -43,19 +43,16 @@ type ArtifactScannerStatus struct {
 	LastError      error
 }
 
-// artifactScannerMeta owns filesystem observation and parsing for one controller incarnation.
+// artifactScannerMeta owns filesystem observation and parsing for one scanner incarnation.
 type artifactScannerMeta[T plugin.Syncable] struct {
 	gen.MetaProcess
-
 	directory   string
 	loader      plugin.Loader[T]
 	incarnation uint64
-
-	parsed  map[string]T
-	digests map[string]string
-
-	runCtx    context.Context
-	cancelRun context.CancelFunc
+	parsed      map[string]T
+	digests     map[string]string
+	runCtx      context.Context
+	cancelRun   context.CancelFunc
 }
 
 // --- messages ---

@@ -33,17 +33,16 @@ type SnapshotPublisherStatus struct {
 	LastError      error
 }
 
-// snapshotPublisherMeta owns blocking persistence and broker writes for one controller incarnation.
+// snapshotPublisherMeta owns blocking persistence and broker writes for one publisher incarnation.
 type snapshotPublisherMeta struct {
 	gen.MetaProcess
-
 	database    backends.Database
 	writer      brokers.Writer
 	incarnation uint64
-
-	runCtx    context.Context
-	cancelRun context.CancelFunc
-	jobs      chan MessagePublishSnapshot
+	supervisor  gen.PID
+	runCtx      context.Context
+	cancelRun   context.CancelFunc
+	jobs        chan MessagePublishSnapshot
 }
 
 // --- messages ---
@@ -61,6 +60,9 @@ type MessageSnapshotPublishResult struct {
 	err         error
 }
 
+// MessageSnapshotPublisherIOStarted proves an accepted meta Start invocation may access application resources.
+type MessageSnapshotPublisherIOStarted struct{ Incarnation uint64 }
+
 // MessageSnapshotPublisherIOStopped proves an accepted meta Start invocation returned.
 type MessageSnapshotPublisherIOStopped struct{ Incarnation uint64 }
 
@@ -73,12 +75,15 @@ func (m *snapshotPublisherMeta) Init(process gen.MetaProcess) error {
 	m.MetaProcess = process
 	m.runCtx, m.cancelRun = context.WithCancel(context.Background())
 	m.jobs = make(chan MessagePublishSnapshot, 1)
+	if err := m.Send(m.supervisor, MessageSnapshotPublisherIOStarted{Incarnation: m.incarnation}); err != nil {
+		return fmt.Errorf("snapshot publisher meta: register I/O: %w", err)
+	}
 	return nil
 }
 
 func (m *snapshotPublisherMeta) Start() error {
 	defer func() {
-		_ = m.Send(m.Parent(), MessageSnapshotPublisherIOStopped{Incarnation: m.incarnation})
+		_ = m.Send(m.supervisor, MessageSnapshotPublisherIOStopped{Incarnation: m.incarnation})
 	}()
 
 	records, err := m.database.LoadAll(m.runCtx)

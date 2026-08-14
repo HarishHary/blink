@@ -63,19 +63,15 @@ type reconcilePlan struct {
 
 type controllerActor[T plugin.Syncable] struct {
 	act.Actor
-
-	opts ControllerActorOptions[T]
-
-	lifecycle ControllerActorLifecycle
-	scanner   scannerMetaState
-	publisher publisherMetaState
-
-	bootstrapped bool
-	generation   int64
-	committed    *snapshot.Snapshot
-	records      map[string]backends.ControllerRecord
-	pending      *reconcilePlan
-
+	opts                  ControllerActorOptions[T]
+	lifecycle             ControllerActorLifecycle
+	scanner               scannerMetaState
+	publisher             publisherMetaState
+	bootstrapped          bool
+	generation            int64
+	committed             *snapshot.Snapshot
+	records               map[string]backends.ControllerRecord
+	pending               *reconcilePlan
 	fullRepublishRequired bool
 }
 
@@ -267,7 +263,7 @@ func (a *controllerActor[T]) HandleMessage(from gen.PID, message any) error {
 			return a.schedulePublisherRestart()
 		}
 	case MessageSnapshotPublisherIOStopped:
-		if from != a.PID() {
+		if from != a.Parent() {
 			return nil
 		}
 		if _, ok := a.publisher.activeIO[m.Incarnation]; !ok {
@@ -340,6 +336,7 @@ func (a *controllerActor[T]) startPublisher() error {
 	alias, err := a.SpawnMeta(&snapshotPublisherMeta{
 		database:    a.opts.Database,
 		writer:      a.opts.Writer,
+		supervisor:  a.Parent(),
 		incarnation: incarnation,
 	}, gen.MetaOptions{})
 	if err != nil {
