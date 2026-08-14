@@ -6,13 +6,12 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
-	"github.com/harishhary/blink/internal/backends"
 	"github.com/harishhary/blink/internal/brokers"
-	"github.com/harishhary/blink/internal/config"
-	"github.com/harishhary/blink/internal/controller"
 	"github.com/harishhary/blink/internal/logger"
-	"github.com/harishhary/blink/internal/plugin"
+	"github.com/harishhary/blink/internal/runtime/controller"
+	"github.com/harishhary/blink/internal/runtime/plugin"
 	"github.com/harishhary/blink/internal/services"
 	"github.com/harishhary/blink/pkg/enrichments"
 	"github.com/harishhary/blink/pkg/formatters"
@@ -21,8 +20,11 @@ import (
 	"github.com/harishhary/blink/pkg/tuning_rules"
 )
 
+const runtimeShutdownTimeout = 45 * time.Second
+
 type controllerConfig struct {
 	services.Common
+	ControllerDatabaseDSN  string `env:"CONTROLLER_DATABASE_DSN"`
 	ExecutorSnapshotTopic  string `env:"KAFKA_TOPIC_EXECUTOR_SNAPSHOT"`
 	MatcherSnapshotTopic   string `env:"KAFKA_TOPIC_MATCHER_SNAPSHOT"`
 	TunerSnapshotTopic     string `env:"KAFKA_TOPIC_TUNER_SNAPSHOT"`
@@ -35,7 +37,6 @@ type controllerConfig struct {
 	EnrichmentPluginDir    string `env:"ENRICHER_PLUGIN_DIR"`
 }
 
-// main runs the control plane: one PluginController per plugin type. See docs/services/controller.md.
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -44,44 +45,86 @@ func main() {
 	if err := services.LoadFromEnvironment(&cfg); err != nil {
 		log.Fatalf("config: %v", err)
 	}
-	b := brokers.NewKafkaBroker(cfg.Kafka)
+	broker := brokers.NewKafkaBroker(cfg.Kafka)
 	rootLogger := logger.New("controller", cfg.Env)
+	host, err := plugin.Start(plugin.NodeOptions{Name: "controller@localhost", ShutdownTimeout: runtimeShutdownTimeout})
+	if err != nil {
+		log.Fatalf("start controller node: %v", err)
+	}
 
-	// Shared control-plane store; NewNop is the no-op default (swap for SQLite/Postgres).
-	db := backends.NewNop()
-
+	node := host.Node()
 	runner := services.New(rootLogger.With("component", "runner"))
-
-	addController(rootLogger, "rule", cfg.RulePluginDir, runner, db, rules.Loader{}, b.NewWriter(cfg.ExecutorSnapshotTopic))
-	addController(rootLogger, "matcher", cfg.MatcherPluginDir, runner, db, matchers.Loader{}, b.NewWriter(cfg.MatcherSnapshotTopic))
-	addController(rootLogger, "tuning", cfg.TuningPluginDir, runner, db, tuning_rules.Loader{}, b.NewWriter(cfg.TunerSnapshotTopic))
-	addController(rootLogger, "formatter", cfg.FormatterPluginDir, runner, db, formatters.Loader{}, b.NewWriter(cfg.FormatterSnapshotTopic))
-	addController(rootLogger, "enrichment", cfg.EnrichmentPluginDir, runner, db, enrichments.Loader{}, b.NewWriter(cfg.EnricherSnapshotTopic))
-
-	go services.ServeHealth(rootLogger.With("component", "health"), ":8080", nil)
-
-	runner.Run(ctx)
-	log.Println("Shutting down controller")
-}
-
-// addController registers a LocalReader + PluginController for one plugin type. See docs/services/controller.md.
-func addController[T plugin.Syncable](
-	rootLogger *logger.Logger,
-	name string,
-	dir string,
-	runner *services.Runner,
-	db backends.Database,
-	loader config.Loader[T],
-	writer brokers.Writer,
-) {
-	reader := controller.NewLocalReader(rootLogger.With("plugin_type", name, "component", "local_reader"), dir, loader)
-	readerSvc := services.NewManagedService(name+"config-reader", reader)
-
-	ctrl := controller.NewPluginController(rootLogger.With("plugin_type", name, "component", "plugin_controller"), db, reader, writer)
-	ctrlSvc := services.NewManagedService(name+"-controller", ctrl)
-
 	runner.Register(
-		readerSvc,
-		ctrlSvc,
+		controller.NewService(node, "controller-rule", controller.ControllerApplicationOptions[*rules.RuleMetadata]{
+			DatabaseDSN: cfg.ControllerDatabaseDSN,
+			Namespace:   "rule",
+			Topic:       cfg.ExecutorSnapshotTopic,
+			Broker:      broker,
+			SupervisorOptions: controller.ControllerSupervisorOptions[*rules.RuleMetadata]{
+				ActorOptions: controller.ControllerActorOptions[*rules.RuleMetadata]{
+					Directory: cfg.RulePluginDir,
+					Loader:    rules.Loader{},
+				},
+			},
+		}),
+		controller.NewService(node, "controller-matcher", controller.ControllerApplicationOptions[*matchers.MatcherMetadata]{
+			DatabaseDSN: cfg.ControllerDatabaseDSN,
+			Namespace:   "matcher",
+			Topic:       cfg.MatcherSnapshotTopic,
+			Broker:      broker,
+			SupervisorOptions: controller.ControllerSupervisorOptions[*matchers.MatcherMetadata]{
+				ActorOptions: controller.ControllerActorOptions[*matchers.MatcherMetadata]{
+					Directory: cfg.MatcherPluginDir,
+					Loader:    matchers.Loader{},
+				},
+			},
+		}),
+		controller.NewService(node, "controller-tuning", controller.ControllerApplicationOptions[*tuning_rules.TuningRuleMetadata]{
+			DatabaseDSN: cfg.ControllerDatabaseDSN,
+			Namespace:   "tuning",
+			Topic:       cfg.TunerSnapshotTopic,
+			Broker:      broker,
+			SupervisorOptions: controller.ControllerSupervisorOptions[*tuning_rules.TuningRuleMetadata]{
+				ActorOptions: controller.ControllerActorOptions[*tuning_rules.TuningRuleMetadata]{
+					Directory: cfg.TuningPluginDir,
+					Loader:    tuning_rules.Loader{},
+				},
+			},
+		}),
+		controller.NewService(node, "controller-formatter", controller.ControllerApplicationOptions[*formatters.FormatterMetadata]{
+			DatabaseDSN: cfg.ControllerDatabaseDSN,
+			Namespace:   "formatter",
+			Topic:       cfg.FormatterSnapshotTopic,
+			Broker:      broker,
+			SupervisorOptions: controller.ControllerSupervisorOptions[*formatters.FormatterMetadata]{
+				ActorOptions: controller.ControllerActorOptions[*formatters.FormatterMetadata]{
+					Directory: cfg.FormatterPluginDir,
+					Loader:    formatters.Loader{},
+				},
+			},
+		}),
+		controller.NewService(node, "controller-enrichment", controller.ControllerApplicationOptions[*enrichments.EnrichmentMetadata]{
+			DatabaseDSN: cfg.ControllerDatabaseDSN,
+			Namespace:   "enrichment",
+			Topic:       cfg.EnricherSnapshotTopic,
+			Broker:      broker,
+			SupervisorOptions: controller.ControllerSupervisorOptions[*enrichments.EnrichmentMetadata]{
+				ActorOptions: controller.ControllerActorOptions[*enrichments.EnrichmentMetadata]{
+					Directory: cfg.EnrichmentPluginDir,
+					Loader:    enrichments.Loader{},
+				},
+			},
+		}),
 	)
+	go services.ServeHealth(rootLogger.With("component", "health"), ":8080", nil)
+	runner.Run(ctx)
+
+	closeCtx, cancel := context.WithTimeout(context.Background(), runtimeShutdownTimeout)
+	err = host.Close(closeCtx)
+	cancel()
+	if err != nil {
+		rootLogger.ErrorF("close controller node: %v", err)
+		os.Exit(1)
+	}
+	rootLogger.Info("controller stopped")
 }
