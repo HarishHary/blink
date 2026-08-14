@@ -88,6 +88,10 @@ func (r *Runner) Run(ctx context.Context) {
 func (r *Runner) runWithBackoff(ctx context.Context, svc service) {
 	attempt := 0
 	for {
+		if ctx.Err() != nil {
+			r.logger.Info("service %s stopped (context cancelled)", svc.Name())
+			return
+		}
 		r.logger.Info("service %s starting (attempt %d)", svc.Name(), attempt+1)
 		if err := svc.Run(ctx); err != nil {
 			r.logger.ErrorF("service %s error: %s", svc.Name(), err)
