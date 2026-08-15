@@ -51,17 +51,22 @@ func (a *ControllerApplication[T]) WaitQuiesced(ctx context.Context) error {
 
 // Load opens the application-owned resources and describes its one supervisor.
 func (a *ControllerApplication[T]) Load(_ ...any) (gen.ApplicationSpec, error) {
+	a.Log().Debug("controller application loading: name=%q namespace=%q topic=%q", a.opts.Name, a.opts.Namespace, a.opts.Topic)
 	if a.opts.Name == "" || a.opts.SupervisorOptions.Name == "" || a.opts.Namespace == "" || a.opts.Topic == "" || a.opts.Broker == nil {
-		return gen.ApplicationSpec{}, fmt.Errorf("controller application: name, supervisor name, namespace, topic, and broker are required")
+		err := fmt.Errorf("controller application: name, supervisor name, namespace, topic, and broker are required")
+		a.Log().Error("controller application configuration invalid: name=%q namespace=%q error=%v", a.opts.Name, a.opts.Namespace, err)
+		return gen.ApplicationSpec{}, err
 	}
 
 	database, err := backends.OpenSQLite(a.opts.DatabaseDSN)
 	if err != nil {
+		a.Log().Error("controller application database open failed: name=%q namespace=%q error=%v", a.opts.Name, a.opts.Namespace, err)
 		return gen.ApplicationSpec{}, fmt.Errorf("open %s controller database: %w", a.opts.Namespace, err)
 	}
 	store, err := backends.NewSQLite(database, a.opts.Namespace)
 	if err != nil {
 		_ = database.Close()
+		a.Log().Error("controller application database initialization failed: name=%q namespace=%q error=%v", a.opts.Name, a.opts.Namespace, err)
 		return gen.ApplicationSpec{}, fmt.Errorf("initialize %s controller database: %w", a.opts.Namespace, err)
 	}
 
@@ -69,6 +74,7 @@ func (a *ControllerApplication[T]) Load(_ ...any) (gen.ApplicationSpec, error) {
 	a.database = database
 	a.writer = writer
 	supervisorOpts := a.opts.SupervisorOptions
+	a.Log().Info("controller application loaded: name=%q namespace=%q supervisor=%q topic=%q", a.opts.Name, a.opts.Namespace, a.opts.SupervisorOptions.Name, a.opts.Topic)
 
 	return gen.ApplicationSpec{
 		Name:        a.opts.Name,
@@ -87,6 +93,7 @@ func (a *ControllerApplication[T]) Load(_ ...any) (gen.ApplicationSpec, error) {
 // Terminate only seals and reports. Waiting and closing belong to the service.
 func (a *ControllerApplication[T]) Terminate(reason error) {
 	a.Seal()
+	a.Log().Info("controller application terminated: name=%q namespace=%q reason=%v", a.opts.Name, a.opts.Namespace, reason)
 	select {
 	case a.stopped <- reason:
 	default:
@@ -96,10 +103,13 @@ func (a *ControllerApplication[T]) Terminate(reason error) {
 // Close closes the application-owned resources after Seal and quiescence are proven.
 func (a *ControllerApplication[T]) Close(ctx context.Context) error {
 	if !a.barrier.Quiesced() {
-		return fmt.Errorf("controller application publisher I/O has not quiesced")
+		err := fmt.Errorf("controller application publisher I/O has not quiesced")
+		a.Log().Error("controller application close rejected: name=%q namespace=%q error=%v", a.opts.Name, a.opts.Namespace, err)
+		return err
 	}
 	writer, database := a.writer, a.database
 	a.writer, a.database = nil, nil
+	a.Log().Debug("controller application resources closing: name=%q namespace=%q writer=%t database=%t", a.opts.Name, a.opts.Namespace, writer != nil, database != nil)
 	done := make(chan error, 1)
 	go func() {
 		type closeResult struct {
@@ -123,13 +133,20 @@ func (a *ControllerApplication[T]) Close(ctx context.Context) error {
 				errs = append(errs, fmt.Errorf("close %s: %w", result.resource, result.err))
 			}
 		}
-		done <- errors.Join(errs...)
+		err := errors.Join(errs...)
+		if err != nil {
+			a.Log().Error("controller application resource close failed: name=%q namespace=%q error=%v", a.opts.Name, a.opts.Namespace, err)
+		} else {
+			a.Log().Info("controller application resources closed: name=%q namespace=%q", a.opts.Name, a.opts.Namespace)
+		}
+		done <- err
 	}()
 
 	select {
 	case err := <-done:
 		return err
 	case <-ctx.Done():
+		a.Log().Debug("controller application close wait interrupted: name=%q namespace=%q error=%v", a.opts.Name, a.opts.Namespace, ctx.Err())
 		return ctx.Err()
 	}
 }

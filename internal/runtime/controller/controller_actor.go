@@ -229,10 +229,13 @@ func (a *controllerActor[T]) HandleMessage(from gen.PID, message any) error {
 			return nil
 		}
 		a.publisher.status.Publishing = false
+		changed := a.pending.next.Generation != a.generation
 		a.committed = a.pending.next.Clone()
 		a.generation = a.pending.next.Generation
 		a.fullRepublishRequired = false
-		a.Log().Info("snapshot committed: name=%q generation=%d upserts=%d tombstones=%d", a.opts.Name, a.pending.next.Generation, len(a.pending.entryUpserts), len(a.pending.tombstones))
+		if changed {
+			a.Log().Info("snapshot committed: name=%q generation=%d upserts=%d tombstones=%d", a.opts.Name, a.pending.next.Generation, len(a.pending.entryUpserts), len(a.pending.tombstones))
+		}
 		for _, record := range a.pending.recordUpserts {
 			a.records[record.Id] = record
 		}
@@ -471,7 +474,6 @@ func (a *controllerActor[T]) sendPending() error {
 	for i := range message.records {
 		message.records[i] = message.records[i].Clone()
 	}
-	a.Log().Debug("pending publication dispatched: name=%q generation=%d changed=%t upserts=%d tombstones=%d", a.opts.Name, message.next.Generation, message.changed, len(message.upserts), len(message.tombstones))
 	if err := a.Send(a.publisher.alias, message); err != nil {
 		a.Log().Error("pending publication dispatch failed: name=%q generation=%d error=%v", a.opts.Name, message.next.Generation, err)
 		a.publisher.status.Publishing = false
@@ -482,6 +484,7 @@ func (a *controllerActor[T]) sendPending() error {
 		a.stopPublisher(gen.TerminateReasonShutdown)
 		return a.schedulePublisherRestart()
 	}
+	a.Log().Debug("pending publication dispatched: name=%q generation=%d changed=%t upserts=%d tombstones=%d", a.opts.Name, message.next.Generation, message.changed, len(message.upserts), len(message.tombstones))
 	return nil
 }
 
