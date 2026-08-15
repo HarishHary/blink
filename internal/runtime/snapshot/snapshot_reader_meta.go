@@ -14,7 +14,7 @@ import (
 const snapshotCatchUpPoll = 250 * time.Millisecond
 
 // SnapshotReaderMetaLifecycle describes one blocking broker-reader
-// meta-process incarnation.
+// meta-process instance.
 type SnapshotReaderMetaLifecycle string
 
 const (
@@ -25,16 +25,13 @@ const (
 )
 
 // SnapshotReaderMetaStatus is owned by snapshotReaderActor because that actor
-// owns the meta-process incarnation, restart policy, and interpretation of
-// MessageDownAlias. The meta-process only reports runtime facts.
+// owns the meta-process restart policy and interpretation of MessageDownAlias.
+// The meta-process only reports runtime facts.
 type SnapshotReaderMetaStatus struct {
-	Lifecycle      SnapshotReaderMetaLifecycle
-	Availability   runtime.Availability
-	Incarnation    uint64
-	RestartCount   uint64
-	RestartPending bool
-	CaughtUp       bool
-	LastError      error
+	Lifecycle    SnapshotReaderMetaLifecycle
+	Availability runtime.Availability
+	CaughtUp     bool
+	LastError    error
 }
 
 // snapshotReaderMeta owns one concrete broker reader and one blocking read
@@ -42,22 +39,19 @@ type SnapshotReaderMetaStatus struct {
 // snapshot state, and publication.
 type snapshotReaderMeta struct {
 	gen.MetaProcess
-
-	reader      brokers.Reader
-	incarnation uint64
-
+	reader    brokers.Reader
 	runCtx    context.Context
 	cancelRun context.CancelFunc
 }
 
 // --- messages ---
 
-// Reader meta messages are fenced by incarnation in the parent actor.
+// Reader meta messages are fenced by source alias in the parent actor.
 type MessageSnapshotRecord struct {
-	incarnation uint64
-	message     brokers.Message
+	source  gen.Alias
+	message brokers.Message
 }
-type MessageSnapshotCaughtUp struct{ incarnation uint64 }
+type MessageSnapshotCaughtUp struct{ source gen.Alias }
 
 // --- messages ---
 
@@ -93,7 +87,7 @@ func (m *snapshotReaderMeta) Start() error {
 				}
 				if lag == 0 {
 					caughtUp = true
-					if sendErr := m.Send(m.Parent(), MessageSnapshotCaughtUp{incarnation: m.incarnation}); sendErr != nil {
+					if sendErr := m.Send(m.Parent(), MessageSnapshotCaughtUp{source: m.ID()}); sendErr != nil {
 						return fmt.Errorf("%w: send caught-up: %w", runtime.ErrSnapshotRead, sendErr)
 					}
 				}
@@ -105,8 +99,8 @@ func (m *snapshotReaderMeta) Start() error {
 		message.Key = append([]byte(nil), message.Key...)
 		message.Value = append([]byte(nil), message.Value...)
 		if err := m.Send(m.Parent(), MessageSnapshotRecord{
-			incarnation: m.incarnation,
-			message:     message,
+			source:  m.ID(),
+			message: message,
 		}); err != nil {
 			return fmt.Errorf("%w: send record: %w", runtime.ErrSnapshotRead, err)
 		}
@@ -128,6 +122,4 @@ func (m *snapshotReaderMeta) Terminate(error) {
 	}
 }
 
-func (m *snapshotReaderMeta) HandleInspect(gen.PID, ...string) map[string]string {
-	return map[string]string{"incarnation": fmt.Sprintf("%d", m.incarnation)}
-}
+func (m *snapshotReaderMeta) HandleInspect(gen.PID, ...string) map[string]string { return nil }
