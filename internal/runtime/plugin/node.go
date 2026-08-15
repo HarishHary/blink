@@ -7,6 +7,9 @@ import (
 	"sync"
 	"time"
 
+	"ergo.services/application/mcp"
+	"ergo.services/application/observer"
+	"ergo.services/application/radar"
 	"ergo.services/ergo"
 	"ergo.services/ergo/gen"
 )
@@ -24,6 +27,7 @@ type NodeHost struct {
 
 type NodeOptions struct {
 	Name            gen.Atom
+	Env             string
 	ShutdownTimeout time.Duration
 	Applications    []gen.ApplicationBehavior
 }
@@ -36,14 +40,34 @@ func Start(opts NodeOptions) (*NodeHost, error) {
 	if opts.ShutdownTimeout <= 0 {
 		opts.ShutdownTimeout = gen.DefaultShutdownTimeout
 	}
+	applications := []gen.ApplicationBehavior{radar.CreateApp(radar.Options{})}
+	logLevel := gen.LogLevelInfo
+	if opts.Env == "dev" {
+		applications = append(applications,
+			observer.CreateApp(observer.Options{}),
+			mcp.CreateApp(mcp.Options{Port: 9922}),
+		)
+		logLevel = gen.LogLevelDebug
+	}
+	applications = append(applications, opts.Applications...)
 
 	n, err := ergo.StartNode(
 		opts.Name,
 		gen.NodeOptions{
 			ShutdownTimeout: opts.ShutdownTimeout,
-			Applications:    opts.Applications,
+			Applications:    applications,
 			Network: gen.NetworkOptions{
 				Mode: gen.NetworkModeDisabled,
+			},
+			Log: gen.LogOptions{
+				Level: logLevel,
+				DefaultLogger: gen.DefaultLoggerOptions{
+					TimeFormat:      time.RFC3339,
+					IncludeBehavior: true,
+					IncludeName:     true,
+					IncludeFields:   true,
+					DisableBanner:   true,
+				},
 			},
 		},
 	)
