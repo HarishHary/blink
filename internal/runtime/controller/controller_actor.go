@@ -298,6 +298,7 @@ func (a *controllerActor[T]) HandleMessage(from gen.PID, message any) error {
 
 // Terminate stops workers and reports the final controller state.
 func (a *controllerActor[T]) Terminate(error) {
+	defer a.reportStatus()
 	a.lifecycle = ControllerActorStopped
 	a.scanner.restart.CancelScheduled(false)
 	a.publisher.restart.CancelScheduled(false)
@@ -308,7 +309,6 @@ func (a *controllerActor[T]) Terminate(error) {
 	a.publisher.status.Lifecycle = SnapshotPublisherStopped
 	a.publisher.status.Availability = runtime.AvailabilityUnavailable
 	a.publisher.status.Publishing = false
-	a.reportStatus()
 }
 
 // startScanner starts a new artifact scanner instance.
@@ -500,11 +500,6 @@ func (a *controllerActor[T]) maybeDrained() error {
 
 // reportStatus sends the current status to the supervisor.
 func (a *controllerActor[T]) reportStatus() {
-	_ = a.Send(a.Parent(), MessageControllerStatusChanged{status: a.currentStatus()})
-}
-
-// currentStatus derives aggregate controller health.
-func (a *controllerActor[T]) currentStatus() ControllerActorStatus {
 	availability := runtime.AvailabilityUnavailable
 	if a.lifecycle == ControllerActorRunning {
 		availability = runtime.AvailabilityDegraded
@@ -512,7 +507,7 @@ func (a *controllerActor[T]) currentStatus() ControllerActorStatus {
 			availability = runtime.AvailabilityReady
 		}
 	}
-	return ControllerActorStatus{Lifecycle: a.lifecycle, Availability: availability, Generation: a.generation, Scanner: a.scanner.status, Publisher: a.publisher.status}
+	_ = a.Send(a.Parent(), MessageControllerStatusChanged{status: ControllerActorStatus{Lifecycle: a.lifecycle, Availability: availability, Generation: a.generation, Scanner: a.scanner.status, Publisher: a.publisher.status}})
 }
 
 // cloneEntries returns independent copies of catalog entries.
