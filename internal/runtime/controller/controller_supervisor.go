@@ -40,7 +40,7 @@ type controllerSupervisor[T plugin.Syncable] struct {
 	barrier         *publisherIOBarrier
 	lifecycle       ControllerSupervisorLifecycle
 	controllerActor controllerActorState
-	publisherFences map[uint64]gen.PID
+	publisherFences map[gen.Alias]gen.PID
 }
 
 // newSupervisor constructs the controller supervisor with normalized options.
@@ -70,7 +70,7 @@ func (s *controllerSupervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 		Publisher:    SnapshotPublisherStatus{Lifecycle: SnapshotPublisherStarting, Availability: runtime.AvailabilityUnavailable},
 	}
 	s.lifecycle = ControllerSupervisorLifecycleStarting
-	s.publisherFences = make(map[uint64]gen.PID)
+	s.publisherFences = make(map[gen.Alias]gen.PID)
 	return act.SupervisorSpec{
 		Type:                act.SupervisorTypeOneForOne,
 		EnableHandleChild:   true,
@@ -114,15 +114,15 @@ func (s *controllerSupervisor[T]) HandleMessage(from gen.PID, message any) error
 			return nil
 		}
 		if s.publisherFences == nil {
-			s.publisherFences = make(map[uint64]gen.PID)
+			s.publisherFences = make(map[gen.Alias]gen.PID)
 		}
-		s.publisherFences[m.Incarnation] = from
+		s.publisherFences[m.Alias] = from
 	case MessageSnapshotPublisherIOStopped:
-		owner, ok := s.publisherFences[m.Incarnation]
+		owner, ok := s.publisherFences[m.Alias]
 		if !ok || owner != from {
 			return nil
 		}
-		delete(s.publisherFences, m.Incarnation)
+		delete(s.publisherFences, m.Alias)
 		if s.controllerActor.pid == from {
 			if err := s.Send(from, m); err != nil && !stalePIDSendFailure(err) {
 				return fmt.Errorf("forward snapshot publisher I/O completion to %s: %w", from, err)
