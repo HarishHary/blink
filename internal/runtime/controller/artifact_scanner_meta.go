@@ -34,13 +34,11 @@ const (
 
 // ArtifactScannerStatus is derived and owned by the controller actor.
 type ArtifactScannerStatus struct {
-	Lifecycle      ArtifactScannerLifecycle
-	Availability   runtime.Availability
-	Incarnation    uint64
-	RestartCount   uint64
-	RestartPending bool
-	Complete       bool
-	LastError      error
+	Lifecycle    ArtifactScannerLifecycle
+	Availability runtime.Availability
+	Incarnation  uint64
+	Complete     bool
+	LastError    error
 }
 
 // artifactScannerMeta owns filesystem observation and parsing for one scanner incarnation.

@@ -25,14 +25,12 @@ const (
 
 // SnapshotPublisherStatus is derived and owned by the controller actor.
 type SnapshotPublisherStatus struct {
-	Lifecycle      SnapshotPublisherLifecycle
-	Availability   runtime.Availability
-	Incarnation    uint64
-	RestartCount   uint64
-	RestartPending bool
-	Loaded         bool
-	Publishing     bool
-	LastError      error
+	Lifecycle    SnapshotPublisherLifecycle
+	Availability runtime.Availability
+	Incarnation  uint64
+	Loaded       bool
+	Publishing   bool
+	LastError    error
 }
 
 // snapshotPublisherMeta owns blocking persistence and broker writes for one publisher incarnation.
