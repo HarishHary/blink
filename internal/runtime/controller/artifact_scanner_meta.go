@@ -169,7 +169,7 @@ func (m *artifactScannerMeta[T]) HandleMessage(gen.PID, any) error { return nil 
 
 // HandleCall rejects unsupported scanner calls.
 func (m *artifactScannerMeta[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
-	return nil, fmt.Errorf("artifact scanner meta: unsupported call %T", request)
+	return fmt.Errorf("artifact scanner meta: unsupported call %T", request), nil
 }
 
 // HandleInspect provides no custom scanner diagnostics.

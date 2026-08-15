@@ -27,20 +27,22 @@ var (
 )
 
 type ScheduledBackoff struct {
-	Strategy *backoff.ExponentialBackOff
+	Strategy backoff.BackOff
 	Pending  bool
 	Token    uint64
 	Cancel   gen.CancelFunc
 }
 
+const scheduledRestartLimit uint64 = 5
+
 func NewScheduledBackoff(minDelay, maxDelay time.Duration) *ScheduledBackoff {
 	return &ScheduledBackoff{
-		Strategy: backoff.NewExponentialBackOff(
+		Strategy: backoff.WithMaxRetries(backoff.NewExponentialBackOff(
 			backoff.WithInitialInterval(minDelay),
 			backoff.WithMaxInterval(maxDelay),
 			backoff.WithMultiplier(2),
 			backoff.WithMaxElapsedTime(0),
-		),
+		), scheduledRestartLimit),
 	}
 }
 

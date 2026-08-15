@@ -3,8 +3,10 @@ package controller
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"ergo.services/ergo/gen"
+	"github.com/cenkalti/backoff/v4"
 	"github.com/harishhary/blink/internal/backends"
 	"github.com/harishhary/blink/internal/brokers"
 	"github.com/harishhary/blink/internal/runtime"
@@ -44,6 +46,8 @@ type snapshotPublisherMeta struct {
 	runCtx      context.Context
 	cancelRun   context.CancelFunc
 	jobs        chan MessagePublishSnapshot
+	retryMin    time.Duration
+	retryMax    time.Duration
 }
 
 // --- messages ---
@@ -60,6 +64,8 @@ type MessageSnapshotPublishResult struct {
 	incarnation uint64
 	err         error
 }
+
+const publishRetryAttemptBudget = 5
 
 // MessageSnapshotPublisherIOStarted proves an accepted meta Start invocation may access application resources.
 type MessageSnapshotPublisherIOStarted struct{ Incarnation uint64 }
@@ -142,17 +148,40 @@ func (m *snapshotPublisherMeta) Start() (runErr error) {
 			return nil
 		case job := <-m.jobs:
 			m.Log().Debug("snapshot publication started: incarnation=%d generation=%d changed=%t upserts=%d tombstones=%d", m.incarnation, job.next.Generation, job.changed, len(job.upserts), len(job.tombstones))
-			err := m.publish(job)
+			retry := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(
+				backoff.WithInitialInterval(m.retryMin),
+				backoff.WithMaxInterval(m.retryMax),
+				backoff.WithMultiplier(2),
+				backoff.WithMaxElapsedTime(0),
+			), publishRetryAttemptBudget-1), m.runCtx)
+			var reportErr error
+			err := backoff.Retry(func() error {
+				publishErr := m.publish(job)
+				if publishErr == nil {
+					return nil
+				}
+				m.Log().Error("snapshot publication failed: incarnation=%d generation=%d error=%v", m.incarnation, job.next.Generation, publishErr)
+				if sendErr := m.SendWithPriority(m.Parent(), MessageSnapshotPublishResult{incarnation: m.incarnation, err: publishErr}, gen.MessagePriorityHigh); sendErr != nil {
+					reportErr = fmt.Errorf("%w: send failed attempt: %w", runtime.ErrSnapshotPublish, sendErr)
+					return backoff.Permanent(reportErr)
+				}
+				return publishErr
+			}, retry)
+			if m.runCtx.Err() != nil {
+				return nil
+			}
+			if reportErr != nil {
+				return reportErr
+			}
 			if err != nil {
-				m.Log().Error("snapshot publication failed: incarnation=%d generation=%d error=%v", m.incarnation, job.next.Generation, err)
-			} else if job.changed {
+				return fmt.Errorf("snapshot publication retry budget exhausted: %w", err)
+			}
+			if job.changed {
 				m.Log().Info("snapshot publication completed: incarnation=%d generation=%d upserts=%d tombstones=%d", m.incarnation, job.next.Generation, len(job.upserts), len(job.tombstones))
 			} else {
 				m.Log().Debug("snapshot publication skipped broker write: incarnation=%d generation=%d records=%d", m.incarnation, job.next.Generation, len(job.records))
 			}
-			if sendErr := m.Send(m.Parent(), MessageSnapshotPublishResult{
-				incarnation: m.incarnation, err: err,
-			}); sendErr != nil {
+			if sendErr := m.Send(m.Parent(), MessageSnapshotPublishResult{incarnation: m.incarnation}); sendErr != nil {
 				return fmt.Errorf("%w: send result: %w", runtime.ErrSnapshotPublish, sendErr)
 			}
 		}
@@ -177,6 +206,21 @@ func (m *snapshotPublisherMeta) HandleMessage(_ gen.PID, message any) error {
 		}
 	}
 	return nil
+}
+
+// HandleCall rejects unsupported publisher calls.
+func (m *snapshotPublisherMeta) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
+	return fmt.Errorf("snapshot publisher meta: unsupported call %T", request), nil
+}
+
+// HandleInspect provides no custom publisher diagnostics.
+func (m *snapshotPublisherMeta) HandleInspect(gen.PID, ...string) map[string]string { return nil }
+
+// Terminate cancels active publisher work.
+func (m *snapshotPublisherMeta) Terminate(error) {
+	if m.cancelRun != nil {
+		m.cancelRun()
+	}
 }
 
 // publish persists records and emits changed keyed snapshot entries.
@@ -215,18 +259,3 @@ func (m *snapshotPublisherMeta) publish(job MessagePublishSnapshot) error {
 	}
 	return nil
 }
-
-// HandleCall rejects unsupported publisher calls.
-func (m *snapshotPublisherMeta) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
-	return nil, fmt.Errorf("snapshot publisher meta: unsupported call %T", request)
-}
-
-// Terminate cancels active publisher work.
-func (m *snapshotPublisherMeta) Terminate(error) {
-	if m.cancelRun != nil {
-		m.cancelRun()
-	}
-}
-
-// HandleInspect provides no custom publisher diagnostics.
-func (m *snapshotPublisherMeta) HandleInspect(gen.PID, ...string) map[string]string { return nil }
