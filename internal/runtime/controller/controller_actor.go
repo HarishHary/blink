@@ -50,7 +50,7 @@ type publisherMetaState struct {
 	consecutiveFailures int
 	restart             *runtime.ScheduledBackoff
 	status              SnapshotPublisherStatus
-	activeIO            map[uint64]struct{}
+	activeIO            map[gen.Alias]struct{}
 	replacementPending  bool
 }
 
@@ -89,12 +89,11 @@ type MessageControllerActivate struct{}
 type MessageArtifactScannerRestart struct{ token uint64 }
 type MessageSnapshotPublisherRestart struct{ token uint64 }
 type MessagePublishSnapshot struct {
-	incarnation uint64
-	records     []backends.ControllerRecord
-	next        snapshot.Snapshot
-	changed     bool
-	upserts     []snapshot.EffectiveEntry
-	tombstones  []string
+	records    []backends.ControllerRecord
+	next       snapshot.Snapshot
+	changed    bool
+	upserts    []snapshot.EffectiveEntry
+	tombstones []string
 }
 
 // --- messages ---
@@ -121,7 +120,7 @@ func (a *controllerActor[T]) Init(...any) error {
 			Lifecycle:    SnapshotPublisherStarting,
 			Availability: runtime.AvailabilityUnavailable,
 		},
-		activeIO: make(map[uint64]struct{}),
+		activeIO: make(map[gen.Alias]struct{}),
 	}
 	return nil
 }
@@ -163,7 +162,7 @@ func (a *controllerActor[T]) HandleMessage(from gen.PID, message any) error {
 		}
 		return nil
 	case MessageArtifactScanResult:
-		if from != a.PID() || a.scanner.alias == (gen.Alias{}) || m.incarnation != a.scanner.status.Incarnation {
+		if from != a.PID() || m.source != a.scanner.alias {
 			return nil
 		}
 		a.scanner.status.Lifecycle = ArtifactScannerRunning
@@ -186,7 +185,7 @@ func (a *controllerActor[T]) HandleMessage(from gen.PID, message any) error {
 		a.scanner.presentIDs = append([]string(nil), m.presentIDs...)
 		return a.reconcile()
 	case MessageSnapshotLoadResult:
-		if from != a.PID() || a.publisher.alias == (gen.Alias{}) || m.incarnation != a.publisher.status.Incarnation {
+		if from != a.PID() || m.source != a.publisher.alias {
 			return nil
 		}
 		if m.err != nil {
@@ -222,7 +221,7 @@ func (a *controllerActor[T]) HandleMessage(from gen.PID, message any) error {
 		}
 		return a.reconcile()
 	case MessageSnapshotPublishResult:
-		if from != a.PID() || a.publisher.alias == (gen.Alias{}) || m.incarnation != a.publisher.status.Incarnation || a.pending == nil || !a.publisher.status.Publishing {
+		if from != a.PID() || m.source != a.publisher.alias || a.pending == nil || !a.publisher.status.Publishing {
 			return nil
 		}
 		if m.err != nil {
@@ -261,10 +260,10 @@ func (a *controllerActor[T]) HandleMessage(from gen.PID, message any) error {
 		if from != a.Parent() {
 			return nil
 		}
-		if _, ok := a.publisher.activeIO[m.Incarnation]; !ok {
+		if _, ok := a.publisher.activeIO[m.Alias]; !ok {
 			return nil
 		}
-		delete(a.publisher.activeIO, m.Incarnation)
+		delete(a.publisher.activeIO, m.Alias)
 		if a.lifecycle == ControllerActorDraining || a.lifecycle == ControllerActorDrained {
 			return a.maybeDrained()
 		}
@@ -314,14 +313,13 @@ func (a *controllerActor[T]) Terminate(error) {
 	a.reportStatus()
 }
 
-// startScanner starts a new artifact scanner incarnation.
+// startScanner starts a new artifact scanner instance.
 func (a *controllerActor[T]) startScanner() error {
 	if a.scanner.alias != (gen.Alias{}) {
 		return nil
 	}
-	incarnation := a.scanner.status.Incarnation + 1
-	a.scanner.status = ArtifactScannerStatus{Lifecycle: ArtifactScannerStarting, Availability: runtime.AvailabilityUnavailable, Incarnation: incarnation}
-	alias, err := a.SpawnMeta(&artifactScannerMeta[T]{directory: a.opts.Directory, loader: a.opts.Loader, incarnation: incarnation}, gen.MetaOptions{})
+	a.scanner.status = ArtifactScannerStatus{Lifecycle: ArtifactScannerStarting, Availability: runtime.AvailabilityUnavailable}
+	alias, err := a.SpawnMeta(&artifactScannerMeta[T]{directory: a.opts.Directory, loader: a.opts.Loader}, gen.MetaOptions{})
 	if err != nil {
 		a.scanner.status.LastError = fmt.Errorf("spawn artifact scanner meta: %w", err)
 		return a.scheduleScannerRestart()
@@ -340,28 +338,25 @@ func (a *controllerActor[T]) startPublisher() error {
 	if a.publisher.alias != (gen.Alias{}) || len(a.publisher.activeIO) != 0 || a.lifecycle != ControllerActorRunning {
 		return nil
 	}
-	incarnation := a.publisher.status.Incarnation + 1
 	a.publisher.status = SnapshotPublisherStatus{
 		Lifecycle:    SnapshotPublisherStarting,
 		Availability: runtime.AvailabilityUnavailable,
-		Incarnation:  incarnation,
 		LastError:    a.publisher.status.LastError,
 	}
 	alias, err := a.SpawnMeta(&snapshotPublisherMeta{
-		database:    a.database,
-		writer:      a.writer,
-		barrier:     a.barrier,
-		supervisor:  a.Parent(),
-		incarnation: incarnation,
-		retryMin:    a.opts.RetryMin,
-		retryMax:    a.opts.RetryMax,
+		database:   a.database,
+		writer:     a.writer,
+		barrier:    a.barrier,
+		supervisor: a.Parent(),
+		retryMin:   a.opts.RetryMin,
+		retryMax:   a.opts.RetryMax,
 	}, gen.MetaOptions{})
 	if err != nil {
 		a.publisher.status.LastError = fmt.Errorf("spawn snapshot publisher meta: %w", err)
 		a.publisher.replacementPending = true
 		return a.schedulePublisherRestart()
 	}
-	a.publisher.activeIO[incarnation] = struct{}{}
+	a.publisher.activeIO[alias] = struct{}{}
 	if err := a.MonitorAlias(alias); err != nil {
 		_ = a.SendExitMeta(alias, gen.TerminateReasonShutdown)
 		a.publisher.status.LastError = fmt.Errorf("monitor snapshot publisher meta: %w", err)
@@ -452,12 +447,11 @@ func (a *controllerActor[T]) sendPending() error {
 	}
 	a.publisher.status.Publishing = true
 	message := MessagePublishSnapshot{
-		incarnation: a.publisher.status.Incarnation,
-		records:     append([]backends.ControllerRecord(nil), a.pending.recordUpserts...),
-		next:        *a.pending.next.Clone(),
-		changed:     a.pending.next.Generation != a.generation,
-		upserts:     cloneEntries(a.pending.entryUpserts),
-		tombstones:  append([]string(nil), a.pending.tombstones...),
+		records:    append([]backends.ControllerRecord(nil), a.pending.recordUpserts...),
+		next:       *a.pending.next.Clone(),
+		changed:    a.pending.next.Generation != a.generation,
+		upserts:    cloneEntries(a.pending.entryUpserts),
+		tombstones: append([]string(nil), a.pending.tombstones...),
 	}
 	for i := range message.records {
 		message.records[i] = message.records[i].Clone()

@@ -36,31 +36,29 @@ const (
 type ArtifactScannerStatus struct {
 	Lifecycle    ArtifactScannerLifecycle
 	Availability runtime.Availability
-	Incarnation  uint64
 	Complete     bool
 	LastError    error
 }
 
-// artifactScannerMeta owns filesystem observation and parsing for one scanner incarnation.
+// artifactScannerMeta owns filesystem observation and parsing for one scanner instance.
 type artifactScannerMeta[T plugin.Syncable] struct {
 	gen.MetaProcess
-	directory   string
-	loader      plugin.Loader[T]
-	incarnation uint64
-	parsed      map[string]T
-	digests     map[string]string
-	runCtx      context.Context
-	cancelRun   context.CancelFunc
+	directory string
+	loader    plugin.Loader[T]
+	parsed    map[string]T
+	digests   map[string]string
+	runCtx    context.Context
+	cancelRun context.CancelFunc
 }
 
 // --- messages ---
 
 type MessageArtifactScanResult struct {
-	incarnation uint64
-	complete    bool
-	entries     []snapshot.EffectiveEntry
-	presentIDs  []string
-	err         error
+	source     gen.Alias
+	complete   bool
+	entries    []snapshot.EffectiveEntry
+	presentIDs []string
+	err        error
 }
 
 // --- messages ---
@@ -74,7 +72,7 @@ func (m *artifactScannerMeta[T]) Init(process gen.MetaProcess) error {
 	m.runCtx, m.cancelRun = context.WithCancel(context.Background())
 	m.parsed = make(map[string]T)
 	m.digests = make(map[string]string)
-	m.Log().Info("artifact scanner initialized: directory=%q incarnation=%d", m.directory, m.incarnation)
+	m.Log().Info("artifact scanner initialized: directory=%q alias=%s", m.directory, m.ID())
 	return nil
 }
 
@@ -82,10 +80,10 @@ func (m *artifactScannerMeta[T]) Init(process gen.MetaProcess) error {
 func (m *artifactScannerMeta[T]) Start() (runErr error) {
 	defer func() {
 		if runErr != nil {
-			m.Log().Error("artifact scanner stopped: incarnation=%d error=%v", m.incarnation, runErr)
+			m.Log().Error("artifact scanner stopped: alias=%s error=%v", m.ID(), runErr)
 			return
 		}
-		m.Log().Info("artifact scanner stopped: incarnation=%d", m.incarnation)
+		m.Log().Info("artifact scanner stopped: alias=%s", m.ID())
 	}()
 
 	watcher, err := fsnotify.NewWatcher()
@@ -99,7 +97,7 @@ func (m *artifactScannerMeta[T]) Start() (runErr error) {
 	if err := m.sendScan(watcher); err != nil {
 		return err
 	}
-	m.Log().Info("artifact scanner started: directory=%q incarnation=%d parsed=%d binaries=%d", m.directory, m.incarnation, len(m.parsed), len(m.digests))
+	m.Log().Info("artifact scanner started: directory=%q alias=%s parsed=%d binaries=%d", m.directory, m.ID(), len(m.parsed), len(m.digests))
 
 	poll := time.NewTicker(scannerPoll)
 	defer poll.Stop()
@@ -138,7 +136,7 @@ func (m *artifactScannerMeta[T]) Start() (runErr error) {
 				}
 				return fmt.Errorf("%w: events closed", runtime.ErrArtifactWatch)
 			}
-			m.Log().Debug("artifact change detected: directory=%q incarnation=%d path=%q operation=%s", m.directory, m.incarnation, event.Name, event.Op)
+			m.Log().Debug("artifact change detected: directory=%q alias=%s path=%q operation=%s", m.directory, m.ID(), event.Name, event.Op)
 			schedule()
 		case err, ok := <-watcher.Errors:
 			if !ok {
@@ -150,7 +148,7 @@ func (m *artifactScannerMeta[T]) Start() (runErr error) {
 			return fmt.Errorf("%w: %w", runtime.ErrArtifactWatch, err)
 		case <-debounceC:
 			debounceC = nil
-			m.Log().Debug("artifact changes detected; rescanning: directory=%q incarnation=%d", m.directory, m.incarnation)
+			m.Log().Debug("artifact changes detected; rescanning: directory=%q alias=%s", m.directory, m.ID())
 			if err := m.sendScan(watcher); err != nil {
 				return err
 			}
@@ -191,22 +189,22 @@ func (m *artifactScannerMeta[T]) sendScan(watcher *fsnotify.Watcher) error {
 		err = fmt.Errorf("%w: directory %q: %w", runtime.ErrArtifactWatch, m.directory, attachErr)
 	}
 	if err != nil {
-		m.Log().Warning("artifact scan incomplete: directory=%q incarnation=%d error=%v", m.directory, m.incarnation, err)
+		m.Log().Warning("artifact scan incomplete: directory=%q alias=%s error=%v", m.directory, m.ID(), err)
 	}
 	entries = cloneEntries(entries)
 	if sendErr := m.Send(m.Parent(), MessageArtifactScanResult{
-		incarnation: m.incarnation,
-		complete:    complete,
-		entries:     entries,
-		presentIDs:  ids,
-		err:         err,
+		source:     m.ID(),
+		complete:   complete,
+		entries:    entries,
+		presentIDs: ids,
+		err:        err,
 	}); sendErr != nil {
 		err := fmt.Errorf("artifact scanner meta: send scan: %w", sendErr)
-		m.Log().Error("artifact scan result delivery failed: incarnation=%d error=%v", m.incarnation, err)
+		m.Log().Error("artifact scan result delivery failed: alias=%s error=%v", m.ID(), err)
 		return err
 	}
 	if err == nil {
-		m.Log().Debug("artifact scan complete: directory=%q incarnation=%d entries=%d ids=%d parsed=%d binaries=%d", m.directory, m.incarnation, len(entries), len(ids), len(m.parsed), len(m.digests))
+		m.Log().Debug("artifact scan complete: directory=%q alias=%s entries=%d ids=%d parsed=%d binaries=%d", m.directory, m.ID(), len(entries), len(ids), len(m.parsed), len(m.digests))
 	}
 	return nil
 }
