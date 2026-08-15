@@ -118,7 +118,7 @@ func (s *Service[T]) gracefulStop(app *ControllerApplication[T], name gen.Atom) 
 	if err != nil {
 		return errors.Join(fmt.Errorf("lookup supervisor %s: %w", app.SupervisorName(), err), s.forceStop(name))
 	}
-	if err := s.node.Send(pid, MessageControllerSupervisorShutdown{}); err != nil {
+	if err := s.node.Send(pid, plugin.MessageStop{}); err != nil {
 		return errors.Join(fmt.Errorf("stop supervisor %s: %w", app.SupervisorName(), err), s.forceStop(name))
 	}
 

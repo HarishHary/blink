@@ -54,8 +54,6 @@ type MessageControllerStatusChanged struct {
 	status ControllerActorStatus
 }
 
-type MessageControllerSupervisorShutdown struct{}
-
 // --- messages ---
 
 // Init configures the supervised controller actor.
@@ -92,7 +90,7 @@ func (s *controllerSupervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 // HandleMessage coordinates controller lifecycle and publisher I/O fences.
 func (s *controllerSupervisor[T]) HandleMessage(from gen.PID, message any) error {
 	switch m := message.(type) {
-	case MessageControllerSupervisorShutdown:
+	case plugin.MessageStop:
 		if s.lifecycle != ControllerSupervisorLifecycleRunning {
 			return nil
 		}
