@@ -8,6 +8,8 @@ import (
 	"syscall"
 	"time"
 
+	"ergo.services/application/observer"
+	"ergo.services/ergo/gen"
 	"github.com/harishhary/blink/internal/brokers"
 	"github.com/harishhary/blink/internal/logger"
 	"github.com/harishhary/blink/internal/runtime/controller"
@@ -48,7 +50,13 @@ func main() {
 	}
 	broker := brokers.NewKafkaBroker(cfg.Kafka)
 	rootLogger := logger.New("controller", cfg.Env)
-	host, err := plugin.Start(plugin.NodeOptions{Name: "controller@localhost", ShutdownTimeout: runtimeShutdownTimeout})
+	host, err := plugin.Start(plugin.NodeOptions{
+		Name:            "controller@localhost",
+		ShutdownTimeout: runtimeShutdownTimeout,
+		Applications: []gen.ApplicationBehavior{
+			observer.CreateApp(observer.Options{}),
+		},
+	})
 	if err != nil {
 		rootLogger.FatalF("start controller node: %v", err)
 	}

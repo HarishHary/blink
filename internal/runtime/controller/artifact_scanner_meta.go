@@ -76,11 +76,20 @@ func (m *artifactScannerMeta[T]) Init(process gen.MetaProcess) error {
 	m.runCtx, m.cancelRun = context.WithCancel(context.Background())
 	m.parsed = make(map[string]T)
 	m.digests = make(map[string]string)
+	m.Log().Info("artifact scanner initialized: directory=%q incarnation=%d", m.directory, m.incarnation)
 	return nil
 }
 
 // Start watches and periodically scans the artifact directory.
-func (m *artifactScannerMeta[T]) Start() error {
+func (m *artifactScannerMeta[T]) Start() (runErr error) {
+	defer func() {
+		if runErr != nil {
+			m.Log().Error("artifact scanner stopped: incarnation=%d error=%v", m.incarnation, runErr)
+			return
+		}
+		m.Log().Info("artifact scanner stopped: incarnation=%d", m.incarnation)
+	}()
+
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return fmt.Errorf("%w: create watcher: %w", runtime.ErrArtifactWatch, err)
@@ -92,6 +101,7 @@ func (m *artifactScannerMeta[T]) Start() error {
 	if err := m.sendScan(watcher); err != nil {
 		return err
 	}
+	m.Log().Info("artifact scanner started: directory=%q incarnation=%d parsed=%d binaries=%d", m.directory, m.incarnation, len(m.parsed), len(m.digests))
 
 	poll := time.NewTicker(scannerPoll)
 	defer poll.Stop()
@@ -123,13 +133,14 @@ func (m *artifactScannerMeta[T]) Start() error {
 		select {
 		case <-m.runCtx.Done():
 			return nil
-		case _, ok := <-watcher.Events:
+		case event, ok := <-watcher.Events:
 			if !ok {
 				if m.runCtx.Err() != nil {
 					return nil
 				}
 				return fmt.Errorf("%w: events closed", runtime.ErrArtifactWatch)
 			}
+			m.Log().Debug("artifact change detected: directory=%q incarnation=%d path=%q operation=%s", m.directory, m.incarnation, event.Name, event.Op)
 			schedule()
 		case err, ok := <-watcher.Errors:
 			if !ok {
@@ -141,6 +152,7 @@ func (m *artifactScannerMeta[T]) Start() error {
 			return fmt.Errorf("%w: %w", runtime.ErrArtifactWatch, err)
 		case <-debounceC:
 			debounceC = nil
+			m.Log().Debug("artifact changes detected; rescanning: directory=%q incarnation=%d", m.directory, m.incarnation)
 			if err := m.sendScan(watcher); err != nil {
 				return err
 			}
@@ -160,16 +172,14 @@ func (m *artifactScannerMeta[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (
 	return nil, fmt.Errorf("artifact scanner meta: unsupported call %T", request)
 }
 
+// HandleInspect provides no custom scanner diagnostics.
+func (m *artifactScannerMeta[T]) HandleInspect(gen.PID, ...string) map[string]string { return nil }
+
 // Terminate cancels active filesystem observation.
 func (m *artifactScannerMeta[T]) Terminate(error) {
 	if m.cancelRun != nil {
 		m.cancelRun()
 	}
-}
-
-// HandleInspect reports the scanner incarnation.
-func (m *artifactScannerMeta[T]) HandleInspect(gen.PID, ...string) map[string]string {
-	return map[string]string{"incarnation": fmt.Sprintf("%d", m.incarnation)}
 }
 
 // sendScan observes the directory and forwards its effective catalog.
@@ -182,6 +192,9 @@ func (m *artifactScannerMeta[T]) sendScan(watcher *fsnotify.Watcher) error {
 	if err == nil && attachErr != nil {
 		err = fmt.Errorf("%w: directory %q: %w", runtime.ErrArtifactWatch, m.directory, attachErr)
 	}
+	if err != nil {
+		m.Log().Warning("artifact scan incomplete: directory=%q incarnation=%d error=%v", m.directory, m.incarnation, err)
+	}
 	entries = cloneEntries(entries)
 	if sendErr := m.Send(m.Parent(), MessageArtifactScanResult{
 		incarnation: m.incarnation,
@@ -190,7 +203,12 @@ func (m *artifactScannerMeta[T]) sendScan(watcher *fsnotify.Watcher) error {
 		presentIDs:  ids,
 		err:         err,
 	}); sendErr != nil {
-		return fmt.Errorf("artifact scanner meta: send scan: %w", sendErr)
+		err := fmt.Errorf("artifact scanner meta: send scan: %w", sendErr)
+		m.Log().Error("artifact scan result delivery failed: incarnation=%d error=%v", m.incarnation, err)
+		return err
+	}
+	if err == nil {
+		m.Log().Debug("artifact scan complete: directory=%q incarnation=%d entries=%d ids=%d parsed=%d binaries=%d", m.directory, m.incarnation, len(entries), len(ids), len(m.parsed), len(m.digests))
 	}
 	return nil
 }
@@ -213,17 +231,22 @@ func (m *artifactScannerMeta[T]) scan() ([]snapshot.EffectiveEntry, []string, bo
 			seenParsed[path] = struct{}{}
 			data, readErr := os.ReadFile(path)
 			if readErr != nil {
+				m.Log().Debug("artifact spec read failed: path=%q error=%v", path, readErr)
 				continue
 			}
 			item, parseErr := m.loader.ParseSpec(strings.TrimSuffix(name, filepath.Ext(name)), data)
 			if parseErr != nil {
+				m.Log().Debug("artifact spec parse failed: path=%q error=%v", path, parseErr)
 				continue
 			}
 			m.parsed[path] = item
+			metadata := item.Metadata()
+			m.Log().Debug("artifact spec parsed: path=%q id=%q name=%q version=%q enabled=%t mode=%s", path, metadata.Id, metadata.Name, metadata.Version, metadata.Enabled, metadata.RolloutMode)
 			continue
 		}
 		info, infoErr := file.Info()
 		if infoErr != nil {
+			m.Log().Debug("artifact binary stat failed: path=%q error=%v", path, infoErr)
 			if _, known := m.digests[name]; known {
 				// Preserve a known digest only while metadata for a still-present
 				// file cannot be read. A successful non-executable stat is a delete.
@@ -236,9 +259,12 @@ func (m *artifactScannerMeta[T]) scan() ([]snapshot.EffectiveEntry, []string, bo
 		}
 		seenBinaries[name] = struct{}{}
 		digest, digestErr := helpers.BinaryChecksum(path)
-		if digestErr == nil {
-			m.digests[name] = digest
+		if digestErr != nil {
+			m.Log().Debug("artifact binary checksum failed: path=%q error=%v", path, digestErr)
+			continue
 		}
+		m.digests[name] = digest
+		m.Log().Debug("artifact binary indexed: path=%q name=%q", path, name)
 	}
 	for path := range m.parsed {
 		if _, ok := seenParsed[path]; !ok {

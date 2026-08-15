@@ -1,5 +1,9 @@
-ergo.services/ergo v1.999.320 h1:IYyjCBJvXPLW8Mpy6pq5FoBa2RjNAS4QSL2lK7bBueQ=
-ergo.services/ergo v1.999.320/go.mod h1:bLQ6PoO6Mz/8gVuzvPv3xfMfo1P9w6rZV1WnMXMeMdg=
+ergo.services/application/observer v0.1.1-0.20260807132520-3b2d3707a392 h1:lO6TehvKTrj2gfSP7wacQZgTTDteKx2ZcUMDS7m6ggs=
+ergo.services/application/observer v0.1.1-0.20260807132520-3b2d3707a392/go.mod h1:uAoWJ5Y/7j9EEhmCxV+pJ+YLPyEOEsFCqcdC0fC0FdA=
+ergo.services/ergo v1.999.321-0.20260813122550-5102d48bf215 h1:OUxrev5N4gt5x1hIHCISIYPSIq8ca2LyR4BMH4z8aMs=
+ergo.services/ergo v1.999.321-0.20260813122550-5102d48bf215/go.mod h1:2WcCdXUIZvCfy9Kkac3Sx6V/tB23Mx3yK6xz77hRfbM=
+ergo.services/meta/sse v0.2.1-0.20260807132248-3e4748b06924 h1:tENdZTlsvwT/PHPcrXY3z2Ix+cx0U8OcIDWf+VaKf4k=
+ergo.services/meta/sse v0.2.1-0.20260807132248-3e4748b06924/go.mod h1:bFEH9A/lqzbAYas8drrgPIq92uHadKnH8TqtPB51CQY=
 github.com/Azure/azure-sdk-for-go/sdk/azcore v1.21.1 h1:jHb/wfvRikGdxMXYV3QG/SzUOPYN9KEUUuC0Yd0/vC0=
 github.com/Azure/azure-sdk-for-go/sdk/azcore v1.21.1/go.mod h1:pzBXCYn05zvYIrwLgtK8Ap8QcjRg+0i76tMQdWN6wOk=
 github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.13.1 h1:Hk5QBxZQC1jb2Fwj6mpzme37xbCDdNTxU7O9eb5+LB4=

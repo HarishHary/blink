@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"ergo.services/ergo"
 	"ergo.services/ergo/gen"
-	"ergo.services/ergo/node"
 )
 
 // Host owns the single Ergo node for one Blink process.
@@ -28,6 +28,7 @@ type NodeOptions struct {
 	Applications    []gen.ApplicationBehavior
 }
 
+// Start creates a node whose lifecycle is owned by the returned host.
 func Start(opts NodeOptions) (*NodeHost, error) {
 	if opts.Name == "" {
 		return nil, errors.New("actornode: name is required")
@@ -36,7 +37,7 @@ func Start(opts NodeOptions) (*NodeHost, error) {
 		opts.ShutdownTimeout = gen.DefaultShutdownTimeout
 	}
 
-	n, err := node.Start(
+	n, err := ergo.StartNode(
 		opts.Name,
 		gen.NodeOptions{
 			ShutdownTimeout: opts.ShutdownTimeout,
@@ -45,12 +46,11 @@ func Start(opts NodeOptions) (*NodeHost, error) {
 				Mode: gen.NetworkModeDisabled,
 			},
 		},
-		gen.Version{},
 	)
 	if err != nil {
 		return nil, fmt.Errorf("start Ergo node %q: %w", opts.Name, err)
 	}
-
+	n.SetCTRLC(false)
 	return &NodeHost{
 		node:    n,
 		stopped: make(chan struct{}),

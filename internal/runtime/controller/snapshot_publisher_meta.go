@@ -85,13 +85,23 @@ func (m *snapshotPublisherMeta) Init(process gen.MetaProcess) error {
 		m.barrier.Release()
 		return fmt.Errorf("snapshot publisher meta: register I/O: %w", err)
 	}
+	m.Log().Info("snapshot publisher initialized: incarnation=%d supervisor=%s", m.incarnation, m.supervisor)
 	return nil
 }
 
 // Start loads persisted state and publishes queued updates.
-func (m *snapshotPublisherMeta) Start() error {
+func (m *snapshotPublisherMeta) Start() (runErr error) {
 	defer func() { _ = m.Send(m.supervisor, MessageSnapshotPublisherIOStopped{Incarnation: m.incarnation}) }()
 	defer m.barrier.Release()
+	defer func() {
+		if runErr != nil {
+			m.Log().Error("snapshot publisher stopped: incarnation=%d error=%v", m.incarnation, runErr)
+			return
+		}
+		m.Log().Info("snapshot publisher stopped: incarnation=%d", m.incarnation)
+	}()
+
+	m.Log().Info("snapshot publisher loading persisted state: incarnation=%d", m.incarnation)
 
 	records, err := m.database.LoadAll(m.runCtx)
 	var generation int64
@@ -106,6 +116,15 @@ func (m *snapshotPublisherMeta) Start() error {
 	records = append([]backends.ControllerRecord(nil), records...)
 	for i := range records {
 		records[i] = records[i].Clone()
+	}
+	if err != nil {
+		m.Log().Error("snapshot publisher load failed: incarnation=%d error=%v", m.incarnation, err)
+	} else {
+		savedEntries := 0
+		if saved != nil {
+			savedEntries = len(saved.Entries)
+		}
+		m.Log().Info("snapshot publisher loaded: incarnation=%d records=%d generation=%d entries=%d", m.incarnation, len(records), generation, savedEntries)
 	}
 	if sendErr := m.Send(m.Parent(), MessageSnapshotLoadResult{
 		incarnation: m.incarnation,
@@ -122,7 +141,15 @@ func (m *snapshotPublisherMeta) Start() error {
 		case <-m.runCtx.Done():
 			return nil
 		case job := <-m.jobs:
+			m.Log().Debug("snapshot publication started: incarnation=%d generation=%d changed=%t upserts=%d tombstones=%d", m.incarnation, job.next.Generation, job.changed, len(job.upserts), len(job.tombstones))
 			err := m.publish(job)
+			if err != nil {
+				m.Log().Error("snapshot publication failed: incarnation=%d generation=%d error=%v", m.incarnation, job.next.Generation, err)
+			} else if job.changed {
+				m.Log().Info("snapshot publication completed: incarnation=%d generation=%d upserts=%d tombstones=%d", m.incarnation, job.next.Generation, len(job.upserts), len(job.tombstones))
+			} else {
+				m.Log().Debug("snapshot publication skipped broker write: incarnation=%d generation=%d records=%d", m.incarnation, job.next.Generation, len(job.records))
+			}
 			if sendErr := m.Send(m.Parent(), MessageSnapshotPublishResult{
 				incarnation: m.incarnation, err: err,
 			}); sendErr != nil {
@@ -137,12 +164,15 @@ func (m *snapshotPublisherMeta) HandleMessage(_ gen.PID, message any) error {
 	switch message := message.(type) {
 	case MessagePublishSnapshot:
 		if message.incarnation != m.incarnation {
+			m.Log().Debug("ignored stale snapshot publication: publisher_incarnation=%d message_incarnation=%d", m.incarnation, message.incarnation)
 			return nil
 		}
 		select {
 		case m.jobs <- message:
+			m.Log().Debug("snapshot publication queued: incarnation=%d generation=%d", m.incarnation, message.next.Generation)
 			return nil
 		default:
+			m.Log().Warning("snapshot publication queue full: incarnation=%d generation=%d", m.incarnation, message.next.Generation)
 			return fmt.Errorf("%w: already queued", runtime.ErrSnapshotPublish)
 		}
 	}
@@ -198,7 +228,5 @@ func (m *snapshotPublisherMeta) Terminate(error) {
 	}
 }
 
-// HandleInspect reports the publisher incarnation.
-func (m *snapshotPublisherMeta) HandleInspect(gen.PID, ...string) map[string]string {
-	return map[string]string{"incarnation": fmt.Sprintf("%d", m.incarnation)}
-}
+// HandleInspect provides no custom publisher diagnostics.
+func (m *snapshotPublisherMeta) HandleInspect(gen.PID, ...string) map[string]string { return nil }

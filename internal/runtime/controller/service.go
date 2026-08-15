@@ -59,7 +59,7 @@ func (s *Service[T]) Run(ctx context.Context) errs.Error {
 	}
 }
 
-// cleanupAttempt closes and unloads an application with a shutdown budget.
+// cleanupAttempt closes an application and unloads it while the root context is live.
 func (s *Service[T]) cleanupAttempt(ctx context.Context, app *ControllerApplication[T], name gen.Atom) error {
 	cleanupCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -84,6 +84,9 @@ func (s *Service[T]) cleanupAttempt(ctx context.Context, app *ControllerApplicat
 		return err
 	}
 	closeErr := app.Close(cleanupCtx)
+	if ctx.Err() != nil {
+		return closeErr
+	}
 	if err := cleanupCtx.Err(); err != nil {
 		return err
 	}

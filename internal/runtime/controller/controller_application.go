@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"ergo.services/ergo/app"
 	"ergo.services/ergo/gen"
 	"github.com/harishhary/blink/internal/backends"
 	"github.com/harishhary/blink/internal/brokers"
@@ -14,6 +15,7 @@ import (
 
 // ControllerApplication owns the resources for one plugin-type controller application.
 type ControllerApplication[T plugin.Syncable] struct {
+	app.Application
 	opts     ControllerApplicationOptions[T]
 	database *sql.DB
 	writer   brokers.Writer
@@ -48,7 +50,7 @@ func (a *ControllerApplication[T]) WaitQuiesced(ctx context.Context) error {
 }
 
 // Load opens the application-owned resources and describes its one supervisor.
-func (a *ControllerApplication[T]) Load(_ gen.Node, _ ...any) (gen.ApplicationSpec, error) {
+func (a *ControllerApplication[T]) Load(_ ...any) (gen.ApplicationSpec, error) {
 	if a.opts.Name == "" || a.opts.SupervisorOptions.Name == "" || a.opts.Namespace == "" || a.opts.Topic == "" || a.opts.Broker == nil {
 		return gen.ApplicationSpec{}, fmt.Errorf("controller application: name, supervisor name, namespace, topic, and broker are required")
 	}
@@ -57,7 +59,6 @@ func (a *ControllerApplication[T]) Load(_ gen.Node, _ ...any) (gen.ApplicationSp
 	if err != nil {
 		return gen.ApplicationSpec{}, fmt.Errorf("open %s controller database: %w", a.opts.Namespace, err)
 	}
-	database.SetMaxOpenConns(1)
 	store, err := backends.NewSQLite(database, a.opts.Namespace)
 	if err != nil {
 		_ = database.Close()
@@ -82,9 +83,6 @@ func (a *ControllerApplication[T]) Load(_ gen.Node, _ ...any) (gen.ApplicationSp
 		Map: map[string]gen.Atom{"supervisor": a.opts.SupervisorOptions.Name},
 	}, nil
 }
-
-// Start needs no work because Load created the supervisor specification.
-func (a *ControllerApplication[T]) Start(gen.ApplicationMode) {}
 
 // Terminate only seals and reports. Waiting and closing belong to the service.
 func (a *ControllerApplication[T]) Terminate(reason error) {
