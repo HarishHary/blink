@@ -3,7 +3,9 @@ module github.com/harishhary/blink
 go 1.26
 
 require (
+	ergo.services/application/mcp v0.0.0-20260807132520-3b2d3707a392
 	ergo.services/application/observer v0.1.1-0.20260807132520-3b2d3707a392
+	ergo.services/application/radar v0.0.0-20260807132520-3b2d3707a392
 	ergo.services/ergo v1.999.321-0.20260813122550-5102d48bf215
 	github.com/Azure/azure-sdk-for-go/sdk/messaging/azeventhubs/v2 v2.0.2
 	github.com/cenkalti/backoff/v4 v4.3.0
@@ -20,6 +22,8 @@ require (
 )
 
 require (
+	ergo.services/actor/health v0.0.0-20260807131927-95b2e1ebf6fe // indirect
+	ergo.services/actor/metrics v0.2.2-0.20260807131927-95b2e1ebf6fe // indirect
 	ergo.services/meta/sse v0.2.1-0.20260807132248-3e4748b06924 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.21.1 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/internal v1.12.0 // indirect
@@ -30,6 +34,7 @@ require (
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/fatih/color v1.15.0 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
+	github.com/google/pprof v0.0.0-20260302011040-a15ffb7f9dcc // indirect
 	github.com/hashicorp/go-hclog v1.6.3 // indirect
 	github.com/hashicorp/yamux v0.1.2 // indirect
 	github.com/klauspost/compress v1.18.0 // indirect

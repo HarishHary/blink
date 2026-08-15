@@ -1,5 +1,13 @@
+ergo.services/actor/health v0.0.0-20260807131927-95b2e1ebf6fe h1:ZBLVCGhgNxS2GbrEzcB2nnBqQopIcGAdacDE8A1MWSI=
+ergo.services/actor/health v0.0.0-20260807131927-95b2e1ebf6fe/go.mod h1:nH+6OwENONTGMxoR6OBoYe22J+v6jo02B2e4jpm8Huw=
+ergo.services/actor/metrics v0.2.2-0.20260807131927-95b2e1ebf6fe h1:cbcF4scbluzLeDZqlsiB1ujCwZk++g2w/LeER3IOwAI=
+ergo.services/actor/metrics v0.2.2-0.20260807131927-95b2e1ebf6fe/go.mod h1:lm0+Bi0hsHtrUTKPLfrJy+9il+tRBLw0s2MdbKE3Mps=
+ergo.services/application/mcp v0.0.0-20260807132520-3b2d3707a392 h1:JG1lxDebekQvmlxoZzIdT3I+90E88J0OHzXXnkmSJy4=
+ergo.services/application/mcp v0.0.0-20260807132520-3b2d3707a392/go.mod h1:5sGHugSBGmwljSTHn1JNoDYmmmlJY0ov/fSwVA8D/5E=
 ergo.services/application/observer v0.1.1-0.20260807132520-3b2d3707a392 h1:lO6TehvKTrj2gfSP7wacQZgTTDteKx2ZcUMDS7m6ggs=
 ergo.services/application/observer v0.1.1-0.20260807132520-3b2d3707a392/go.mod h1:uAoWJ5Y/7j9EEhmCxV+pJ+YLPyEOEsFCqcdC0fC0FdA=
+ergo.services/application/radar v0.0.0-20260807132520-3b2d3707a392 h1:y8+bK5AThXIeOK+V4KCDXSEbI4G26bGJM+s20Fro6I0=
+ergo.services/application/radar v0.0.0-20260807132520-3b2d3707a392/go.mod h1:YufpJwkx79QHJSurFH5XRuAealcHDxSYr7g9OUPJHDQ=
 ergo.services/ergo v1.999.321-0.20260813122550-5102d48bf215 h1:OUxrev5N4gt5x1hIHCISIYPSIq8ca2LyR4BMH4z8aMs=
 ergo.services/ergo v1.999.321-0.20260813122550-5102d48bf215/go.mod h1:2WcCdXUIZvCfy9Kkac3Sx6V/tB23Mx3yK6xz77hRfbM=
 ergo.services/meta/sse v0.2.1-0.20260807132248-3e4748b06924 h1:tENdZTlsvwT/PHPcrXY3z2Ix+cx0U8OcIDWf+VaKf4k=
@@ -53,6 +61,8 @@ github.com/golang/protobuf v1.5.4 h1:i7eJL8qZTpSEXOPTxNKhASYpMn+8e5Q6AdndVa1dWek
 github.com/golang/protobuf v1.5.4/go.mod h1:lnTiLA8Wa4RWRcIUkrtSVa5nRhsEGBg48fD6rSs7xps=
 github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
 github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX3N/iU=
+github.com/google/pprof v0.0.0-20260302011040-a15ffb7f9dcc h1:VBbFa1lDYWEeV5FZKUiYKYT0VxCp9twUmmaq9eb8sXw=
+github.com/google/pprof v0.0.0-20260302011040-a15ffb7f9dcc/go.mod h1:MxpfABSjhmINe3F1It9d+8exIHFvUqtLIRCdOGNXqiI=
 github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
 github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
 github.com/hashicorp/go-hclog v1.6.3 h1:Qr2kF+eVWjTiYmU7Y31tYlP1h0q/X3Nl3tPGdaB11/k=
