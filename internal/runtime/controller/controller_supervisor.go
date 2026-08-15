@@ -95,7 +95,7 @@ func (s *controllerSupervisor[T]) HandleMessage(from gen.PID, message any) error
 			return nil
 		}
 		s.lifecycle = ControllerSupervisorLifecycleDraining
-		s.Log().Info("controller supervisor draining: name=%q child=%s publisher_fences=%d", s.opts.Name, s.controllerActor.pid, len(s.publisherFences))
+		s.Log().Info("controller supervisor draining: name=%s child=%s publisher_fences=%d", s.opts.Name, s.controllerActor.pid, len(s.publisherFences))
 		if err := s.sendDrain(); err != nil {
 			return err
 		}
@@ -107,7 +107,7 @@ func (s *controllerSupervisor[T]) HandleMessage(from gen.PID, message any) error
 		previous := s.controllerActor.status.Lifecycle
 		s.controllerActor.status = m.status
 		if previous != m.status.Lifecycle {
-			s.Log().Debug("controller child lifecycle changed: name=%q child=%s lifecycle=%s", s.opts.Name, from, m.status.Lifecycle)
+			s.Log().Debug("controller child lifecycle changed: name=%s child=%s lifecycle=%s", s.opts.Name, from, m.status.Lifecycle)
 		}
 		if s.lifecycle == ControllerSupervisorLifecycleDraining {
 			return s.advanceShutdown()
@@ -120,17 +120,17 @@ func (s *controllerSupervisor[T]) HandleMessage(from gen.PID, message any) error
 			s.publisherFences = make(map[gen.Alias]gen.PID)
 		}
 		s.publisherFences[m.Alias] = from
-		s.Log().Debug("snapshot publisher I/O fence registered: name=%q child=%s alias=%s active=%d", s.opts.Name, from, m.Alias, len(s.publisherFences))
+		s.Log().Debug("snapshot publisher I/O fence registered: name=%s child=%s alias=%s active=%d", s.opts.Name, from, m.Alias, len(s.publisherFences))
 	case MessageSnapshotPublisherIOStopped:
 		owner, ok := s.publisherFences[m.Alias]
 		if !ok || owner != from {
 			return nil
 		}
 		delete(s.publisherFences, m.Alias)
-		s.Log().Debug("snapshot publisher I/O fence released: name=%q child=%s alias=%s active=%d", s.opts.Name, from, m.Alias, len(s.publisherFences))
+		s.Log().Debug("snapshot publisher I/O fence released: name=%s child=%s alias=%s active=%d", s.opts.Name, from, m.Alias, len(s.publisherFences))
 		if s.controllerActor.pid == from {
 			if err := s.Send(from, m); err != nil && !stalePIDSendFailure(err) {
-				s.Log().Error("snapshot publisher I/O completion forwarding failed: name=%q child=%s alias=%s error=%v", s.opts.Name, from, m.Alias, err)
+				s.Log().Error("snapshot publisher I/O completion forwarding failed: name=%s child=%s alias=%s error=%v", s.opts.Name, from, m.Alias, err)
 				return fmt.Errorf("forward snapshot publisher I/O completion to %s: %w", from, err)
 			}
 		}
@@ -159,7 +159,7 @@ func (s *controllerSupervisor[T]) HandleChildStart(name gen.Atom, pid gen.PID) e
 			},
 		},
 	}
-	s.Log().Info("controller child started: name=%q child=%s", s.opts.Name, pid)
+	s.Log().Info("controller child started: name=%s child=%s", s.opts.Name, pid)
 	return s.reconcileController()
 }
 
@@ -172,14 +172,14 @@ func (s *controllerSupervisor[T]) HandleChildTerminate(name gen.Atom, pid gen.PI
 	if reason == gen.TerminateReasonNormal || reason == gen.TerminateReasonShutdown {
 		switch s.lifecycle {
 		case ControllerSupervisorLifecycleDraining, ControllerSupervisorLifecycleStopping:
-			s.Log().Info("controller child stopped: name=%q child=%s reason=%v", s.opts.Name, pid, reason)
+			s.Log().Info("controller child stopped: name=%s child=%s reason=%v", s.opts.Name, pid, reason)
 			return s.advanceShutdown()
 		default:
-			s.Log().Error("controller child stopped unexpectedly: name=%q child=%s reason=%v", s.opts.Name, pid, reason)
+			s.Log().Error("controller child stopped unexpectedly: name=%s child=%s reason=%v", s.opts.Name, pid, reason)
 			return fmt.Errorf("controller supervisor: child %s (%s) exited unexpectedly: %w", name, pid, reason)
 		}
 	}
-	s.Log().Error("controller child failed: name=%q child=%s reason=%v", s.opts.Name, pid, reason)
+	s.Log().Error("controller child failed: name=%s child=%s reason=%v", s.opts.Name, pid, reason)
 	return nil
 }
 
@@ -193,13 +193,13 @@ func (s *controllerSupervisor[T]) advanceShutdown() error {
 			return nil
 		}
 		s.lifecycle = ControllerSupervisorLifecycleStopping
-		s.Log().Info("controller supervisor stopping: name=%q", s.opts.Name)
+		s.Log().Info("controller supervisor stopping: name=%s", s.opts.Name)
 		if err := s.sendStop(); err != nil {
 			return err
 		}
 	}
 	if s.lifecycle == ControllerSupervisorLifecycleStopping && s.controllerActor.pid == (gen.PID{}) && len(s.publisherFences) == 0 {
-		s.Log().Info("controller supervisor stopped: name=%q", s.opts.Name)
+		s.Log().Info("controller supervisor stopped: name=%s", s.opts.Name)
 		return gen.TerminateReasonNormal
 	}
 	return nil
@@ -222,19 +222,19 @@ func (s *controllerSupervisor[T]) reconcileController() error {
 	}
 	if len(s.publisherFences) != 0 || s.controllerActor.activationSent {
 		if len(s.publisherFences) != 0 {
-			s.Log().Debug("controller activation waiting for publisher I/O: name=%q child=%s active=%d", s.opts.Name, s.controllerActor.pid, len(s.publisherFences))
+			s.Log().Debug("controller activation waiting for publisher I/O: name=%s child=%s active=%d", s.opts.Name, s.controllerActor.pid, len(s.publisherFences))
 		}
 		return nil
 	}
 	err := s.Send(s.controllerActor.pid, MessageControllerActivate{})
 	if err != nil && !stalePIDSendFailure(err) {
-		s.Log().Error("controller activation failed: name=%q child=%s error=%v", s.opts.Name, s.controllerActor.pid, err)
+		s.Log().Error("controller activation failed: name=%s child=%s error=%v", s.opts.Name, s.controllerActor.pid, err)
 		return fmt.Errorf("activate controller %s: %w", s.controllerActor.pid, err)
 	}
 	s.controllerActor.activationSent = true
 	s.lifecycle = ControllerSupervisorLifecycleRunning
 	if err == nil {
-		s.Log().Info("controller activated: name=%q child=%s", s.opts.Name, s.controllerActor.pid)
+		s.Log().Info("controller activated: name=%s child=%s", s.opts.Name, s.controllerActor.pid)
 	}
 	return nil
 }
@@ -246,11 +246,11 @@ func (s *controllerSupervisor[T]) sendDrain() error {
 	}
 	err := s.Send(s.controllerActor.pid, plugin.MessageDrain{})
 	if err != nil && !stalePIDSendFailure(err) {
-		s.Log().Error("controller drain request failed: name=%q child=%s error=%v", s.opts.Name, s.controllerActor.pid, err)
+		s.Log().Error("controller drain request failed: name=%s child=%s error=%v", s.opts.Name, s.controllerActor.pid, err)
 		return fmt.Errorf("drain controller %s: %w", s.controllerActor.pid, err)
 	}
 	if err == nil {
-		s.Log().Debug("controller drain requested: name=%q child=%s", s.opts.Name, s.controllerActor.pid)
+		s.Log().Debug("controller drain requested: name=%s child=%s", s.opts.Name, s.controllerActor.pid)
 	}
 	return nil
 }
@@ -262,11 +262,11 @@ func (s *controllerSupervisor[T]) sendStop() error {
 	}
 	err := s.Send(s.controllerActor.pid, plugin.MessageStop{})
 	if err != nil && !stalePIDSendFailure(err) {
-		s.Log().Error("controller stop request failed: name=%q child=%s error=%v", s.opts.Name, s.controllerActor.pid, err)
+		s.Log().Error("controller stop request failed: name=%s child=%s error=%v", s.opts.Name, s.controllerActor.pid, err)
 		return fmt.Errorf("stop controller %s: %w", s.controllerActor.pid, err)
 	}
 	if err == nil {
-		s.Log().Debug("controller stop requested: name=%q child=%s", s.opts.Name, s.controllerActor.pid)
+		s.Log().Debug("controller stop requested: name=%s child=%s", s.opts.Name, s.controllerActor.pid)
 	}
 	return nil
 }

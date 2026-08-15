@@ -85,7 +85,7 @@ func (m *snapshotPublisherMeta) Init(process gen.MetaProcess) error {
 		m.barrier.Release()
 		return fmt.Errorf("snapshot publisher meta: register I/O: %w", err)
 	}
-	m.Log().Info("snapshot publisher initialized: alias=%s supervisor=%s", m.ID(), m.supervisor)
+	m.Log().Debug("snapshot publisher initialized: alias=%s supervisor=%s", m.ID(), m.supervisor)
 	return nil
 }
 
@@ -96,14 +96,12 @@ func (m *snapshotPublisherMeta) Start() (runErr error) {
 	defer func() { _ = m.Send(m.supervisor, MessageSnapshotPublisherIOStopped{Alias: m.ID()}) }()
 	defer m.barrier.Release()
 	defer func() {
-		if runErr != nil {
-			m.Log().Error("snapshot publisher stopped: alias=%s error=%v", m.ID(), runErr)
-			return
+		if runErr == nil {
+			m.Log().Info("snapshot publisher stopped: alias=%s", m.ID())
 		}
-		m.Log().Info("snapshot publisher stopped: alias=%s", m.ID())
 	}()
 
-	m.Log().Info("snapshot publisher loading persisted state: alias=%s", m.ID())
+	m.Log().Debug("snapshot publisher loading persisted state: alias=%s", m.ID())
 
 	records, err := m.database.LoadAll(m.runCtx)
 	var generation int64
@@ -151,12 +149,14 @@ func (m *snapshotPublisherMeta) Start() (runErr error) {
 				backoff.WithMaxElapsedTime(0),
 			), publishRetryAttemptBudget-1), m.runCtx)
 			var reportErr error
+			attempt := 0
 			err := backoff.Retry(func() error {
+				attempt++
 				publishErr := m.publish(job)
 				if publishErr == nil {
 					return nil
 				}
-				m.Log().Error("snapshot publication failed: alias=%s generation=%d error=%v", m.ID(), job.next.Generation, publishErr)
+				m.Log().Debug("snapshot publication attempt failed: alias=%s generation=%d attempt=%d/%d error=%v", m.ID(), job.next.Generation, attempt, publishRetryAttemptBudget, publishErr)
 				if sendErr := m.SendWithPriority(m.Parent(), MessageSnapshotPublishResult{source: m.ID(), err: publishErr}, gen.MessagePriorityHigh); sendErr != nil {
 					reportErr = fmt.Errorf("%w: send failed attempt: %w", runtime.ErrSnapshotPublish, sendErr)
 					return backoff.Permanent(reportErr)

@@ -72,7 +72,7 @@ func (m *artifactScannerMeta[T]) Init(process gen.MetaProcess) error {
 	m.runCtx, m.cancelRun = context.WithCancel(context.Background())
 	m.parsed = make(map[string]T)
 	m.digests = make(map[string]string)
-	m.Log().Info("artifact scanner initialized: directory=%q alias=%s", m.directory, m.ID())
+	m.Log().Debug("artifact scanner initialized: directory=%q alias=%s", m.directory, m.ID())
 	return nil
 }
 
