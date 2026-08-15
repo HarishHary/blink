@@ -31,8 +31,6 @@ type ControllerActorStatus struct {
 	Lifecycle    ControllerActorLifecycle
 	Availability runtime.Availability
 	Generation   int64
-	Pending      bool
-	Publishing   bool
 	Scanner      ArtifactScannerStatus
 	Publisher    SnapshotPublisherStatus
 }
@@ -514,7 +512,7 @@ func (a *controllerActor[T]) currentStatus() ControllerActorStatus {
 			availability = runtime.AvailabilityReady
 		}
 	}
-	return ControllerActorStatus{Lifecycle: a.lifecycle, Availability: availability, Generation: a.generation, Pending: a.pending != nil, Publishing: a.publisher.status.Publishing, Scanner: a.scanner.status, Publisher: a.publisher.status}
+	return ControllerActorStatus{Lifecycle: a.lifecycle, Availability: availability, Generation: a.generation, Scanner: a.scanner.status, Publisher: a.publisher.status}
 }
 
 // cloneEntries returns independent copies of catalog entries.
