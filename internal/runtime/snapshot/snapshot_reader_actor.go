@@ -39,7 +39,7 @@ type snapshotReaderMetaState struct {
 
 type snapshotReaderActor struct {
 	act.Actor
-	opts               SnapshotReaderSupervisorOptions
+	opts               SnapshotReaderActorOptions
 	snapshotEventName  gen.Atom
 	snapshotEventToken gen.Ref
 	reader             snapshotReaderMetaState

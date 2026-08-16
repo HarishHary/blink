@@ -80,6 +80,9 @@ func (s *controllerSupervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 		},
 		Children: []act.SupervisorChildSpec{{
 			Name: s.opts.ActorOptions.Name,
+			Options: gen.ProcessOptions{
+				PreserveMailbox: true,
+			},
 			Factory: func() gen.ProcessBehavior {
 				return newActor(s.opts.ActorOptions, s.database, s.writer, s.barrier)
 			},

@@ -34,8 +34,8 @@ func EventsFor(node gen.Node, name gen.Atom) SnapshotReaderEvents {
 	}
 }
 
-// SnapshotReaderSupervisorOptions configures the reader child of a snapshot supervisor.
-type SnapshotReaderSupervisorOptions struct {
+// SnapshotReaderActorOptions configures the reader child of a snapshot supervisor.
+type SnapshotReaderActorOptions struct {
 	Name          gen.Atom
 	Logger        *logger.Logger
 	ReaderFactory func() brokers.Reader
@@ -43,9 +43,9 @@ type SnapshotReaderSupervisorOptions struct {
 	RestartMax    time.Duration
 }
 
-// SnapshotSupervisorOptions configures a raw reader and its typed projection sibling.
-type SnapshotSupervisorOptions[T any] struct {
-	SnapshotReaderSupervisorOptions
+// SnapshotReaderSupervisorOptions configures a raw reader and its typed projection sibling.
+type SnapshotReaderSupervisorOptions[T any] struct {
+	SnapshotReaderActorOptions
 	Projection     ProjectionSpec[T]
 	ProjectionMode ProjectionCommitMode
 	Stopped        chan<- error
@@ -55,7 +55,7 @@ type SnapshotSupervisorOptions[T any] struct {
 // Rest-for-one restarts the projection whenever its reader restarts.
 type SnapshotSupervisor[T any] struct {
 	act.Supervisor
-	opts            SnapshotSupervisorOptions[T]
+	opts            SnapshotReaderSupervisorOptions[T]
 	readerActor     snapshotReaderActorState
 	projectionActor projectionActorState
 	events          SnapshotReaderEvents
@@ -73,12 +73,12 @@ type projectionActorState struct {
 }
 
 // NewSupervisor creates a reader/projection supervisor with stable child names.
-func NewSupervisor[T any](opts SnapshotSupervisorOptions[T]) *SnapshotSupervisor[T] {
-	return &SnapshotSupervisor[T]{opts: SnapshotSupervisorOptions[T]{
-		SnapshotReaderSupervisorOptions: defaultOptions(opts.SnapshotReaderSupervisorOptions),
-		Projection:                      opts.Projection,
-		ProjectionMode:                  opts.ProjectionMode,
-		Stopped:                         opts.Stopped,
+func NewSupervisor[T any](opts SnapshotReaderSupervisorOptions[T]) *SnapshotSupervisor[T] {
+	return &SnapshotSupervisor[T]{opts: SnapshotReaderSupervisorOptions[T]{
+		SnapshotReaderActorOptions: defaultOptions(opts.SnapshotReaderActorOptions),
+		Projection:                 opts.Projection,
+		ProjectionMode:             opts.ProjectionMode,
+		Stopped:                    opts.Stopped,
 	}}
 }
 
@@ -126,7 +126,7 @@ func (s *SnapshotSupervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 		EnableHandleChild:   true,
 		DisableAutoShutdown: true,
 		Restart: act.SupervisorRestart{
-			Strategy:  act.SupervisorStrategyPermanent,
+			Strategy:  act.SupervisorStrategyTransient,
 			Intensity: snapshotReaderActorRestartIntensity,
 			Period:    snapshotReaderActorRestartPeriod,
 		},
@@ -134,7 +134,7 @@ func (s *SnapshotSupervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 			{
 				Name: readerActorName(s.opts.Name),
 				Factory: func() gen.ProcessBehavior {
-					return &snapshotReaderActor{opts: s.opts.SnapshotReaderSupervisorOptions}
+					return &snapshotReaderActor{opts: s.opts.SnapshotReaderActorOptions}
 				},
 			},
 			{
@@ -305,7 +305,7 @@ func newProjectionActorStatus() ProjectionActorStatus {
 }
 
 // defaultOptions fills omitted reader supervisor defaults.
-func defaultOptions(opts SnapshotReaderSupervisorOptions) SnapshotReaderSupervisorOptions {
+func defaultOptions(opts SnapshotReaderActorOptions) SnapshotReaderActorOptions {
 	if opts.Name == "" {
 		opts.Name = "snapshot-reader"
 	}
