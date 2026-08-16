@@ -2,12 +2,9 @@ package snapshot
 
 import (
 	"fmt"
-	"time"
 
 	"ergo.services/ergo/act"
 	"ergo.services/ergo/gen"
-	"github.com/harishhary/blink/internal/brokers"
-	"github.com/harishhary/blink/internal/logger"
 	"github.com/harishhary/blink/internal/runtime"
 )
 
@@ -34,23 +31,6 @@ func EventsFor(node gen.Node, name gen.Atom) SnapshotReaderEvents {
 	}
 }
 
-// SnapshotReaderActorOptions configures the reader child of a snapshot supervisor.
-type SnapshotReaderActorOptions struct {
-	Name          gen.Atom
-	Logger        *logger.Logger
-	ReaderFactory func() brokers.Reader
-	RestartMin    time.Duration
-	RestartMax    time.Duration
-}
-
-// SnapshotReaderSupervisorOptions configures a raw reader and its typed projection sibling.
-type SnapshotReaderSupervisorOptions[T any] struct {
-	SnapshotReaderActorOptions
-	Projection     ProjectionSpec[T]
-	ProjectionMode ProjectionCommitMode
-	Stopped        chan<- error
-}
-
 // SnapshotSupervisor owns a reader followed by a typed projection actor.
 // Rest-for-one restarts the projection whenever its reader restarts.
 type SnapshotSupervisor[T any] struct {
@@ -74,12 +54,7 @@ type projectionActorState struct {
 
 // NewSupervisor creates a reader/projection supervisor with stable child names.
 func NewSupervisor[T any](opts SnapshotReaderSupervisorOptions[T]) *SnapshotSupervisor[T] {
-	return &SnapshotSupervisor[T]{opts: SnapshotReaderSupervisorOptions[T]{
-		SnapshotReaderActorOptions: defaultOptions(opts.SnapshotReaderActorOptions),
-		Projection:                 opts.Projection,
-		ProjectionMode:             opts.ProjectionMode,
-		Stopped:                    opts.Stopped,
-	}}
+	return &SnapshotSupervisor[T]{opts: snapshotReaderSupervisorOptionsWithDefaults(opts)}
 }
 
 // --- messages ---
@@ -302,21 +277,4 @@ func newProjectionActorStatus() ProjectionActorStatus {
 		Lifecycle:    ProjectionActorStarting,
 		Availability: runtime.AvailabilityUnavailable,
 	}
-}
-
-// defaultOptions fills omitted reader supervisor defaults.
-func defaultOptions(opts SnapshotReaderActorOptions) SnapshotReaderActorOptions {
-	if opts.Name == "" {
-		opts.Name = "snapshot-reader"
-	}
-	if opts.RestartMin <= 0 {
-		opts.RestartMin = 100 * time.Millisecond
-	}
-	if opts.RestartMax <= 0 {
-		opts.RestartMax = 5 * time.Second
-	}
-	if opts.RestartMax < opts.RestartMin {
-		opts.RestartMax = opts.RestartMin
-	}
-	return opts
 }

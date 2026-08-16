@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 
 	"ergo.services/ergo/act"
 	"ergo.services/ergo/gen"
@@ -69,10 +70,7 @@ func (s ProjectionData[T]) clone(spec ProjectionSpec[T]) ProjectionData[T] {
 	for name, value := range s.ByFileName {
 		clone.ByFileName[name] = spec.Clone(value)
 	}
-	clone.MaxProcsByID = make(map[string]int, len(s.MaxProcsByID))
-	for id, maxProcs := range s.MaxProcsByID {
-		clone.MaxProcsByID[id] = maxProcs
-	}
+	clone.MaxProcsByID = maps.Clone(s.MaxProcsByID)
 	return clone
 }
 
