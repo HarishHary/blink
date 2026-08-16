@@ -89,6 +89,7 @@ type MessageSnapshotReaderStatusChanged struct{ status SnapshotReaderActorStatus
 
 // --- messages ---
 
+// Init validates options and configures the supervised reader and projection actors.
 func (s *SnapshotSupervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 	defer s.reportStatus()
 
@@ -146,6 +147,7 @@ func (s *SnapshotSupervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 	}, nil
 }
 
+// HandleChildStart tracks and activates a started reader or projection child.
 func (s *SnapshotSupervisor[T]) HandleChildStart(name gen.Atom, pid gen.PID) error {
 	defer s.reportStatus()
 
@@ -168,6 +170,7 @@ func (s *SnapshotSupervisor[T]) HandleChildStart(name gen.Atom, pid gen.PID) err
 	})
 }
 
+// HandleChildTerminate records a terminated child and reports external commit failures.
 func (s *SnapshotSupervisor[T]) HandleChildTerminate(name gen.Atom, pid gen.PID, reason error) error {
 	defer s.reportStatus()
 
@@ -199,6 +202,7 @@ func (s *SnapshotSupervisor[T]) HandleChildTerminate(name gen.Atom, pid gen.PID,
 	return nil
 }
 
+// HandleMessage routes child status and external projection commit messages.
 func (s *SnapshotSupervisor[T]) HandleMessage(from gen.PID, message any) error {
 	defer s.reportStatus()
 
@@ -241,10 +245,12 @@ func (s *SnapshotSupervisor[T]) HandleMessage(from gen.PID, message any) error {
 	return nil
 }
 
+// HandleCall rejects unsupported synchronous requests.
 func (s *SnapshotSupervisor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
 	return fmt.Errorf("snapshot supervisor: unsupported call %T", request), nil
 }
 
+// Terminate marks children stopped and reports the shutdown reason.
 func (s *SnapshotSupervisor[T]) Terminate(reason error) {
 	defer s.reportStatus()
 	s.projectionActor.status.Lifecycle = ProjectionActorStopped
@@ -261,20 +267,24 @@ func (s *SnapshotSupervisor[T]) Terminate(reason error) {
 	}
 }
 
+// reportStatus publishes the reader actor's current status.
 func (s *SnapshotSupervisor[T]) reportStatus() {
 	if s.events.statusToken != (gen.Ref{}) {
 		_ = s.SendEvent(s.events.Status.Name, s.events.statusToken, s.readerActor.status)
 	}
 }
 
+// readerActorName returns the stable reader child name.
 func readerActorName(name gen.Atom) gen.Atom {
 	return gen.Atom(string(name) + "-reader")
 }
 
+// projectionActorName returns the stable projection child name.
 func projectionActorName(name gen.Atom) gen.Atom {
 	return gen.Atom(string(name) + "-projection")
 }
 
+// newSnapshotReaderStatus returns the initial unavailable reader status.
 func newSnapshotReaderStatus() SnapshotReaderActorStatus {
 	return SnapshotReaderActorStatus{
 		Lifecycle:    SnapshotReaderStarting,
@@ -286,6 +296,7 @@ func newSnapshotReaderStatus() SnapshotReaderActorStatus {
 	}
 }
 
+// newProjectionActorStatus returns the initial unavailable projection status.
 func newProjectionActorStatus() ProjectionActorStatus {
 	return ProjectionActorStatus{
 		Lifecycle:    ProjectionActorStarting,
@@ -293,6 +304,7 @@ func newProjectionActorStatus() ProjectionActorStatus {
 	}
 }
 
+// defaultOptions fills omitted reader supervisor defaults.
 func defaultOptions(opts SnapshotReaderSupervisorOptions) SnapshotReaderSupervisorOptions {
 	if opts.Name == "" {
 		opts.Name = "snapshot-reader"

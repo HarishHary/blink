@@ -55,6 +55,7 @@ type MessageSnapshotCaughtUp struct{ source gen.Alias }
 
 // --- messages ---
 
+// Init validates the reader and initializes its cancellation context.
 func (m *snapshotReaderMeta) Init(process gen.MetaProcess) error {
 	if m.reader == nil {
 		return fmt.Errorf("snapshot reader meta: reader is required")
@@ -64,6 +65,7 @@ func (m *snapshotReaderMeta) Init(process gen.MetaProcess) error {
 	return nil
 }
 
+// Start reads broker records and reports them to the parent actor.
 func (m *snapshotReaderMeta) Start() error {
 	caughtUp := false
 	for {
@@ -107,12 +109,15 @@ func (m *snapshotReaderMeta) Start() error {
 	}
 }
 
+// HandleMessage ignores asynchronous messages.
 func (m *snapshotReaderMeta) HandleMessage(gen.PID, any) error { return nil }
 
+// HandleCall rejects unsupported synchronous requests.
 func (m *snapshotReaderMeta) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
 	return fmt.Errorf("snapshot reader meta: unsupported call %T", request), nil
 }
 
+// Terminate cancels reading and closes the broker reader.
 func (m *snapshotReaderMeta) Terminate(error) {
 	if m.cancelRun != nil {
 		m.cancelRun()
@@ -122,4 +127,5 @@ func (m *snapshotReaderMeta) Terminate(error) {
 	}
 }
 
+// HandleInspect returns no inspection data.
 func (m *snapshotReaderMeta) HandleInspect(gen.PID, ...string) map[string]string { return nil }

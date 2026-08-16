@@ -58,6 +58,7 @@ type MessageSnapshotReaderActivate struct {
 
 // --- messages ---
 
+// Init initializes reader state and its restart backoff.
 func (a *snapshotReaderActor) Init(...any) error {
 	a.entries = make(map[string]snapshot.EffectiveEntry)
 	a.reader.status = SnapshotReaderMetaStatus{
@@ -68,6 +69,7 @@ func (a *snapshotReaderActor) Init(...any) error {
 	return nil
 }
 
+// HandleMessage processes reader records, lifecycle, and restart messages.
 func (a *snapshotReaderActor) HandleMessage(_ gen.PID, message any) error {
 	defer a.reportStatus()
 
@@ -141,10 +143,12 @@ func (a *snapshotReaderActor) HandleMessage(_ gen.PID, message any) error {
 	return nil
 }
 
+// HandleCall rejects unsupported synchronous requests.
 func (a *snapshotReaderActor) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
 	return fmt.Errorf("snapshot reader actor: unsupported call %T", request), nil
 }
 
+// Terminate stops the reader meta-process and marks it unavailable.
 func (a *snapshotReaderActor) Terminate(error) {
 	defer a.reportStatus()
 	a.reader.restart.CancelScheduled(false)
@@ -154,9 +158,7 @@ func (a *snapshotReaderActor) Terminate(error) {
 	a.reader.status.CaughtUp = false
 }
 
-// startSnapshotReaderMeta starts a fresh reader and compacted-topic
-// reconstruction. The previous complete buffered snapshot remains available to
-// subscribers while this reader catches up.
+// startSnapshotReaderMeta starts compacted-topic reconstruction while retaining the prior published snapshot.
 func (a *snapshotReaderActor) startSnapshotReaderMeta() error {
 	a.stopSnapshotReaderMeta(gen.TerminateReasonShutdown)
 	a.reader.status = SnapshotReaderMetaStatus{
@@ -190,6 +192,7 @@ func (a *snapshotReaderActor) startSnapshotReaderMeta() error {
 	return nil
 }
 
+// stopSnapshotReaderMeta stops the active reader meta-process.
 func (a *snapshotReaderActor) stopSnapshotReaderMeta(reason error) {
 	if a.reader.alias == (gen.Alias{}) {
 		return
@@ -200,6 +203,7 @@ func (a *snapshotReaderActor) stopSnapshotReaderMeta(reason error) {
 	_ = a.SendExitMeta(alias, reason)
 }
 
+// scheduleSnapshotReaderMetaRestart schedules a backoff-delayed reader restart.
 func (a *snapshotReaderActor) scheduleSnapshotReaderMetaRestart() error {
 	if a.reader.restart.Pending {
 		return nil
@@ -221,6 +225,7 @@ func (a *snapshotReaderActor) scheduleSnapshotReaderMetaRestart() error {
 	return nil
 }
 
+// apply incorporates a compacted-topic record and reports a new committed generation.
 func (a *snapshotReaderActor) apply(message brokers.Message) bool {
 	key := string(message.Key)
 	if key == snapshot.GenerationMarkerKey {
@@ -261,6 +266,7 @@ func (a *snapshotReaderActor) apply(message brokers.Message) bool {
 	return false
 }
 
+// publishSnapshot sends the committed snapshot to subscribers.
 func (a *snapshotReaderActor) publishSnapshot() {
 	if a.committed == nil {
 		return
@@ -270,6 +276,7 @@ func (a *snapshotReaderActor) publishSnapshot() {
 	}
 }
 
+// sortedEntries returns cloned entries ordered by identifier.
 func (a *snapshotReaderActor) sortedEntries() []snapshot.EffectiveEntry {
 	entries := make([]snapshot.EffectiveEntry, 0, len(a.entries))
 	for _, entry := range a.entries {
@@ -279,6 +286,7 @@ func (a *snapshotReaderActor) sortedEntries() []snapshot.EffectiveEntry {
 	return entries
 }
 
+// reportStatus sends current reader status to the supervisor.
 func (a *snapshotReaderActor) reportStatus() {
 	if a.snapshotEventToken == (gen.Ref{}) {
 		return
