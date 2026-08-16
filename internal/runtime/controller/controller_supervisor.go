@@ -28,7 +28,7 @@ const (
 
 type actorState struct {
 	pid            gen.PID
-	status         ActorStatus
+	status         actorStatus
 	activationSent bool
 }
 
@@ -51,7 +51,7 @@ func newSupervisor[T plugin.Syncable](opts SupervisorOptions[T], database backen
 // --- messages ---
 
 type MessageActorStatusChanged struct {
-	status ActorStatus
+	status actorStatus
 }
 
 // --- messages ---
@@ -61,11 +61,9 @@ func (s *supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 	if s.opts.ActorOptions.Name == "" {
 		return act.SupervisorSpec{}, fmt.Errorf("controller supervisor: actor name is required")
 	}
-	s.actor.status = ActorStatus{
+	s.actor.status = actorStatus{
 		Lifecycle:    ActorStarting,
 		Availability: runtime.AvailabilityUnavailable,
-		Scanner:      ArtifactScannerMetaStatus{Lifecycle: ArtifactScannerMetaStarting, Availability: runtime.AvailabilityUnavailable},
-		Publisher:    SnapshotPublisherMetaStatus{Lifecycle: SnapshotPublisherMetaStarting, Availability: runtime.AvailabilityUnavailable},
 	}
 	s.lifecycle = SupervisorStarting
 	s.publisherFences = make(map[gen.Alias]gen.PID)
@@ -149,17 +147,9 @@ func (s *supervisor[T]) HandleChildStart(name gen.Atom, pid gen.PID) error {
 	}
 	s.actor = actorState{
 		pid: pid,
-		status: ActorStatus{
+		status: actorStatus{
 			Lifecycle:    ActorStarting,
 			Availability: runtime.AvailabilityUnavailable,
-			Scanner: ArtifactScannerMetaStatus{
-				Lifecycle:    ArtifactScannerMetaStarting,
-				Availability: runtime.AvailabilityUnavailable,
-			},
-			Publisher: SnapshotPublisherMetaStatus{
-				Lifecycle:    SnapshotPublisherMetaStarting,
-				Availability: runtime.AvailabilityUnavailable,
-			},
 		},
 	}
 	s.Log().Info("controller child started: name=%s child=%s", s.opts.Name, pid)

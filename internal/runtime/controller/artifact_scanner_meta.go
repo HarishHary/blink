@@ -32,8 +32,8 @@ const (
 	ArtifactScannerMetaStopped    ArtifactScannerMetaLifecycle = "stopped"
 )
 
-// ArtifactScannerMetaStatus is derived and owned by the controller actor.
-type ArtifactScannerMetaStatus struct {
+// artifactScannerMetaStatus is derived and owned by the controller actor.
+type artifactScannerMetaStatus struct {
 	Lifecycle    ArtifactScannerMetaLifecycle
 	Availability runtime.Availability
 	Complete     bool

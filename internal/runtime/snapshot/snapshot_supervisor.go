@@ -93,7 +93,7 @@ func (s *Supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 		return act.SupervisorSpec{}, fmt.Errorf("register snapshot status event: %w", err)
 	}
 	s.events.statusToken = statusToken
-	s.readerActor.status = newReaderStatus()
+	s.readerActor.status = newReaderActorStatus()
 	s.projectionActor.status = newProjectionActorStatus()
 
 	return act.SupervisorSpec{
@@ -125,37 +125,43 @@ func (s *Supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 // HandleChildStart tracks and activates a started reader or projection child.
 func (s *Supervisor[T]) HandleChildStart(name gen.Atom, pid gen.PID) error {
 	defer s.reportStatus()
-
-	if name == projectionActorName(s.opts.Name) {
+	switch name {
+	case projectionActorName(s.opts.Name):
+		if s.projectionActor.pid != (gen.PID{}) {
+			return nil
+		}
 		s.projectionActor.pid = pid
 		s.projectionActor.commitGeneration = 0
 		s.projectionActor.status = newProjectionActorStatus()
 		// Stale child-start callbacks may race a replacement and fail to send.
-		_ = s.Send(pid, MessageProjectionStart{})
+		_ = s.Send(pid, MessageProjectionActorActivate{})
+		return nil
+	case readerActorName(s.opts.Name):
+		if s.readerActor.pid != (gen.PID{}) {
+			return nil
+		}
+		s.readerActor.pid = pid
+		s.readerActor.status = newReaderActorStatus()
+		return s.Send(pid, MessageReaderActorActivate{
+			snapshotEventName:  s.events.Snapshot.Name,
+			snapshotEventToken: s.events.snapshotToken,
+		})
+	default:
 		return nil
 	}
-	if name != readerActorName(s.opts.Name) {
-		return nil
-	}
-	s.readerActor.pid = pid
-	s.readerActor.status = newReaderStatus()
-	return s.Send(pid, MessageReaderMetaActivate{
-		snapshotEventName:  s.events.Snapshot.Name,
-		snapshotEventToken: s.events.snapshotToken,
-	})
 }
 
 // HandleChildTerminate records a terminated child and reports external commit failures.
-func (s *Supervisor[T]) HandleChildTerminate(name gen.Atom, pid gen.PID, reason error) error {
+func (s *Supervisor[T]) HandleChildTerminate(_ gen.Atom, pid gen.PID, reason error) error {
 	defer s.reportStatus()
-
-	if name == projectionActorName(s.opts.Name) && s.projectionActor.pid == pid {
+	switch pid {
+	case s.projectionActor.pid:
 		s.projectionActor.pid = gen.PID{}
 		s.projectionActor.status.Lifecycle = ProjectionActorRestarting
 		s.projectionActor.status.Availability = runtime.AvailabilityUnavailable
 		s.projectionActor.status.PreparedGeneration = 0
 		if s.opts.ProjectionMode == ProjectionCommitExternal {
-			_ = s.Send(s.Parent(), MessageProjectionStatusChanged{Status: s.projectionActor.status, ProjectionPID: pid})
+			_ = s.Send(s.Parent(), MessageProjectionActorStatusChanged{Status: s.projectionActor.status, ProjectionPID: pid})
 		}
 		if generation := s.projectionActor.commitGeneration; generation != 0 {
 			s.projectionActor.commitGeneration = 0
@@ -164,29 +170,25 @@ func (s *Supervisor[T]) HandleChildTerminate(name gen.Atom, pid gen.PID, reason 
 			})
 		}
 		return nil
-	}
-	if name != readerActorName(s.opts.Name) || s.readerActor.pid != pid {
+	case s.readerActor.pid:
+		s.readerActor.pid = gen.PID{}
+		s.readerActor.status.Lifecycle = ReaderActorRestarting
+		s.readerActor.status.Availability = runtime.AvailabilityUnavailable
+		return nil
+	default:
 		return nil
 	}
-	s.readerActor.pid = gen.PID{}
-	s.readerActor.status.Lifecycle = ReaderActorRestarting
-	s.readerActor.status.Availability = runtime.AvailabilityUnavailable
-	s.readerActor.status.Reader.Lifecycle = ReaderMetaStopped
-	s.readerActor.status.Reader.Availability = runtime.AvailabilityUnavailable
-	s.readerActor.status.Reader.CaughtUp = false
-	return nil
 }
 
 // HandleMessage routes child status and external projection commit messages.
 func (s *Supervisor[T]) HandleMessage(from gen.PID, message any) error {
 	defer s.reportStatus()
-
 	switch message := message.(type) {
 	case MessageReaderStatusChanged:
 		if from == s.readerActor.pid {
 			s.readerActor.status = message.status
 		}
-	case MessageProjectionStatusChanged:
+	case MessageProjectionActorStatusChanged:
 		if from == s.projectionActor.pid {
 			s.projectionActor.status = message.Status
 			if s.opts.ProjectionMode == ProjectionCommitExternal {
@@ -232,8 +234,6 @@ func (s *Supervisor[T]) Terminate(reason error) {
 	s.projectionActor.status.Availability = runtime.AvailabilityUnavailable
 	s.readerActor.status.Lifecycle = ReaderActorStopped
 	s.readerActor.status.Availability = runtime.AvailabilityUnavailable
-	s.readerActor.status.Reader.Lifecycle = ReaderMetaStopped
-	s.readerActor.status.Reader.Availability = runtime.AvailabilityUnavailable
 	if s.opts.Stopped != nil {
 		select {
 		case s.opts.Stopped <- reason:
@@ -259,15 +259,11 @@ func projectionActorName(name gen.Atom) gen.Atom {
 	return gen.Atom(string(name) + "-projection")
 }
 
-// newReaderStatus returns the initial unavailable reader status.
-func newReaderStatus() ReaderActorStatus {
+// newReaderActorStatus returns the initial unavailable reader status.
+func newReaderActorStatus() ReaderActorStatus {
 	return ReaderActorStatus{
 		Lifecycle:    ReaderActorStarting,
 		Availability: runtime.AvailabilityUnavailable,
-		Reader: ReaderMetaStatus{
-			Lifecycle:    ReaderMetaStarting,
-			Availability: runtime.AvailabilityUnavailable,
-		},
 	}
 }
 

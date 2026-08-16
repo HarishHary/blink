@@ -24,10 +24,10 @@ const (
 	ReaderMetaStopped    ReaderMetaLifecycle = "stopped"
 )
 
-// ReaderMetaStatus is owned by readerActor because that actor
+// readerMetaStatus is owned by readerActor because that actor
 // owns the meta-process restart policy and interpretation of MessageDownAlias.
 // The meta-process only reports runtime facts.
-type ReaderMetaStatus struct {
+type readerMetaStatus struct {
 	Lifecycle    ReaderMetaLifecycle
 	Availability runtime.Availability
 	CaughtUp     bool

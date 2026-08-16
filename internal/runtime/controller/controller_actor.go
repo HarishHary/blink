@@ -26,19 +26,17 @@ const (
 	ActorStopped  ActorLifecycle = "stopped"
 )
 
-// ActorStatus is the controller actor's immutable status report to its supervisor.
-type ActorStatus struct {
+// actorStatus is the controller actor's immutable status report to its supervisor.
+type actorStatus struct {
 	Lifecycle    ActorLifecycle
 	Availability runtime.Availability
 	Generation   int64
-	Scanner      ArtifactScannerMetaStatus
-	Publisher    SnapshotPublisherMetaStatus
 }
 
 type scannerMetaState struct {
 	alias      gen.Alias
 	restart    *runtime.ScheduledBackoff
-	status     ArtifactScannerMetaStatus
+	status     artifactScannerMetaStatus
 	entries    []snapshot.EffectiveEntry
 	presentIDs []string
 }
@@ -47,7 +45,7 @@ type publisherMetaState struct {
 	alias               gen.Alias
 	consecutiveFailures int
 	restart             *runtime.ScheduledBackoff
-	status              SnapshotPublisherMetaStatus
+	status              snapshotPublisherMetaStatus
 	activeIO            map[gen.Alias]struct{}
 	replacementPending  bool
 }
@@ -107,14 +105,14 @@ func (a *actor[T]) Init(...any) error {
 	a.records = make(map[string]backends.ControllerRecord)
 	a.scanner = scannerMetaState{
 		restart: runtime.NewScheduledBackoff(a.opts.RestartMin, a.opts.RestartMax),
-		status: ArtifactScannerMetaStatus{
+		status: artifactScannerMetaStatus{
 			Lifecycle:    ArtifactScannerMetaStarting,
 			Availability: runtime.AvailabilityUnavailable,
 		},
 	}
 	a.publisher = publisherMetaState{
 		restart: runtime.NewScheduledBackoff(a.opts.RestartMin, a.opts.RestartMax),
-		status: SnapshotPublisherMetaStatus{
+		status: snapshotPublisherMetaStatus{
 			Lifecycle:    SnapshotPublisherMetaStarting,
 			Availability: runtime.AvailabilityUnavailable,
 		},
@@ -328,7 +326,7 @@ func (a *actor[T]) startScanner() error {
 	if a.scanner.alias != (gen.Alias{}) {
 		return nil
 	}
-	a.scanner.status = ArtifactScannerMetaStatus{Lifecycle: ArtifactScannerMetaStarting, Availability: runtime.AvailabilityUnavailable}
+	a.scanner.status = artifactScannerMetaStatus{Lifecycle: ArtifactScannerMetaStarting, Availability: runtime.AvailabilityUnavailable}
 	alias, err := a.SpawnMeta(&artifactScannerMeta[T]{directory: a.opts.Directory, loader: a.opts.Loader}, gen.MetaOptions{})
 	if err != nil {
 		a.scanner.status.LastError = fmt.Errorf("spawn artifact scanner meta: %w", err)
@@ -350,7 +348,7 @@ func (a *actor[T]) startPublisher() error {
 	if a.publisher.alias != (gen.Alias{}) || len(a.publisher.activeIO) != 0 || a.lifecycle != ActorRunning {
 		return nil
 	}
-	a.publisher.status = SnapshotPublisherMetaStatus{
+	a.publisher.status = snapshotPublisherMetaStatus{
 		Lifecycle:    SnapshotPublisherMetaStarting,
 		Availability: runtime.AvailabilityUnavailable,
 		LastError:    a.publisher.status.LastError,
@@ -531,7 +529,7 @@ func (a *actor[T]) reportStatus() {
 			availability = runtime.AvailabilityReady
 		}
 	}
-	_ = a.Send(a.Parent(), MessageActorStatusChanged{status: ActorStatus{Lifecycle: a.lifecycle, Availability: availability, Generation: a.generation, Scanner: a.scanner.status, Publisher: a.publisher.status}})
+	_ = a.Send(a.Parent(), MessageActorStatusChanged{status: actorStatus{Lifecycle: a.lifecycle, Availability: availability, Generation: a.generation}})
 }
 
 // cloneEntries returns independent copies of catalog entries.

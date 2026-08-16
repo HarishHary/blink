@@ -23,8 +23,8 @@ const (
 	SnapshotPublisherMetaStopped    SnapshotPublisherMetaLifecycle = "stopped"
 )
 
-// SnapshotPublisherMetaStatus is derived and owned by the controller actor.
-type SnapshotPublisherMetaStatus struct {
+// snapshotPublisherMetaStatus is derived and owned by the controller actor.
+type snapshotPublisherMetaStatus struct {
 	Lifecycle    SnapshotPublisherMetaLifecycle
 	Availability runtime.Availability
 	Loaded       bool

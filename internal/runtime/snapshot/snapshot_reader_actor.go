@@ -23,18 +23,16 @@ const (
 )
 
 // ReaderActorStatus is the public status value published by the supervisor.
-// Reader contains the independently managed broker-reader meta-process state.
 type ReaderActorStatus struct {
 	Lifecycle    ReaderActorLifecycle
 	Availability runtime.Availability
 	Generation   int64
-	Reader       ReaderMetaStatus
 }
 
 type readerMetaState struct {
 	alias   gen.Alias
 	restart *runtime.ScheduledBackoff
-	status  ReaderMetaStatus
+	status  readerMetaStatus
 }
 
 type readerActor struct {
@@ -42,7 +40,7 @@ type readerActor struct {
 	opts               ReaderActorOptions
 	snapshotEventName  gen.Atom
 	snapshotEventToken gen.Ref
-	reader             readerMetaState
+	readerMeta         readerMetaState
 	entries            map[string]snapshot.EffectiveEntry
 	committed          *snapshot.Snapshot
 }
@@ -51,7 +49,7 @@ type readerActor struct {
 
 type MessageReaderMetaRestart struct{ token uint64 }
 
-type MessageReaderMetaActivate struct {
+type MessageReaderActorActivate struct {
 	snapshotEventName  gen.Atom
 	snapshotEventToken gen.Ref
 }
@@ -61,82 +59,73 @@ type MessageReaderMetaActivate struct {
 // Init initializes reader state and its restart backoff.
 func (a *readerActor) Init(...any) error {
 	a.entries = make(map[string]snapshot.EffectiveEntry)
-	a.reader.status = ReaderMetaStatus{
+	a.readerMeta.status = readerMetaStatus{
 		Lifecycle:    ReaderMetaStarting,
 		Availability: runtime.AvailabilityUnavailable,
 	}
-	a.reader.restart = runtime.NewScheduledBackoff(a.opts.RestartMin, a.opts.RestartMax)
+	a.readerMeta.restart = runtime.NewScheduledBackoff(a.opts.RestartMin, a.opts.RestartMax)
 	return nil
 }
 
 // HandleMessage processes reader records, lifecycle, and restart messages.
-func (a *readerActor) HandleMessage(_ gen.PID, message any) error {
+func (a *readerActor) HandleMessage(from gen.PID, message any) error {
 	defer a.reportStatus()
-
 	switch m := message.(type) {
-	case MessageReaderMetaActivate:
-		if a.snapshotEventToken != (gen.Ref{}) {
-			return fmt.Errorf("snapshot reader actor already activated")
+	case MessageReaderActorActivate:
+		if from != a.Parent() || a.snapshotEventToken != (gen.Ref{}) {
+			return nil
 		}
 		a.snapshotEventName = m.snapshotEventName
 		a.snapshotEventToken = m.snapshotEventToken
 		return a.startReaderMeta()
-
 	case MessageRecord:
-		if m.source != a.reader.alias || a.reader.alias == (gen.Alias{}) {
+		if m.source != a.readerMeta.alias || a.readerMeta.alias == (gen.Alias{}) {
 			return nil
 		}
-		started := a.reader.status.Lifecycle != ReaderMetaRunning
+		started := a.readerMeta.status.Lifecycle != ReaderMetaRunning
 		if started {
-			a.reader.status.Lifecycle = ReaderMetaRunning
-			a.reader.status.Availability = runtime.AvailabilityDegraded
-			a.reader.status.CaughtUp = false
-			a.reader.status.LastError = nil
+			a.readerMeta.status.Lifecycle = ReaderMetaRunning
+			a.readerMeta.status.Availability = runtime.AvailabilityDegraded
+			a.readerMeta.status.CaughtUp = false
+			a.readerMeta.status.LastError = nil
 		}
-		committed := a.apply(m.message)
-		if committed && a.reader.status.CaughtUp {
-			a.reader.status.Availability = runtime.AvailabilityReady
-			a.reader.status.LastError = nil
+		committed := a.apply(m.message) && a.readerMeta.status.CaughtUp
+		if committed {
+			a.readerMeta.status.Availability = runtime.AvailabilityReady
+			a.readerMeta.status.LastError = nil
 			a.publishSnapshot()
 		}
-
 	case MessageCaughtUp:
-		if m.source != a.reader.alias ||
-			a.reader.alias == (gen.Alias{}) ||
-			a.reader.status.CaughtUp {
+		if m.source != a.readerMeta.alias || a.readerMeta.alias == (gen.Alias{}) || a.readerMeta.status.CaughtUp {
 			return nil
 		}
-		a.reader.status.Lifecycle = ReaderMetaRunning
-		a.reader.status.Availability = runtime.AvailabilityReady
-		a.reader.status.CaughtUp = true
-		a.reader.restart.CancelScheduled(true)
+		a.readerMeta.status.Lifecycle = ReaderMetaRunning
+		a.readerMeta.status.Availability = runtime.AvailabilityReady
+		a.readerMeta.status.CaughtUp = true
+		a.readerMeta.restart.CancelScheduled(true)
 		if a.committed == nil {
-			a.reader.status.Availability = runtime.AvailabilityUnavailable
-			a.reader.status.LastError = fmt.Errorf("%w: generation marker not found", runtime.ErrSnapshotRead)
+			a.readerMeta.status.Availability = runtime.AvailabilityUnavailable
+			a.readerMeta.status.LastError = fmt.Errorf("%w: generation marker not found", runtime.ErrSnapshotRead)
 			return nil
 		}
-		a.reader.status.LastError = nil
+		a.readerMeta.status.LastError = nil
 		a.publishSnapshot()
-
 	case MessageReaderMetaRestart:
-		if !a.reader.restart.Pending ||
-			a.reader.restart.Token != m.token ||
-			a.reader.alias != (gen.Alias{}) {
+		if !a.readerMeta.restart.Pending || a.readerMeta.restart.Token != m.token || a.readerMeta.alias != (gen.Alias{}) {
 			return nil
 		}
-		a.reader.restart.Pending = false
-		a.reader.restart.Cancel = nil
+		a.readerMeta.restart.Pending = false
+		a.readerMeta.restart.Cancel = nil
 		return a.startReaderMeta()
-
 	case gen.MessageDownAlias:
-		if m.Alias != a.reader.alias {
+		if m.Alias != a.readerMeta.alias {
 			return nil
 		}
-		a.reader.alias = gen.Alias{}
-		a.reader.status.Lifecycle = ReaderMetaRestarting
-		a.reader.status.Availability = runtime.AvailabilityUnavailable
-		a.reader.status.CaughtUp = false
-		a.reader.status.LastError = m.Reason
+		a.readerMeta.alias = gen.Alias{}
+		a.readerMeta.status.Lifecycle = ReaderMetaRestarting
+		a.readerMeta.status.Availability = runtime.AvailabilityUnavailable
+		a.readerMeta.status.CaughtUp = false
+		a.readerMeta.status.LastError = m.Reason
 		a.opts.Logger.ErrorF("snapshot reader actor: reader %s stopped: %v", m.Alias, m.Reason)
 		return a.scheduleReaderMetaRestart()
 	}
@@ -151,17 +140,17 @@ func (a *readerActor) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error)
 // Terminate stops the reader meta-process and marks it unavailable.
 func (a *readerActor) Terminate(error) {
 	defer a.reportStatus()
-	a.reader.restart.CancelScheduled(false)
+	a.readerMeta.restart.CancelScheduled(false)
 	a.stopReaderMeta(gen.TerminateReasonShutdown)
-	a.reader.status.Lifecycle = ReaderMetaStopped
-	a.reader.status.Availability = runtime.AvailabilityUnavailable
-	a.reader.status.CaughtUp = false
+	a.readerMeta.status.Lifecycle = ReaderMetaStopped
+	a.readerMeta.status.Availability = runtime.AvailabilityUnavailable
+	a.readerMeta.status.CaughtUp = false
 }
 
 // startReaderMeta starts compacted-topic reconstruction while retaining the prior published snapshot.
 func (a *readerActor) startReaderMeta() error {
 	a.stopReaderMeta(gen.TerminateReasonShutdown)
-	a.reader.status = ReaderMetaStatus{
+	a.readerMeta.status = readerMetaStatus{
 		Lifecycle:    ReaderMetaStarting,
 		Availability: runtime.AvailabilityUnavailable,
 	}
@@ -170,58 +159,58 @@ func (a *readerActor) startReaderMeta() error {
 
 	reader := a.opts.ReaderFactory()
 	if reader == nil {
-		a.reader.status.Lifecycle = ReaderMetaRestarting
-		a.reader.status.LastError = fmt.Errorf("start snapshot reader meta: reader factory returned nil")
+		a.readerMeta.status.Lifecycle = ReaderMetaRestarting
+		a.readerMeta.status.LastError = fmt.Errorf("start snapshot reader meta: reader factory returned nil")
 		return a.scheduleReaderMetaRestart()
 	}
 
 	alias, err := a.SpawnMeta(&readerMeta{reader: reader}, gen.MetaOptions{})
 	if err != nil {
 		_ = reader.Close()
-		a.reader.status.Lifecycle = ReaderMetaRestarting
-		a.reader.status.LastError = fmt.Errorf("spawn snapshot reader meta: %w", err)
+		a.readerMeta.status.Lifecycle = ReaderMetaRestarting
+		a.readerMeta.status.LastError = fmt.Errorf("spawn snapshot reader meta: %w", err)
 		return a.scheduleReaderMetaRestart()
 	}
 	if err := a.MonitorAlias(alias); err != nil {
 		_ = a.SendExitMeta(alias, gen.TerminateReasonShutdown)
-		a.reader.status.Lifecycle = ReaderMetaRestarting
-		a.reader.status.LastError = fmt.Errorf("monitor snapshot reader meta: %w", err)
+		a.readerMeta.status.Lifecycle = ReaderMetaRestarting
+		a.readerMeta.status.LastError = fmt.Errorf("monitor snapshot reader meta: %w", err)
 		return a.scheduleReaderMetaRestart()
 	}
-	a.reader.alias = alias
+	a.readerMeta.alias = alias
 	return nil
 }
 
 // stopReaderMeta stops the active reader meta-process.
 func (a *readerActor) stopReaderMeta(reason error) {
-	if a.reader.alias == (gen.Alias{}) {
+	if a.readerMeta.alias == (gen.Alias{}) {
 		return
 	}
-	alias := a.reader.alias
-	a.reader.alias = gen.Alias{}
+	alias := a.readerMeta.alias
+	a.readerMeta.alias = gen.Alias{}
 	_ = a.DemonitorAlias(alias)
 	_ = a.SendExitMeta(alias, reason)
 }
 
 // scheduleReaderMetaRestart schedules a backoff-delayed reader restart.
 func (a *readerActor) scheduleReaderMetaRestart() error {
-	if a.reader.restart.Pending {
+	if a.readerMeta.restart.Pending {
 		return nil
 	}
-	delay := a.reader.restart.Strategy.NextBackOff()
+	delay := a.readerMeta.restart.Strategy.NextBackOff()
 	if delay == backoff.Stop {
 		return fmt.Errorf("snapshot reader meta restart: %w", runtime.ErrBackoffStopped)
 	}
-	a.reader.restart.Token++
-	token := a.reader.restart.Token
+	a.readerMeta.restart.Token++
+	token := a.readerMeta.restart.Token
 	cancel, err := a.SendAfter(a.PID(), MessageReaderMetaRestart{token: token}, delay)
 	if err != nil {
 		return fmt.Errorf("schedule snapshot reader meta restart: %w", err)
 	}
-	a.reader.restart.Pending = true
-	a.reader.restart.Cancel = cancel
-	a.reader.status.Lifecycle = ReaderMetaRestarting
-	a.reader.status.Availability = runtime.AvailabilityUnavailable
+	a.readerMeta.restart.Pending = true
+	a.readerMeta.restart.Cancel = cancel
+	a.readerMeta.status.Lifecycle = ReaderMetaRestarting
+	a.readerMeta.status.Availability = runtime.AvailabilityUnavailable
 	return nil
 }
 
@@ -293,7 +282,7 @@ func (a *readerActor) reportStatus() {
 	}
 
 	availability := runtime.AvailabilityUnavailable
-	switch a.reader.status.Availability {
+	switch a.readerMeta.status.Availability {
 	case runtime.AvailabilityReady:
 		availability = runtime.AvailabilityReady
 	case runtime.AvailabilityDegraded:
@@ -303,7 +292,6 @@ func (a *readerActor) reportStatus() {
 	status := ReaderActorStatus{
 		Lifecycle:    ReaderActorRunning,
 		Availability: availability,
-		Reader:       a.reader.status,
 	}
 	if a.committed != nil {
 		status.Generation = a.committed.Generation

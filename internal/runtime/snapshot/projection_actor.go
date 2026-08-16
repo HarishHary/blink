@@ -107,9 +107,9 @@ type projectionActor[T any] struct {
 // ProjectionStateRequest reads the current immutable projection state.
 type ProjectionStateRequest struct{}
 
-// MessageProjectionStatusChanged reports projection status. The child sends it
+// MessageProjectionActorStatusChanged reports projection status. The child sends it
 // to its parent with a zero PID; Supervisor stamps external reports.
-type MessageProjectionStatusChanged struct {
+type MessageProjectionActorStatusChanged struct {
 	Status        ProjectionActorStatus
 	ProjectionPID gen.PID
 }
@@ -127,9 +127,9 @@ type MessageProjectionCommitResult struct {
 	Err           error
 }
 
-// MessageProjectionStart tells a projection child that its parent has recorded
+// MessageProjectionActorActivate tells a projection child that its parent has recorded
 // the child's PID and it may begin monitoring snapshot events.
-type MessageProjectionStart struct{}
+type MessageProjectionActorActivate struct{}
 
 // --- messages ---
 
@@ -144,7 +144,7 @@ func (a *projectionActor[T]) Init(...any) error {
 // HandleMessage starts event monitoring and processes projection commits.
 func (a *projectionActor[T]) HandleMessage(from gen.PID, message any) error {
 	switch m := message.(type) {
-	case MessageProjectionStart:
+	case MessageProjectionActorActivate:
 		if from != a.Parent() {
 			return nil
 		}
@@ -183,9 +183,7 @@ func (a *projectionActor[T]) HandleMessage(from gen.PID, message any) error {
 		return a.Send(a.Parent(), MessageProjectionCommitResult{Generation: m.Generation, ProjectionPID: m.ProjectionPID, Err: err})
 	case gen.MessageDownEvent:
 		if m.Event == a.events.Snapshot || m.Event == a.events.Status {
-			a.readerReady = false
-			err := fmt.Errorf("snapshot projection event terminated: %w", m.Reason)
-			return err
+			return fmt.Errorf("snapshot projection event terminated: %w", m.Reason)
 		}
 	}
 	return nil
@@ -275,7 +273,7 @@ func (a *projectionActor[T]) reportState() ProjectionState[T] {
 
 // reportStatus sends the current projection status to the supervisor.
 func (a *projectionActor[T]) reportStatus() {
-	_ = a.Send(a.Parent(), MessageProjectionStatusChanged{Status: a.currentStatus()})
+	_ = a.Send(a.Parent(), MessageProjectionActorStatusChanged{Status: a.currentStatus()})
 }
 
 type parsedProjection[T any] struct {
