@@ -13,19 +13,19 @@ import (
 	"github.com/harishhary/blink/internal/snapshot"
 )
 
-// SnapshotPublisherLifecycle describes the controller-owned publisher meta lifecycle.
-type SnapshotPublisherLifecycle string
+// SnapshotPublisherMetaLifecycle describes the controller-owned publisher meta lifecycle.
+type SnapshotPublisherMetaLifecycle string
 
 const (
-	SnapshotPublisherStarting   SnapshotPublisherLifecycle = "starting"
-	SnapshotPublisherRunning    SnapshotPublisherLifecycle = "running"
-	SnapshotPublisherRestarting SnapshotPublisherLifecycle = "restarting"
-	SnapshotPublisherStopped    SnapshotPublisherLifecycle = "stopped"
+	SnapshotPublisherMetaStarting   SnapshotPublisherMetaLifecycle = "starting"
+	SnapshotPublisherMetaRunning    SnapshotPublisherMetaLifecycle = "running"
+	SnapshotPublisherMetaRestarting SnapshotPublisherMetaLifecycle = "restarting"
+	SnapshotPublisherMetaStopped    SnapshotPublisherMetaLifecycle = "stopped"
 )
 
-// SnapshotPublisherStatus is derived and owned by the controller actor.
-type SnapshotPublisherStatus struct {
-	Lifecycle    SnapshotPublisherLifecycle
+// SnapshotPublisherMetaStatus is derived and owned by the controller actor.
+type SnapshotPublisherMetaStatus struct {
+	Lifecycle    SnapshotPublisherMetaLifecycle
 	Availability runtime.Availability
 	Loaded       bool
 	Publishing   bool

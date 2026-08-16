@@ -13,10 +13,10 @@ import (
 	"github.com/harishhary/blink/internal/runtime/plugin"
 )
 
-// ControllerApplication owns the resources for one plugin-type controller application.
-type ControllerApplication[T plugin.Syncable] struct {
+// Application owns the resources for one plugin-type controller application.
+type Application[T plugin.Syncable] struct {
 	app.Application
-	opts     ControllerApplicationOptions[T]
+	opts     Options[T]
 	database *sql.DB
 	writer   brokers.Writer
 	barrier  *publisherIOBarrier
@@ -24,33 +24,33 @@ type ControllerApplication[T plugin.Syncable] struct {
 }
 
 // NewApplication creates an unloaded application for one plugin type.
-func NewApplication[T plugin.Syncable](opts ControllerApplicationOptions[T]) *ControllerApplication[T] {
-	return &ControllerApplication[T]{
-		opts:    controllerApplicationOptionsWithDefaults(opts),
+func NewApplication[T plugin.Syncable](opts Options[T]) *Application[T] {
+	return &Application[T]{
+		opts:    optionsWithDefaults(opts),
 		barrier: newPublisherIOBarrier(),
 		stopped: make(chan error, 1),
 	}
 }
 
 // Name returns the application name after defaults are applied.
-func (a *ControllerApplication[T]) Name() gen.Atom { return a.opts.Name }
+func (a *Application[T]) Name() gen.Atom { return a.opts.Name }
 
 // SupervisorName returns the root supervisor name after defaults are applied.
-func (a *ControllerApplication[T]) SupervisorName() gen.Atom { return a.opts.SupervisorOptions.Name }
+func (a *Application[T]) SupervisorName() gen.Atom { return a.opts.SupervisorOptions.Name }
 
 // Stopped reports the application callback without blocking the Ergo runtime.
-func (a *ControllerApplication[T]) Stopped() <-chan error { return a.stopped }
+func (a *Application[T]) Stopped() <-chan error { return a.stopped }
 
 // Seal prevents new publisher I/O from starting for this application attempt.
-func (a *ControllerApplication[T]) Seal() { a.barrier.Seal() }
+func (a *Application[T]) Seal() { a.barrier.Seal() }
 
 // WaitQuiesced waits for publisher I/O accepted before Seal to finish.
-func (a *ControllerApplication[T]) WaitQuiesced(ctx context.Context) error {
+func (a *Application[T]) WaitQuiesced(ctx context.Context) error {
 	return a.barrier.WaitQuiesced(ctx)
 }
 
 // Load opens the application-owned resources and describes its one supervisor.
-func (a *ControllerApplication[T]) Load(_ ...any) (gen.ApplicationSpec, error) {
+func (a *Application[T]) Load(_ ...any) (gen.ApplicationSpec, error) {
 	a.Log().Debug("controller application loading: name=%s namespace=%q topic=%q", a.opts.Name, a.opts.Namespace, a.opts.Topic)
 	if a.opts.Name == "" || a.opts.SupervisorOptions.Name == "" || a.opts.Namespace == "" || a.opts.Topic == "" || a.opts.Broker == nil {
 		err := fmt.Errorf("controller application: name, supervisor name, namespace, topic, and broker are required")
@@ -91,7 +91,7 @@ func (a *ControllerApplication[T]) Load(_ ...any) (gen.ApplicationSpec, error) {
 }
 
 // Terminate only seals and reports. Waiting and closing belong to the service.
-func (a *ControllerApplication[T]) Terminate(reason error) {
+func (a *Application[T]) Terminate(reason error) {
 	a.Seal()
 	a.Log().Info("controller application terminated: name=%s namespace=%q reason=%v", a.opts.Name, a.opts.Namespace, reason)
 	select {
@@ -101,7 +101,7 @@ func (a *ControllerApplication[T]) Terminate(reason error) {
 }
 
 // Close closes the application-owned resources after Seal and quiescence are proven.
-func (a *ControllerApplication[T]) Close(ctx context.Context) error {
+func (a *Application[T]) Close(ctx context.Context) error {
 	if !a.barrier.Quiesced() {
 		err := fmt.Errorf("controller application publisher I/O has not quiesced")
 		a.Log().Error("controller application close rejected: name=%s namespace=%q error=%v", a.opts.Name, a.opts.Namespace, err)

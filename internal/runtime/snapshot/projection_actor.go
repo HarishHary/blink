@@ -89,9 +89,9 @@ func cloneValues[T any](values []T, clone func(T) T) []T {
 	return valuesCopy
 }
 
-type snapshotProjectionActor[T any] struct {
+type projectionActor[T any] struct {
 	act.Actor
-	events             SnapshotReaderEvents
+	events             Events
 	spec               ProjectionSpec[T]
 	mode               ProjectionCommitMode
 	readerReady        bool
@@ -108,13 +108,13 @@ type snapshotProjectionActor[T any] struct {
 type ProjectionStateRequest struct{}
 
 // MessageProjectionStatusChanged reports projection status. The child sends it
-// to its parent with a zero PID; SnapshotSupervisor stamps external reports.
+// to its parent with a zero PID; Supervisor stamps external reports.
 type MessageProjectionStatusChanged struct {
 	Status        ProjectionActorStatus
 	ProjectionPID gen.PID
 }
 
-// MessageProjectionCommit asks a SnapshotSupervisor to commit a generation.
+// MessageProjectionCommit asks a Supervisor to commit a generation.
 type MessageProjectionCommit struct {
 	Generation    int64
 	ProjectionPID gen.PID
@@ -134,7 +134,7 @@ type MessageProjectionStart struct{}
 // --- messages ---
 
 // Init validates the projection actor's required events.
-func (a *snapshotProjectionActor[T]) Init(...any) error {
+func (a *projectionActor[T]) Init(...any) error {
 	if a.events.Snapshot.Name == "" || a.events.Status.Name == "" {
 		return fmt.Errorf("snapshot projection: snapshot events are required")
 	}
@@ -142,7 +142,7 @@ func (a *snapshotProjectionActor[T]) Init(...any) error {
 }
 
 // HandleMessage starts event monitoring and processes projection commits.
-func (a *snapshotProjectionActor[T]) HandleMessage(from gen.PID, message any) error {
+func (a *projectionActor[T]) HandleMessage(from gen.PID, message any) error {
 	switch m := message.(type) {
 	case MessageProjectionStart:
 		if from != a.Parent() {
@@ -192,7 +192,7 @@ func (a *snapshotProjectionActor[T]) HandleMessage(from gen.PID, message any) er
 }
 
 // HandleEvent applies a monitored snapshot or reader status event.
-func (a *snapshotProjectionActor[T]) HandleEvent(event gen.MessageEvent) error {
+func (a *projectionActor[T]) HandleEvent(event gen.MessageEvent) error {
 	previousGeneration := a.observedGeneration
 	err := a.applyEvent(event)
 	if event.Event == a.events.Snapshot && a.observedGeneration > previousGeneration && a.lastError != nil {
@@ -203,7 +203,7 @@ func (a *snapshotProjectionActor[T]) HandleEvent(event gen.MessageEvent) error {
 }
 
 // HandleCall returns the current projection state.
-func (a *snapshotProjectionActor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
+func (a *projectionActor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
 	switch request := request.(type) {
 	case ProjectionStateRequest:
 		return a.reportState(), nil
@@ -213,7 +213,7 @@ func (a *snapshotProjectionActor[T]) HandleCall(_ gen.PID, _ gen.Ref, request an
 }
 
 // applyEvent updates projection state from a monitored event.
-func (a *snapshotProjectionActor[T]) applyEvent(event gen.MessageEvent) error {
+func (a *projectionActor[T]) applyEvent(event gen.MessageEvent) error {
 	switch event.Event {
 	case a.events.Snapshot:
 		snap, ok := event.Message.(*snapshot.Snapshot)
@@ -234,7 +234,7 @@ func (a *snapshotProjectionActor[T]) applyEvent(event gen.MessageEvent) error {
 		}
 		a.lastError = nil
 	case a.events.Status:
-		status, ok := event.Message.(SnapshotReaderActorStatus)
+		status, ok := event.Message.(ReaderActorStatus)
 		if ok {
 			a.readerReady = status.Availability == runtime.AvailabilityReady
 			a.readerGeneration = status.Generation
@@ -244,7 +244,7 @@ func (a *snapshotProjectionActor[T]) applyEvent(event gen.MessageEvent) error {
 }
 
 // currentStatus derives the projection actor's current availability.
-func (a *snapshotProjectionActor[T]) currentStatus() ProjectionActorStatus {
+func (a *projectionActor[T]) currentStatus() ProjectionActorStatus {
 	status := ProjectionActorStatus{Lifecycle: ProjectionActorRunning, Availability: runtime.AvailabilityUnavailable}
 	if a.mode == ProjectionCommitExternal && a.prepared != nil {
 		status.PreparedGeneration = a.prepared.generation
@@ -264,7 +264,7 @@ func (a *snapshotProjectionActor[T]) currentStatus() ProjectionActorStatus {
 }
 
 // reportState returns an independently owned projection view.
-func (a *snapshotProjectionActor[T]) reportState() ProjectionState[T] {
+func (a *projectionActor[T]) reportState() ProjectionState[T] {
 	state := ProjectionState[T]{ProjectionActorStatus: a.currentStatus()}
 	if a.committed == nil {
 		return state
@@ -274,7 +274,7 @@ func (a *snapshotProjectionActor[T]) reportState() ProjectionState[T] {
 }
 
 // reportStatus sends the current projection status to the supervisor.
-func (a *snapshotProjectionActor[T]) reportStatus() {
+func (a *projectionActor[T]) reportStatus() {
 	_ = a.Send(a.Parent(), MessageProjectionStatusChanged{Status: a.currentStatus()})
 }
 

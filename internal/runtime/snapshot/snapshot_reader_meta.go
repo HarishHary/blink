@@ -11,33 +11,33 @@ import (
 	"github.com/harishhary/blink/internal/runtime"
 )
 
-const snapshotCatchUpPoll = 250 * time.Millisecond
+const catchUpPoll = 250 * time.Millisecond
 
-// SnapshotReaderMetaLifecycle describes one blocking broker-reader
+// ReaderMetaLifecycle describes one blocking broker-reader
 // meta-process instance.
-type SnapshotReaderMetaLifecycle string
+type ReaderMetaLifecycle string
 
 const (
-	SnapshotReaderMetaStarting   SnapshotReaderMetaLifecycle = "starting"
-	SnapshotReaderMetaRunning    SnapshotReaderMetaLifecycle = "running"
-	SnapshotReaderMetaRestarting SnapshotReaderMetaLifecycle = "restarting"
-	SnapshotReaderMetaStopped    SnapshotReaderMetaLifecycle = "stopped"
+	ReaderMetaStarting   ReaderMetaLifecycle = "starting"
+	ReaderMetaRunning    ReaderMetaLifecycle = "running"
+	ReaderMetaRestarting ReaderMetaLifecycle = "restarting"
+	ReaderMetaStopped    ReaderMetaLifecycle = "stopped"
 )
 
-// SnapshotReaderMetaStatus is owned by snapshotReaderActor because that actor
+// ReaderMetaStatus is owned by readerActor because that actor
 // owns the meta-process restart policy and interpretation of MessageDownAlias.
 // The meta-process only reports runtime facts.
-type SnapshotReaderMetaStatus struct {
-	Lifecycle    SnapshotReaderMetaLifecycle
+type ReaderMetaStatus struct {
+	Lifecycle    ReaderMetaLifecycle
 	Availability runtime.Availability
 	CaughtUp     bool
 	LastError    error
 }
 
-// snapshotReaderMeta owns one concrete broker reader and one blocking read
+// readerMeta owns one concrete broker reader and one blocking read
 // loop. Its parent actor owns reader creation, restart/backoff, public status,
 // snapshot state, and publication.
-type snapshotReaderMeta struct {
+type readerMeta struct {
 	gen.MetaProcess
 	reader    brokers.Reader
 	runCtx    context.Context
@@ -47,16 +47,16 @@ type snapshotReaderMeta struct {
 // --- messages ---
 
 // Reader meta messages are fenced by source alias in the parent actor.
-type MessageSnapshotRecord struct {
+type MessageRecord struct {
 	source  gen.Alias
 	message brokers.Message
 }
-type MessageSnapshotCaughtUp struct{ source gen.Alias }
+type MessageCaughtUp struct{ source gen.Alias }
 
 // --- messages ---
 
 // Init validates the reader and initializes its cancellation context.
-func (m *snapshotReaderMeta) Init(process gen.MetaProcess) error {
+func (m *readerMeta) Init(process gen.MetaProcess) error {
 	if m.reader == nil {
 		return fmt.Errorf("snapshot reader meta: reader is required")
 	}
@@ -66,13 +66,13 @@ func (m *snapshotReaderMeta) Init(process gen.MetaProcess) error {
 }
 
 // Start reads broker records and reports them to the parent actor.
-func (m *snapshotReaderMeta) Start() error {
+func (m *readerMeta) Start() error {
 	caughtUp := false
 	for {
 		readCtx := m.runCtx
 		cancel := func() {}
 		if !caughtUp {
-			readCtx, cancel = context.WithTimeout(m.runCtx, snapshotCatchUpPoll)
+			readCtx, cancel = context.WithTimeout(m.runCtx, catchUpPoll)
 		}
 
 		message, err := m.reader.ReadMessage(readCtx)
@@ -89,7 +89,7 @@ func (m *snapshotReaderMeta) Start() error {
 				}
 				if lag == 0 {
 					caughtUp = true
-					if sendErr := m.Send(m.Parent(), MessageSnapshotCaughtUp{source: m.ID()}); sendErr != nil {
+					if sendErr := m.Send(m.Parent(), MessageCaughtUp{source: m.ID()}); sendErr != nil {
 						return fmt.Errorf("%w: send caught-up: %w", runtime.ErrSnapshotRead, sendErr)
 					}
 				}
@@ -100,7 +100,7 @@ func (m *snapshotReaderMeta) Start() error {
 
 		message.Key = append([]byte(nil), message.Key...)
 		message.Value = append([]byte(nil), message.Value...)
-		if err := m.Send(m.Parent(), MessageSnapshotRecord{
+		if err := m.Send(m.Parent(), MessageRecord{
 			source:  m.ID(),
 			message: message,
 		}); err != nil {
@@ -110,15 +110,15 @@ func (m *snapshotReaderMeta) Start() error {
 }
 
 // HandleMessage ignores asynchronous messages.
-func (m *snapshotReaderMeta) HandleMessage(gen.PID, any) error { return nil }
+func (m *readerMeta) HandleMessage(gen.PID, any) error { return nil }
 
 // HandleCall rejects unsupported synchronous requests.
-func (m *snapshotReaderMeta) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
+func (m *readerMeta) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
 	return fmt.Errorf("snapshot reader meta: unsupported call %T", request), nil
 }
 
 // Terminate cancels reading and closes the broker reader.
-func (m *snapshotReaderMeta) Terminate(error) {
+func (m *readerMeta) Terminate(error) {
 	if m.cancelRun != nil {
 		m.cancelRun()
 	}
@@ -128,4 +128,4 @@ func (m *snapshotReaderMeta) Terminate(error) {
 }
 
 // HandleInspect returns no inspection data.
-func (m *snapshotReaderMeta) HandleInspect(gen.PID, ...string) map[string]string { return nil }
+func (m *readerMeta) HandleInspect(gen.PID, ...string) map[string]string { return nil }

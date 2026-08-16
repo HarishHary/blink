@@ -12,26 +12,26 @@ const (
 	DefaultRestartMax = 5 * time.Second
 )
 
-// controllerApplicationOptionsWithDefaults fills application option defaults.
-func controllerApplicationOptionsWithDefaults[T plugin.Syncable](opts ControllerApplicationOptions[T]) ControllerApplicationOptions[T] {
+// optionsWithDefaults fills application option defaults.
+func optionsWithDefaults[T plugin.Syncable](opts Options[T]) Options[T] {
 	if opts.Name == "" {
 		opts.Name = gen.Atom("controller-" + opts.Namespace)
 	}
-	opts.SupervisorOptions = controllerSupervisorOptionsWithDefaults(opts.Name, opts.SupervisorOptions)
+	opts.SupervisorOptions = supervisorOptionsWithDefaults(opts.Name, opts.SupervisorOptions)
 	return opts
 }
 
-// controllerSupervisorOptionsWithDefaults fills supervisor option defaults.
-func controllerSupervisorOptionsWithDefaults[T plugin.Syncable](applicationName gen.Atom, opts ControllerSupervisorOptions[T]) ControllerSupervisorOptions[T] {
+// supervisorOptionsWithDefaults fills supervisor option defaults.
+func supervisorOptionsWithDefaults[T plugin.Syncable](applicationName gen.Atom, opts SupervisorOptions[T]) SupervisorOptions[T] {
 	if opts.Name == "" {
 		opts.Name = applicationName + "-supervisor"
 	}
-	opts.ActorOptions = controllerActorOptionsWithDefaults(applicationName, opts.ActorOptions)
+	opts.ActorOptions = actorOptionsWithDefaults(applicationName, opts.ActorOptions)
 	return opts
 }
 
-// controllerActorOptionsWithDefaults fills actor names and timing defaults.
-func controllerActorOptionsWithDefaults[T plugin.Syncable](applicationName gen.Atom, opts ControllerActorOptions[T]) ControllerActorOptions[T] {
+// actorOptionsWithDefaults fills actor names and timing defaults.
+func actorOptionsWithDefaults[T plugin.Syncable](applicationName gen.Atom, opts ActorOptions[T]) ActorOptions[T] {
 	if opts.Name == "" {
 		opts.Name = applicationName + "-actor"
 	}

@@ -7,14 +7,14 @@ const (
 	DefaultRestartMax = 5 * time.Second
 )
 
-// snapshotReaderSupervisorOptionsWithDefaults fills reader supervisor option defaults.
-func snapshotReaderSupervisorOptionsWithDefaults[T any](opts SnapshotReaderSupervisorOptions[T]) SnapshotReaderSupervisorOptions[T] {
-	opts.SnapshotReaderActorOptions = snapshotReaderActorOptionsWithDefaults(opts.SnapshotReaderActorOptions)
+// optionsWithDefaults fills reader supervisor option defaults.
+func optionsWithDefaults[T any](opts SupervisorOptions[T]) SupervisorOptions[T] {
+	opts.ReaderActorOptions = readerOptionsWithDefaults(opts.ReaderActorOptions)
 	return opts
 }
 
-// snapshotReaderActorOptionsWithDefaults fills reader actor option defaults.
-func snapshotReaderActorOptionsWithDefaults(opts SnapshotReaderActorOptions) SnapshotReaderActorOptions {
+// readerOptionsWithDefaults fills reader actor option defaults.
+func readerOptionsWithDefaults(opts ReaderActorOptions) ReaderActorOptions {
 	if opts.Name == "" {
 		opts.Name = "snapshot-reader"
 	}

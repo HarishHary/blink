@@ -22,19 +22,19 @@ const (
 	scannerPoll     = 5 * time.Second
 )
 
-// ArtifactScannerLifecycle describes the controller-owned scanner meta lifecycle.
-type ArtifactScannerLifecycle string
+// ArtifactScannerMetaLifecycle describes the controller-owned scanner meta lifecycle.
+type ArtifactScannerMetaLifecycle string
 
 const (
-	ArtifactScannerStarting   ArtifactScannerLifecycle = "starting"
-	ArtifactScannerRunning    ArtifactScannerLifecycle = "running"
-	ArtifactScannerRestarting ArtifactScannerLifecycle = "restarting"
-	ArtifactScannerStopped    ArtifactScannerLifecycle = "stopped"
+	ArtifactScannerMetaStarting   ArtifactScannerMetaLifecycle = "starting"
+	ArtifactScannerMetaRunning    ArtifactScannerMetaLifecycle = "running"
+	ArtifactScannerMetaRestarting ArtifactScannerMetaLifecycle = "restarting"
+	ArtifactScannerMetaStopped    ArtifactScannerMetaLifecycle = "stopped"
 )
 
-// ArtifactScannerStatus is derived and owned by the controller actor.
-type ArtifactScannerStatus struct {
-	Lifecycle    ArtifactScannerLifecycle
+// ArtifactScannerMetaStatus is derived and owned by the controller actor.
+type ArtifactScannerMetaStatus struct {
+	Lifecycle    ArtifactScannerMetaLifecycle
 	Availability runtime.Availability
 	Complete     bool
 	LastError    error

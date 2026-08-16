@@ -8,24 +8,24 @@ import (
 	"github.com/harishhary/blink/internal/runtime/plugin"
 )
 
-// ControllerApplicationOptions configures one plugin-type controller application.
-type ControllerApplicationOptions[T plugin.Syncable] struct {
+// Options configures one plugin-type controller application.
+type Options[T plugin.Syncable] struct {
 	// Names default to controller-<namespace>, <name>-supervisor, and <name>-actor.
 	Name              gen.Atom
 	DatabaseDSN       string
 	Namespace         string
 	Topic             string
 	Broker            brokers.Broker
-	SupervisorOptions ControllerSupervisorOptions[T]
+	SupervisorOptions SupervisorOptions[T]
 }
 
-type ControllerSupervisorOptions[T plugin.Syncable] struct {
+type SupervisorOptions[T plugin.Syncable] struct {
 	Name         gen.Atom
-	ActorOptions ControllerActorOptions[T]
+	ActorOptions ActorOptions[T]
 }
 
-// ControllerActorOptions configures the controller actor.
-type ControllerActorOptions[T plugin.Syncable] struct {
+// ActorOptions configures the controller actor.
+type ActorOptions[T plugin.Syncable] struct {
 	Name       gen.Atom
 	Directory  string
 	Loader     plugin.Loader[T]

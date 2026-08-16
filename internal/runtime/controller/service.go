@@ -17,12 +17,12 @@ const serviceShutdownTimeout = 45 * time.Second
 type Service[T plugin.Syncable] struct {
 	node            gen.Node
 	name            string
-	opts            ControllerApplicationOptions[T]
+	opts            Options[T]
 	shutdownTimeout time.Duration
 }
 
 // NewService creates a service that constructs a fresh application per Run.
-func NewService[T plugin.Syncable](node gen.Node, name string, opts ControllerApplicationOptions[T]) *Service[T] {
+func NewService[T plugin.Syncable](node gen.Node, name string, opts Options[T]) *Service[T] {
 	return &Service[T]{node: node, name: name, opts: opts, shutdownTimeout: serviceShutdownTimeout}
 }
 
@@ -60,7 +60,7 @@ func (s *Service[T]) Run(ctx context.Context) errs.Error {
 }
 
 // cleanupAttempt closes an application and unloads it while the root context is live.
-func (s *Service[T]) cleanupAttempt(ctx context.Context, app *ControllerApplication[T], name gen.Atom) error {
+func (s *Service[T]) cleanupAttempt(ctx context.Context, app *Application[T], name gen.Atom) error {
 	cleanupCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() {
@@ -112,7 +112,7 @@ func (s *Service[T]) cleanupAttempt(ctx context.Context, app *ControllerApplicat
 }
 
 // gracefulStop drains the application before forcing it to stop.
-func (s *Service[T]) gracefulStop(app *ControllerApplication[T], name gen.Atom) error {
+func (s *Service[T]) gracefulStop(app *Application[T], name gen.Atom) error {
 	app.Seal()
 	pid, err := s.node.ProcessPID(app.SupervisorName())
 	if err != nil {

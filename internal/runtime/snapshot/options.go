@@ -8,8 +8,8 @@ import (
 	"github.com/harishhary/blink/internal/logger"
 )
 
-// SnapshotReaderActorOptions configures the reader child of a snapshot supervisor.
-type SnapshotReaderActorOptions struct {
+// ReaderActorOptions configures the reader child of a snapshot supervisor.
+type ReaderActorOptions struct {
 	Name          gen.Atom
 	Logger        *logger.Logger
 	ReaderFactory func() brokers.Reader
@@ -17,9 +17,9 @@ type SnapshotReaderActorOptions struct {
 	RestartMax    time.Duration
 }
 
-// SnapshotReaderSupervisorOptions configures a raw reader and its typed projection sibling.
-type SnapshotReaderSupervisorOptions[T any] struct {
-	SnapshotReaderActorOptions
+// SupervisorOptions configures a raw reader and its typed projection sibling.
+type SupervisorOptions[T any] struct {
+	ReaderActorOptions
 	Projection     ProjectionSpec[T]
 	ProjectionMode ProjectionCommitMode
 	Stopped        chan<- error
