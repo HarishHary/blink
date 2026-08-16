@@ -68,7 +68,6 @@ type snapshotReaderActorState struct {
 
 type projectionActorState struct {
 	pid              gen.PID
-	incarnation      uint64
 	commitGeneration int64
 	status           ProjectionActorStatus
 }
@@ -152,7 +151,6 @@ func (s *SnapshotSupervisor[T]) HandleChildStart(name gen.Atom, pid gen.PID) err
 
 	if name == projectionActorName(s.opts.Name) {
 		s.projectionActor.pid = pid
-		s.projectionActor.incarnation++
 		s.projectionActor.commitGeneration = 0
 		s.projectionActor.status = newProjectionActorStatus()
 		// Stale child-start callbacks may race a replacement and fail to send.
@@ -179,12 +177,12 @@ func (s *SnapshotSupervisor[T]) HandleChildTerminate(name gen.Atom, pid gen.PID,
 		s.projectionActor.status.Availability = runtime.AvailabilityUnavailable
 		s.projectionActor.status.PreparedGeneration = 0
 		if s.opts.ProjectionMode == ProjectionCommitExternal {
-			_ = s.Send(s.Parent(), MessageProjectionStatusChanged{Status: s.projectionActor.status, ProjectionIncarnation: s.projectionActor.incarnation})
+			_ = s.Send(s.Parent(), MessageProjectionStatusChanged{Status: s.projectionActor.status, ProjectionPID: pid})
 		}
 		if generation := s.projectionActor.commitGeneration; generation != 0 {
 			s.projectionActor.commitGeneration = 0
 			_ = s.Send(s.Parent(), MessageProjectionCommitResult{
-				Generation: generation, ProjectionIncarnation: s.projectionActor.incarnation, Err: ErrProjectionNotPrepared,
+				Generation: generation, ProjectionPID: pid, Err: ErrProjectionNotPrepared,
 			})
 		}
 		return nil
@@ -213,7 +211,7 @@ func (s *SnapshotSupervisor[T]) HandleMessage(from gen.PID, message any) error {
 		if from == s.projectionActor.pid {
 			s.projectionActor.status = message.Status
 			if s.opts.ProjectionMode == ProjectionCommitExternal {
-				message.ProjectionIncarnation = s.projectionActor.incarnation
+				message.ProjectionPID = s.projectionActor.pid
 				_ = s.Send(s.Parent(), message)
 			}
 		}
@@ -221,21 +219,21 @@ func (s *SnapshotSupervisor[T]) HandleMessage(from gen.PID, message any) error {
 		if s.opts.ProjectionMode != ProjectionCommitExternal || from != s.Parent() {
 			return nil
 		}
-		if s.projectionActor.pid == (gen.PID{}) || message.ProjectionIncarnation != s.projectionActor.incarnation {
+		if s.projectionActor.pid == (gen.PID{}) || message.ProjectionPID != s.projectionActor.pid {
 			_ = s.Send(s.Parent(), MessageProjectionCommitResult{
-				Generation:            message.Generation,
-				ProjectionIncarnation: s.projectionActor.incarnation,
-				Err:                   ErrProjectionNotPrepared,
+				Generation:    message.Generation,
+				ProjectionPID: s.projectionActor.pid,
+				Err:           ErrProjectionNotPrepared,
 			})
 			return nil
 		}
 		s.projectionActor.commitGeneration = message.Generation
 		if err := s.Send(s.projectionActor.pid, message); err != nil {
 			s.projectionActor.commitGeneration = 0
-			_ = s.Send(s.Parent(), MessageProjectionCommitResult{Generation: message.Generation, ProjectionIncarnation: message.ProjectionIncarnation, Err: err})
+			_ = s.Send(s.Parent(), MessageProjectionCommitResult{Generation: message.Generation, ProjectionPID: message.ProjectionPID, Err: err})
 		}
 	case MessageProjectionCommitResult:
-		if s.projectionActor.commitGeneration != 0 && from == s.projectionActor.pid && message.Generation == s.projectionActor.commitGeneration && message.ProjectionIncarnation == s.projectionActor.incarnation {
+		if s.projectionActor.commitGeneration != 0 && from == s.projectionActor.pid && message.Generation == s.projectionActor.commitGeneration && message.ProjectionPID == s.projectionActor.pid {
 			s.projectionActor.commitGeneration = 0
 			_ = s.Send(s.Parent(), message)
 		}
