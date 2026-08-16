@@ -11,7 +11,7 @@ import (
 
 type ActorDependencies[T Syncable] struct {
 	Node           gen.Node
-	Adapter        *PluginAdapter[T]
+	Adapter        *Adapter[T]
 	QueueSize      int
 	DrainTimeout   time.Duration
 	HealthInterval time.Duration

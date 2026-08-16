@@ -9,48 +9,56 @@ import (
 	"github.com/harishhary/blink/internal/helpers"
 	"github.com/harishhary/blink/internal/runtime"
 	"github.com/harishhary/blink/internal/snapshot"
+	"go.yaml.in/yaml/v4"
 )
 
-// ArtifactResolverLifecycle describes one resolver meta-process incarnation.
-type ArtifactResolverLifecycle string
+// ArtifactResolverMetaLifecycle describes the resolver meta-process lifecycle.
+type ArtifactResolverMetaLifecycle string
 
 const (
-	ArtifactResolverStarting   ArtifactResolverLifecycle = "starting"
-	ArtifactResolverRunning    ArtifactResolverLifecycle = "running"
-	ArtifactResolverRestarting ArtifactResolverLifecycle = "restarting"
-	ArtifactResolverStopped    ArtifactResolverLifecycle = "stopped"
+	ArtifactResolverMetaStarting   ArtifactResolverMetaLifecycle = "starting"
+	ArtifactResolverMetaRunning    ArtifactResolverMetaLifecycle = "running"
+	ArtifactResolverMetaRestarting ArtifactResolverMetaLifecycle = "restarting"
+	ArtifactResolverMetaStopped    ArtifactResolverMetaLifecycle = "stopped"
 )
 
-// ArtifactResolverStatus is owned by desiredStateReconcilerActor because the
+// artifactResolverMetaStatus is owned by desiredStateReconcilerActor because the
 // actor owns resolver generations, restart policy, and alias monitoring.
-type ArtifactResolverStatus struct {
-	Lifecycle      ArtifactResolverLifecycle
-	Availability   runtime.Availability
-	Incarnation    uint64
-	RestartCount   uint64
-	RestartPending bool
-	LastError      error
+type artifactResolverMetaStatus struct {
+	Lifecycle    ArtifactResolverMetaLifecycle
+	Availability runtime.Availability
 }
 
-// artifactResolverMeta owns one resolver incarnation. It performs filesystem
+// artifactResolverMeta owns one resolver instance. It performs filesystem
 // readiness checks and binary checksums for complete snapshot-resolution
-// requests. The parent actor owns restart policy and fences requests/results by
-// incarnation.
-type artifactResolverMeta[T Syncable] struct {
+// requests. The parent actor owns restart policy and fences results by alias.
+type artifactResolverMeta struct {
 	gen.MetaProcess
-
-	directory   string
-	adapter     *PluginAdapter[T]
-	incarnation uint64
-
+	directory string
 	runCtx    context.Context
 	cancelRun context.CancelFunc
 	jobs      chan MessageResolveArtifacts
 }
 
-func (m *artifactResolverMeta[T]) Init(process gen.MetaProcess) error {
-	if m.directory == "" || m.adapter == nil || m.adapter.Config == nil {
-		return fmt.Errorf("artifact resolver meta: directory, adapter, and config are required")
+// --- messages ---
+
+type MessageResolveArtifacts struct {
+	snapshot snapshot.Snapshot
+}
+
+type MessageArtifactResolutionResult struct {
+	source             gen.Alias
+	snapshotGeneration int64
+	desired            map[string]MessageApplyRouterDesiredState
+	deferred           bool
+	complete           bool
+}
+
+// --- messages ---
+
+func (m *artifactResolverMeta) Init(process gen.MetaProcess) error {
+	if m.directory == "" {
+		return fmt.Errorf("artifact resolver meta: directory is required")
 	}
 	m.MetaProcess = process
 	m.runCtx, m.cancelRun = context.WithCancel(context.Background())
@@ -58,11 +66,7 @@ func (m *artifactResolverMeta[T]) Init(process gen.MetaProcess) error {
 	return nil
 }
 
-func (m *artifactResolverMeta[T]) Start() error {
-	if err := m.Send(m.Parent(), MessageArtifactResolverStarted{incarnation: m.incarnation}); err != nil {
-		return fmt.Errorf("%w: announce start: %w", runtime.ErrArtifactResolve, err)
-	}
-
+func (m *artifactResolverMeta) Start() error {
 	for {
 		select {
 		case <-m.runCtx.Done():
@@ -70,7 +74,7 @@ func (m *artifactResolverMeta[T]) Start() error {
 		case request := <-m.jobs:
 			desired, deferred, complete := m.buildDesiredRoutes(request.snapshot)
 			if err := m.Send(m.Parent(), MessageArtifactResolutionResult{
-				incarnation:        m.incarnation,
+				source:             m.ID(),
 				snapshotGeneration: request.snapshot.Generation,
 				desired:            desired,
 				deferred:           deferred,
@@ -82,9 +86,9 @@ func (m *artifactResolverMeta[T]) Start() error {
 	}
 }
 
-func (m *artifactResolverMeta[T]) HandleMessage(_ gen.PID, message any) error {
+func (m *artifactResolverMeta) HandleMessage(_ gen.PID, message any) error {
 	request, ok := message.(MessageResolveArtifacts)
-	if !ok || request.incarnation != m.incarnation {
+	if !ok {
 		return nil
 	}
 	select {
@@ -95,28 +99,20 @@ func (m *artifactResolverMeta[T]) HandleMessage(_ gen.PID, message any) error {
 	}
 }
 
-func (m *artifactResolverMeta[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
-	return nil, fmt.Errorf("actorruntime: unsupported artifact resolver call %T", request)
+func (m *artifactResolverMeta) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
+	return fmt.Errorf("actorruntime: unsupported artifact resolver call %T", request), nil
 }
 
-func (m *artifactResolverMeta[T]) Terminate(error) {
+func (m *artifactResolverMeta) Terminate(error) {
 	if m.cancelRun != nil {
 		m.cancelRun()
 	}
 }
 
-func (m *artifactResolverMeta[T]) HandleInspect(gen.PID, ...string) map[string]string {
-	return map[string]string{
-		"directory":   m.directory,
-		"incarnation": fmt.Sprintf("%d", m.incarnation),
-	}
-}
+func (m *artifactResolverMeta) HandleInspect(gen.PID, ...string) map[string]string { return nil }
 
-func (m *artifactResolverMeta[T]) buildDesiredRoutes(snap snapshot.Snapshot) (map[string]MessageApplyRouterDesiredState, bool, bool) {
+func (m *artifactResolverMeta) buildDesiredRoutes(snap snapshot.Snapshot) (map[string]MessageApplyRouterDesiredState, bool, bool) {
 	desired := make(map[string]MessageApplyRouterDesiredState)
-	if !m.configMatches(snap.Generation) {
-		return desired, false, false
-	}
 
 	deferred := false
 	for _, entry := range snap.Entries {
@@ -129,13 +125,10 @@ func (m *artifactResolverMeta[T]) buildDesiredRoutes(snap snapshot.Snapshot) (ma
 		deferred = deferred || route.primaryDeferred || route.candidateDeferred
 		desired[entry.Id] = route
 	}
-	if !m.configMatches(snap.Generation) {
-		return nil, false, false
-	}
 	return desired, deferred, true
 }
 
-func (m *artifactResolverMeta[T]) resolveDeployment(entry snapshot.EffectiveEntry, ref *snapshot.ArtifactRef) (*Deployment, bool) {
+func (m *artifactResolverMeta) resolveDeployment(entry snapshot.EffectiveEntry, ref *snapshot.ArtifactRef) (*Deployment, bool) {
 	if ref == nil || !entry.Enabled {
 		return nil, false
 	}
@@ -143,27 +136,26 @@ func (m *artifactResolverMeta[T]) resolveDeployment(entry snapshot.EffectiveEntr
 		return nil, true
 	}
 
-	path := filepath.Join(m.directory, ref.Name)
-	state, ok := m.adapter.Config.DesiredBinaryState(ref.Name)
-	if !ok || !state.Enabled || state.Id != entry.Id {
+	var metadata PluginMetadata
+	if err := yaml.Unmarshal(ref.Spec, &metadata); err != nil || !metadata.Enabled || metadata.Id != entry.Id {
 		return nil, true
 	}
 
+	path := filepath.Join(m.directory, ref.Name)
 	digest, err := helpers.BinaryChecksum(path)
 	if err != nil || ref.Hash != digest {
 		return nil, true
 	}
 
-	state.Id, state.Name = entry.Id, ref.Name
 	return &Deployment{
-		BinaryState: state,
-		Path:        path,
-		Hash:        digest,
-		RolloutPct:  state.RolloutPct,
+		Id:         entry.Id,
+		Name:       ref.Name,
+		Enabled:    metadata.Enabled,
+		Mode:       ref.RolloutMode,
+		RolloutPct: metadata.RolloutPct,
+		MaxProcs:   metadata.MaxProcs,
+		Path:       path,
+		Hash:       digest,
+		Spec:       append([]byte(nil), ref.Spec...),
 	}, false
-}
-
-func (m *artifactResolverMeta[T]) configMatches(generation int64) bool {
-	source, ok := m.adapter.Config.(interface{ Generation() int64 })
-	return !ok || source.Generation() == generation
 }

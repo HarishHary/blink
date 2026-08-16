@@ -35,47 +35,32 @@ type Syncable interface {
 	Checksum() string
 }
 
-type PluginRPC interface {
+type RPC interface {
 	Init(context.Context, *emptypb.Empty, ...grpc.CallOption) (*emptypb.Empty, error)
 	Ping(context.Context, *emptypb.Empty, ...grpc.CallOption) (*emptypb.Empty, error)
 	Shutdown(context.Context, *emptypb.Empty, ...grpc.CallOption) (*emptypb.Empty, error)
 }
 
-type BinaryState struct {
-	Id         string
-	Name       string
-	Enabled    bool
-	Mode       runtime.RolloutMode
-	RolloutPct float64
-	MaxProcs   int
-}
-
-type DesiredConfig interface {
-	DesiredBinaryState(name string) (BinaryState, bool)
-}
-
-type PluginAdapter[T Syncable] struct {
+type Adapter[T Syncable] struct {
 	Key         string
 	Magic       string
 	Plugin      goplugin.Plugin
-	Config      DesiredConfig
-	DoHandshake func(context.Context, any, string, string) (T, PluginRPC, error)
+	DoHandshake func(context.Context, any, Deployment) (T, RPC, error)
 }
 
-func (a *PluginAdapter[T]) PluginKey() string           { return a.Key }
-func (a *PluginAdapter[T]) MagicValue() string          { return a.Magic }
-func (a *PluginAdapter[T]) GRPCPlugin() goplugin.Plugin { return a.Plugin }
-func (a *PluginAdapter[T]) Handshake(ctx context.Context, raw any, path, hash string) (T, PluginRPC, error) {
-	return a.DoHandshake(ctx, raw, path, hash)
+func (a *Adapter[T]) PluginKey() string           { return a.Key }
+func (a *Adapter[T]) MagicValue() string          { return a.Magic }
+func (a *Adapter[T]) GRPCPlugin() goplugin.Plugin { return a.Plugin }
+func (a *Adapter[T]) Handshake(ctx context.Context, raw any, deployment Deployment) (T, RPC, error) {
+	return a.DoHandshake(ctx, raw, deployment)
 }
 
-func Handshake[T any, C PluginRPC](
+func Handshake[T any, C RPC](
 	ctx context.Context,
 	raw any,
-	binPath string,
-	hash string,
+	deployment Deployment,
 	newPlugin func(string, C, string) T,
-) (T, PluginRPC, error) {
+) (T, RPC, error) {
 	var zero T
 	rpc, ok := raw.(C)
 	if !ok {
@@ -87,5 +72,5 @@ func Handshake[T any, C PluginRPC](
 	if _, err := rpc.Init(initCtx, &emptypb.Empty{}); err != nil {
 		return zero, nil, fmt.Errorf("init: %w", err)
 	}
-	return newPlugin(helpers.BinaryBaseName(binPath), rpc, hash), rpc, nil
+	return newPlugin(helpers.BinaryBaseName(deployment.Path), rpc, deployment.Hash), rpc, nil
 }
