@@ -29,7 +29,7 @@ const (
 	ArtifactWatcherMetaStopped    ArtifactWatcherMetaLifecycle = "stopped"
 )
 
-// artifactWatcherMetaStatus is owned by desiredStateReconcilerActor. The watcher
+// artifactWatcherMetaStatus is owned by reconcilerActor. The watcher
 // meta-process reports directory facts; the actor derives lifecycle and
 // availability and owns restart state.
 type artifactWatcherMetaStatus struct {

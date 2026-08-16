@@ -22,7 +22,7 @@ const (
 	ArtifactResolverMetaStopped    ArtifactResolverMetaLifecycle = "stopped"
 )
 
-// artifactResolverMetaStatus is owned by desiredStateReconcilerActor because the
+// artifactResolverMetaStatus is owned by reconcilerActor because the
 // actor owns resolver generations, restart policy, and alias monitoring.
 type artifactResolverMetaStatus struct {
 	Lifecycle    ArtifactResolverMetaLifecycle
