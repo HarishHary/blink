@@ -51,7 +51,6 @@ type MessageArtifactResolutionResult struct {
 	snapshotGeneration int64
 	desired            map[string]MessageApplyRouterDesiredState
 	deferred           bool
-	complete           bool
 }
 
 // --- messages ---
@@ -72,13 +71,12 @@ func (m *artifactResolverMeta) Start() error {
 		case <-m.runCtx.Done():
 			return nil
 		case request := <-m.jobs:
-			desired, deferred, complete := m.buildDesiredRoutes(request.snapshot)
+			desired, deferred := m.buildDesiredRoutes(request.snapshot)
 			if err := m.Send(m.Parent(), MessageArtifactResolutionResult{
 				source:             m.ID(),
 				snapshotGeneration: request.snapshot.Generation,
 				desired:            desired,
 				deferred:           deferred,
-				complete:           complete,
 			}); err != nil {
 				return fmt.Errorf("%w: send result: %w", runtime.ErrArtifactResolve, err)
 			}
@@ -111,7 +109,7 @@ func (m *artifactResolverMeta) Terminate(error) {
 
 func (m *artifactResolverMeta) HandleInspect(gen.PID, ...string) map[string]string { return nil }
 
-func (m *artifactResolverMeta) buildDesiredRoutes(snap snapshot.Snapshot) (map[string]MessageApplyRouterDesiredState, bool, bool) {
+func (m *artifactResolverMeta) buildDesiredRoutes(snap snapshot.Snapshot) (map[string]MessageApplyRouterDesiredState, bool) {
 	desired := make(map[string]MessageApplyRouterDesiredState)
 
 	deferred := false
@@ -125,7 +123,7 @@ func (m *artifactResolverMeta) buildDesiredRoutes(snap snapshot.Snapshot) (map[s
 		deferred = deferred || route.primaryDeferred || route.candidateDeferred
 		desired[entry.Id] = route
 	}
-	return desired, deferred, true
+	return desired, deferred
 }
 
 func (m *artifactResolverMeta) resolveDeployment(entry snapshot.EffectiveEntry, ref *snapshot.ArtifactRef) (*Deployment, bool) {
