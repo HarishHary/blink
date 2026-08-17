@@ -3,12 +3,40 @@ package plugin
 import "time"
 
 const (
-	DefaultDeploymentPoolSize      = 1
-	DefaultWorkerInvocationTimeout = 30 * time.Second
-	DefaultWorkerHealthInterval    = 15 * time.Second
-	DefaultWorkerRetryMin          = time.Second
-	DefaultWorkerRetryMax          = time.Minute
+	DefaultDeploymentManagerQueueSize       = 128
+	DefaultDeploymentManagerDispatchTimeout = 30 * time.Second
+	DefaultDeploymentManagerScaleCooldown   = time.Second
+	DefaultDeploymentManagerIdleTimeout     = 30 * time.Second
+	DefaultDeploymentManagerDrainTimeout    = 30 * time.Second
+	DefaultDeploymentPoolSize               = 1
+	DefaultDeploymentPoolRetryMin           = 5 * time.Second
+	DefaultDeploymentPoolRetryMax           = 5 * time.Minute
+	DefaultWorkerInvocationTimeout          = 30 * time.Second
+	DefaultWorkerHealthInterval             = 15 * time.Second
+	DefaultWorkerRetryMin                   = time.Second
+	DefaultWorkerRetryMax                   = time.Minute
 )
+
+// deploymentManagerOptionsWithDefaults fills manager and pool defaults.
+func deploymentManagerOptionsWithDefaults(opts DeploymentManagerOptions) DeploymentManagerOptions {
+	if opts.QueueSize <= 0 {
+		opts.QueueSize = DefaultDeploymentManagerQueueSize
+	}
+	if opts.DispatchTimeout <= 0 {
+		opts.DispatchTimeout = DefaultDeploymentManagerDispatchTimeout
+	}
+	if opts.ScaleCooldown <= 0 {
+		opts.ScaleCooldown = DefaultDeploymentManagerScaleCooldown
+	}
+	if opts.IdleTimeout <= 0 {
+		opts.IdleTimeout = DefaultDeploymentManagerIdleTimeout
+	}
+	if opts.DrainTimeout <= 0 {
+		opts.DrainTimeout = DefaultDeploymentManagerDrainTimeout
+	}
+	opts.PoolOptions = deploymentPoolOptionsWithDefaults(opts.PoolOptions)
+	return opts
+}
 
 // deploymentPoolOptionsWithDefaults fills pool and worker defaults.
 func deploymentPoolOptionsWithDefaults(opts DeploymentPoolOptions) DeploymentPoolOptions {
@@ -18,7 +46,16 @@ func deploymentPoolOptionsWithDefaults(opts DeploymentPoolOptions) DeploymentPoo
 	if opts.MaxSize < opts.InitialSize {
 		opts.MaxSize = opts.InitialSize
 	}
-	opts.Worker = deploymentWorkerOptionsWithDefaults(opts.Worker)
+	if opts.RetryMin <= 0 {
+		opts.RetryMin = DefaultDeploymentPoolRetryMin
+	}
+	if opts.RetryMax <= 0 {
+		opts.RetryMax = DefaultDeploymentPoolRetryMax
+	}
+	if opts.RetryMax < opts.RetryMin {
+		opts.RetryMax = opts.RetryMin
+	}
+	opts.WorkerOptions = deploymentWorkerOptionsWithDefaults(opts.WorkerOptions)
 	return opts
 }
 

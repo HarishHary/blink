@@ -10,15 +10,6 @@ import (
 	"github.com/harishhary/blink/internal/runtime"
 )
 
-// workerMetaState tracks one worker's replaceable plugin meta-process.
-type workerMetaState struct {
-	alias         gen.Alias
-	restart       *runtime.ScheduledBackoff
-	healthRestart *runtime.ScheduledBackoff
-	status        WorkerMetaStatus
-	pingPending   bool
-}
-
 // DeploymentWorker owns one plugin worker meta-process incarnation.
 // Its manager receives lifecycle and invocation facts directly; the pool only
 // provides worker placement.

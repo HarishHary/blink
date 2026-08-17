@@ -38,6 +38,15 @@ const (
 
 const workerPingTimeout = 3 * time.Second
 
+// workerMetaState tracks one worker's replaceable plugin meta-process.
+type workerMetaState struct {
+	alias         gen.Alias
+	restart       *runtime.ScheduledBackoff
+	healthRestart *runtime.ScheduledBackoff
+	status        WorkerMetaStatus
+	pingPending   bool
+}
+
 // WorkerMetaStatus is owned by the deployment manager.
 type WorkerMetaStatus struct {
 	Lifecycle    WorkerMetaLifecycle
