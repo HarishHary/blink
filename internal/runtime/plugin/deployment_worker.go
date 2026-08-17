@@ -61,15 +61,15 @@ type MessageDeploymentWorkerRestartExhausted struct {
 	cause  error
 }
 
-// MessageDeploymentWorkerStarted and MessageDeploymentWorkerFinished bracket
+// MessageWorkerMetaStarted and MessageDeploymentWorkerFinished bracket
 // every invocation accepted by a worker, including unavailable workers.
-type MessageDeploymentWorkerStarted struct {
+type MessageWorkerMetaStarted struct {
 	worker gen.PID
 	callID uint64
 	pool   gen.PID
 }
 
-type MessageDeploymentWorkerFinished struct {
+type MessageWorkerMetaFinished struct {
 	worker gen.PID
 	callID uint64
 	pool   gen.PID
@@ -224,17 +224,17 @@ func (w *DeploymentWorker[T]) invoke(call MessageInvokePlugin[T]) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, w.options.InvocationTimeout)
 	defer cancel()
-	w.notify(MessageDeploymentWorkerStarted{worker: w.PID(), callID: call.CallID, pool: w.Parent()})
+	w.notify(MessageWorkerMetaStarted{worker: w.PID(), callID: call.CallID, pool: w.Parent()})
 	if err := ctx.Err(); err != nil {
-		w.notify(MessageDeploymentWorkerFinished{worker: w.PID(), callID: call.CallID, pool: w.Parent(), err: err})
+		w.notify(MessageWorkerMetaFinished{worker: w.PID(), callID: call.CallID, pool: w.Parent(), err: err})
 		return
 	}
 	if call.Fn == nil {
-		w.notify(MessageDeploymentWorkerFinished{worker: w.PID(), callID: call.CallID, pool: w.Parent(), err: fmt.Errorf("actorruntime: invocation function is required")})
+		w.notify(MessageWorkerMetaFinished{worker: w.PID(), callID: call.CallID, pool: w.Parent(), err: fmt.Errorf("actorruntime: invocation function is required")})
 		return
 	}
 	if w.meta.status.Availability != runtime.AvailabilityReady || w.meta.alias == (gen.Alias{}) {
-		w.notify(MessageDeploymentWorkerFinished{worker: w.PID(), callID: call.CallID, pool: w.Parent(), err: runtime.ErrPluginUnavailable})
+		w.notify(MessageWorkerMetaFinished{worker: w.PID(), callID: call.CallID, pool: w.Parent(), err: runtime.ErrPluginUnavailable})
 		return
 	}
 
@@ -260,7 +260,7 @@ func (w *DeploymentWorker[T]) invoke(call MessageInvokePlugin[T]) {
 	if recycle {
 		w.retireWorkerMeta(alias, err, true)
 	}
-	w.notify(MessageDeploymentWorkerFinished{worker: w.PID(), callID: call.CallID, pool: w.Parent(), err: err})
+	w.notify(MessageWorkerMetaFinished{worker: w.PID(), callID: call.CallID, pool: w.Parent(), err: err})
 }
 
 func (w *DeploymentWorker[T]) startWorkerMeta() error {
