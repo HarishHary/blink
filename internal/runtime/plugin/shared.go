@@ -10,14 +10,15 @@ import (
 )
 
 type ActorDependencies[T Syncable] struct {
-	Node           gen.Node
-	Adapter        *Adapter[T]
-	QueueSize      int
-	DrainTimeout   time.Duration
-	HealthInterval time.Duration
-	RetryMin       time.Duration
-	RetryMax       time.Duration
-	ControlTimeout time.Duration
+	Node              gen.Node
+	Adapter           *Adapter[T]
+	QueueSize         int
+	DrainTimeout      time.Duration
+	HealthInterval    time.Duration
+	RetryMin          time.Duration
+	RetryMax          time.Duration
+	InvocationTimeout time.Duration
+	ControlTimeout    time.Duration
 }
 
 type Deployment struct {
@@ -26,6 +27,7 @@ type Deployment struct {
 	Enabled    bool
 	Mode       runtime.RolloutMode
 	RolloutPct float64
+	MinProcs   int
 	MaxProcs   int
 	Path       string
 	Hash       string
@@ -34,6 +36,7 @@ type Deployment struct {
 
 type DeploymentPoolKey struct {
 	runtime.PoolKey
+	MinProcs int
 	MaxProcs int
 	SpecHash [sha256.Size]byte
 }
@@ -41,6 +44,7 @@ type DeploymentPoolKey struct {
 func (d *Deployment) PoolKey() DeploymentPoolKey {
 	return DeploymentPoolKey{
 		PoolKey:  runtime.PoolKey{Id: d.Id, Name: d.Name, Hash: d.Hash},
+		MinProcs: d.MinProcs,
 		MaxProcs: d.WorkerCount(),
 		SpecHash: sha256.Sum256(d.Spec),
 	}
@@ -69,6 +73,9 @@ type MessageCancelInvocation struct {
 }
 
 type MessageInvocationCompleted struct {
-	CallID uint64
-	Err    error
+	CallID            uint64
+	Err               error
+	Route             gen.Atom
+	Manager           gen.PID
+	ManagerGeneration uint64
 }
