@@ -94,7 +94,7 @@ type projectionActor[T any] struct {
 	events             Events
 	spec               ProjectionSpec[T]
 	mode               ProjectionCommitMode
-	readerReady        bool
+	readerActorReady   bool
 	readerGeneration   int64
 	observedGeneration int64
 	committed          *parsedProjection[T]
@@ -234,7 +234,7 @@ func (a *projectionActor[T]) applyEvent(event gen.MessageEvent) error {
 	case a.events.Status:
 		status, ok := event.Message.(ReaderActorStatus)
 		if ok {
-			a.readerReady = status.Availability == runtime.AvailabilityReady
+			a.readerActorReady = status.Availability == runtime.AvailabilityReady
 			a.readerGeneration = status.Generation
 		}
 	}
@@ -255,7 +255,7 @@ func (a *projectionActor[T]) currentStatus() ProjectionActorStatus {
 		status.Availability = runtime.AvailabilityDegraded
 		return status
 	}
-	if a.readerReady && a.readerGeneration == a.committed.generation && a.observedGeneration == a.committed.generation {
+	if a.readerActorReady && a.readerGeneration >= a.committed.generation && a.observedGeneration >= a.committed.generation {
 		status.Availability = runtime.AvailabilityReady
 	}
 	return status

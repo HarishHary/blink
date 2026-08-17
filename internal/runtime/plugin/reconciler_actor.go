@@ -50,28 +50,24 @@ type artifactWatcherMetaState struct {
 // actor's state or event subscription.
 type reconcilerActor struct {
 	act.Actor
-	directory              string
-	revision               uint64
-	snapshotEvent          gen.Event
-	snapshot               *snapshot.Snapshot
-	ReaderActorStatusEvent gen.Event
-	readerActorReady       bool
-	resolutionRetry        *runtime.ScheduledBackoff
-	resolver               artifactResolverMetaState
-	watcher                artifactWatcherMetaState
-	resolving              bool
-	dirty                  bool
-	deferred               bool
-	transitionGeneration   int64
-	transitionReady        bool
+	directory        string
+	revision         uint64
+	events           snapshotruntime.Events
+	snapshot         *snapshot.Snapshot
+	readerActorReady bool
+	resolutionRetry  *runtime.ScheduledBackoff
+	resolver         artifactResolverMetaState
+	watcher          artifactWatcherMetaState
+	resolving        bool
+	dirty            bool
+	deferred         bool
 }
 
-func newReconcilerActor(snapshotEvent gen.Event, snapshotReaderStatusEvent gen.Event, directory string, retryMin, retryMax time.Duration) gen.ProcessBehavior {
+func newReconcilerActor(events snapshotruntime.Events, directory string, retryMin, retryMax time.Duration) gen.ProcessBehavior {
 	return &reconcilerActor{
-		snapshotEvent:          snapshotEvent,
-		ReaderActorStatusEvent: snapshotReaderStatusEvent,
-		directory:              directory,
-		resolutionRetry:        runtime.NewScheduledBackoff(retryMin, retryMax),
+		events:          events,
+		directory:       directory,
+		resolutionRetry: runtime.NewScheduledBackoff(retryMin, retryMax),
 		resolver: artifactResolverMetaState{
 			restart: runtime.NewScheduledBackoff(retryMin, retryMax),
 			status: artifactResolverMetaStatus{
@@ -100,28 +96,21 @@ type MessageResolutionRetry struct{ token uint64 }
 type MessageArtifactResolverMetaRestart struct{ token uint64 }
 type MessageArtifactWatcherMetaRestart struct{ token uint64 }
 
-// MessageBeginDesiredStateTransition asks the runtime supervisor to stop
-// admission and drain calls before routing advances.
-type MessageBeginDesiredStateTransition struct{ snapshotGeneration int64 }
-
-// MessageDesiredStateTransitionReady confirms that no invocation can still
-// observe the previously committed catalog generation.
-type MessageDesiredStateTransitionReady struct{ snapshotGeneration int64 }
-
-// MessageDesiredStateTransitionCommitted tells the reconciler that routing
-// describes the same generation.
-type MessageDesiredStateTransitionCommitted struct{ snapshotGeneration int64 }
-
-// MessageDesiredStateTransitionCommitAcknowledged confirms that the committed
-// snapshot may be exposed to callers.
-type MessageDesiredStateTransitionCommitAcknowledged struct {
+// MessageDesiredStateFreshness challenges and confirms that the exact generation and revision remain current.
+type MessageDesiredStateFreshness struct {
 	snapshotGeneration int64
-	snapshot           snapshot.Snapshot
+	desiredRevision    uint64
 }
 
 // --- messages ---
 
-func (a *reconcilerActor) Init(...any) error { return nil }
+// Init validates the reconciler actor's required events.
+func (a *reconcilerActor) Init(...any) error {
+	if a.events.Snapshot.Name == "" || a.events.Status.Name == "" {
+		return fmt.Errorf("plugin reconciler: snapshot events are required")
+	}
+	return nil
+}
 
 func (a *reconcilerActor) HandleMessage(from gen.PID, message any) error {
 	switch m := message.(type) {
@@ -133,22 +122,15 @@ func (a *reconcilerActor) HandleMessage(from gen.PID, message any) error {
 		a.revision = m.revisionBase
 		a.publishStatus()
 
-		buffered, err := a.MonitorEvent(a.snapshotEvent)
-		if err != nil {
-			return fmt.Errorf("monitor snapshot event %s: %w", a.snapshotEvent, err)
-		}
-		for _, event := range buffered {
-			if err := a.acceptEvent(event); err != nil {
-				return err
+		for _, event := range []gen.Event{a.events.Snapshot, a.events.Status} {
+			buffered, err := a.MonitorEvent(event)
+			if err != nil {
+				return fmt.Errorf("monitor reconciler event %q: %w", event.Name, err)
 			}
-		}
-		buffered, err = a.MonitorEvent(a.ReaderActorStatusEvent)
-		if err != nil {
-			return fmt.Errorf("monitor snapshot status event %s: %w", a.ReaderActorStatusEvent, err)
-		}
-		for _, event := range buffered {
-			if err := a.acceptEvent(event); err != nil {
-				return err
+			for _, bufferedEvent := range buffered {
+				if err := a.applyEvent(bufferedEvent); err != nil {
+					return err
+				}
 			}
 		}
 
@@ -157,27 +139,23 @@ func (a *reconcilerActor) HandleMessage(from gen.PID, message any) error {
 		}
 		return a.startArtifactWatcherMeta()
 
-	case MessageDesiredStateTransitionReady:
+	case MessageDesiredStateFreshness:
 		if from != a.Parent() {
 			return nil
 		}
-		if a.snapshot == nil || m.snapshotGeneration != a.snapshot.Generation {
+		if a.snapshot == nil ||
+			m.snapshotGeneration != a.snapshot.Generation ||
+			m.desiredRevision != a.revision ||
+			a.dirty || a.resolving || a.deferred ||
+			!a.readerActorReady ||
+			a.resolver.status.Availability != runtime.AvailabilityReady ||
+			a.watcher.status.Availability != runtime.AvailabilityReady {
 			return nil
 		}
-		a.transitionGeneration = m.snapshotGeneration
-		a.transitionReady = true
-		a.dirty = true
-		a.publishStatus()
-		return a.requestResolve()
-
-	case MessageDesiredStateTransitionCommitted:
-		if from != a.Parent() {
-			return nil
-		}
-		if a.snapshot == nil || m.snapshotGeneration != a.snapshot.Generation {
-			return nil
-		}
-		return a.Send(a.Parent(), MessageDesiredStateTransitionCommitAcknowledged{snapshotGeneration: m.snapshotGeneration, snapshot: *a.snapshot.Clone()})
+		return a.Send(a.Parent(), MessageDesiredStateFreshness{
+			snapshotGeneration: m.snapshotGeneration,
+			desiredRevision:    m.desiredRevision,
+		})
 
 	case MessageArtifactWatcherStateChanged:
 		if from != a.PID() || m.source != a.watcher.alias || a.watcher.alias == (gen.Alias{}) {
@@ -226,24 +204,23 @@ func (a *reconcilerActor) HandleMessage(from gen.PID, message any) error {
 		if a.dirty {
 			return a.requestResolve()
 		}
-		a.revision++
 		a.deferred = m.deferred
-		if err := a.Send(a.Parent(), MessageApplyDesiredState{
+		if m.deferred {
+			a.publishStatus()
+			return a.scheduleResolutionRetry()
+		}
+
+		a.revision++
+		if err := a.Send(a.Parent(), MessageProposeDesiredState{
 			desired: MessageApplyCatalogDesiredState{
 				desiredRevision:    a.revision,
 				snapshotGeneration: a.snapshot.Generation,
 				desired:            m.desired,
 			},
 		}); err != nil {
-			return fmt.Errorf("publish resolved desired state: %w", err)
+			return fmt.Errorf("propose resolved desired state: %w", err)
 		}
-		a.transitionGeneration = 0
-		a.transitionReady = false
 		a.publishStatus()
-
-		if m.deferred {
-			return a.scheduleResolutionRetry()
-		}
 		a.resolutionRetry.CancelScheduled(true)
 
 	case MessageArtifactDirectoryChanged:
@@ -310,7 +287,7 @@ func (a *reconcilerActor) HandleMessage(from gen.PID, message any) error {
 		}
 
 	case gen.MessageDownEvent:
-		if m.Event == a.snapshotEvent || m.Event == a.ReaderActorStatusEvent {
+		if m.Event == a.events.Snapshot || m.Event == a.events.Status {
 			return fmt.Errorf("snapshot event terminated: %w", m.Reason)
 		}
 	}
@@ -318,7 +295,7 @@ func (a *reconcilerActor) HandleMessage(from gen.PID, message any) error {
 }
 
 func (a *reconcilerActor) HandleEvent(event gen.MessageEvent) error {
-	return a.acceptEvent(event)
+	return a.applyEvent(event)
 }
 
 func (a *reconcilerActor) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
@@ -427,9 +404,9 @@ func (a *reconcilerActor) stopArtifactWatcherMeta(reason error) {
 	_ = a.SendExitMeta(alias, reason)
 }
 
-func (a *reconcilerActor) acceptEvent(event gen.MessageEvent) error {
+func (a *reconcilerActor) applyEvent(event gen.MessageEvent) error {
 	switch event.Event {
-	case a.ReaderActorStatusEvent:
+	case a.events.Status:
 		status, ok := event.Message.(snapshotruntime.ReaderActorStatus)
 		if !ok {
 			return nil
@@ -438,7 +415,7 @@ func (a *reconcilerActor) acceptEvent(event gen.MessageEvent) error {
 		a.publishStatus()
 		return nil
 
-	case a.snapshotEvent:
+	case a.events.Snapshot:
 		snap, ok := event.Message.(*snapshot.Snapshot)
 		if !ok || snap == nil {
 			return nil
@@ -469,18 +446,6 @@ func (a *reconcilerActor) requestResolve() error {
 	if a.resolving || !a.dirty || a.snapshot == nil || a.resolver.alias == (gen.Alias{}) {
 		return nil
 	}
-	if a.transitionGeneration != a.snapshot.Generation || !a.transitionReady {
-		if a.transitionGeneration == a.snapshot.Generation {
-			return nil
-		}
-		if err := a.Send(a.Parent(), MessageBeginDesiredStateTransition{snapshotGeneration: a.snapshot.Generation}); err != nil {
-			return fmt.Errorf("begin desired-state transition: %w", err)
-		}
-		a.transitionGeneration = a.snapshot.Generation
-		a.transitionReady = false
-		return nil
-	}
-
 	a.resolving = true
 	a.dirty = false
 	a.publishStatus()
@@ -571,7 +536,6 @@ func (a *reconcilerActor) publishStatus() {
 	switch {
 	case !a.readerActorReady ||
 		a.snapshot == nil ||
-		!a.transitionReady && a.revision == 0 ||
 		a.dirty ||
 		a.resolving ||
 		a.deferred ||
