@@ -60,7 +60,7 @@ func NewSupervisor[T any](opts SupervisorOptions[T]) *Supervisor[T] {
 // --- messages ---
 
 // The supervisor accepts status only from its current reader child PID.
-type MessageReaderStatusChanged struct{ status ReaderActorStatus }
+type MessageReaderActorStatusChanged struct{ status ReaderActorStatus }
 
 // --- messages ---
 
@@ -184,7 +184,7 @@ func (s *Supervisor[T]) HandleChildTerminate(_ gen.Atom, pid gen.PID, reason err
 func (s *Supervisor[T]) HandleMessage(from gen.PID, message any) error {
 	defer s.reportStatus()
 	switch message := message.(type) {
-	case MessageReaderStatusChanged:
+	case MessageReaderActorStatusChanged:
 		if from == s.readerActor.pid {
 			s.readerActor.status = message.status
 		}

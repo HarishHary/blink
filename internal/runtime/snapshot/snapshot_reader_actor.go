@@ -296,5 +296,5 @@ func (a *readerActor) reportStatus() {
 	if a.committed != nil {
 		status.Generation = a.committed.Generation
 	}
-	_ = a.Send(a.Parent(), MessageReaderStatusChanged{status: status})
+	_ = a.Send(a.Parent(), MessageReaderActorStatusChanged{status: status})
 }
