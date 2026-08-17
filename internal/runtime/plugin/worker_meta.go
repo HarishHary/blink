@@ -25,6 +25,7 @@ const (
 	WorkerMetaStarting   WorkerMetaLifecycle = "starting"
 	WorkerMetaRunning    WorkerMetaLifecycle = "running"
 	WorkerMetaRestarting WorkerMetaLifecycle = "restarting"
+	WorkerMetaFailed     WorkerMetaLifecycle = "failed"
 	WorkerMetaDraining   WorkerMetaLifecycle = "draining"
 	WorkerMetaStopped    WorkerMetaLifecycle = "stopped"
 )
