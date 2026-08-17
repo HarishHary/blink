@@ -29,7 +29,6 @@ type DeploymentWorker[T Syncable] struct {
 	deployment Deployment
 	manager    gen.PID
 	meta       workerMetaState
-	stopping   bool
 }
 
 // --- messages ---
@@ -105,17 +104,9 @@ func (w *DeploymentWorker[T]) Init(...any) error {
 	return w.startWorkerMeta()
 }
 
-func (w *DeploymentWorker[T]) Terminate(reason error) {
-	w.stopping = true
+func (w *DeploymentWorker[T]) Terminate(error) {
 	w.meta.restart.CancelScheduled(false)
 	w.meta.healthRestart.CancelScheduled(false)
-	w.cancelHealthCheck()
-	if w.meta.alias != (gen.Alias{}) {
-		_ = w.SendExitMeta(w.meta.alias, reason)
-		w.meta.alias = gen.Alias{}
-	}
-	w.meta.status.Lifecycle = WorkerMetaStopped
-	w.meta.status.Availability = runtime.AvailabilityUnavailable
 	w.notify(MessageDeploymentWorkerStopped{worker: w.PID(), pool: w.Parent()})
 }
 
@@ -150,7 +141,7 @@ func (w *DeploymentWorker[T]) HandleMessage(_ gen.PID, message any) error {
 		if msg.health {
 			restart = w.meta.healthRestart
 		}
-		if w.stopping || !restart.Pending || msg.token != restart.Token {
+		if !restart.Pending || msg.token != restart.Token {
 			return nil
 		}
 		restart.Pending = false
@@ -158,7 +149,7 @@ func (w *DeploymentWorker[T]) HandleMessage(_ gen.PID, message any) error {
 		return w.startWorkerMeta()
 
 	case MessageWorkerMetaHealthTick:
-		if w.stopping || w.meta.status.Availability != runtime.AvailabilityReady || w.meta.pingPending || msg.alias != w.meta.alias || msg.token != w.meta.healthRestart.Token {
+		if w.meta.status.Availability != runtime.AvailabilityReady || w.meta.pingPending || msg.alias != w.meta.alias || msg.token != w.meta.healthRestart.Token {
 			return nil
 		}
 		w.meta.pingPending = true
@@ -173,14 +164,14 @@ func (w *DeploymentWorker[T]) HandleMessage(_ gen.PID, message any) error {
 		}
 
 	case MessageWorkerMetaHealthTimeout:
-		if w.stopping || !w.meta.pingPending || msg.alias != w.meta.alias || msg.token != w.meta.healthRestart.Token {
+		if !w.meta.pingPending || msg.alias != w.meta.alias || msg.token != w.meta.healthRestart.Token {
 			return nil
 		}
 		w.meta.pingPending = false
 		w.retireWorkerMeta(msg.alias, context.DeadlineExceeded, true)
 
 	case MessageWorkerMetaPingResult:
-		if w.stopping || !w.meta.pingPending || msg.alias != w.meta.alias {
+		if !w.meta.pingPending || msg.alias != w.meta.alias {
 			return nil
 		}
 		w.meta.pingPending = false
@@ -202,10 +193,6 @@ func (w *DeploymentWorker[T]) HandleMessage(_ gen.PID, message any) error {
 		alias := w.meta.alias
 		healthFailure := w.meta.pingPending
 		w.cancelHealthCheck()
-		if w.stopping {
-			w.meta.alias = gen.Alias{}
-			return nil
-		}
 		w.reportUnavailable(alias, msg.Reason)
 		w.meta.alias = gen.Alias{}
 		return w.scheduleWorkerMetaRestart(healthFailure)
@@ -264,7 +251,7 @@ func (w *DeploymentWorker[T]) invoke(call MessageInvokePlugin[T]) {
 }
 
 func (w *DeploymentWorker[T]) startWorkerMeta() error {
-	if w.stopping || w.meta.alias != (gen.Alias{}) {
+	if w.meta.alias != (gen.Alias{}) {
 		return nil
 	}
 	w.cancelHealthCheck()
@@ -291,7 +278,7 @@ func (w *DeploymentWorker[T]) startWorkerMeta() error {
 }
 
 func (w *DeploymentWorker[T]) scheduleWorkerMetaRestart(health bool) error {
-	if w.stopping || w.meta.status.Lifecycle == WorkerMetaFailed {
+	if w.meta.status.Lifecycle == WorkerMetaFailed {
 		return nil
 	}
 	restart := w.meta.restart
@@ -319,7 +306,7 @@ func (w *DeploymentWorker[T]) scheduleWorkerMetaRestart(health bool) error {
 }
 
 func (w *DeploymentWorker[T]) failWorkerMeta(health bool, err error) {
-	if w.stopping || w.meta.status.Lifecycle == WorkerMetaFailed {
+	if w.meta.status.Lifecycle == WorkerMetaFailed {
 		return
 	}
 	if w.meta.status.LastError != nil {
@@ -347,7 +334,7 @@ func (w *DeploymentWorker[T]) retireWorkerMeta(alias gen.Alias, err error, healt
 }
 
 func (w *DeploymentWorker[T]) scheduleHealthCheck(alias gen.Alias) {
-	if w.stopping || w.meta.status.Availability != runtime.AvailabilityReady || alias != w.meta.alias {
+	if w.meta.status.Availability != runtime.AvailabilityReady || alias != w.meta.alias {
 		return
 	}
 	delay := w.options.HealthInterval

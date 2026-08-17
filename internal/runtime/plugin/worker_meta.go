@@ -26,8 +26,6 @@ const (
 	WorkerMetaRunning    WorkerMetaLifecycle = "running"
 	WorkerMetaRestarting WorkerMetaLifecycle = "restarting"
 	WorkerMetaFailed     WorkerMetaLifecycle = "failed"
-	WorkerMetaDraining   WorkerMetaLifecycle = "draining"
-	WorkerMetaStopped    WorkerMetaLifecycle = "stopped"
 )
 
 // WorkerMetaActivity is deliberately separate from lifecycle.
