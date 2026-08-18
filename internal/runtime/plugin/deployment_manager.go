@@ -121,8 +121,8 @@ type MessageDeploymentManagerStatusChanged struct {
 	status  DeploymentManagerStatus
 }
 
-// MessageDeploymentManagerAccepted acknowledges manager ownership of an invocation.
-type MessageDeploymentManagerAccepted struct {
+// MessageInvocationAccepted acknowledges manager ownership of an invocation.
+type MessageInvocationAccepted struct {
 	route   gen.Atom
 	manager gen.PID
 	callID  uint64
@@ -396,7 +396,7 @@ func (m *DeploymentManager[T]) HandleInspect(_ gen.PID, _ ...string) map[string]
 
 // accept records one invocation or rejects it with an exact completion.
 func (m *DeploymentManager[T]) accept(call MessageInvokePlugin[T]) {
-	_ = m.SendWithPriority(m.Parent(), MessageDeploymentManagerAccepted{
+	_ = m.SendWithPriority(m.Parent(), MessageInvocationAccepted{
 		route: m.route, manager: m.PID(), callID: call.CallID,
 	}, gen.MessagePriorityHigh)
 	if _, exists := m.calls[call.CallID]; exists {
@@ -532,7 +532,8 @@ func (m *DeploymentManager[T]) startDeploymentPool(initial int) {
 	}
 	// LinkParent only propagates manager termination; MonitorPID below receives pool DOWN.
 	poolOptions := m.options.PoolOptions
-	poolOptions.InitialSize, poolOptions.MaxSize = int64(initial), int64(m.deployment.WorkerCount())
+	poolOptions.InitialSize = int64(initial)
+	poolOptions.MaxSize = int64(m.deployment.WorkerCount())
 	pid, err := m.Spawn(func() gen.ProcessBehavior {
 		return &DeploymentPool[T]{
 			adapter:    m.adapter,
@@ -545,13 +546,24 @@ func (m *DeploymentManager[T]) startDeploymentPool(initial int) {
 		m.scheduleDeploymentPoolRestart()
 		return
 	}
-	m.pool.pid, m.pool.expectedStop, m.pool.recovering = pid, false, false
-	m.pool.status = DeploymentPoolStatus{Lifecycle: DeploymentPoolStarting, Availability: runtime.AvailabilityUnavailable, DesiredWorkers: initial, Workers: make(map[gen.PID]DeploymentWorkerStatus)}
+	m.pool.pid = pid
+	m.pool.expectedStop = false
+	m.pool.recovering = false
+	m.pool.status = DeploymentPoolStatus{
+		Lifecycle:      DeploymentPoolStarting,
+		Availability:   runtime.AvailabilityUnavailable,
+		DesiredWorkers: initial,
+		Workers:        make(map[gen.PID]DeploymentWorkerStatus),
+	}
 	if err := m.MonitorPID(pid); err != nil {
 		m.lastError = fmt.Errorf("monitor deployment pool: %w", err)
 		_ = m.Node().SendExit(pid, gen.TerminateReasonShutdown)
 		m.pool.pid = gen.PID{}
-		m.pool.status = DeploymentPoolStatus{Lifecycle: DeploymentPoolStopped, Availability: runtime.AvailabilityUnavailable, Workers: make(map[gen.PID]DeploymentWorkerStatus)}
+		m.pool.status = DeploymentPoolStatus{
+			Lifecycle:    DeploymentPoolStopped,
+			Availability: runtime.AvailabilityUnavailable,
+			Workers:      make(map[gen.PID]DeploymentWorkerStatus),
+		}
 		m.scheduleDeploymentPoolRestart()
 		return
 	}

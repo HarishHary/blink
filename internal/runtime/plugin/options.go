@@ -2,6 +2,14 @@ package plugin
 
 import "time"
 
+// RouterOptions configures one deployment router and the managers it spawns.
+type RouterOptions[T Syncable] struct {
+	Adapter        *Adapter[T]
+	RetryMin       time.Duration // route-level restart backoff
+	RetryMax       time.Duration
+	ManagerOptions DeploymentManagerOptions // handed straight to each spawned manager
+}
+
 // DeploymentManagerOptions configures one deployment manager.
 type DeploymentManagerOptions struct {
 	QueueSize       int

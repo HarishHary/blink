@@ -12,6 +12,10 @@ import (
 	"github.com/harishhary/blink/internal/snapshot"
 )
 
+// ---------------------------------------------------------------------------
+// Types & state
+// ---------------------------------------------------------------------------
+
 // ReconcilerActorLifecycle describes the stable actor that projects
 // control-plane snapshots and local artifacts into runtime desired state.
 type ReconcilerActorLifecycle string
@@ -31,12 +35,14 @@ type ReconcilerActorStatus struct {
 	Revision           uint64
 }
 
+// artifactResolverMetaState tracks the resolver meta-process state and restart policy.
 type artifactResolverMetaState struct {
 	alias   gen.Alias
 	restart *runtime.ScheduledBackoff
 	status  artifactResolverMetaStatus
 }
 
+// artifactWatcherMetaState tracks the watcher meta-process state and restart policy.
 type artifactWatcherMetaState struct {
 	alias   gen.Alias
 	restart *runtime.ScheduledBackoff
@@ -63,6 +69,35 @@ type reconcilerActor struct {
 	deferred         bool
 }
 
+// ---- messages ----
+
+// MessageReconcilerActorActivate gives a replacement reconciler a
+// revision base newer than the last state accepted by its supervisor.
+type MessageReconcilerActorActivate struct{ revisionBase uint64 }
+
+// MessageReconcilerActorStatusChanged publishes the reconciler status to its supervisor.
+type MessageReconcilerActorStatusChanged struct{ status ReconcilerActorStatus }
+
+// MessageResolutionRetry retries deferred artifact resolution after backoff.
+type MessageResolutionRetry struct{ token uint64 }
+
+// MessageArtifactResolverMetaRestart restarts the artifact resolver meta-process after backoff.
+type MessageArtifactResolverMetaRestart struct{ token uint64 }
+
+// MessageArtifactWatcherMetaRestart restarts the artifact watcher meta-process after backoff.
+type MessageArtifactWatcherMetaRestart struct{ token uint64 }
+
+// MessageDesiredStateFreshness challenges and confirms that the exact generation and revision remain current.
+type MessageDesiredStateFreshness struct {
+	snapshotGeneration int64
+	desiredRevision    uint64
+}
+
+// ---------------------------------------------------------------------------
+// Constructor & actor lifecycle
+// ---------------------------------------------------------------------------
+
+// newReconcilerActor constructs a reconciler actor with independent retry policies.
 func newReconcilerActor(events snapshotruntime.Events, directory string, retryMin, retryMax time.Duration) gen.ProcessBehavior {
 	return &reconcilerActor{
 		events:          events,
@@ -85,25 +120,6 @@ func newReconcilerActor(events snapshotruntime.Events, directory string, retryMi
 	}
 }
 
-// --- messages ---
-
-// MessageReconcilerActorActivate gives a replacement reconciler a
-// revision base newer than the last state accepted by its supervisor.
-type MessageReconcilerActorActivate struct{ revisionBase uint64 }
-type MessageReconcilerActorStatusChanged struct{ status ReconcilerActorStatus }
-
-type MessageResolutionRetry struct{ token uint64 }
-type MessageArtifactResolverMetaRestart struct{ token uint64 }
-type MessageArtifactWatcherMetaRestart struct{ token uint64 }
-
-// MessageDesiredStateFreshness challenges and confirms that the exact generation and revision remain current.
-type MessageDesiredStateFreshness struct {
-	snapshotGeneration int64
-	desiredRevision    uint64
-}
-
-// --- messages ---
-
 // Init validates the reconciler actor's required events.
 func (a *reconcilerActor) Init(...any) error {
 	if a.events.Snapshot.Name == "" || a.events.Status.Name == "" {
@@ -112,6 +128,20 @@ func (a *reconcilerActor) Init(...any) error {
 	return nil
 }
 
+// Terminate stops retries and shuts down the artifact meta-processes.
+func (a *reconcilerActor) Terminate(error) {
+	a.resolutionRetry.CancelScheduled(false)
+	a.resolver.restart.CancelScheduled(false)
+	a.watcher.restart.CancelScheduled(false)
+	a.stopArtifactResolverMeta(gen.TerminateReasonShutdown)
+	a.stopArtifactWatcherMeta(gen.TerminateReasonShutdown)
+}
+
+// ---------------------------------------------------------------------------
+// Message ingress
+// ---------------------------------------------------------------------------
+
+// HandleMessage processes reconciler control messages and meta-process lifecycle events.
 func (a *reconcilerActor) HandleMessage(from gen.PID, message any) error {
 	switch m := message.(type) {
 	case MessageReconcilerActorActivate:
@@ -294,22 +324,21 @@ func (a *reconcilerActor) HandleMessage(from gen.PID, message any) error {
 	return nil
 }
 
+// HandleEvent applies a monitored snapshot or reader-status event.
 func (a *reconcilerActor) HandleEvent(event gen.MessageEvent) error {
 	return a.applyEvent(event)
 }
 
+// HandleCall rejects synchronous calls because the reconciler has no call API.
 func (a *reconcilerActor) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
 	return fmt.Errorf("actorruntime: unsupported desired-state reconciler call %T", request), nil
 }
 
-func (a *reconcilerActor) Terminate(error) {
-	a.resolutionRetry.CancelScheduled(false)
-	a.resolver.restart.CancelScheduled(false)
-	a.watcher.restart.CancelScheduled(false)
-	a.stopArtifactResolverMeta(gen.TerminateReasonShutdown)
-	a.stopArtifactWatcherMeta(gen.TerminateReasonShutdown)
-}
+// ---------------------------------------------------------------------------
+// Artifact meta-process lifecycle
+// ---------------------------------------------------------------------------
 
+// startArtifactResolverMeta starts and monitors the artifact resolver meta-process.
 func (a *reconcilerActor) startArtifactResolverMeta() error {
 	if a.resolver.alias != (gen.Alias{}) {
 		return nil
@@ -347,6 +376,7 @@ func (a *reconcilerActor) startArtifactResolverMeta() error {
 	return a.requestResolve()
 }
 
+// startArtifactWatcherMeta starts and monitors the artifact watcher meta-process.
 func (a *reconcilerActor) startArtifactWatcherMeta() error {
 	if a.watcher.alias != (gen.Alias{}) {
 		return nil
@@ -384,6 +414,7 @@ func (a *reconcilerActor) startArtifactWatcherMeta() error {
 	return nil
 }
 
+// stopArtifactResolverMeta stops and demonitors the artifact resolver meta-process.
 func (a *reconcilerActor) stopArtifactResolverMeta(reason error) {
 	if a.resolver.alias == (gen.Alias{}) {
 		return
@@ -394,6 +425,7 @@ func (a *reconcilerActor) stopArtifactResolverMeta(reason error) {
 	_ = a.SendExitMeta(alias, reason)
 }
 
+// stopArtifactWatcherMeta stops and demonitors the artifact watcher meta-process.
 func (a *reconcilerActor) stopArtifactWatcherMeta(reason error) {
 	if a.watcher.alias == (gen.Alias{}) {
 		return
@@ -404,6 +436,11 @@ func (a *reconcilerActor) stopArtifactWatcherMeta(reason error) {
 	_ = a.SendExitMeta(alias, reason)
 }
 
+// ---------------------------------------------------------------------------
+// Snapshot & resolution reconciliation
+// ---------------------------------------------------------------------------
+
+// applyEvent incorporates monitored snapshot and reader-status events.
 func (a *reconcilerActor) applyEvent(event gen.MessageEvent) error {
 	switch event.Event {
 	case a.events.Status:
@@ -442,6 +479,7 @@ func (a *reconcilerActor) applyEvent(event gen.MessageEvent) error {
 	}
 }
 
+// requestResolve starts artifact resolution when current state requires it.
 func (a *reconcilerActor) requestResolve() error {
 	if a.resolving || !a.dirty || a.snapshot == nil || a.resolver.alias == (gen.Alias{}) {
 		return nil
@@ -462,6 +500,11 @@ func (a *reconcilerActor) requestResolve() error {
 	return nil
 }
 
+// ---------------------------------------------------------------------------
+// Retry scheduling
+// ---------------------------------------------------------------------------
+
+// scheduleResolutionRetry schedules a delayed artifact-resolution retry.
 func (a *reconcilerActor) scheduleResolutionRetry() error {
 	if a.resolutionRetry.Pending {
 		return nil
@@ -483,6 +526,7 @@ func (a *reconcilerActor) scheduleResolutionRetry() error {
 	return nil
 }
 
+// scheduleResolverRestart schedules a delayed resolver meta-process restart.
 func (a *reconcilerActor) scheduleResolverRestart() error {
 	if a.resolver.restart.Pending {
 		return nil
@@ -507,6 +551,7 @@ func (a *reconcilerActor) scheduleResolverRestart() error {
 	return nil
 }
 
+// scheduleWatcherRestart schedules a delayed watcher meta-process restart.
 func (a *reconcilerActor) scheduleWatcherRestart() error {
 	if a.watcher.restart.Pending {
 		return nil
@@ -531,6 +576,11 @@ func (a *reconcilerActor) scheduleWatcherRestart() error {
 	return nil
 }
 
+// ---------------------------------------------------------------------------
+// Status projection
+// ---------------------------------------------------------------------------
+
+// publishStatus reports the current reconciler availability to its supervisor.
 func (a *reconcilerActor) publishStatus() {
 	availability := runtime.AvailabilityReady
 	switch {
@@ -558,6 +608,11 @@ func (a *reconcilerActor) publishStatus() {
 	}})
 }
 
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+// errorText returns an empty string for nil errors and the error text otherwise.
 func errorText(err error) string {
 	if err == nil {
 		return ""

@@ -85,7 +85,7 @@ type deploymentRouteState struct {
 // routerActor owns one dynamic Ergo route per concrete DeploymentPoolKey.
 type routerActor[T Syncable] struct {
 	act.Router
-	deps             ActorDependencies[T]
+	opts             RouterOptions[T]
 	pluginID         string
 	actorGeneration  uint64
 	activated        bool
@@ -117,8 +117,8 @@ type routerInvocation struct {
 	manager  gen.PID
 }
 
-// RouterAcceptanceTimedout fires when a routed call is not accepted before its deadline.
-type RouterAcceptanceTimedout struct {
+// MessageInvocationTimedOut fires when a routed call is not accepted before its deadline.
+type MessageInvocationTimedOut struct {
 	callID uint64
 	token  uint64
 }
@@ -197,7 +197,7 @@ func (a *routerActor[T]) Terminate(error) {
 // so their expiration is consumed here rather than forwarded to a route.
 func (a *routerActor[T]) RouteMessage(_ gen.PID, message any) gen.Atom {
 	switch m := message.(type) {
-	case RouterAcceptanceTimedout:
+	case MessageInvocationTimedOut:
 		call := a.inFlightCalls[m.callID]
 		if call != nil && !call.accepted && call.ackToken == m.token {
 			a.finishTrackedCall(m.callID, runtime.ErrPluginUnavailable)
@@ -288,7 +288,7 @@ func (a *routerActor[T]) HandleMessage(from gen.PID, message any) error {
 			}
 		}
 
-	case MessageDeploymentManagerAccepted:
+	case MessageInvocationAccepted:
 		if ref, ok := a.currentManager(m.route, from, m.manager); ok {
 			ref.managers[m.manager] = struct{}{}
 			if ref.phase == deploymentRouteDraining {
@@ -462,7 +462,7 @@ func (a *routerActor[T]) scheduleRouteStep(ref *deploymentRouteState) error {
 		return nil
 	}
 	if ref.restart == nil {
-		ref.restart = runtime.NewScheduledBackoff(a.deps.RetryMin, a.deps.RetryMax)
+		ref.restart = runtime.NewScheduledBackoff(a.opts.RetryMin, a.opts.RetryMax)
 	}
 	if ref.restart.Pending {
 		return nil
@@ -487,23 +487,11 @@ func (a *routerActor[T]) newDeploymentManager(ref *deploymentRouteState) *Deploy
 		Workers: make(map[gen.PID]DeploymentWorkerStatus),
 	}
 	return &DeploymentManager[T]{
-		adapter: a.deps.Adapter,
-		options: DeploymentManagerOptions{
-			QueueSize:       a.deps.QueueSize,
-			DispatchTimeout: a.deps.ControlTimeout,
-			DrainTimeout:    a.deps.DrainTimeout,
-			PoolOptions: DeploymentPoolOptions{
-				RetryMin: a.deps.PoolRetryMin,
-				RetryMax: a.deps.PoolRetryMax,
-				WorkerOptions: DeploymentWorkerOptions{
-					InvocationTimeout: a.deps.InvocationTimeout,
-					HealthInterval:    a.deps.HealthInterval,
-					RetryMin:          a.deps.RetryMin,
-					RetryMax:          a.deps.RetryMax,
-				},
-			},
-		},
-		deployment: ref.deployment, route: ref.name, draining: ref.phase >= deploymentRouteDraining || a.draining,
+		adapter:    a.opts.Adapter,
+		options:    a.opts.ManagerOptions,
+		deployment: ref.deployment,
+		route:      ref.name,
+		draining:   ref.phase >= deploymentRouteDraining || a.draining,
 	}
 }
 
@@ -577,11 +565,11 @@ func (a *routerActor[T]) routeInvocation(call MessageInvokePlugin[T]) gen.Atom {
 		return act.RouteDiscard
 	}
 	tracked := &routerInvocation{route: ref.name, ackToken: 1}
-	timeout := a.deps.ControlTimeout
+	timeout := a.opts.ManagerOptions.DispatchTimeout
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	cancel, err := a.SendAfter(a.PID(), RouterAcceptanceTimedout{callID: call.CallID, token: tracked.ackToken}, timeout)
+	cancel, err := a.SendAfter(a.PID(), MessageInvocationTimedOut{callID: call.CallID, token: tracked.ackToken}, timeout)
 	if err != nil {
 		_ = a.SendWithPriority(a.Parent(), MessageInvocationCompleted{CallID: call.CallID, Err: runtime.ErrPluginUnavailable}, gen.MessagePriorityHigh)
 		return act.RouteDiscard
@@ -592,7 +580,7 @@ func (a *routerActor[T]) routeInvocation(call MessageInvokePlugin[T]) gen.Atom {
 }
 
 // acceptInvocation binds an in-flight call to the manager that accepted it.
-func (a *routerActor[T]) acceptInvocation(message MessageDeploymentManagerAccepted) {
+func (a *routerActor[T]) acceptInvocation(message MessageInvocationAccepted) {
 	call := a.inFlightCalls[message.callID]
 	if call == nil || call.accepted || call.route != message.route {
 		return
