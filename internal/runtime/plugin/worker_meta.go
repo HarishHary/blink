@@ -47,7 +47,7 @@ type workerMetaState struct {
 	pingPending   bool
 }
 
-// WorkerMetaStatus is owned by the deployment manager.
+// WorkerMetaStatus is owned by its deployment worker.
 type WorkerMetaStatus struct {
 	Lifecycle    WorkerMetaLifecycle
 	Availability runtime.Availability

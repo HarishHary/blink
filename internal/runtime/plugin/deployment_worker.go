@@ -10,72 +10,67 @@ import (
 	"github.com/harishhary/blink/internal/runtime"
 )
 
+// DeploymentWorkerLifecycle describes a deployment worker's lifecycle.
+type DeploymentWorkerLifecycle string
+
+const (
+	DeploymentWorkerStarting   DeploymentWorkerLifecycle = "starting"
+	DeploymentWorkerRunning    DeploymentWorkerLifecycle = "running"
+	DeploymentWorkerRestarting DeploymentWorkerLifecycle = "restarting"
+	DeploymentWorkerFailed     DeploymentWorkerLifecycle = "failed"
+)
+
+type deploymentWorkerState struct {
+	status DeploymentWorkerStatus
+}
+
+// DeploymentWorkerStatus is the immutable worker snapshot sent to its pool.
+type DeploymentWorkerStatus struct {
+	Lifecycle    DeploymentWorkerLifecycle
+	Availability runtime.Availability
+	Meta         WorkerMetaStatus
+}
+
 // DeploymentWorker owns one plugin worker meta-process incarnation.
-// Its manager receives lifecycle and invocation facts directly; the pool only
-// provides worker placement.
 type DeploymentWorker[T Syncable] struct {
 	act.Actor
 	adapter    *Adapter[T]
 	options    DeploymentWorkerOptions
 	deployment Deployment
-	manager    gen.PID
 	meta       workerMetaState
 }
 
 // --- messages ---
 
-type MessageDeploymentWorkerReady struct {
+type MessageDeploymentWorkerStatusChanged struct {
 	worker gen.PID
-	alias  gen.Alias
-	pool   gen.PID
+	status DeploymentWorkerStatus
 }
-
-type MessageDeploymentWorkerUnavailable struct {
-	worker gen.PID
-	alias  gen.Alias
-	pool   gen.PID
-	err    error
-}
-
 type MessageDeploymentWorkerStopped struct {
 	worker gen.PID
 	pool   gen.PID
 }
 
-// MessageDeploymentWorkerRestartExhausted reports a terminal local recovery
-// failure. Pool PID fences the fact to this worker's current pool incarnation.
+// MessageDeploymentWorkerRestartExhausted reports a terminal local recovery failure.
 type MessageDeploymentWorkerRestartExhausted struct {
-	worker gen.PID
-	pool   gen.PID
-	health bool
-	cause  error
+	cause error
 }
 
-// MessageWorkerMetaStarted and MessageDeploymentWorkerFinished bracket
-// every invocation accepted by a worker, including unavailable workers.
-type MessageWorkerMetaStarted struct {
-	worker gen.PID
+// MessageInvocationStarted and MessageInvocationFinished bracket every
+// invocation accepted by a worker, including unavailable workers.
+type MessageInvocationStarted struct{ callID uint64 }
+type MessageInvocationFinished struct {
 	callID uint64
-	pool   gen.PID
-}
-
-type MessageWorkerMetaFinished struct {
-	worker gen.PID
-	callID uint64
-	pool   gen.PID
 	err    error
 }
-
 type MessageWorkerMetaRestart struct {
 	token  uint64
 	health bool
 }
-
 type MessageWorkerMetaHealthTick struct {
 	alias gen.Alias
 	token uint64
 }
-
 type MessageWorkerMetaHealthTimeout struct {
 	alias gen.Alias
 	token uint64
@@ -98,20 +93,20 @@ func (w *DeploymentWorker[T]) Init(...any) error {
 func (w *DeploymentWorker[T]) Terminate(error) {
 	w.meta.restart.CancelScheduled(false)
 	w.meta.healthRestart.CancelScheduled(false)
-	w.notify(MessageDeploymentWorkerStopped{worker: w.PID(), pool: w.Parent()})
+	_ = w.SendWithPriority(w.Parent(), MessageDeploymentWorkerStopped{worker: w.PID(), pool: w.Parent()}, gen.MessagePriorityHigh)
 }
 
-func (w *DeploymentWorker[T]) HandleMessage(_ gen.PID, message any) error {
+func (w *DeploymentWorker[T]) HandleMessage(from gen.PID, message any) error {
 	switch msg := message.(type) {
 	case MessageInvokePlugin[T]:
-		w.invoke(msg)
+		w.invoke(from, msg)
 
 	case MessageWorkerMetaStartResult:
 		if msg.alias != w.meta.alias {
 			return nil
 		}
 		if msg.err != nil {
-			w.reportUnavailable(w.meta.alias, msg.err)
+			w.reportUnavailable(msg.err)
 			w.cancelHealthCheck()
 			w.meta.alias = gen.Alias{}
 			return w.scheduleWorkerMetaRestart(false)
@@ -125,7 +120,7 @@ func (w *DeploymentWorker[T]) HandleMessage(_ gen.PID, message any) error {
 			Activity:     PluginWorkerIdle,
 		}
 		w.scheduleHealthCheck(w.meta.alias)
-		w.notify(MessageDeploymentWorkerReady{worker: w.PID(), alias: w.meta.alias, pool: w.Parent()})
+		w.publishStatus(DeploymentWorkerRunning)
 
 	case MessageWorkerMetaRestart:
 		restart := w.meta.restart
@@ -181,10 +176,9 @@ func (w *DeploymentWorker[T]) HandleMessage(_ gen.PID, message any) error {
 		if msg.Alias != w.meta.alias {
 			return nil
 		}
-		alias := w.meta.alias
 		healthFailure := w.meta.pingPending
 		w.cancelHealthCheck()
-		w.reportUnavailable(alias, msg.Reason)
+		w.reportUnavailable(msg.Reason)
 		w.meta.alias = gen.Alias{}
 		return w.scheduleWorkerMetaRestart(healthFailure)
 	}
@@ -195,31 +189,33 @@ func (w *DeploymentWorker[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any
 	return fmt.Errorf("actorruntime: unsupported deployment worker call %T", request), nil
 }
 
-func (w *DeploymentWorker[T]) invoke(call MessageInvokePlugin[T]) {
+func (w *DeploymentWorker[T]) invoke(manager gen.PID, call MessageInvokePlugin[T]) {
 	ctx := call.Context
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	ctx, cancel := context.WithTimeout(ctx, w.options.InvocationTimeout)
 	defer cancel()
-	w.notify(MessageWorkerMetaStarted{worker: w.PID(), callID: call.CallID, pool: w.Parent()})
+	_ = w.SendWithPriority(manager, MessageInvocationStarted{callID: call.CallID}, gen.MessagePriorityHigh)
 	if err := ctx.Err(); err != nil {
-		w.notify(MessageWorkerMetaFinished{worker: w.PID(), callID: call.CallID, pool: w.Parent(), err: err})
+		_ = w.SendWithPriority(manager, MessageInvocationFinished{callID: call.CallID, err: err}, gen.MessagePriorityHigh)
 		return
 	}
 	if call.Fn == nil {
-		w.notify(MessageWorkerMetaFinished{worker: w.PID(), callID: call.CallID, pool: w.Parent(), err: fmt.Errorf("actorruntime: invocation function is required")})
+		_ = w.SendWithPriority(manager, MessageInvocationFinished{callID: call.CallID, err: fmt.Errorf("actorruntime: invocation function is required")}, gen.MessagePriorityHigh)
 		return
 	}
 	if w.meta.status.Availability != runtime.AvailabilityReady || w.meta.alias == (gen.Alias{}) {
-		w.notify(MessageWorkerMetaFinished{worker: w.PID(), callID: call.CallID, pool: w.Parent(), err: runtime.ErrPluginUnavailable})
+		_ = w.SendWithPriority(manager, MessageInvocationFinished{callID: call.CallID, err: runtime.ErrPluginUnavailable}, gen.MessagePriorityHigh)
 		return
 	}
 
 	alias := w.meta.alias
 	w.meta.status.Activity = PluginWorkerBusy
+	w.publishStatus(DeploymentWorkerRunning)
 	response, err := w.CallWithTimeout(alias, workerInvokeCall[T]{context: ctx, fn: call.Fn}, callTimeoutSeconds(ctx, w.options.InvocationTimeout))
 	w.meta.status.Activity = PluginWorkerIdle
+	w.publishStatus(DeploymentWorkerRunning)
 	recycle := err != nil
 	if err == nil {
 		result, ok := response.(workerInvokeResponse)
@@ -238,7 +234,7 @@ func (w *DeploymentWorker[T]) invoke(call MessageInvokePlugin[T]) {
 	if recycle {
 		w.retireWorkerMeta(alias, err, true)
 	}
-	w.notify(MessageWorkerMetaFinished{worker: w.PID(), callID: call.CallID, pool: w.Parent(), err: err})
+	_ = w.SendWithPriority(manager, MessageInvocationFinished{callID: call.CallID, err: err}, gen.MessagePriorityHigh)
 }
 
 func (w *DeploymentWorker[T]) startWorkerMeta() error {
@@ -251,17 +247,18 @@ func (w *DeploymentWorker[T]) startWorkerMeta() error {
 		Availability: runtime.AvailabilityUnavailable,
 		Activity:     PluginWorkerIdle,
 	}
+	w.publishStatus(DeploymentWorkerStarting)
 	alias, err := w.SpawnMeta(&workerMeta[T]{
 		adapter:    w.adapter,
 		deployment: w.deployment,
 	}, gen.MetaOptions{})
 	if err != nil {
-		w.reportUnavailable(gen.Alias{}, fmt.Errorf("spawn plugin worker: %w", err))
+		w.reportUnavailable(fmt.Errorf("spawn plugin worker: %w", err))
 		return w.scheduleWorkerMetaRestart(false)
 	}
 	if err := w.MonitorAlias(alias); err != nil {
 		_ = w.SendExitMeta(alias, gen.TerminateReasonShutdown)
-		w.reportUnavailable(alias, fmt.Errorf("monitor plugin worker: %w", err))
+		w.reportUnavailable(fmt.Errorf("monitor plugin worker: %w", err))
 		return w.scheduleWorkerMetaRestart(false)
 	}
 	w.meta.alias = alias
@@ -281,14 +278,14 @@ func (w *DeploymentWorker[T]) scheduleWorkerMetaRestart(health bool) error {
 	}
 	delay := restart.Strategy.NextBackOff()
 	if delay == backoff.Stop {
-		w.failWorkerMeta(health, fmt.Errorf("plugin worker restart budget: %w", runtime.ErrBackoffStopped))
+		w.failWorkerMeta(fmt.Errorf("plugin worker restart budget: %w", runtime.ErrBackoffStopped))
 		return nil
 	}
 	restart.Token++
 	token := restart.Token
 	cancel, err := w.SendAfter(w.PID(), MessageWorkerMetaRestart{token: token, health: health}, delay)
 	if err != nil {
-		w.failWorkerMeta(health, fmt.Errorf("schedule plugin worker restart: %w", err))
+		w.failWorkerMeta(fmt.Errorf("schedule plugin worker restart: %w", err))
 		return nil
 	}
 	restart.Pending = true
@@ -296,7 +293,7 @@ func (w *DeploymentWorker[T]) scheduleWorkerMetaRestart(health bool) error {
 	return nil
 }
 
-func (w *DeploymentWorker[T]) failWorkerMeta(health bool, err error) {
+func (w *DeploymentWorker[T]) failWorkerMeta(err error) {
 	if w.meta.status.Lifecycle == WorkerMetaFailed {
 		return
 	}
@@ -310,7 +307,8 @@ func (w *DeploymentWorker[T]) failWorkerMeta(health bool, err error) {
 		Activity:     PluginWorkerIdle,
 		LastError:    err,
 	}
-	w.notify(MessageDeploymentWorkerRestartExhausted{worker: w.PID(), pool: w.Parent(), health: health, cause: err})
+	w.publishStatus(DeploymentWorkerFailed)
+	_ = w.SendWithPriority(w.Parent(), MessageDeploymentWorkerRestartExhausted{cause: err}, gen.MessagePriorityHigh)
 }
 
 func (w *DeploymentWorker[T]) retireWorkerMeta(alias gen.Alias, err error, health bool) {
@@ -318,7 +316,7 @@ func (w *DeploymentWorker[T]) retireWorkerMeta(alias gen.Alias, err error, healt
 		return
 	}
 	w.cancelHealthCheck()
-	w.reportUnavailable(alias, err)
+	w.reportUnavailable(err)
 	w.meta.alias = gen.Alias{}
 	_ = w.SendExitMeta(alias, gen.TerminateReasonShutdown)
 	_ = w.scheduleWorkerMetaRestart(health)
@@ -341,23 +339,29 @@ func (w *DeploymentWorker[T]) cancelHealthCheck() {
 	w.meta.pingPending = false
 }
 
-func (w *DeploymentWorker[T]) reportUnavailable(alias gen.Alias, err error) {
-	if w.meta.status.Lifecycle == WorkerMetaRestarting {
-		return
-	}
+func (w *DeploymentWorker[T]) reportUnavailable(err error) {
 	w.meta.status = WorkerMetaStatus{
 		Lifecycle:    WorkerMetaRestarting,
 		Availability: runtime.AvailabilityUnavailable,
 		Activity:     PluginWorkerIdle,
 		LastError:    err,
 	}
-	w.notify(MessageDeploymentWorkerUnavailable{worker: w.PID(), alias: alias, pool: w.Parent(), err: err})
+	w.publishStatus(DeploymentWorkerRestarting)
 }
 
-func (w *DeploymentWorker[T]) notify(message any) {
-	manager := w.manager
-	if manager == (gen.PID{}) {
-		manager = w.Parent()
-	}
-	_ = w.SendWithPriority(manager, message, gen.MessagePriorityHigh)
+func (w *DeploymentWorker[T]) publishStatus(lifecycle DeploymentWorkerLifecycle) {
+	_ = w.SendWithPriority(w.Parent(), MessageDeploymentWorkerStatusChanged{
+		worker: w.PID(),
+		status: DeploymentWorkerStatus{
+			Lifecycle:    lifecycle,
+			Availability: w.meta.status.Availability,
+			Meta:         w.meta.status,
+		},
+	}, gen.MessagePriorityHigh)
+}
+
+func sameDeploymentWorkerStatus(left, right DeploymentWorkerStatus) bool {
+	return left.Lifecycle == right.Lifecycle && left.Availability == right.Availability &&
+		left.Meta.Lifecycle == right.Meta.Lifecycle && left.Meta.Availability == right.Meta.Availability &&
+		left.Meta.Activity == right.Meta.Activity && errorText(left.Meta.LastError) == errorText(right.Meta.LastError)
 }
