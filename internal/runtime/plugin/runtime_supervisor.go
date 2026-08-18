@@ -205,7 +205,7 @@ func (s *supervisor[P, M]) Init(...any) (act.SupervisorSpec, error) {
 	s.events = RuntimeEventsFor(s.Node(), s.opts.Name)
 	s.inFlightCalls = make(map[uint64]runtimeCall)
 	s.lifecycle = SupervisorStarting
-	s.catalog.status = newCatalogStatus(0, nil)
+	s.catalog.status = newCatalogStatus(nil)
 	s.projection.Retry = runtime.NewScheduledBackoff(s.opts.RetryMin, s.opts.RetryMax)
 	s.reconciler.status = reconcilerActorStatus{
 		lifecycle:    ReconcilerActorStarting,
@@ -451,7 +451,6 @@ func (s *supervisor[P, M]) HandleMessage(from gen.PID, message any) error {
 	case MessageCatalogStatusChanged:
 		if from != s.catalog.pid ||
 			m.pid != s.catalog.pid ||
-			m.generation != s.catalog.actorGeneration ||
 			m.epoch <= s.catalog.lastEpoch {
 			return nil
 		}
@@ -466,8 +465,7 @@ func (s *supervisor[P, M]) HandleMessage(from gen.PID, message any) error {
 	case MessageCatalogDrained:
 		if s.lifecycle != SupervisorDraining ||
 			from != s.catalog.pid ||
-			m.pid != s.catalog.pid ||
-			m.generation != s.catalog.actorGeneration {
+			m.pid != s.catalog.pid {
 			return nil
 		}
 
@@ -596,17 +594,13 @@ func (s *supervisor[P, M]) startReconcilerActor(pid gen.PID) error {
 // startCatalogActor initializes a catalog actor incarnation.
 func (s *supervisor[P, M]) startCatalogActor(pid gen.PID) error {
 	state := &s.catalog
-	state.actorGeneration++
 	state.pid = pid
 	state.lastEpoch = 0
-	state.status = newCatalogStatus(
-		state.actorGeneration,
-		state.status.lastError,
-	)
+	state.status = newCatalogStatus(state.status.lastError)
 	s.reconcileStatus()
 	s.publishStatus()
 
-	if err := s.Send(pid, MessageCatalogActivate{generation: state.actorGeneration}); err != nil {
+	if err := s.Send(pid, MessageCatalogActivate{}); err != nil {
 		_ = s.Node().SendExit(pid, fmt.Errorf("activate catalog: %w", err))
 		return nil
 	}
@@ -653,7 +647,6 @@ func (s *supervisor[P, M]) retireCatalogActor(pid gen.PID, reason error) {
 	state.lastEpoch = 0
 	state.status.lifecycle = CatalogActorRestarting
 	state.status.availability = runtime.AvailabilityUnavailable
-	state.status.generation = state.actorGeneration
 	state.status.lastError = reason
 
 	for callID, call := range s.inFlightCalls {
@@ -765,7 +758,7 @@ func (s *supervisor[P, M]) desiredStateTransitionReadyToCommit() bool {
 		s.desiredState.desiredRevision != 0 &&
 		s.desiredState.snapshotGeneration == s.transitionGeneration &&
 		s.reconciler.status.revision == s.desiredState.desiredRevision &&
-		s.catalog.status.revision == s.desiredState.desiredRevision &&
+		s.catalog.status.desiredRevision == s.desiredState.desiredRevision &&
 		s.catalog.status.availability == runtime.AvailabilityReady
 }
 
@@ -782,7 +775,7 @@ func (s *supervisor[P, M]) finishDesiredStateTransition() {
 		s.reconciler.status.snapshotGeneration != s.transitionGeneration ||
 		s.reconciler.status.revision != s.desiredState.desiredRevision ||
 		s.reconciler.status.availability != runtime.AvailabilityReady ||
-		s.catalog.status.revision != s.desiredState.desiredRevision ||
+		s.catalog.status.desiredRevision != s.desiredState.desiredRevision ||
 		s.catalog.status.availability != runtime.AvailabilityReady {
 		return
 	}
@@ -793,11 +786,10 @@ func (s *supervisor[P, M]) finishDesiredStateTransition() {
 // Status Reporting
 // ---------------------------------------------------------------------------
 // newCatalogStatus returns an initial catalog status for an actor incarnation.
-func newCatalogStatus(actorGeneration uint64, lastError error) catalogActorStatus {
+func newCatalogStatus(lastError error) catalogActorStatus {
 	return catalogActorStatus{
 		lifecycle:    CatalogActorStarting,
 		availability: runtime.AvailabilityUnavailable,
-		generation:   actorGeneration,
 		lastError:    lastError,
 		routers:      make(map[string]routerActorStatus),
 	}
@@ -807,7 +799,6 @@ func newCatalogStatus(actorGeneration uint64, lastError error) catalogActorStatu
 func (s *supervisor[P, M]) mergeCatalogStatus(status catalogActorStatus) {
 	state := &s.catalog
 	next := status.clone()
-	next.generation = state.actorGeneration
 	if next.lifecycle == CatalogActorRunning {
 		next.lastError = nil
 		if s.lifecycle != SupervisorDraining {
@@ -884,7 +875,7 @@ func (s *supervisor[P, M]) acceptsSubmission(expectedGeneration int64) bool {
 		s.projection.Status.Availability.Routable() &&
 		s.projection.Status.CommittedGeneration == expectedGeneration &&
 		expectedGeneration == s.desiredState.snapshotGeneration &&
-		s.catalog.status.revision == s.desiredState.desiredRevision &&
+		s.catalog.status.desiredRevision == s.desiredState.desiredRevision &&
 		s.lifecycle != SupervisorDraining && s.transition == SupervisorTransitionIdle && s.projectionReady() &&
 		s.catalog.pid != (gen.PID{})
 }
@@ -1103,7 +1094,7 @@ func (s *supervisor[P, M]) supervisorStateReader() bool {
 		s.projection.Status.CommittedGeneration == s.projection.ReadyGeneration &&
 		s.projection.Status.Availability.Routable() &&
 		s.desiredState.snapshotGeneration == s.projection.ReadyGeneration &&
-		s.catalog.status.revision == s.desiredState.desiredRevision &&
+		s.catalog.status.desiredRevision == s.desiredState.desiredRevision &&
 		s.catalog.status.availability == runtime.AvailabilityReady &&
 		s.transition == SupervisorTransitionIdle && s.lifecycle != SupervisorDraining
 }

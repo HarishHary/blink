@@ -92,10 +92,7 @@ type routerActor[T Syncable] struct {
 	pluginID         string
 	generation       uint64
 	desiredRevision  uint64
-	activated        bool
-	draining         bool
-	drainReported    bool
-	everRoutable     bool
+	lifecycle        RouterActorLifecycle
 	liveStatus       routerActorStatus
 	statusEpoch      uint64
 	routesByKey      map[DeploymentPoolKey]*deploymentRouteState
@@ -135,13 +132,18 @@ type MessageRetryDeployment struct {
 	manager gen.PID
 }
 
-// MessageApplyRouterDesiredState delivers the desired primary/candidate deployments to apply.
-type MessageApplyRouterDesiredState struct {
-	desiredRevision   uint64
+// routerDesiredState describes the desired primary and candidate deployments.
+type routerDesiredState struct {
 	primary           *Deployment
 	candidate         *Deployment
 	primaryDeferred   bool
 	candidateDeferred bool
+}
+
+// MessageApplyRouterDesiredState delivers one catalog revision to a router.
+type MessageApplyRouterDesiredState struct {
+	desiredRevision uint64
+	routerDesiredState
 }
 
 // MessageRouterDrained reports to the catalog that the router has fully drained.
@@ -173,6 +175,7 @@ type MessageRetryRouteStep struct {
 // Init allocates the router's route and in-flight-call indexes.
 func (a *routerActor[T]) Init(...any) (act.RouterOptions, error) {
 	a.opts = routerOptionsWithDefaults(a.opts)
+	a.lifecycle = RouterActorStarting
 	a.routesByKey = make(map[DeploymentPoolKey]*deploymentRouteState)
 	a.routesByName = make(map[gen.Atom]DeploymentPoolKey)
 	a.inFlightCalls = make(map[uint64]*routerInvocation)
@@ -228,14 +231,14 @@ func (a *routerActor[T]) HandleMessage(from gen.PID, message any) error {
 		if m.generation <= a.generation {
 			return nil
 		}
-		if a.activated {
+		if a.generation != 0 {
 			return fmt.Errorf("router %q already activated as generation %d", a.pluginID, a.generation)
 		}
-		a.generation, a.activated = m.generation, true
+		a.generation = m.generation
 		a.reconcileStatus()
 
 	case MessageApplyRouterDesiredState:
-		if !a.activated || a.draining || m.desiredRevision < a.desiredRevision {
+		if a.generation == 0 || a.isDraining() || m.desiredRevision < a.desiredRevision {
 			return nil
 		}
 		for _, d := range []*Deployment{m.primary, m.candidate} {
@@ -357,7 +360,7 @@ func (a *routerActor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, err
 
 // applyDeployment creates or updates the route backing one desired deployment.
 func (a *routerActor[T]) applyDeployment(d *Deployment) error {
-	if d == nil || a.draining {
+	if d == nil || a.isDraining() {
 		return nil
 	}
 	key := d.PoolKey()
@@ -441,7 +444,7 @@ func (a *routerActor[T]) retryRouteStep(message MessageRetryRouteStep) {
 	ref.restart.Pending, ref.restart.Cancel = false, nil
 	if ref.phase == deploymentRouteRemoving {
 		a.removeDrainedRoute(ref)
-	} else if a.draining || ref.phase == deploymentRouteDraining {
+	} else if a.isDraining() || ref.phase == deploymentRouteDraining {
 		a.drainRoute(ref)
 	} else {
 		var err error
@@ -462,7 +465,7 @@ func (a *routerActor[T]) retryRouteStep(message MessageRetryRouteStep) {
 
 // scheduleRouteStep arms a per-route backoff timer that re-drives its pending lifecycle step.
 func (a *routerActor[T]) scheduleRouteStep(ref *deploymentRouteState) error {
-	if a.draining && ref.phase < deploymentRouteDraining {
+	if a.isDraining() && ref.phase < deploymentRouteDraining {
 		return nil
 	}
 	if ref.restart == nil {
@@ -496,7 +499,7 @@ func (a *routerActor[T]) newDeploymentManager(ref *deploymentRouteState) *deploy
 		options:    a.opts.ManagerOptions,
 		deployment: ref.deployment,
 		route:      ref.name,
-		draining:   ref.phase >= deploymentRouteDraining || a.draining,
+		draining:   ref.phase >= deploymentRouteDraining || a.isDraining(),
 	}
 }
 
@@ -541,7 +544,7 @@ func (a *routerActor[T]) currentManager(route gen.Atom, from, manager gen.PID) (
 
 // routeInvocation selects the rollout target route and tracks the call awaiting acceptance.
 func (a *routerActor[T]) routeInvocation(call MessageInvokePlugin[T]) gen.Atom {
-	if a.draining {
+	if a.isDraining() {
 		_ = a.SendWithPriority(a.Parent(), MessageInvocationCompleted{CallID: call.CallID, Err: runtime.ErrPluginUnavailable}, gen.MessagePriorityHigh)
 		return act.RouteDiscard
 	}
@@ -724,10 +727,10 @@ func (a *routerActor[T]) drainRoute(ref *deploymentRouteState) {
 
 // beginDrain starts a global drain of every route and reports if it is already complete.
 func (a *routerActor[T]) beginDrain() {
-	if a.draining {
+	if a.isDraining() {
 		return
 	}
-	a.draining = true
+	a.lifecycle = RouterActorDraining
 	for _, ref := range a.routesByKey {
 		a.drainRoute(ref)
 	}
@@ -737,10 +740,10 @@ func (a *routerActor[T]) beginDrain() {
 
 // reportDrained announces router drain completion to the catalog once no routes remain.
 func (a *routerActor[T]) reportDrained() {
-	if !a.draining || len(a.routesByKey) > 0 || a.drainReported {
+	if a.lifecycle != RouterActorDraining || len(a.routesByKey) > 0 {
 		return
 	}
-	a.drainReported = true
+	a.lifecycle = RouterActorStopped
 	a.reconcileStatus()
 	_ = a.SendWithPriority(a.Parent(), MessageRouterDrained{pluginID: a.pluginID, pid: a.PID(), generation: a.generation}, gen.MessagePriorityHigh)
 }
@@ -830,20 +833,11 @@ func (a *routerActor[T]) reconcileStatus() {
 			fullNormalCoverage = true
 		}
 	}
-	if normalRoutable {
-		a.everRoutable = true
+	if normalRoutable && a.lifecycle == RouterActorStarting {
+		a.lifecycle = RouterActorRunning
 	}
 	primaryHealthy := a.desiredPrimary == nil || (primaryStatus.lifecycle == DeploymentPoolRunning && primaryStatus.availability == runtime.AvailabilityReady)
 	candidateHealthy := a.desiredCandidate == nil || (candidateStatus.lifecycle == DeploymentPoolRunning && candidateStatus.availability == runtime.AvailabilityReady)
-	lifecycle := RouterActorStarting
-	switch {
-	case a.drainReported:
-		lifecycle = RouterActorStopped
-	case a.draining:
-		lifecycle = RouterActorDraining
-	case a.everRoutable:
-		lifecycle = RouterActorRunning
-	}
 	availability := runtime.AvailabilityUnavailable
 	switch {
 	case fullNormalCoverage && primaryHealthy && candidateHealthy:
@@ -851,15 +845,20 @@ func (a *routerActor[T]) reconcileStatus() {
 	case normalRoutable || shadowRoutable:
 		availability = runtime.AvailabilityDegraded
 	}
-	next := routerActorStatus{lifecycle: lifecycle, availability: availability, revision: a.desiredRevision,
+	next := routerActorStatus{lifecycle: a.lifecycle, availability: availability, revision: a.desiredRevision,
 		normalRoutable: normalRoutable, shadowRoutable: shadowRoutable, primary: primaryStatus, candidate: candidateStatus}
 	if sameRouterStatus(a.liveStatus, next) && a.statusEpoch != 0 {
 		return
 	}
 	a.statusEpoch, a.liveStatus = a.statusEpoch+1, next
-	if a.activated {
+	if a.generation != 0 {
 		_ = a.SendWithPriority(a.Parent(), MessageRouterStatusChanged{pluginID: a.pluginID, pid: a.PID(), generation: a.generation, epoch: a.statusEpoch, status: next.clone()}, gen.MessagePriorityHigh)
 	}
+}
+
+// isDraining reports whether the router has closed admission for shutdown.
+func (a *routerActor[T]) isDraining() bool {
+	return a.lifecycle == RouterActorDraining || a.lifecycle == RouterActorStopped
 }
 
 // sameRouterStatus reports whether two router statuses are equal, for publish deduplication.

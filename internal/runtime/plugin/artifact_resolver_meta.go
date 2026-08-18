@@ -64,7 +64,7 @@ type MessageResolveArtifacts struct {
 type MessageArtifactResolutionResult struct {
 	source             gen.Alias
 	snapshotGeneration int64
-	desired            map[string]MessageApplyRouterDesiredState
+	desired            map[string]routerDesiredState
 	deferred           bool
 }
 
@@ -141,15 +141,15 @@ func (m *artifactResolverMeta) HandleInspect(gen.PID, ...string) map[string]stri
 // ---------------------------------------------------------------------------
 
 // buildDesiredRoutes resolves all enabled snapshot entries into desired routes.
-func (m *artifactResolverMeta) buildDesiredRoutes(snap snapshot.Snapshot) (map[string]MessageApplyRouterDesiredState, bool) {
-	desired := make(map[string]MessageApplyRouterDesiredState)
+func (m *artifactResolverMeta) buildDesiredRoutes(snap snapshot.Snapshot) (map[string]routerDesiredState, bool) {
+	desired := make(map[string]routerDesiredState)
 
 	deferred := false
 	for _, entry := range snap.Entries {
 		if !entry.Enabled {
 			continue
 		}
-		route := MessageApplyRouterDesiredState{}
+		route := routerDesiredState{}
 		route.primary, route.primaryDeferred = m.resolveDeployment(entry, entry.Primary)
 		route.candidate, route.candidateDeferred = m.resolveDeployment(entry, entry.Candidate)
 		deferred = deferred || route.primaryDeferred || route.candidateDeferred

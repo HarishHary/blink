@@ -26,10 +26,9 @@ const (
 
 // catalogActorState tracks the catalog actor incarnation and status.
 type catalogActorState struct {
-	pid             gen.PID
-	actorGeneration uint64
-	lastEpoch       uint64
-	status          catalogActorStatus
+	pid       gen.PID
+	lastEpoch uint64
+	status    catalogActorStatus
 }
 
 // catalogActorStatus is owned by catalogActor, except for LastError, which is
@@ -38,9 +37,8 @@ type catalogActorState struct {
 type catalogActorStatus struct {
 	lifecycle          CatalogActorLifecycle
 	availability       runtime.Availability
-	generation         uint64
 	lastError          error
-	revision           uint64
+	desiredRevision    uint64
 	desiredRouters     int
 	routableRouters    int
 	degradedRouters    int
@@ -66,7 +64,6 @@ func (s catalogActorStatus) clone() catalogActorStatus {
 type catalogActor[T Syncable] struct {
 	act.Actor
 	opts            CatalogOptions[T]
-	generation      uint64
 	desiredRevision uint64
 	activated       bool
 	draining        bool
@@ -74,7 +71,7 @@ type catalogActor[T Syncable] struct {
 	liveStatus      catalogActorStatus
 	statusEpoch     uint64
 	routers         map[string]*routerState
-	desired         map[string]MessageApplyRouterDesiredState
+	desired         map[string]routerDesiredState
 	inFlightCalls   map[uint64]gen.PID
 }
 
@@ -82,28 +79,26 @@ type catalogActor[T Syncable] struct {
 // Messages
 // ---------------------------------------------------------------------------
 
-// MessageCatalogActivate promotes the catalog actor to a new generation.
-type MessageCatalogActivate struct{ generation uint64 }
+// MessageCatalogActivate lets the catalog actor publish status.
+type MessageCatalogActivate struct{}
 
 // MessageApplyCatalogDesiredState delivers the desired router state to apply.
 type MessageApplyCatalogDesiredState struct {
 	desiredRevision    uint64
 	snapshotGeneration int64
-	desired            map[string]MessageApplyRouterDesiredState
+	desired            map[string]routerDesiredState
 }
 
 // MessageCatalogDrained reports that the catalog actor has fully drained.
 type MessageCatalogDrained struct {
-	pid        gen.PID
-	generation uint64
+	pid gen.PID
 }
 
 // MessageCatalogStatusChanged publishes an epoch-ordered catalog status update.
 type MessageCatalogStatusChanged struct {
-	pid        gen.PID
-	generation uint64
-	epoch      uint64
-	status     catalogActorStatus
+	pid    gen.PID
+	epoch  uint64
+	status catalogActorStatus
 }
 
 // MessageRouterRestart re-drives a pending router restart after backoff.
@@ -126,7 +121,7 @@ func newCatalogActor[T Syncable](opts CatalogOptions[T]) gen.ProcessBehavior {
 func (a *catalogActor[T]) Init(...any) error {
 	a.opts = catalogOptionsWithDefaults(a.opts)
 	a.routers = make(map[string]*routerState)
-	a.desired = make(map[string]MessageApplyRouterDesiredState)
+	a.desired = make(map[string]routerDesiredState)
 	a.inFlightCalls = make(map[uint64]gen.PID)
 	return nil
 }
@@ -139,16 +134,9 @@ func (a *catalogActor[T]) Init(...any) error {
 func (a *catalogActor[T]) HandleMessage(from gen.PID, message any) error {
 	switch m := message.(type) {
 	case MessageCatalogActivate:
-		if m.generation <= a.generation {
+		if a.activated {
 			return nil
 		}
-		if a.activated {
-			return fmt.Errorf(
-				"catalog already activated as generation %d",
-				a.generation,
-			)
-		}
-		a.generation = m.generation
 		a.activated = true
 		a.reconcileStatus()
 
@@ -353,8 +341,11 @@ func (a *catalogActor[T]) sendDesiredToRouter(id string) error {
 		return a.scheduleRouterRestart(id)
 	}
 	ref.retiring = false
-	desired.desiredRevision = a.desiredRevision
-	if err := a.SendWithPriority(ref.pid, desired, gen.MessagePriorityHigh); err != nil {
+	message := MessageApplyRouterDesiredState{
+		desiredRevision:    a.desiredRevision,
+		routerDesiredState: desired,
+	}
+	if err := a.SendWithPriority(ref.pid, message, gen.MessagePriorityHigh); err != nil {
 		_ = a.Node().SendExit(ref.pid, fmt.Errorf("apply desired state to router %q: %w", id, err))
 	}
 	return nil
@@ -622,8 +613,7 @@ func (a *catalogActor[T]) reconcileStatus() {
 	next := catalogActorStatus{
 		lifecycle:          lifecycle,
 		availability:       availability,
-		generation:         a.generation,
-		revision:           a.desiredRevision,
+		desiredRevision:    a.desiredRevision,
 		desiredRouters:     len(a.desired),
 		routableRouters:    routable,
 		degradedRouters:    degraded,
@@ -640,10 +630,9 @@ func (a *catalogActor[T]) reconcileStatus() {
 		return
 	}
 	_ = a.Send(a.Parent(), MessageCatalogStatusChanged{
-		pid:        a.PID(),
-		generation: a.generation,
-		epoch:      a.statusEpoch,
-		status:     next.clone(),
+		pid:    a.PID(),
+		epoch:  a.statusEpoch,
+		status: next.clone(),
 	})
 }
 
@@ -651,8 +640,7 @@ func (a *catalogActor[T]) reconcileStatus() {
 func sameCatalogStatus(left, right catalogActorStatus) bool {
 	if left.lifecycle != right.lifecycle ||
 		left.availability != right.availability ||
-		left.generation != right.generation ||
-		left.revision != right.revision ||
+		left.desiredRevision != right.desiredRevision ||
 		left.desiredRouters != right.desiredRouters ||
 		left.routableRouters != right.routableRouters ||
 		left.degradedRouters != right.degradedRouters ||
@@ -680,5 +668,5 @@ func (a *catalogActor[T]) reportDrained() {
 	}
 	a.drainReported = true
 	a.reconcileStatus()
-	_ = a.Send(a.Parent(), MessageCatalogDrained{pid: a.PID(), generation: a.generation})
+	_ = a.Send(a.Parent(), MessageCatalogDrained{pid: a.PID()})
 }
