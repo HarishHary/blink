@@ -21,6 +21,15 @@ const (
 	DeploymentPoolStopped    DeploymentPoolLifecycle = "stopped"
 )
 
+type deploymentPoolState struct {
+	pid           gen.PID
+	status        DeploymentPoolStatus
+	restart       *runtime.ScheduledBackoff
+	resizePending bool
+	expectedStop  bool
+	recovering    bool
+}
+
 // DeploymentPoolStatus preserves the existing router/catalog status contract.
 type DeploymentPoolStatus struct {
 	Lifecycle      DeploymentPoolLifecycle
