@@ -33,12 +33,19 @@ const (
 	ArtifactWatcherMetaStopped    ArtifactWatcherMetaLifecycle = "stopped"
 )
 
+// artifactWatcherMetaState tracks the watcher meta-process state and restart policy.
+type artifactWatcherMetaState struct {
+	alias   gen.Alias
+	restart *runtime.ScheduledBackoff
+	status  artifactWatcherMetaStatus
+}
+
 // artifactWatcherMetaStatus is owned by reconcilerActor. The watcher
 // meta-process reports directory facts; the actor derives lifecycle and
 // availability and owns restart state.
 type artifactWatcherMetaStatus struct {
-	Lifecycle    ArtifactWatcherMetaLifecycle
-	Availability runtime.Availability
+	lifecycle    ArtifactWatcherMetaLifecycle
+	availability runtime.Availability
 }
 
 // artifactWatcherMeta owns one watcher instance. fsnotify provides

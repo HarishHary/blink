@@ -26,11 +26,18 @@ const (
 	ArtifactResolverMetaStopped    ArtifactResolverMetaLifecycle = "stopped"
 )
 
+// artifactResolverMetaState tracks the resolver meta-process state and restart policy.
+type artifactResolverMetaState struct {
+	alias   gen.Alias
+	restart *runtime.ScheduledBackoff
+	status  artifactResolverMetaStatus
+}
+
 // artifactResolverMetaStatus is owned by reconcilerActor because the
 // actor owns resolver generations, restart policy, and alias monitoring.
 type artifactResolverMetaStatus struct {
-	Lifecycle    ArtifactResolverMetaLifecycle
-	Availability runtime.Availability
+	lifecycle    ArtifactResolverMetaLifecycle
+	availability runtime.Availability
 }
 
 // artifactResolverMeta owns one resolver instance. It performs filesystem

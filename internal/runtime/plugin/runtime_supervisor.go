@@ -48,7 +48,7 @@ type SupervisorStatus struct {
 	DesiredRevision uint64
 	Transition      SupervisorTransitionPhase
 	Catalog         CatalogActorStatus
-	Reconciler      ReconcilerActorStatus
+	Reconciler      reconcilerActorStatus
 }
 
 // clone returns an independent copy of the runtime status.
@@ -207,9 +207,9 @@ func (s *supervisor[P, M]) Init(...any) (act.SupervisorSpec, error) {
 	s.lifecycle = SupervisorStarting
 	s.catalog.status = newCatalogStatus(0, nil)
 	s.projection.Retry = runtime.NewScheduledBackoff(s.opts.RetryMin, s.opts.RetryMax)
-	s.reconciler.status = ReconcilerActorStatus{
-		Lifecycle:    ReconcilerActorStarting,
-		Availability: runtime.AvailabilityUnavailable,
+	s.reconciler.status = reconcilerActorStatus{
+		lifecycle:    ReconcilerActorStarting,
+		availability: runtime.AvailabilityUnavailable,
 	}
 	s.reconcileStatus()
 
@@ -347,9 +347,9 @@ func (s *supervisor[P, M]) HandleMessage(from gen.PID, message any) error {
 			return nil
 		}
 		s.reconciler.status = m.status
-		if m.status.SnapshotGeneration != s.desiredState.snapshotGeneration ||
-			m.status.Revision != s.desiredState.desiredRevision ||
-			m.status.Availability != runtime.AvailabilityReady {
+		if m.status.snapshotGeneration != s.desiredState.snapshotGeneration ||
+			m.status.revision != s.desiredState.desiredRevision ||
+			m.status.availability != runtime.AvailabilityReady {
 			if s.transition != SupervisorTransitionIdle {
 				s.transition = SupervisorTransitionPreparing
 			}
@@ -573,9 +573,9 @@ func (s *supervisor[P, M]) startReconcilerActor(pid gen.PID) error {
 		s.transition = SupervisorTransitionPreparing
 	}
 	state.pid = pid
-	state.status = ReconcilerActorStatus{
-		Lifecycle:    ReconcilerActorStarting,
-		Availability: runtime.AvailabilityUnavailable,
+	state.status = reconcilerActorStatus{
+		lifecycle:    ReconcilerActorStarting,
+		availability: runtime.AvailabilityUnavailable,
 	}
 	s.reconcileStatus()
 	s.publishStatus()
@@ -638,8 +638,8 @@ func (s *supervisor[P, M]) retireReconcilerActor(pid gen.PID) {
 	if s.transition != SupervisorTransitionIdle {
 		s.transition = SupervisorTransitionPreparing
 	}
-	state.status.Lifecycle = ReconcilerActorRestarting
-	state.status.Availability = runtime.AvailabilityUnavailable
+	state.status.lifecycle = ReconcilerActorRestarting
+	state.status.availability = runtime.AvailabilityUnavailable
 }
 
 // retireCatalogActor marks a catalog incarnation unavailable.
@@ -760,11 +760,11 @@ func (s *supervisor[P, M]) completeDesiredStateTransition() {
 func (s *supervisor[P, M]) desiredStateTransitionReadyToCommit() bool {
 	return s.transition == SupervisorTransitionPreparing &&
 		s.pendingDesiredState.desiredRevision == 0 &&
-		s.reconciler.status.SnapshotGeneration == s.transitionGeneration &&
-		s.reconciler.status.Availability == runtime.AvailabilityReady &&
+		s.reconciler.status.snapshotGeneration == s.transitionGeneration &&
+		s.reconciler.status.availability == runtime.AvailabilityReady &&
 		s.desiredState.desiredRevision != 0 &&
 		s.desiredState.snapshotGeneration == s.transitionGeneration &&
-		s.reconciler.status.Revision == s.desiredState.desiredRevision &&
+		s.reconciler.status.revision == s.desiredState.desiredRevision &&
 		s.catalog.status.Revision == s.desiredState.desiredRevision &&
 		s.catalog.status.Availability == runtime.AvailabilityReady
 }
@@ -779,9 +779,9 @@ func (s *supervisor[P, M]) finishDesiredStateTransition() {
 		!s.projection.Status.Availability.Routable() ||
 		s.projection.Status.CommittedGeneration != s.transitionGeneration ||
 		s.desiredState.snapshotGeneration != s.transitionGeneration ||
-		s.reconciler.status.SnapshotGeneration != s.transitionGeneration ||
-		s.reconciler.status.Revision != s.desiredState.desiredRevision ||
-		s.reconciler.status.Availability != runtime.AvailabilityReady ||
+		s.reconciler.status.snapshotGeneration != s.transitionGeneration ||
+		s.reconciler.status.revision != s.desiredState.desiredRevision ||
+		s.reconciler.status.availability != runtime.AvailabilityReady ||
 		s.catalog.status.Revision != s.desiredState.desiredRevision ||
 		s.catalog.status.Availability != runtime.AvailabilityReady {
 		return
@@ -852,7 +852,7 @@ func (s *supervisor[P, M]) runtimeAvailability() runtime.Availability {
 	}
 	if s.projection.Status.Availability != runtime.AvailabilityReady ||
 		s.catalog.status.Availability != runtime.AvailabilityReady ||
-		s.reconciler.status.Availability != runtime.AvailabilityReady {
+		s.reconciler.status.availability != runtime.AvailabilityReady {
 		return runtime.AvailabilityDegraded
 	}
 	return runtime.AvailabilityReady
