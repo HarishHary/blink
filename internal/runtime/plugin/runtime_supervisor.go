@@ -3,44 +3,64 @@ package plugin
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"ergo.services/ergo/act"
 	"ergo.services/ergo/gen"
-	"github.com/harishhary/blink/internal/plugin"
+	"github.com/cenkalti/backoff/v4"
 	"github.com/harishhary/blink/internal/runtime"
+	"github.com/harishhary/blink/internal/runtime/snapshot"
 )
 
-// RuntimeLifecycle describes the complete plugin runtime subtree.
-type RuntimeLifecycle string
+// ---------------------------------------------------------------------------
+// Types & state
+// ---------------------------------------------------------------------------
 
 const (
-	RuntimeStarting RuntimeLifecycle = "starting"
-	RuntimeRunning  RuntimeLifecycle = "running"
-	RuntimeDraining RuntimeLifecycle = "draining"
-	RuntimeStopped  RuntimeLifecycle = "stopped"
+	supervisorChildRestartIntensity uint16 = 5
+	supervisorChildRestartPeriod    uint16 = 5
 )
 
-// RuntimeStatus is the authoritative public status published by the runtime
-// supervisor. Child actor statuses are merged with supervisor-owned
-// incarnation and restart metadata before they are exposed here.
-type RuntimeStatus struct {
-	Lifecycle       RuntimeLifecycle
+// SupervisorLifecycle describes the complete plugin runtime subtree.
+type SupervisorLifecycle string
+
+const (
+	SupervisorStarting SupervisorLifecycle = "starting"
+	SupervisorRunning  SupervisorLifecycle = "running"
+	SupervisorDraining SupervisorLifecycle = "draining"
+)
+
+// SupervisorTransitionPhase describes desired-state transition progress.
+type SupervisorTransitionPhase uint8
+
+const (
+	SupervisorTransitionIdle SupervisorTransitionPhase = iota
+	SupervisorTransitionPreparing
+	SupervisorTransitionAwaitingFreshness
+	SupervisorTransitionAwaitingProjection
+)
+
+// SupervisorStatus is the authoritative public status published by the runtime
+// supervisor.
+type SupervisorStatus struct {
+	Lifecycle       SupervisorLifecycle
 	Availability    runtime.Availability
 	DesiredRevision uint64
-	Catalog         CatalogStatus
-	Reconciler      DesiredStateReconcilerStatus
+	Transition      SupervisorTransitionPhase
+	Catalog         CatalogActorStatus
+	Reconciler      ReconcilerActorStatus
 }
 
-func (s RuntimeStatus) clone() RuntimeStatus {
+// clone returns an independent copy of the runtime status.
+func (s SupervisorStatus) clone() SupervisorStatus {
 	clone := s
 	clone.Catalog = s.Catalog.clone()
 	return clone
 }
 
-const (
-	runtimeChildRestartIntensity uint16 = 5
-	runtimeChildRestartPeriod    uint16 = 5
-)
+// ---------------------------------------------------------------------------
+// Runtime Events
+// ---------------------------------------------------------------------------
 
 // RuntimeEvents identifies the stable buffered events owned by one runtime
 // supervisor subtree.
@@ -52,107 +72,145 @@ type RuntimeEvents struct {
 // same way that actorsnapshot.EventsFor derives snapshot-reader events.
 func RuntimeEventsFor(node gen.Node, name gen.Atom) RuntimeEvents {
 	return RuntimeEvents{
-		Status: gen.Event{
-			Name: gen.Atom(string(name) + "-status"),
-			Node: node.Name(),
-		},
+		Status: gen.Event{Name: gen.Atom(string(name) + "-status"), Node: node.Name()},
 	}
 }
 
-type runtimeSupervisorOptions[T plugin.Syncable] struct {
-	Name          gen.Atom
-	Dependencies  runtime.ActorDependencies[T]
-	SnapshotEvent gen.Event
-	Directory     string
-	Stopped       chan<- error
-}
+// ---------------------------------------------------------------------------
+// Supervisor Configuration
+// ---------------------------------------------------------------------------
 
+// runtimeDrainWaiter tracks a caller waiting for runtime drain completion.
 type runtimeDrainWaiter struct {
 	pid gen.PID
 	ref gen.Ref
 }
 
+// alive reports whether the drain waiter can still receive a response.
 func (t runtimeDrainWaiter) alive() bool { return t.ref.IsAlive() }
 
+// ---------------------------------------------------------------------------
+// Runtime Control Messages
+// ---------------------------------------------------------------------------
+
+// DrainRequest asks the runtime supervisor to drain.
 type DrainRequest struct{}
 
+// DrainResponse reports completion of a runtime drain request.
 type DrainResponse struct{ Err error }
 
-type RuntimeStatusRequest struct{}
+// SupervisorStatusRequest asks the runtime supervisor for its current status.
+type SupervisorStatusRequest struct{}
 
-type RuntimeStatusResponse struct{ Status RuntimeStatus }
+// SupervisorStatusResponse contains the current runtime status.
+type SupervisorStatusResponse struct{ Status SupervisorStatus }
 
-type runtimeInvocationState struct {
-	catalogPID gen.PID
-	result     *runtime.AsyncResult
+// SupervisorStateRequest asks the runtime supervisor for its ready generation.
+type SupervisorStateRequest struct{}
+
+// SupervisorStateResponse contains the ready runtime generation.
+type SupervisorStateResponse struct{ Generation int64 }
+
+// MessageProjectionCommitRetry triggers a deferred projection commit retry.
+type MessageProjectionCommitRetry struct{ token uint64 }
+
+// MessageProjectionCommitDeadline marks a projection commit attempt as expired.
+type MessageProjectionCommitDeadline struct {
+	token         uint64
+	generation    int64
+	projectionPID gen.PID
 }
 
-type runtimeReconcilerState struct {
-	pid          gen.PID
-	incarnation  uint64
-	restartCount uint64
-	status       DesiredStateReconcilerStatus
+// ---------------------------------------------------------------------------
+// Runtime State
+// ---------------------------------------------------------------------------
+
+// runtimeCall tracks an in-flight runtime call.
+type runtimeCall struct {
+	catalog gen.PID
+	result  *runtime.AsyncResult
+	cancel  context.CancelFunc
 }
 
-type runtimeCatalogState struct {
-	pid             gen.PID
-	actorGeneration uint64
-	restartCount    uint64
-	lastEpoch       uint64
-	status          CatalogStatus
-}
+// ---------------------------------------------------------------------------
+// Runtime Supervisor
+// ---------------------------------------------------------------------------
 
-type runtimeSupervisor[T plugin.Syncable] struct {
+// supervisor coordinates the runtime actor subtree.
+type supervisor[P Syncable, M any] struct {
 	act.Supervisor
-
-	opts runtimeSupervisorOptions[T]
-
-	events      RuntimeEvents
-	statusToken gen.Ref
-
-	reconciler runtimeReconcilerState
-	catalog    runtimeCatalogState
-
-	desiredState        MessageApplyCatalogDesiredState
-	inFlightInvocations map[uint64]runtimeInvocationState
-	drainWaiters        []runtimeDrainWaiter
-
-	draining    bool
-	everRunning bool
-	liveStatus  RuntimeStatus
+	opts                 SupervisorOptions[P, M]
+	events               RuntimeEvents
+	statusToken          gen.Ref
+	reconciler           reconcilerActorState
+	catalog              catalogActorState
+	snapshot             snapshot.SupervisorState
+	projection           snapshot.ProjectionActorState
+	desiredState         MessageApplyCatalogDesiredState
+	pendingDesiredState  MessageApplyCatalogDesiredState
+	inFlightCalls        map[uint64]runtimeCall
+	drainWaiters         []runtimeDrainWaiter
+	lifecycle            SupervisorLifecycle
+	transition           SupervisorTransitionPhase
+	transitionGeneration int64
+	liveStatus           SupervisorStatus
 }
 
-type MessageApplyDesiredState struct {
+// ---------------------------------------------------------------------------
+// Runtime Messages
+// ---------------------------------------------------------------------------
+
+// MessageProposeDesiredState offers a fully resolved state for drain and promotion.
+type MessageProposeDesiredState struct {
 	desired MessageApplyCatalogDesiredState
 }
 
-type MessageSubmitInvocation[T plugin.Syncable] struct {
+// MessageSubmitInvocation requests execution of a plugin invocation.
+type MessageSubmitInvocation[T Syncable] struct {
 	callID               uint64
 	context              context.Context
+	cancel               context.CancelFunc
 	pluginID, rolloutKey string
+	expectedGeneration   int64
 	fn                   func(context.Context, T) error
 	shadow               bool
 	result               *runtime.AsyncResult
 }
 
-func newRuntimeSupervisor[T plugin.Syncable](opts runtimeSupervisorOptions[T]) gen.ProcessBehavior {
-	return &runtimeSupervisor[T]{opts: opts}
+// ---------------------------------------------------------------------------
+// Supervisor Initialization
+// ---------------------------------------------------------------------------
+
+// newRuntimeSupervisor creates a runtime supervisor process behavior.
+func newRuntimeSupervisor[P Syncable, M any](opts SupervisorOptions[P, M]) gen.ProcessBehavior {
+	return &supervisor[P, M]{opts: opts}
 }
 
-func (s *runtimeSupervisor[T]) Init(...any) (act.SupervisorSpec, error) {
+// Init validates and initializes the runtime supervisor subtree.
+func (s *supervisor[P, M]) Init(...any) (act.SupervisorSpec, error) {
+	s.opts = supervisorOptionsWithDefaults(s.opts)
 	if s.opts.Name == "" ||
-		s.opts.Dependencies.Adapter == nil ||
-		s.opts.SnapshotEvent.Name == "" ||
-		s.opts.Directory == "" {
+		s.opts.CatalogOptions.RouterOptions.Adapter == nil ||
+		s.opts.Directory == "" ||
+		s.opts.SnapshotReader.ReaderFactory == nil ||
+		s.opts.Projection.Parse == nil || s.opts.Projection.Clone == nil || s.opts.Projection.MaxProcs == nil {
 		return act.SupervisorSpec{}, fmt.Errorf(
-			"actorruntime: name, adapter, snapshot event, and directory are required",
+			"actorruntime: name, adapter, reader options, projection, and directory are required",
 		)
+	}
+	if err := s.RegisterName(s.opts.Name); err != nil {
+		return act.SupervisorSpec{}, fmt.Errorf("register runtime supervisor %q: %w", s.opts.Name, err)
 	}
 
 	s.events = RuntimeEventsFor(s.Node(), s.opts.Name)
-	s.inFlightInvocations = make(map[uint64]runtimeInvocationState)
-	s.catalog.status = newCatalogStatus(0, 0, "")
-	s.reconciler.status = newDesiredStateReconcilerStatus(0, 0, nil)
+	s.inFlightCalls = make(map[uint64]runtimeCall)
+	s.lifecycle = SupervisorStarting
+	s.catalog.status = newCatalogStatus(0, nil)
+	s.projection.Retry = runtime.NewScheduledBackoff(s.opts.RetryMin, s.opts.RetryMax)
+	s.reconciler.status = ReconcilerActorStatus{
+		Lifecycle:    ReconcilerActorStarting,
+		Availability: runtime.AvailabilityUnavailable,
+	}
 	s.reconcileStatus()
 
 	token, err := s.RegisterEvent(s.events.Status.Name, gen.EventOptions{Buffer: 1})
@@ -167,32 +225,43 @@ func (s *runtimeSupervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 	s.publishStatus()
 
 	return act.SupervisorSpec{
-		Type:                act.SupervisorTypeOneForOne,
+		Type:                act.SupervisorTypeRestForOne,
 		EnableHandleChild:   true,
 		DisableAutoShutdown: true,
 		Restart: act.SupervisorRestart{
-			Strategy:  act.SupervisorStrategyPermanent,
-			Intensity: runtimeChildRestartIntensity,
-			Period:    runtimeChildRestartPeriod,
+			Strategy:  act.SupervisorStrategyTransient,
+			Intensity: supervisorChildRestartIntensity,
+			Period:    supervisorChildRestartPeriod,
 		},
 		Children: []act.SupervisorChildSpec{
 			{
+				Name: s.snapshotSupervisorName(),
+				Factory: func() gen.ProcessBehavior {
+					readerOptions := s.opts.SnapshotReader
+					readerOptions.Name = s.snapshotSupervisorName()
+					return snapshot.NewSupervisor(snapshot.SupervisorOptions[M]{
+						ReaderActorOptions: readerOptions,
+						Projection:         s.opts.Projection,
+						ProjectionMode:     snapshot.ProjectionCommitExternal,
+					})
+				},
+			},
+			{
 				Name: s.reconcilerActorName(),
 				Factory: func() gen.ProcessBehavior {
-					return newDesiredStateReconcilerActor(
-						s.opts.SnapshotEvent,
+					events := snapshot.EventsFor(s.Node(), s.snapshotSupervisorName())
+					return newReconcilerActor(
+						events,
 						s.opts.Directory,
-						s.opts.Dependencies.Adapter,
-						s.opts.Dependencies.RetryMin,
-						s.opts.Dependencies.RetryMax,
+						s.opts.RetryMin,
+						s.opts.RetryMax,
 					)
 				},
-				Options: gen.ProcessOptions{},
 			},
 			{
 				Name: s.catalogActorName(),
 				Factory: func() gen.ProcessBehavior {
-					return newCatalogActor(s.opts.Dependencies)
+					return newCatalogActor(s.opts.CatalogOptions)
 				},
 				Options: gen.ProcessOptions{},
 			},
@@ -200,36 +269,48 @@ func (s *runtimeSupervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 	}, nil
 }
 
+// ---------------------------------------------------------------------------
+// Supervisor Message Handling
+// ---------------------------------------------------------------------------
+
 // HandleCall remains control-plane only. Plugin execution enters through
 // MessageSubmitInvocation in HandleMessage and never blocks an Ergo Call callback.
-func (s *runtimeSupervisor[T]) HandleCall(from gen.PID, ref gen.Ref, request any) (any, error) {
+func (s *supervisor[P, M]) HandleCall(from gen.PID, ref gen.Ref, request any) (any, error) {
 	switch request.(type) {
 	case DrainRequest:
 		s.drainWaiters = append(s.drainWaiters, runtimeDrainWaiter{pid: from, ref: ref})
-		if s.draining {
+		if s.lifecycle == SupervisorDraining {
 			return nil, nil
 		}
 
-		s.draining = true
+		s.lifecycle = SupervisorDraining
+		s.cancelProjectionDeadline()
 		s.reconcileStatus()
 		s.publishStatus()
 		if s.catalog.pid != (gen.PID{}) {
-			_ = s.Send(s.catalog.pid, runtime.MessageDrain{})
+			_ = s.Send(s.catalog.pid, MessageDrain{})
 		}
 		return nil, nil
 
-	case RuntimeStatusRequest:
-		return RuntimeStatusResponse{Status: s.liveStatus.clone()}, nil
+	case SupervisorStatusRequest:
+		return SupervisorStatusResponse{Status: s.liveStatus.clone()}, nil
+
+	case SupervisorStateRequest:
+		if !s.supervisorStateReader() {
+			return nil, runtime.ErrPluginUnavailable
+		}
+		return SupervisorStateResponse{Generation: s.projection.ReadyGeneration}, nil
 
 	default:
 		return nil, fmt.Errorf("actorruntime: unsupported supervisor call %T", request)
 	}
 }
 
-func (s *runtimeSupervisor[T]) HandleMessage(from gen.PID, message any) error {
+// HandleMessage processes runtime control and child-actor messages.
+func (s *supervisor[P, M]) HandleMessage(from gen.PID, message any) error {
 	switch m := message.(type) {
-	case MessageSubmitInvocation[T]:
-		if s.draining || s.catalog.pid == (gen.PID{}) {
+	case MessageSubmitInvocation[P]:
+		if !s.acceptsSubmission(m.expectedGeneration) {
 			m.result.Complete(runtime.ErrPluginUnavailable)
 			return nil
 		}
@@ -239,13 +320,15 @@ func (s *runtimeSupervisor[T]) HandleMessage(from gen.PID, message any) error {
 		}
 
 		catalogPID := s.catalog.pid
-		s.inFlightInvocations[m.callID] = runtimeInvocationState{
-			catalogPID: catalogPID,
-			result:     m.result,
+		s.inFlightCalls[m.callID] = runtimeCall{
+			catalog: catalogPID,
+			result:  m.result,
+			cancel:  m.cancel,
 		}
-		call := runtime.MessageInvokePlugin[T]{
+		call := MessageInvokePlugin[P]{
 			CallID:     m.callID,
 			Context:    m.context,
+			Cancel:     m.cancel,
 			PluginID:   m.pluginID,
 			RolloutKey: m.rolloutKey,
 			Fn:         m.fn,
@@ -259,44 +342,111 @@ func (s *runtimeSupervisor[T]) HandleMessage(from gen.PID, message any) error {
 			)
 		}
 
-	case MessageDesiredStateReconcilerStatusChanged:
+	case MessageReconcilerActorStatusChanged:
 		if from != s.reconciler.pid {
 			return nil
 		}
-		s.mergeReconcilerStatus(m.status)
+		s.reconciler.status = m.status
+		if m.status.SnapshotGeneration != s.desiredState.snapshotGeneration ||
+			m.status.Revision != s.desiredState.desiredRevision ||
+			m.status.Availability != runtime.AvailabilityReady {
+			if s.transition != SupervisorTransitionIdle {
+				s.transition = SupervisorTransitionPreparing
+			}
+		}
+		s.completeDesiredStateTransition()
+		s.finishDesiredStateTransition()
 		s.reconcileStatus()
 		s.publishStatus()
 
-	case MessageApplyDesiredState:
+	case MessageDesiredStateFreshness:
 		if from != s.reconciler.pid ||
-			s.draining ||
-			m.desired.desiredRevision <= s.desiredState.desiredRevision {
+			s.transition != SupervisorTransitionAwaitingFreshness ||
+			s.pendingDesiredState.desiredRevision != 0 ||
+			m.snapshotGeneration != s.transitionGeneration ||
+			m.snapshotGeneration != s.desiredState.snapshotGeneration ||
+			m.desiredRevision != s.desiredState.desiredRevision {
+			return nil
+		}
+		s.transition = SupervisorTransitionAwaitingProjection
+		s.projection.CommittedGeneration = m.snapshotGeneration
+		s.projection.ReadyGeneration = 0
+		err := s.requestProjectionCommit()
+		s.reconcileStatus()
+		s.publishStatus()
+		return err
+
+	case snapshot.MessageProjectionActorStatusChanged:
+		if from != s.snapshot.Pid {
+			return nil
+		}
+		return s.handleProjectionStatus(m.Status, m.ProjectionPID)
+
+	case snapshot.MessageProjectionCommitResult:
+		// A NACK is stamped by the authenticated snapshot supervisor with its
+		// current projection PID, allowing recovery from a stale pending PID.
+		if from != s.snapshot.Pid ||
+			m.Generation != s.projection.PendingGeneration ||
+			(m.Err == nil && m.ProjectionPID != s.projection.PendingPID) {
+			return nil
+		}
+		return s.handleProjectionCommitResult(m)
+
+	case MessageProjectionCommitRetry:
+		if !s.projection.Retry.Pending || s.projection.Retry.Token != m.token {
+			return nil
+		}
+		s.projection.Retry.Pending = false
+		s.projection.Retry.Cancel = nil
+		s.projection.PendingGeneration = 0
+		s.projection.PendingPID = gen.PID{}
+		return s.requestProjectionCommit()
+
+	case MessageProjectionCommitDeadline:
+		if m.token != s.projection.DeadlineToken ||
+			m.generation != s.projection.PendingGeneration ||
+			m.projectionPID != s.projection.PendingPID {
+			return nil
+		}
+		s.projection.DeadlineCancel = nil
+		s.projection.PendingGeneration = 0
+		s.projection.PendingPID = gen.PID{}
+		return s.scheduleProjectionCommitRetry()
+
+	case MessageProposeDesiredState:
+		if from != s.reconciler.pid ||
+			s.lifecycle == SupervisorDraining ||
+			m.desired.desiredRevision <= s.desiredState.desiredRevision ||
+			m.desired.desiredRevision <= s.pendingDesiredState.desiredRevision ||
+			m.desired.snapshotGeneration < s.desiredState.snapshotGeneration ||
+			m.desired.snapshotGeneration < s.pendingDesiredState.snapshotGeneration {
 			return nil
 		}
 
-		s.desiredState = m.desired
-		if s.catalog.pid != (gen.PID{}) {
-			if err := s.Send(s.catalog.pid, m.desired); err != nil {
-				_ = s.Node().SendExit(
-					s.catalog.pid,
-					fmt.Errorf("apply desired state to catalog: %w", err),
-				)
-			}
+		s.pendingDesiredState = m.desired
+		if !s.pendingProjectionReady() {
+			s.reconcileStatus()
+			s.publishStatus()
+			return nil
 		}
-		s.reconcileStatus()
-		s.publishStatus()
+		return s.beginPendingDesiredStateTransition()
 
-	case runtime.MessageCancelInvocation:
-		call, ok := s.inFlightInvocations[m.CallID]
+	case MessageCancelInvocation:
+		call, ok := s.inFlightCalls[m.CallID]
 		if !ok {
 			return nil
 		}
-		if err := s.Send(call.catalogPID, m); err != nil {
+		if call.cancel != nil {
+			call.cancel()
+		}
+		if err := s.SendWithPriority(call.catalog, m, gen.MessagePriorityHigh); err != nil {
 			s.finishCall(m.CallID, m.Err)
 		}
 
-	case runtime.MessageInvocationCompleted:
-		s.finishCall(m.CallID, m.Err)
+	case MessageInvocationCompleted:
+		if call, ok := s.inFlightCalls[m.CallID]; ok && from == call.catalog {
+			s.finishCall(m.CallID, m.Err)
+		}
 
 	case MessageCatalogStatusChanged:
 		if from != s.catalog.pid ||
@@ -308,18 +458,20 @@ func (s *runtimeSupervisor[T]) HandleMessage(from gen.PID, message any) error {
 
 		s.catalog.lastEpoch = m.epoch
 		s.mergeCatalogStatus(m.status)
+		s.completeDesiredStateTransition()
+		s.finishDesiredStateTransition()
 		s.reconcileStatus()
 		s.publishStatus()
 
 	case MessageCatalogDrained:
-		if !s.draining ||
+		if s.lifecycle != SupervisorDraining ||
 			from != s.catalog.pid ||
 			m.pid != s.catalog.pid ||
 			m.generation != s.catalog.actorGeneration {
 			return nil
 		}
 
-		for callID := range s.inFlightInvocations {
+		for callID := range s.inFlightCalls {
 			s.finishCall(callID, runtime.ErrPluginUnavailable)
 		}
 		for _, waiter := range s.drainWaiters {
@@ -333,24 +485,39 @@ func (s *runtimeSupervisor[T]) HandleMessage(from gen.PID, message any) error {
 	return nil
 }
 
-func (s *runtimeSupervisor[T]) HandleChildStart(name gen.Atom, pid gen.PID) error {
+// ---------------------------------------------------------------------------
+// Child Lifecycle
+// ---------------------------------------------------------------------------
+
+// HandleChildStart records a child actor incarnation.
+func (s *supervisor[P, M]) HandleChildStart(name gen.Atom, pid gen.PID) error {
 	switch name {
+	case s.snapshotSupervisorName():
+		s.startSnapshotSupervisor(pid)
+
 	case s.reconcilerActorName():
-		return s.startReconcilerIncarnation(pid)
+		return s.startReconcilerActor(pid)
 
 	case s.catalogActorName():
-		return s.startCatalogIncarnation(pid)
+		return s.startCatalogActor(pid)
 	}
 	return nil
 }
 
-func (s *runtimeSupervisor[T]) HandleChildTerminate(name gen.Atom, pid gen.PID, reason error) error {
+// HandleChildTerminate retires a terminated child actor incarnation.
+func (s *supervisor[P, M]) HandleChildTerminate(name gen.Atom, pid gen.PID, reason error) error {
 	switch name {
+	case s.snapshotSupervisorName():
+		if s.snapshot.Pid == pid {
+			s.snapshot.Pid = gen.PID{}
+			s.projection.ReadyGeneration = 0
+		}
+
 	case s.reconcilerActorName():
-		s.retireReconcilerIncarnation(pid, reason)
+		s.retireReconcilerActor(pid)
 
 	case s.catalogActorName():
-		s.retireCatalogIncarnation(pid, reason)
+		s.retireCatalogActor(pid, reason)
 	}
 
 	s.reconcileStatus()
@@ -358,47 +525,66 @@ func (s *runtimeSupervisor[T]) HandleChildTerminate(name gen.Atom, pid gen.PID, 
 	return nil
 }
 
-func (s *runtimeSupervisor[T]) Terminate(reason error) {
-	for callID := range s.inFlightInvocations {
+// Terminate stops the runtime supervisor and completes outstanding calls.
+func (s *supervisor[P, M]) Terminate(reason error) {
+	s.lifecycle = SupervisorDraining
+	s.cancelProjectionCommitRetry(false)
+	s.cancelProjectionDeadline()
+	for callID := range s.inFlightCalls {
 		s.finishCall(callID, runtime.ErrPluginUnavailable)
 	}
-
-	s.liveStatus.Lifecycle = RuntimeStopped
-	s.liveStatus.Availability = runtime.AvailabilityUnavailable
-	s.liveStatus.Catalog.Lifecycle = CatalogStopped
-	s.liveStatus.Catalog.Availability = runtime.AvailabilityUnavailable
-	s.liveStatus.Reconciler.Lifecycle = DesiredStateReconcilerStopped
-	s.liveStatus.Reconciler.Availability = runtime.AvailabilityUnavailable
-	s.publishStatus()
-
-	if s.opts.Stopped == nil {
-		return
-	}
-	select {
-	case s.opts.Stopped <- reason:
-	default:
+	if s.opts.Stopped != nil {
+		select {
+		case s.opts.Stopped <- reason:
+		default:
+		}
 	}
 }
 
-func (s *runtimeSupervisor[T]) startReconcilerIncarnation(pid gen.PID) error {
-	state := &s.reconciler
-	if state.incarnation > 0 {
-		state.restartCount++
-	}
+// ---------------------------------------------------------------------------
+// Component Lifecycle
+// ---------------------------------------------------------------------------
 
-	state.incarnation++
+// startSnapshotSupervisor records a new snapshot supervisor incarnation.
+func (s *supervisor[P, M]) startSnapshotSupervisor(pid gen.PID) {
+	if s.snapshot.Pid == pid {
+		return
+	}
+	s.snapshot.Pid = pid
+	s.snapshot.Epoch++
+	s.projection.Pid = gen.PID{}
+	s.projection.ReadyGeneration = 0
+	s.projection.PendingGeneration = 0
+	s.projection.PendingPID = gen.PID{}
+	s.projection.Status = snapshot.ProjectionActorStatus{
+		Lifecycle:    snapshot.ProjectionActorRestarting,
+		Availability: runtime.AvailabilityUnavailable,
+	}
+	s.cancelProjectionCommitRetry(false)
+	s.cancelProjectionDeadline()
+	s.reconcileStatus()
+	s.publishStatus()
+}
+
+// startReconcilerActor initializes a desired-state reconciler incarnation.
+func (s *supervisor[P, M]) startReconcilerActor(pid gen.PID) error {
+	state := &s.reconciler
+	if s.transition != SupervisorTransitionIdle {
+		s.transition = SupervisorTransitionPreparing
+	}
 	state.pid = pid
-	state.status = newDesiredStateReconcilerStatus(
-		state.incarnation,
-		state.restartCount,
-		state.status.LastError,
-	)
+	state.status = ReconcilerActorStatus{
+		Lifecycle:    ReconcilerActorStarting,
+		Availability: runtime.AvailabilityUnavailable,
+	}
 	s.reconcileStatus()
 	s.publishStatus()
 
-	if err := s.Send(pid, MessageDesiredStateReconcilerActivate{
-		revisionBase: s.desiredState.desiredRevision,
-	}); err != nil {
+	revisionBase := s.desiredState.desiredRevision
+	if s.pendingDesiredState.desiredRevision > revisionBase {
+		revisionBase = s.pendingDesiredState.desiredRevision
+	}
+	if err := s.Send(pid, MessageReconcilerActorActivate{revisionBase: revisionBase}); err != nil {
 		_ = s.Node().SendExit(
 			pid,
 			fmt.Errorf("activate desired-state reconciler: %w", err),
@@ -407,19 +593,15 @@ func (s *runtimeSupervisor[T]) startReconcilerIncarnation(pid gen.PID) error {
 	return nil
 }
 
-func (s *runtimeSupervisor[T]) startCatalogIncarnation(pid gen.PID) error {
+// startCatalogActor initializes a catalog actor incarnation.
+func (s *supervisor[P, M]) startCatalogActor(pid gen.PID) error {
 	state := &s.catalog
-	if state.actorGeneration > 0 {
-		state.restartCount++
-	}
-
 	state.actorGeneration++
 	state.pid = pid
 	state.lastEpoch = 0
 	state.status = newCatalogStatus(
 		state.actorGeneration,
-		state.restartCount,
-		state.status.ActorLastError,
+		state.status.LastError,
 	)
 	s.reconcileStatus()
 	s.publishStatus()
@@ -434,8 +616,8 @@ func (s *runtimeSupervisor[T]) startCatalogIncarnation(pid gen.PID) error {
 			return nil
 		}
 	}
-	if s.draining {
-		if err := s.Send(pid, runtime.MessageDrain{}); err != nil {
+	if s.lifecycle == SupervisorDraining {
+		if err := s.Send(pid, MessageDrain{}); err != nil {
 			_ = s.Node().SendExit(
 				pid,
 				fmt.Errorf("drain replacement catalog: %w", err),
@@ -445,27 +627,23 @@ func (s *runtimeSupervisor[T]) startCatalogIncarnation(pid gen.PID) error {
 	return nil
 }
 
-func (s *runtimeSupervisor[T]) retireReconcilerIncarnation(pid gen.PID, reason error) {
+// retireReconcilerActor marks a reconciler incarnation unavailable.
+func (s *supervisor[P, M]) retireReconcilerActor(pid gen.PID) {
 	state := &s.reconciler
 	if state.pid != pid {
 		return
 	}
 
 	state.pid = gen.PID{}
-	state.status.Lifecycle = DesiredStateReconcilerRestarting
+	if s.transition != SupervisorTransitionIdle {
+		s.transition = SupervisorTransitionPreparing
+	}
+	state.status.Lifecycle = ReconcilerActorRestarting
 	state.status.Availability = runtime.AvailabilityUnavailable
-	state.status.Incarnation = state.incarnation
-	state.status.RestartCount = state.restartCount
-	state.status.LastError = reason
-	state.status.Resolver.Lifecycle = ArtifactResolverStopped
-	state.status.Resolver.Availability = runtime.AvailabilityUnavailable
-	state.status.Resolver.RestartPending = false
-	state.status.Watcher.Lifecycle = ArtifactWatcherStopped
-	state.status.Watcher.Availability = runtime.AvailabilityUnavailable
-	state.status.Watcher.RestartPending = false
 }
 
-func (s *runtimeSupervisor[T]) retireCatalogIncarnation(pid gen.PID, reason error) {
+// retireCatalogActor marks a catalog incarnation unavailable.
+func (s *supervisor[P, M]) retireCatalogActor(pid gen.PID, reason error) {
 	state := &s.catalog
 	if state.pid != pid {
 		return
@@ -473,128 +651,459 @@ func (s *runtimeSupervisor[T]) retireCatalogIncarnation(pid gen.PID, reason erro
 
 	state.pid = gen.PID{}
 	state.lastEpoch = 0
-	state.status.Lifecycle = CatalogRestarting
+	state.status.Lifecycle = CatalogActorRestarting
 	state.status.Availability = runtime.AvailabilityUnavailable
-	state.status.ActorGeneration = state.actorGeneration
-	state.status.RestartCount = state.restartCount
-	state.status.RestartPending = true
-	state.status.ActorLastError = errorText(reason)
+	state.status.Generation = state.actorGeneration
+	state.status.LastError = reason
 
-	for callID, call := range s.inFlightInvocations {
-		if call.catalogPID == pid {
+	for callID, call := range s.inFlightCalls {
+		if call.catalog == pid {
 			s.finishCall(callID, runtime.ErrPluginUnavailable)
 		}
 	}
 }
 
-func (s *runtimeSupervisor[T]) finishCall(callID uint64, err error) {
-	call, ok := s.inFlightInvocations[callID]
+// ---------------------------------------------------------------------------
+// Invocation Lifecycle
+// ---------------------------------------------------------------------------
+
+// finishCall completes and removes an in-flight plugin invocation.
+func (s *supervisor[P, M]) finishCall(callID uint64, err error) {
+	call, ok := s.inFlightCalls[callID]
 	if !ok {
 		return
 	}
-	delete(s.inFlightInvocations, callID)
-	call.result.Complete(err)
-}
-
-func (s *runtimeSupervisor[T]) mergeReconcilerStatus(status DesiredStateReconcilerStatus) {
-	state := &s.reconciler
-	status.Incarnation = state.incarnation
-	status.RestartCount = state.restartCount
-	if status.Lifecycle == DesiredStateReconcilerRunning {
-		status.LastError = nil
-	} else {
-		status.LastError = state.status.LastError
+	delete(s.inFlightCalls, callID)
+	if call.cancel != nil {
+		call.cancel()
 	}
-	state.status = status
+	call.result.Complete(err)
+	_ = s.promotePendingDesiredState()
 }
 
-func (s *runtimeSupervisor[T]) mergeCatalogStatus(status CatalogStatus) {
+// ---------------------------------------------------------------------------
+// Desired State Transitions
+// ---------------------------------------------------------------------------
+
+// promotePendingDesiredState applies the latest proposal after tracked calls drain.
+func (s *supervisor[P, M]) promotePendingDesiredState() error {
+	if s.lifecycle == SupervisorDraining || s.transition == SupervisorTransitionIdle || len(s.inFlightCalls) != 0 ||
+		s.pendingDesiredState.desiredRevision == 0 ||
+		s.pendingDesiredState.snapshotGeneration != s.transitionGeneration {
+		return nil
+	}
+	s.desiredState = s.pendingDesiredState
+	s.pendingDesiredState = MessageApplyCatalogDesiredState{}
+	if s.catalog.pid != (gen.PID{}) {
+		if err := s.Send(s.catalog.pid, s.desiredState); err != nil {
+			_ = s.Node().SendExit(
+				s.catalog.pid,
+				fmt.Errorf("apply desired state to catalog: %w", err),
+			)
+		}
+	}
+	s.completeDesiredStateTransition()
+	s.reconcileStatus()
+	s.publishStatus()
+	return nil
+}
+
+// beginPendingDesiredStateTransition closes admission only after the target projection is prepared.
+func (s *supervisor[P, M]) beginPendingDesiredStateTransition() error {
+	if s.lifecycle == SupervisorDraining || s.pendingDesiredState.desiredRevision == 0 || !s.pendingProjectionReady() {
+		return nil
+	}
+
+	s.transition = SupervisorTransitionPreparing
+	s.transitionGeneration = s.pendingDesiredState.snapshotGeneration
+	s.cancelProjectionCommitRetry(false)
+	s.cancelProjectionDeadline()
+	s.projection.PendingGeneration = 0
+	s.projection.PendingPID = gen.PID{}
+	s.reconcileStatus()
+	s.publishStatus()
+	return s.promotePendingDesiredState()
+}
+
+// pendingProjectionReady reports whether the pending projection can transition.
+func (s *supervisor[P, M]) pendingProjectionReady() bool {
+	target := s.pendingDesiredState.snapshotGeneration
+	if target == 0 {
+		return false
+	}
+	if target == s.projection.CommittedGeneration {
+		return s.projection.ReadyGeneration == target &&
+			s.projection.Status.Lifecycle == snapshot.ProjectionActorRunning &&
+			s.projection.Status.Availability == runtime.AvailabilityReady &&
+			s.projection.Status.CommittedGeneration == target &&
+			s.projection.Status.PreparedGeneration == 0
+	}
+	return s.projection.Status.Lifecycle == snapshot.ProjectionActorRunning &&
+		s.projection.Status.Availability == runtime.AvailabilityReady &&
+		s.projection.Status.PreparedGeneration == target
+}
+
+// completeDesiredStateTransition requests a freshness confirmation when ready.
+func (s *supervisor[P, M]) completeDesiredStateTransition() {
+	if !s.desiredStateTransitionReadyToCommit() {
+		return
+	}
+	if err := s.Send(s.reconciler.pid, MessageDesiredStateFreshness{
+		snapshotGeneration: s.transitionGeneration,
+		desiredRevision:    s.desiredState.desiredRevision,
+	}); err == nil {
+		s.transition = SupervisorTransitionAwaitingFreshness
+	}
+}
+
+// desiredStateTransitionReadyToCommit reports whether all transition dependencies converged.
+func (s *supervisor[P, M]) desiredStateTransitionReadyToCommit() bool {
+	return s.transition == SupervisorTransitionPreparing &&
+		s.pendingDesiredState.desiredRevision == 0 &&
+		s.reconciler.status.SnapshotGeneration == s.transitionGeneration &&
+		s.reconciler.status.Availability == runtime.AvailabilityReady &&
+		s.desiredState.desiredRevision != 0 &&
+		s.desiredState.snapshotGeneration == s.transitionGeneration &&
+		s.reconciler.status.Revision == s.desiredState.desiredRevision &&
+		s.catalog.status.Revision == s.desiredState.desiredRevision &&
+		s.catalog.status.Availability == runtime.AvailabilityReady
+}
+
+// finishDesiredStateTransition reopens admission after every current dependency converges.
+func (s *supervisor[P, M]) finishDesiredStateTransition() {
+	if s.transition != SupervisorTransitionAwaitingProjection ||
+		s.pendingDesiredState.desiredRevision != 0 ||
+		s.projection.ReadyGeneration != s.transitionGeneration ||
+		s.projection.CommittedGeneration != s.transitionGeneration ||
+		s.projection.Status.Lifecycle != snapshot.ProjectionActorRunning ||
+		!s.projection.Status.Availability.Routable() ||
+		s.projection.Status.CommittedGeneration != s.transitionGeneration ||
+		s.desiredState.snapshotGeneration != s.transitionGeneration ||
+		s.reconciler.status.SnapshotGeneration != s.transitionGeneration ||
+		s.reconciler.status.Revision != s.desiredState.desiredRevision ||
+		s.reconciler.status.Availability != runtime.AvailabilityReady ||
+		s.catalog.status.Revision != s.desiredState.desiredRevision ||
+		s.catalog.status.Availability != runtime.AvailabilityReady {
+		return
+	}
+	s.transition = SupervisorTransitionIdle
+}
+
+// ---------------------------------------------------------------------------
+// Status Reporting
+// ---------------------------------------------------------------------------
+// newCatalogStatus returns an initial catalog status for an actor incarnation.
+func newCatalogStatus(actorGeneration uint64, lastError error) CatalogActorStatus {
+	return CatalogActorStatus{
+		Lifecycle:    CatalogActorStarting,
+		Availability: runtime.AvailabilityUnavailable,
+		Generation:   actorGeneration,
+		LastError:    lastError,
+		Routers:      make(map[string]RouterActorStatus),
+	}
+}
+
+// mergeCatalogStatus merges the latest catalog status into supervisor state.
+func (s *supervisor[P, M]) mergeCatalogStatus(status CatalogActorStatus) {
 	state := &s.catalog
 	next := status.clone()
-	next.ActorGeneration = state.actorGeneration
-	next.RestartCount = state.restartCount
-	next.RestartPending = false
-	if next.Lifecycle == CatalogRunning {
-		next.ActorLastError = ""
-		s.everRunning = true
+	next.Generation = state.actorGeneration
+	if next.Lifecycle == CatalogActorRunning {
+		next.LastError = nil
+		if s.lifecycle != SupervisorDraining {
+			s.lifecycle = SupervisorRunning
+		}
 	} else {
-		next.ActorLastError = state.status.ActorLastError
+		next.LastError = state.status.LastError
 	}
 	state.status = next
 }
 
-func (s *runtimeSupervisor[T]) reconcileStatus() {
-	s.liveStatus = RuntimeStatus{
-		Lifecycle:       s.runtimeLifecycle(),
+// reconcileStatus rebuilds the published runtime status.
+func (s *supervisor[P, M]) reconcileStatus() {
+	lifecycle := s.lifecycle
+	if lifecycle == "" {
+		lifecycle = SupervisorStarting
+	}
+	s.liveStatus = SupervisorStatus{
+		Lifecycle:       lifecycle,
 		Availability:    s.runtimeAvailability(),
-		DesiredRevision: s.desiredState.desiredRevision,
+		DesiredRevision: s.currentDesiredRevision(),
+		Transition:      s.transition,
 		Catalog:         s.catalog.status.clone(),
 		Reconciler:      s.reconciler.status,
 	}
 }
 
-func (s *runtimeSupervisor[T]) publishStatus() {
+// publishStatus emits the current runtime status event.
+func (s *supervisor[P, M]) publishStatus() {
 	if s.events.Status.Name == "" || s.statusToken == (gen.Ref{}) {
 		return
 	}
 	_ = s.SendEvent(s.events.Status.Name, s.statusToken, s.liveStatus.clone())
 }
 
-func newCatalogStatus(actorGeneration uint64, restartCount uint64, lastError string) CatalogStatus {
-	return CatalogStatus{
-		Lifecycle:       CatalogStarting,
-		Availability:    runtime.AvailabilityUnavailable,
-		ActorGeneration: actorGeneration,
-		RestartCount:    restartCount,
-		ActorLastError:  lastError,
-		Routers:         make(map[string]RouterStatus),
-	}
-}
-
-func newDesiredStateReconcilerStatus(incarnation uint64, restartCount uint64, lastError error) DesiredStateReconcilerStatus {
-	return DesiredStateReconcilerStatus{
-		Lifecycle:    DesiredStateReconcilerStarting,
-		Availability: runtime.AvailabilityUnavailable,
-		Incarnation:  incarnation,
-		RestartCount: restartCount,
-		LastError:    lastError,
-		Resolver: ArtifactResolverStatus{
-			Lifecycle:    ArtifactResolverStarting,
-			Availability: runtime.AvailabilityUnavailable,
-		},
-		Watcher: ArtifactWatcherStatus{
-			Lifecycle:    ArtifactWatcherStarting,
-			Availability: runtime.AvailabilityUnavailable,
-		},
-	}
-}
-
-func (s *runtimeSupervisor[T]) runtimeAvailability() runtime.Availability {
-	if s.catalog.status.Availability == runtime.AvailabilityUnavailable {
+// runtimeAvailability derives runtime availability from child component status.
+func (s *supervisor[P, M]) runtimeAvailability() runtime.Availability {
+	if s.lifecycle == SupervisorDraining || s.transition != SupervisorTransitionIdle || !s.projectionReady() ||
+		s.projection.Status.Availability == runtime.AvailabilityUnavailable ||
+		s.catalog.status.Availability == runtime.AvailabilityUnavailable {
 		return runtime.AvailabilityUnavailable
 	}
-	if s.catalog.status.Availability != runtime.AvailabilityReady ||
+	if s.projection.Status.Availability != runtime.AvailabilityReady ||
+		s.catalog.status.Availability != runtime.AvailabilityReady ||
 		s.reconciler.status.Availability != runtime.AvailabilityReady {
 		return runtime.AvailabilityDegraded
 	}
 	return runtime.AvailabilityReady
 }
 
-func (s *runtimeSupervisor[T]) runtimeLifecycle() RuntimeLifecycle {
-	switch {
-	case s.draining:
-		return RuntimeDraining
-	case s.everRunning:
-		return RuntimeRunning
-	default:
-		return RuntimeStarting
+// projectionReady reports whether the committed projection generation is ready.
+func (s *supervisor[P, M]) projectionReady() bool {
+	return s.projection.CommittedGeneration == 0 || s.projection.ReadyGeneration == s.projection.CommittedGeneration
+}
+
+// currentDesiredRevision reports the newest applied or pending revision.
+func (s *supervisor[P, M]) currentDesiredRevision() uint64 {
+	if s.pendingDesiredState.desiredRevision > s.desiredState.desiredRevision {
+		return s.pendingDesiredState.desiredRevision
+	}
+	return s.desiredState.desiredRevision
+}
+
+// ---------------------------------------------------------------------------
+// Runtime Admission
+// ---------------------------------------------------------------------------
+
+// acceptsSubmission reports whether the runtime can accept an invocation.
+func (s *supervisor[P, M]) acceptsSubmission(expectedGeneration int64) bool {
+	return expectedGeneration > 0 &&
+		expectedGeneration == s.projection.ReadyGeneration &&
+		expectedGeneration == s.projection.CommittedGeneration &&
+		s.projection.Status.Lifecycle == snapshot.ProjectionActorRunning &&
+		s.projection.Status.Availability.Routable() &&
+		s.projection.Status.CommittedGeneration == expectedGeneration &&
+		expectedGeneration == s.desiredState.snapshotGeneration &&
+		s.catalog.status.Revision == s.desiredState.desiredRevision &&
+		s.lifecycle != SupervisorDraining && s.transition == SupervisorTransitionIdle && s.projectionReady() &&
+		s.catalog.pid != (gen.PID{})
+}
+
+// ---------------------------------------------------------------------------
+// Projection Commit Coordination
+// ---------------------------------------------------------------------------
+
+// adoptAuthoritativeProjectionPID updates the active projection PID when it changes.
+func (s *supervisor[P, M]) adoptAuthoritativeProjectionPID(pid gen.PID) bool {
+	if pid == (gen.PID{}) || pid == s.projection.Pid {
+		return false
+	}
+	s.projection.Pid = pid
+	s.projection.ReadyGeneration = 0
+	s.projection.PendingGeneration = 0
+	s.projection.PendingPID = gen.PID{}
+	return true
+}
+
+// handleProjectionStatus applies the latest projection actor status.
+func (s *supervisor[P, M]) handleProjectionStatus(status snapshot.ProjectionActorStatus, pid gen.PID) error {
+	pidChanged := s.adoptAuthoritativeProjectionPID(pid)
+	if pidChanged {
+		s.cancelProjectionCommitRetry(false)
+		s.cancelProjectionDeadline()
+	}
+	if !pidChanged && s.projection.PendingGeneration == s.projection.CommittedGeneration &&
+		s.projection.PendingPID == pid {
+		// Status precedes the matching commit result from the child.
+		// Keep that correlation alive; only the acknowledgement or deadline resolves it.
+		s.projection.ReadyGeneration = 0
+		s.projection.Status = status
+		s.reconcileStatus()
+		s.publishStatus()
+		return s.beginPendingDesiredStateTransition()
+	}
+	if !pidChanged && status.Lifecycle == snapshot.ProjectionActorRunning &&
+		status.Availability.Routable() &&
+		status.CommittedGeneration == s.projection.CommittedGeneration &&
+		s.projection.ReadyGeneration == s.projection.CommittedGeneration {
+		s.projection.Status = status
+		s.finishDesiredStateTransition()
+		s.reconcileStatus()
+		s.publishStatus()
+		return s.beginPendingDesiredStateTransition()
+	}
+	s.projection.Status = status
+
+	canActivate := status.Lifecycle == snapshot.ProjectionActorRunning &&
+		status.PreparedGeneration == s.projection.CommittedGeneration
+	s.projection.ReadyGeneration = 0
+	s.projection.PendingGeneration = 0
+	s.projection.PendingPID = gen.PID{}
+	s.cancelProjectionCommitRetry(false)
+	s.cancelProjectionDeadline()
+	s.reconcileStatus()
+	s.publishStatus()
+	if err := s.beginPendingDesiredStateTransition(); err != nil {
+		return err
+	}
+	if canActivate {
+		return s.requestProjectionCommit()
+	}
+	return nil
+}
+
+// handleProjectionCommitResult processes a projection commit acknowledgement.
+func (s *supervisor[P, M]) handleProjectionCommitResult(m snapshot.MessageProjectionCommitResult) error {
+	if m.Err != nil {
+		if s.adoptAuthoritativeProjectionPID(m.ProjectionPID) {
+			s.cancelProjectionDeadline()
+			s.cancelProjectionCommitRetry(false)
+			s.reconcileStatus()
+			s.publishStatus()
+			return s.requestProjectionCommit()
+		}
+		if m.ProjectionPID != s.projection.PendingPID || m.ProjectionPID != s.projection.Pid {
+			return nil
+		}
+		if s.projection.ReadyGeneration == m.Generation {
+			return nil
+		}
+		s.cancelProjectionDeadline()
+		s.projection.PendingGeneration = 0
+		s.projection.PendingPID = gen.PID{}
+		return s.scheduleProjectionCommitRetry()
+	}
+	if m.ProjectionPID != s.projection.PendingPID || m.ProjectionPID != s.projection.Pid {
+		return nil
+	}
+	s.cancelProjectionDeadline()
+	s.projection.ReadyGeneration = m.Generation
+	s.projection.PendingGeneration = 0
+	s.projection.PendingPID = gen.PID{}
+	s.cancelProjectionCommitRetry(true)
+	s.finishDesiredStateTransition()
+	if err := s.beginPendingDesiredStateTransition(); err != nil {
+		return err
+	}
+	s.reconcileStatus()
+	s.publishStatus()
+	return nil
+}
+
+// requestProjectionCommit asks the snapshot supervisor to commit the projection.
+func (s *supervisor[P, M]) requestProjectionCommit() error {
+	if s.Process == nil || s.lifecycle == SupervisorDraining || s.snapshot.Pid == (gen.PID{}) || s.projection.CommittedGeneration == 0 ||
+		s.projection.Retry.Pending ||
+		(s.projection.PendingGeneration != 0 &&
+			(s.projection.PendingGeneration != s.projection.CommittedGeneration ||
+				s.projection.PendingPID != s.projection.Pid)) {
+		return nil
+	}
+	if s.projection.PendingGeneration == 0 {
+		s.projection.PendingGeneration = s.projection.CommittedGeneration
+		s.projection.PendingPID = s.projection.Pid
+	}
+	if err := s.Send(s.snapshot.Pid, snapshot.MessageProjectionCommit{
+		Generation:    s.projection.PendingGeneration,
+		ProjectionPID: s.projection.PendingPID,
+	}); err != nil {
+		return s.scheduleProjectionCommitRetry()
+	}
+	if err := s.scheduleProjectionDeadline(); err != nil {
+		s.projection.PendingGeneration = 0
+		s.projection.PendingPID = gen.PID{}
+		return s.scheduleProjectionCommitRetry()
+	}
+	return nil
+}
+
+// scheduleProjectionCommitRetry schedules another projection commit attempt.
+func (s *supervisor[P, M]) scheduleProjectionCommitRetry() error {
+	if s.lifecycle == SupervisorDraining || s.projection.Retry.Pending || s.projection.CommittedGeneration == 0 {
+		return nil
+	}
+	delay := s.projection.Retry.Strategy.NextBackOff()
+	if delay == backoff.Stop {
+		return fmt.Errorf("projection commit retry: %w", runtime.ErrBackoffStopped)
+	}
+	if delay <= 0 {
+		delay = time.Nanosecond
+	}
+	s.projection.Retry.Token++
+	token := s.projection.Retry.Token
+	cancel, err := s.SendAfter(s.PID(), MessageProjectionCommitRetry{token: token}, delay)
+	if err != nil {
+		return fmt.Errorf("schedule projection commit retry: %w", err)
+	}
+	s.projection.Retry.Pending = true
+	s.projection.Retry.Cancel = cancel
+	return nil
+}
+
+// cancelProjectionCommitRetry cancels any scheduled projection commit retry.
+func (s *supervisor[P, M]) cancelProjectionCommitRetry(reset bool) {
+	if s.projection.Retry != nil {
+		s.projection.Retry.CancelScheduled(reset)
 	}
 }
 
-func (s *runtimeSupervisor[T]) reconcilerActorName() gen.Atom {
+// scheduleProjectionDeadline schedules a deadline for the pending projection commit.
+func (s *supervisor[P, M]) scheduleProjectionDeadline() error {
+	delay := s.opts.ControlTimeout
+	if delay <= 0 {
+		delay = s.opts.RetryMin
+	}
+	if delay <= 0 {
+		delay = time.Second
+	}
+	s.cancelProjectionDeadline()
+	s.projection.DeadlineToken++
+	token := s.projection.DeadlineToken
+	cancel, err := s.SendAfter(s.PID(), MessageProjectionCommitDeadline{
+		token: token, generation: s.projection.PendingGeneration, projectionPID: s.projection.PendingPID,
+	}, delay)
+	if err == nil {
+		s.projection.DeadlineCancel = cancel
+	}
+	return err
+}
+
+// cancelProjectionDeadline cancels the pending projection commit deadline.
+func (s *supervisor[P, M]) cancelProjectionDeadline() {
+	if s.projection.DeadlineCancel != nil {
+		s.projection.DeadlineCancel()
+		s.projection.DeadlineCancel = nil
+	}
+	s.projection.DeadlineToken++
+}
+
+// ---------------------------------------------------------------------------
+// Runtime Helpers
+// ---------------------------------------------------------------------------
+
+// reconcilerActorName returns the desired-state reconciler actor name.
+func (s *supervisor[P, M]) reconcilerActorName() gen.Atom {
 	return gen.Atom(string(s.opts.Name) + "-desired-state-reconciler")
 }
 
-func (s *runtimeSupervisor[T]) catalogActorName() gen.Atom {
+// snapshotSupervisorName returns the snapshot supervisor name.
+func (s *supervisor[P, M]) snapshotSupervisorName() gen.Atom {
+	return gen.Atom(string(s.opts.Name) + "-snapshot")
+}
+
+// catalogActorName returns the catalog actor name.
+func (s *supervisor[P, M]) catalogActorName() gen.Atom {
 	return gen.Atom(string(s.opts.Name) + "-catalog")
+}
+
+// supervisorStateReader reports whether the runtime state is ready for callers.
+func (s *supervisor[P, M]) supervisorStateReader() bool {
+	return s.projection.ReadyGeneration != 0 &&
+		s.projection.ReadyGeneration == s.projection.CommittedGeneration &&
+		s.projection.Status.CommittedGeneration == s.projection.ReadyGeneration &&
+		s.projection.Status.Availability.Routable() &&
+		s.desiredState.snapshotGeneration == s.projection.ReadyGeneration &&
+		s.catalog.status.Revision == s.desiredState.desiredRevision &&
+		s.catalog.status.Availability == runtime.AvailabilityReady &&
+		s.transition == SupervisorTransitionIdle && s.lifecycle != SupervisorDraining
 }
