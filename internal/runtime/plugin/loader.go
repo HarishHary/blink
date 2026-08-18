@@ -19,6 +19,7 @@ type ValidationError struct {
 	Message  string
 }
 
+// Error formats the validation error.
 func (e ValidationError) Error() string {
 	if e.Field != "" {
 		return fmt.Sprintf("%s [%s]: %s", e.File, e.Field, e.Message)
@@ -48,6 +49,7 @@ type BaseLoader[U Syncable, T interface {
 // named is satisfied by metadata that embeds *PluginMetadata; unexported because name injection is a loader concern, not a runtime one.
 type named interface{ SetName(string) }
 
+// Parse reads a YAML sidecar into its metadata type.
 func (BaseLoader[U, T]) Parse(path string) (T, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -78,6 +80,7 @@ func (BaseLoader[U, T]) ParseSpec(name string, spec []byte) (T, error) {
 	return p, nil
 }
 
+// Validate checks parsed metadata against its directory binaries and rollout rules.
 func (BaseLoader[U, T]) Validate(items []T, binaries []string) []ValidationError {
 	var errs []ValidationError
 
@@ -163,4 +166,5 @@ func (BaseLoader[U, T]) Validate(items []T, binaries []string) []ValidationError
 	return errs
 }
 
+// CrossValidate performs no cross-item checks by default.
 func (BaseLoader[U, T]) CrossValidate([]T) error { return nil }

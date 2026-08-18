@@ -2,6 +2,7 @@ package plugin
 
 import "time"
 
+// DefaultDeploymentManagerQueueSize and related constants define default deployment options.
 const (
 	DefaultDeploymentManagerQueueSize       = 128
 	DefaultDeploymentManagerDispatchTimeout = 30 * time.Second

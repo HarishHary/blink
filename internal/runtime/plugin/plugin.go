@@ -26,21 +26,29 @@ type PluginMetadata struct {
 	MaxProcs    int                 `yaml:"max_procs"`
 }
 
+// Metadata returns the plugin metadata.
 func (m PluginMetadata) Metadata() PluginMetadata { return m }
-func (m *PluginMetadata) SetName(name string)     { m.Name = name }
-func (m PluginMetadata) Checksum() string         { return "" }
 
+// SetName sets the plugin name.
+func (m *PluginMetadata) SetName(name string) { m.Name = name }
+
+// Checksum returns the plugin checksum.
+func (m PluginMetadata) Checksum() string { return "" }
+
+// Syncable defines the metadata contract for synchronizable plugins.
 type Syncable interface {
 	Metadata() PluginMetadata
 	Checksum() string
 }
 
+// RPC defines the lifecycle RPCs for a plugin.
 type RPC interface {
 	Init(context.Context, *emptypb.Empty, ...grpc.CallOption) (*emptypb.Empty, error)
 	Ping(context.Context, *emptypb.Empty, ...grpc.CallOption) (*emptypb.Empty, error)
 	Shutdown(context.Context, *emptypb.Empty, ...grpc.CallOption) (*emptypb.Empty, error)
 }
 
+// Adapter describes the go-plugin adapter for a plugin type.
 type Adapter[T Syncable] struct {
 	Key         string
 	Magic       string
@@ -48,13 +56,21 @@ type Adapter[T Syncable] struct {
 	DoHandshake func(context.Context, any, Deployment) (T, RPC, error)
 }
 
-func (a *Adapter[T]) PluginKey() string           { return a.Key }
-func (a *Adapter[T]) MagicValue() string          { return a.Magic }
+// PluginKey returns the adapter plugin key.
+func (a *Adapter[T]) PluginKey() string { return a.Key }
+
+// MagicValue returns the adapter magic value.
+func (a *Adapter[T]) MagicValue() string { return a.Magic }
+
+// GRPCPlugin returns the adapter gRPC plugin.
 func (a *Adapter[T]) GRPCPlugin() goplugin.Plugin { return a.Plugin }
+
+// Handshake delegates to the adapter handshake function.
 func (a *Adapter[T]) Handshake(ctx context.Context, raw any, deployment Deployment) (T, RPC, error) {
 	return a.DoHandshake(ctx, raw, deployment)
 }
 
+// Handshake initializes a plugin RPC and returns its typed plugin.
 func Handshake[T any, C RPC](
 	ctx context.Context,
 	raw any,

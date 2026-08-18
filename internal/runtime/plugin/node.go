@@ -25,6 +25,7 @@ type NodeHost struct {
 	stopped  chan struct{}
 }
 
+// NodeOptions configures a NodeHost.
 type NodeOptions struct {
 	Name            gen.Atom
 	Env             string
@@ -81,6 +82,7 @@ func Start(opts NodeOptions) (*NodeHost, error) {
 	}, nil
 }
 
+// Node returns the host's Ergo node.
 func (h *NodeHost) Node() gen.Node {
 	if h == nil {
 		return nil
@@ -88,6 +90,7 @@ func (h *NodeHost) Node() gen.Node {
 	return h.node
 }
 
+// Name returns the host node's name.
 func (h *NodeHost) Name() gen.Atom {
 	if h == nil || h.node == nil {
 		return ""
@@ -95,6 +98,7 @@ func (h *NodeHost) Name() gen.Atom {
 	return h.node.Name()
 }
 
+// Close stops the host node or waits for an existing shutdown.
 func (h *NodeHost) Close(ctx context.Context) error {
 	if h == nil || h.node == nil {
 		return nil
@@ -132,6 +136,7 @@ func (h *NodeHost) Close(ctx context.Context) error {
 	}
 }
 
+// waitForStop waits for the host node to stop.
 func (h *NodeHost) waitForStop(ctx context.Context) error {
 	select {
 	case <-h.stopped:
