@@ -195,7 +195,7 @@ func (m *DeploymentManager[T]) Terminate(reason error) {
 func (m *DeploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 	switch msg := message.(type) {
 	case MessageInvokePlugin[T]:
-		m.accept(msg)
+		m.acceptInvocation(msg)
 
 	case MessageCancelInvocation:
 		entry := m.calls[msg.CallID]
@@ -210,7 +210,7 @@ func (m *DeploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 		if entry.phase == deploymentManagerPending {
 			m.removeCall(msg.CallID, err)
 		} else {
-			m.complete(entry, err)
+			m.completeInvocation(entry, err)
 		}
 		m.reconcile()
 
@@ -357,7 +357,7 @@ func (m *DeploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 		}
 		for callID, entry := range m.calls {
 			m.cancel(entry)
-			m.complete(entry, context.DeadlineExceeded)
+			m.completeInvocation(entry, context.DeadlineExceeded)
 			delete(m.calls, callID)
 		}
 		m.pendingCalls = nil
@@ -394,8 +394,8 @@ func (m *DeploymentManager[T]) HandleInspect(_ gen.PID, _ ...string) map[string]
 // Invocation Handling
 // ---------------------------------------------------------------------------
 
-// accept records one invocation or rejects it with an exact completion.
-func (m *DeploymentManager[T]) accept(call MessageInvokePlugin[T]) {
+// acceptInvocation records one invocation or rejects it with an exact completion.
+func (m *DeploymentManager[T]) acceptInvocation(call MessageInvokePlugin[T]) {
 	_ = m.SendWithPriority(m.Parent(), MessageInvocationAccepted{
 		route: m.route, manager: m.PID(), callID: call.CallID,
 	}, gen.MessagePriorityHigh)
@@ -403,18 +403,18 @@ func (m *DeploymentManager[T]) accept(call MessageInvokePlugin[T]) {
 		return
 	}
 	if m.draining || m.circuitOpen {
-		m.complete(&deploymentManagerCall[T]{call: call}, runtime.ErrPluginUnavailable)
+		m.completeInvocation(&deploymentManagerCall[T]{call: call}, runtime.ErrPluginUnavailable)
 		return
 	}
 	if call.Context == nil {
 		call.Context = context.Background()
 	}
 	if err := call.Context.Err(); err != nil {
-		m.complete(&deploymentManagerCall[T]{call: call}, err)
+		m.completeInvocation(&deploymentManagerCall[T]{call: call}, err)
 		return
 	}
 	if len(m.pendingCalls) >= m.options.QueueSize {
-		m.complete(&deploymentManagerCall[T]{call: call}, runtime.ErrQueueFull)
+		m.completeInvocation(&deploymentManagerCall[T]{call: call}, runtime.ErrQueueFull)
 		return
 	}
 	m.calls[call.CallID] = &deploymentManagerCall[T]{call: call, phase: deploymentManagerPending}
@@ -445,7 +445,7 @@ func (m *DeploymentManager[T]) reconcile() {
 	if m.pool.pid == (gen.PID{}) && !m.pool.recovering && (m.deployment.MinProcs > 0 || len(m.pendingCalls) > 0) && (m.pool.restart == nil || !m.pool.restart.Pending) {
 		m.startDeploymentPool(max(1, m.deployment.MinProcs))
 	}
-	m.dispatch()
+	m.dispatchInvocation()
 	m.scale()
 	m.publishStatus()
 	if m.draining && !m.drained && len(m.calls) == 0 {
@@ -453,8 +453,8 @@ func (m *DeploymentManager[T]) reconcile() {
 	}
 }
 
-// dispatch forwards queued invocations while ready Pool capacity is available.
-func (m *DeploymentManager[T]) dispatch() {
+// dispatchInvocation forwards queued invocations while ready Pool capacity is available.
+func (m *DeploymentManager[T]) dispatchInvocation() {
 	if m.draining || m.circuitOpen || m.pool.recovering || m.pool.status.Lifecycle == DeploymentPoolFailed {
 		return
 	}
@@ -663,11 +663,11 @@ func (m *DeploymentManager[T]) removeCall(callID uint64, err error) {
 		}
 	}
 	delete(m.calls, callID)
-	m.complete(entry, err)
+	m.completeInvocation(entry, err)
 }
 
-// complete publishes one idempotent invocation result to the Router.
-func (m *DeploymentManager[T]) complete(entry *deploymentManagerCall[T], err error) {
+// completeInvocation publishes one idempotent invocation result to the Router.
+func (m *DeploymentManager[T]) completeInvocation(entry *deploymentManagerCall[T], err error) {
 	if entry.completed {
 		return
 	}
