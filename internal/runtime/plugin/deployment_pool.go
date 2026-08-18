@@ -28,8 +28,8 @@ const (
 // deploymentPoolState tracks one pool process and its recovery state.
 type deploymentPoolState struct {
 	pid           gen.PID
-	status        DeploymentPoolStatus
 	restart       *runtime.ScheduledBackoff
+	status        DeploymentPoolStatus
 	resizePending bool
 	expectedStop  bool
 	recovering    bool

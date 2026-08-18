@@ -35,7 +35,7 @@ type DeploymentManagerStatus struct {
 	QueueDepth   int
 	Dispatching  int
 	Active       int
-	Error        error
+	LastError    error
 	Workers      map[gen.PID]DeploymentWorkerStatus
 }
 
@@ -739,8 +739,8 @@ func (m *DeploymentManager[T]) status() DeploymentManagerStatus {
 		Lifecycle: lifecycle, Availability: availability,
 		CurrentProcs: m.pool.status.DesiredWorkers, ReadyWorkers: m.ready(),
 		QueueDepth: len(m.pendingCalls), Dispatching: m.dispatching(), Active: m.active(),
-		Error:   m.lastError,
-		Workers: m.pool.status.clone().Workers,
+		LastError: m.lastError,
+		Workers:   m.pool.status.clone().Workers,
 	}
 	return status
 }

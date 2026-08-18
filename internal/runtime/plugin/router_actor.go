@@ -24,26 +24,25 @@ type routerState struct {
 	generation uint64
 	lastEpoch  uint64
 	restart    *runtime.ScheduledBackoff
-	status     RouterStatus
+	status     RouterActorStatus
 	retiring   bool
 }
 
-// RouterLifecycle describes one logical-plugin router actor incarnation.
-type RouterLifecycle string
+// RouterActorLifecycle describes one logical-plugin router actor incarnation.
+type RouterActorLifecycle string
 
 const (
-	RouterStarting   RouterLifecycle = "starting"
-	RouterRunning    RouterLifecycle = "running"
-	RouterRestarting RouterLifecycle = "restarting"
-	RouterDraining   RouterLifecycle = "draining"
-	RouterStopped    RouterLifecycle = "stopped"
+	RouterActorStarting   RouterActorLifecycle = "starting"
+	RouterActorRunning    RouterActorLifecycle = "running"
+	RouterActorRestarting RouterActorLifecycle = "restarting"
+	RouterActorDraining   RouterActorLifecycle = "draining"
+	RouterActorStopped    RouterActorLifecycle = "stopped"
 )
 
-// RouterStatus is the catalog-facing router status contract.
-type RouterStatus struct {
-	Lifecycle      RouterLifecycle
+// RouterActorStatus is the catalog-facing router status contract.
+type RouterActorStatus struct {
+	Lifecycle      RouterActorLifecycle
 	Availability   runtime.Availability
-	Generation     uint64
 	LastError      error
 	Revision       uint64
 	NormalRoutable bool
@@ -53,16 +52,12 @@ type RouterStatus struct {
 }
 
 // clone deep-copies the nested pool statuses so a receiver cannot mutate router state.
-func (s RouterStatus) clone() RouterStatus {
+func (s RouterActorStatus) clone() RouterActorStatus {
 	clone := s
 	clone.Primary = s.Primary.clone()
 	clone.Candidate = s.Candidate.clone()
 	return clone
 }
-
-// ---------------------------------------------------------------------------
-// Route state
-// ---------------------------------------------------------------------------
 
 // deploymentRoutePhase is the lifecycle phase of a single dynamic route.
 type deploymentRoutePhase uint8
@@ -101,6 +96,8 @@ type routerActor[T Syncable] struct {
 	draining         bool
 	drainReported    bool
 	everRoutable     bool
+	liveStatus       RouterActorStatus
+	statusEpoch      uint64
 	routesByKey      map[DeploymentPoolKey]*deploymentRouteState
 	routesByName     map[gen.Atom]DeploymentPoolKey
 	inFlightCalls    map[uint64]*routerInvocation
@@ -108,8 +105,6 @@ type routerActor[T Syncable] struct {
 	desiredCandidate *Deployment
 	activePrimary    *Deployment
 	activeCandidate  *Deployment
-	liveStatus       RouterStatus
-	statusEpoch      uint64
 }
 
 // ---------------------------------------------------------------------------
@@ -162,7 +157,7 @@ type MessageRouterStatusChanged struct {
 	pid        gen.PID
 	generation uint64
 	epoch      uint64
-	status     RouterStatus
+	status     RouterActorStatus
 }
 
 // MessageRetryRouteStep is the self-timer that re-drives a route's pending lifecycle step.
@@ -840,14 +835,14 @@ func (a *routerActor[T]) reconcileStatus() {
 	}
 	primaryHealthy := a.desiredPrimary == nil || (primaryStatus.Lifecycle == DeploymentPoolRunning && primaryStatus.Availability == runtime.AvailabilityReady)
 	candidateHealthy := a.desiredCandidate == nil || (candidateStatus.Lifecycle == DeploymentPoolRunning && candidateStatus.Availability == runtime.AvailabilityReady)
-	lifecycle := RouterStarting
+	lifecycle := RouterActorStarting
 	switch {
 	case a.drainReported:
-		lifecycle = RouterStopped
+		lifecycle = RouterActorStopped
 	case a.draining:
-		lifecycle = RouterDraining
+		lifecycle = RouterActorDraining
 	case a.everRoutable:
-		lifecycle = RouterRunning
+		lifecycle = RouterActorRunning
 	}
 	availability := runtime.AvailabilityUnavailable
 	switch {
@@ -856,7 +851,7 @@ func (a *routerActor[T]) reconcileStatus() {
 	case normalRoutable || shadowRoutable:
 		availability = runtime.AvailabilityDegraded
 	}
-	next := RouterStatus{Lifecycle: lifecycle, Availability: availability, Generation: a.generation, Revision: a.desiredRevision,
+	next := RouterActorStatus{Lifecycle: lifecycle, Availability: availability, Revision: a.desiredRevision,
 		NormalRoutable: normalRoutable, ShadowRoutable: shadowRoutable, Primary: primaryStatus, Candidate: candidateStatus}
 	if sameRouterStatus(a.liveStatus, next) && a.statusEpoch != 0 {
 		return
@@ -868,10 +863,9 @@ func (a *routerActor[T]) reconcileStatus() {
 }
 
 // sameRouterStatus reports whether two router statuses are equal, for publish deduplication.
-func sameRouterStatus(left, right RouterStatus) bool {
+func sameRouterStatus(left, right RouterActorStatus) bool {
 	return left.Lifecycle == right.Lifecycle &&
 		left.Availability == right.Availability &&
-		left.Generation == right.Generation &&
 		errorText(left.LastError) == errorText(right.LastError) &&
 		left.Revision == right.Revision &&
 		left.NormalRoutable == right.NormalRoutable &&
