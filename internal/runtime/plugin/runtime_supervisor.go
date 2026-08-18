@@ -47,7 +47,7 @@ type SupervisorStatus struct {
 	Availability    runtime.Availability
 	DesiredRevision uint64
 	Transition      SupervisorTransitionPhase
-	Catalog         CatalogActorStatus
+	Catalog         catalogActorStatus
 	Reconciler      reconcilerActorStatus
 }
 
@@ -601,7 +601,7 @@ func (s *supervisor[P, M]) startCatalogActor(pid gen.PID) error {
 	state.lastEpoch = 0
 	state.status = newCatalogStatus(
 		state.actorGeneration,
-		state.status.LastError,
+		state.status.lastError,
 	)
 	s.reconcileStatus()
 	s.publishStatus()
@@ -651,10 +651,10 @@ func (s *supervisor[P, M]) retireCatalogActor(pid gen.PID, reason error) {
 
 	state.pid = gen.PID{}
 	state.lastEpoch = 0
-	state.status.Lifecycle = CatalogActorRestarting
-	state.status.Availability = runtime.AvailabilityUnavailable
-	state.status.Generation = state.actorGeneration
-	state.status.LastError = reason
+	state.status.lifecycle = CatalogActorRestarting
+	state.status.availability = runtime.AvailabilityUnavailable
+	state.status.generation = state.actorGeneration
+	state.status.lastError = reason
 
 	for callID, call := range s.inFlightCalls {
 		if call.catalog == pid {
@@ -765,8 +765,8 @@ func (s *supervisor[P, M]) desiredStateTransitionReadyToCommit() bool {
 		s.desiredState.desiredRevision != 0 &&
 		s.desiredState.snapshotGeneration == s.transitionGeneration &&
 		s.reconciler.status.revision == s.desiredState.desiredRevision &&
-		s.catalog.status.Revision == s.desiredState.desiredRevision &&
-		s.catalog.status.Availability == runtime.AvailabilityReady
+		s.catalog.status.revision == s.desiredState.desiredRevision &&
+		s.catalog.status.availability == runtime.AvailabilityReady
 }
 
 // finishDesiredStateTransition reopens admission after every current dependency converges.
@@ -782,8 +782,8 @@ func (s *supervisor[P, M]) finishDesiredStateTransition() {
 		s.reconciler.status.snapshotGeneration != s.transitionGeneration ||
 		s.reconciler.status.revision != s.desiredState.desiredRevision ||
 		s.reconciler.status.availability != runtime.AvailabilityReady ||
-		s.catalog.status.Revision != s.desiredState.desiredRevision ||
-		s.catalog.status.Availability != runtime.AvailabilityReady {
+		s.catalog.status.revision != s.desiredState.desiredRevision ||
+		s.catalog.status.availability != runtime.AvailabilityReady {
 		return
 	}
 	s.transition = SupervisorTransitionIdle
@@ -793,28 +793,28 @@ func (s *supervisor[P, M]) finishDesiredStateTransition() {
 // Status Reporting
 // ---------------------------------------------------------------------------
 // newCatalogStatus returns an initial catalog status for an actor incarnation.
-func newCatalogStatus(actorGeneration uint64, lastError error) CatalogActorStatus {
-	return CatalogActorStatus{
-		Lifecycle:    CatalogActorStarting,
-		Availability: runtime.AvailabilityUnavailable,
-		Generation:   actorGeneration,
-		LastError:    lastError,
-		Routers:      make(map[string]RouterActorStatus),
+func newCatalogStatus(actorGeneration uint64, lastError error) catalogActorStatus {
+	return catalogActorStatus{
+		lifecycle:    CatalogActorStarting,
+		availability: runtime.AvailabilityUnavailable,
+		generation:   actorGeneration,
+		lastError:    lastError,
+		routers:      make(map[string]routerActorStatus),
 	}
 }
 
 // mergeCatalogStatus merges the latest catalog status into supervisor state.
-func (s *supervisor[P, M]) mergeCatalogStatus(status CatalogActorStatus) {
+func (s *supervisor[P, M]) mergeCatalogStatus(status catalogActorStatus) {
 	state := &s.catalog
 	next := status.clone()
-	next.Generation = state.actorGeneration
-	if next.Lifecycle == CatalogActorRunning {
-		next.LastError = nil
+	next.generation = state.actorGeneration
+	if next.lifecycle == CatalogActorRunning {
+		next.lastError = nil
 		if s.lifecycle != SupervisorDraining {
 			s.lifecycle = SupervisorRunning
 		}
 	} else {
-		next.LastError = state.status.LastError
+		next.lastError = state.status.lastError
 	}
 	state.status = next
 }
@@ -847,11 +847,11 @@ func (s *supervisor[P, M]) publishStatus() {
 func (s *supervisor[P, M]) runtimeAvailability() runtime.Availability {
 	if s.lifecycle == SupervisorDraining || s.transition != SupervisorTransitionIdle || !s.projectionReady() ||
 		s.projection.Status.Availability == runtime.AvailabilityUnavailable ||
-		s.catalog.status.Availability == runtime.AvailabilityUnavailable {
+		s.catalog.status.availability == runtime.AvailabilityUnavailable {
 		return runtime.AvailabilityUnavailable
 	}
 	if s.projection.Status.Availability != runtime.AvailabilityReady ||
-		s.catalog.status.Availability != runtime.AvailabilityReady ||
+		s.catalog.status.availability != runtime.AvailabilityReady ||
 		s.reconciler.status.availability != runtime.AvailabilityReady {
 		return runtime.AvailabilityDegraded
 	}
@@ -884,7 +884,7 @@ func (s *supervisor[P, M]) acceptsSubmission(expectedGeneration int64) bool {
 		s.projection.Status.Availability.Routable() &&
 		s.projection.Status.CommittedGeneration == expectedGeneration &&
 		expectedGeneration == s.desiredState.snapshotGeneration &&
-		s.catalog.status.Revision == s.desiredState.desiredRevision &&
+		s.catalog.status.revision == s.desiredState.desiredRevision &&
 		s.lifecycle != SupervisorDraining && s.transition == SupervisorTransitionIdle && s.projectionReady() &&
 		s.catalog.pid != (gen.PID{})
 }
@@ -1103,7 +1103,7 @@ func (s *supervisor[P, M]) supervisorStateReader() bool {
 		s.projection.Status.CommittedGeneration == s.projection.ReadyGeneration &&
 		s.projection.Status.Availability.Routable() &&
 		s.desiredState.snapshotGeneration == s.projection.ReadyGeneration &&
-		s.catalog.status.Revision == s.desiredState.desiredRevision &&
-		s.catalog.status.Availability == runtime.AvailabilityReady &&
+		s.catalog.status.revision == s.desiredState.desiredRevision &&
+		s.catalog.status.availability == runtime.AvailabilityReady &&
 		s.transition == SupervisorTransitionIdle && s.lifecycle != SupervisorDraining
 }

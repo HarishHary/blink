@@ -24,7 +24,7 @@ type routerState struct {
 	generation uint64
 	lastEpoch  uint64
 	restart    *runtime.ScheduledBackoff
-	status     RouterActorStatus
+	status     routerActorStatus
 	retiring   bool
 }
 
@@ -39,23 +39,23 @@ const (
 	RouterActorStopped    RouterActorLifecycle = "stopped"
 )
 
-// RouterActorStatus is the catalog-facing router status contract.
-type RouterActorStatus struct {
-	Lifecycle      RouterActorLifecycle
-	Availability   runtime.Availability
-	LastError      error
-	Revision       uint64
-	NormalRoutable bool
-	ShadowRoutable bool
-	Primary        DeploymentPoolStatus
-	Candidate      DeploymentPoolStatus
+// routerActorStatus is the catalog-facing router status contract.
+type routerActorStatus struct {
+	lifecycle      RouterActorLifecycle
+	availability   runtime.Availability
+	lastError      error
+	revision       uint64
+	normalRoutable bool
+	shadowRoutable bool
+	primary        deploymentPoolStatus
+	candidate      deploymentPoolStatus
 }
 
 // clone deep-copies the nested pool statuses so a receiver cannot mutate router state.
-func (s RouterActorStatus) clone() RouterActorStatus {
+func (s routerActorStatus) clone() routerActorStatus {
 	clone := s
-	clone.Primary = s.Primary.clone()
-	clone.Candidate = s.Candidate.clone()
+	clone.primary = s.primary.clone()
+	clone.candidate = s.candidate.clone()
 	return clone
 }
 
@@ -76,7 +76,7 @@ type deploymentRouteState struct {
 	name       gen.Atom
 	pid        gen.PID
 	restart    *runtime.ScheduledBackoff
-	status     DeploymentManagerStatus
+	status     deploymentManagerStatus
 	phase      deploymentRoutePhase
 	managers   map[gen.PID]struct{}
 }
@@ -96,7 +96,7 @@ type routerActor[T Syncable] struct {
 	draining         bool
 	drainReported    bool
 	everRoutable     bool
-	liveStatus       RouterActorStatus
+	liveStatus       routerActorStatus
 	statusEpoch      uint64
 	routesByKey      map[DeploymentPoolKey]*deploymentRouteState
 	routesByName     map[gen.Atom]DeploymentPoolKey
@@ -157,7 +157,7 @@ type MessageRouterStatusChanged struct {
 	pid        gen.PID
 	generation uint64
 	epoch      uint64
-	status     RouterActorStatus
+	status     routerActorStatus
 }
 
 // MessageRetryRouteStep is the self-timer that re-drives a route's pending lifecycle step.
@@ -406,7 +406,7 @@ func (a *routerActor[T]) activateDesired(active **Deployment, desired *Deploymen
 	}
 	ref := a.routesByKey[desired.PoolKey()]
 	if ref != nil && ref.phase == deploymentRouteActive &&
-		ref.status.Lifecycle == DeploymentManagerRunning && ref.status.Availability == runtime.AvailabilityReady {
+		ref.status.lifecycle == DeploymentManagerRunning && ref.status.availability == runtime.AvailabilityReady {
 		*active = desired
 	}
 }
@@ -485,13 +485,13 @@ func (a *routerActor[T]) scheduleRouteStep(ref *deploymentRouteState) error {
 }
 
 // newDeploymentManager builds the DeploymentManager child that serves this route.
-func (a *routerActor[T]) newDeploymentManager(ref *deploymentRouteState) *DeploymentManager[T] {
-	ref.status = DeploymentManagerStatus{
-		Lifecycle:    DeploymentManagerStarting,
-		Availability: runtime.AvailabilityUnavailable,
-		Workers:      make(map[gen.PID]deploymentWorkerStatus),
+func (a *routerActor[T]) newDeploymentManager(ref *deploymentRouteState) *deploymentManager[T] {
+	ref.status = deploymentManagerStatus{
+		lifecycle:    DeploymentManagerStarting,
+		availability: runtime.AvailabilityUnavailable,
+		workers:      make(map[gen.PID]deploymentWorkerStatus),
 	}
-	return &DeploymentManager[T]{
+	return &deploymentManager[T]{
 		adapter:    a.opts.Adapter,
 		options:    a.opts.ManagerOptions,
 		deployment: ref.deployment,
@@ -767,25 +767,25 @@ func (a *routerActor[T]) removeDrainedRoute(ref *deploymentRouteState) {
 // ---------------------------------------------------------------------------
 
 // deploymentStatusFor projects a deployment's route into the catalog-facing pool status.
-func (a *routerActor[T]) deploymentStatusFor(deployment *Deployment) DeploymentPoolStatus {
+func (a *routerActor[T]) deploymentStatusFor(deployment *Deployment) deploymentPoolStatus {
 	if deployment == nil {
-		return DeploymentPoolStatus{
-			Lifecycle:    DeploymentPoolStopped,
-			Availability: runtime.AvailabilityUnavailable,
-			Workers:      make(map[gen.PID]deploymentWorkerStatus),
+		return deploymentPoolStatus{
+			lifecycle:    DeploymentPoolStopped,
+			availability: runtime.AvailabilityUnavailable,
+			workers:      make(map[gen.PID]deploymentWorkerStatus),
 		}
 	}
 	ref := a.routesByKey[deployment.PoolKey()]
 	if ref == nil {
-		return DeploymentPoolStatus{
-			Lifecycle:      DeploymentPoolStarting,
-			Availability:   runtime.AvailabilityUnavailable,
-			DesiredWorkers: deployment.WorkerCount(),
-			Workers:        make(map[gen.PID]deploymentWorkerStatus),
+		return deploymentPoolStatus{
+			lifecycle:      DeploymentPoolStarting,
+			availability:   runtime.AvailabilityUnavailable,
+			desiredWorkers: deployment.WorkerCount(),
+			workers:        make(map[gen.PID]deploymentWorkerStatus),
 		}
 	}
 	lifecycle := DeploymentPoolStarting
-	switch ref.status.Lifecycle {
+	switch ref.status.lifecycle {
 	case DeploymentManagerRunning:
 		lifecycle = DeploymentPoolRunning
 	case DeploymentManagerDraining:
@@ -798,14 +798,14 @@ func (a *routerActor[T]) deploymentStatusFor(deployment *Deployment) DeploymentP
 	if ref.restart != nil && ref.restart.Pending {
 		lifecycle = DeploymentPoolRestarting
 	}
-	return DeploymentPoolStatus{
-		Lifecycle:      lifecycle,
-		Availability:   ref.status.Availability,
-		HealthyWorkers: ref.status.ReadyWorkers,
-		DesiredWorkers: ref.status.CurrentProcs,
-		QueueDepth:     ref.status.QueueDepth,
-		ActiveCalls:    ref.status.Active + ref.status.Dispatching,
-		Workers:        ref.status.Workers,
+	return deploymentPoolStatus{
+		lifecycle:      lifecycle,
+		availability:   ref.status.availability,
+		healthyWorkers: ref.status.readyWorkers,
+		desiredWorkers: ref.status.currentProcs,
+		queueDepth:     ref.status.queueDepth,
+		activeCalls:    ref.status.active + ref.status.dispatching,
+		workers:        ref.status.workers,
 	}
 }
 
@@ -833,8 +833,8 @@ func (a *routerActor[T]) reconcileStatus() {
 	if normalRoutable {
 		a.everRoutable = true
 	}
-	primaryHealthy := a.desiredPrimary == nil || (primaryStatus.Lifecycle == DeploymentPoolRunning && primaryStatus.Availability == runtime.AvailabilityReady)
-	candidateHealthy := a.desiredCandidate == nil || (candidateStatus.Lifecycle == DeploymentPoolRunning && candidateStatus.Availability == runtime.AvailabilityReady)
+	primaryHealthy := a.desiredPrimary == nil || (primaryStatus.lifecycle == DeploymentPoolRunning && primaryStatus.availability == runtime.AvailabilityReady)
+	candidateHealthy := a.desiredCandidate == nil || (candidateStatus.lifecycle == DeploymentPoolRunning && candidateStatus.availability == runtime.AvailabilityReady)
 	lifecycle := RouterActorStarting
 	switch {
 	case a.drainReported:
@@ -851,8 +851,8 @@ func (a *routerActor[T]) reconcileStatus() {
 	case normalRoutable || shadowRoutable:
 		availability = runtime.AvailabilityDegraded
 	}
-	next := RouterActorStatus{Lifecycle: lifecycle, Availability: availability, Revision: a.desiredRevision,
-		NormalRoutable: normalRoutable, ShadowRoutable: shadowRoutable, Primary: primaryStatus, Candidate: candidateStatus}
+	next := routerActorStatus{lifecycle: lifecycle, availability: availability, revision: a.desiredRevision,
+		normalRoutable: normalRoutable, shadowRoutable: shadowRoutable, primary: primaryStatus, candidate: candidateStatus}
 	if sameRouterStatus(a.liveStatus, next) && a.statusEpoch != 0 {
 		return
 	}
@@ -863,15 +863,15 @@ func (a *routerActor[T]) reconcileStatus() {
 }
 
 // sameRouterStatus reports whether two router statuses are equal, for publish deduplication.
-func sameRouterStatus(left, right RouterActorStatus) bool {
-	return left.Lifecycle == right.Lifecycle &&
-		left.Availability == right.Availability &&
-		errorText(left.LastError) == errorText(right.LastError) &&
-		left.Revision == right.Revision &&
-		left.NormalRoutable == right.NormalRoutable &&
-		left.ShadowRoutable == right.ShadowRoutable &&
-		sameDeploymentPoolStatus(left.Primary, right.Primary) &&
-		sameDeploymentPoolStatus(left.Candidate, right.Candidate)
+func sameRouterStatus(left, right routerActorStatus) bool {
+	return left.lifecycle == right.lifecycle &&
+		left.availability == right.availability &&
+		errorText(left.lastError) == errorText(right.lastError) &&
+		left.revision == right.revision &&
+		left.normalRoutable == right.normalRoutable &&
+		left.shadowRoutable == right.shadowRoutable &&
+		sameDeploymentPoolStatus(left.primary, right.primary) &&
+		sameDeploymentPoolStatus(left.candidate, right.candidate)
 }
 
 // ---------------------------------------------------------------------------

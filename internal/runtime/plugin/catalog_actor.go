@@ -29,31 +29,31 @@ type catalogActorState struct {
 	pid             gen.PID
 	actorGeneration uint64
 	lastEpoch       uint64
-	status          CatalogActorStatus
+	status          catalogActorStatus
 }
 
-// CatalogActorStatus is owned by catalogActor, except for LastError, which is
+// catalogActorStatus is owned by catalogActor, except for LastError, which is
 // owned by runtimeSupervisor because the supervisor replaces catalog actor
 // incarnations.
-type CatalogActorStatus struct {
-	Lifecycle          CatalogActorLifecycle
-	Availability       runtime.Availability
-	Generation         uint64
-	LastError          error
-	Revision           uint64
-	DesiredRouters     int
-	RoutableRouters    int
-	DegradedRouters    int
-	UnavailableRouters int
-	Routers            map[string]RouterActorStatus
+type catalogActorStatus struct {
+	lifecycle          CatalogActorLifecycle
+	availability       runtime.Availability
+	generation         uint64
+	lastError          error
+	revision           uint64
+	desiredRouters     int
+	routableRouters    int
+	degradedRouters    int
+	unavailableRouters int
+	routers            map[string]routerActorStatus
 }
 
 // clone deep-copies router statuses so a receiver cannot mutate catalog state.
-func (s CatalogActorStatus) clone() CatalogActorStatus {
+func (s catalogActorStatus) clone() catalogActorStatus {
 	clone := s
-	clone.Routers = make(map[string]RouterActorStatus, len(s.Routers))
-	for id, status := range s.Routers {
-		clone.Routers[id] = status.clone()
+	clone.routers = make(map[string]routerActorStatus, len(s.routers))
+	for id, status := range s.routers {
+		clone.routers[id] = status.clone()
 	}
 	return clone
 }
@@ -71,7 +71,7 @@ type catalogActor[T Syncable] struct {
 	activated       bool
 	draining        bool
 	drainReported   bool
-	liveStatus      CatalogActorStatus
+	liveStatus      catalogActorStatus
 	statusEpoch     uint64
 	routers         map[string]*routerState
 	desired         map[string]MessageApplyRouterDesiredState
@@ -103,7 +103,7 @@ type MessageCatalogStatusChanged struct {
 	pid        gen.PID
 	generation uint64
 	epoch      uint64
-	status     CatalogActorStatus
+	status     catalogActorStatus
 }
 
 // MessageRouterRestart re-drives a pending router restart after backoff.
@@ -268,7 +268,7 @@ func (a *catalogActor[T]) HandleMessage(from gen.PID, message any) error {
 
 		next := m.status.clone()
 		a.cancelRouterRestartBackoff(m.pluginID, true)
-		next.LastError = nil
+		next.lastError = nil
 		ref.status = next
 		a.reconcileStatus()
 
@@ -295,9 +295,9 @@ func (a *catalogActor[T]) HandleMessage(from gen.PID, message any) error {
 				continue
 			}
 
-			ref.status.Lifecycle = RouterActorRestarting
-			ref.status.Availability = runtime.AvailabilityUnavailable
-			ref.status.LastError = m.Reason
+			ref.status.lifecycle = RouterActorRestarting
+			ref.status.availability = runtime.AvailabilityUnavailable
+			ref.status.lastError = m.Reason
 
 			_, desired := a.desired[id]
 			if a.draining || ref.retiring || !desired {
@@ -379,20 +379,20 @@ func (a *catalogActor[T]) startRouter(id string) (*routerState, error) {
 	generation := ref.generation
 	ref.lastEpoch = 0
 	ref.retiring = false
-	prevErr := ref.status.LastError
-	ref.status = RouterActorStatus{
-		Lifecycle:    RouterActorStarting,
-		Availability: runtime.AvailabilityUnavailable,
-		LastError:    prevErr,
-		Primary: DeploymentPoolStatus{
-			Lifecycle:    DeploymentPoolStopped,
-			Availability: runtime.AvailabilityUnavailable,
-			Workers:      make(map[gen.PID]deploymentWorkerStatus),
+	prevErr := ref.status.lastError
+	ref.status = routerActorStatus{
+		lifecycle:    RouterActorStarting,
+		availability: runtime.AvailabilityUnavailable,
+		lastError:    prevErr,
+		primary: deploymentPoolStatus{
+			lifecycle:    DeploymentPoolStopped,
+			availability: runtime.AvailabilityUnavailable,
+			workers:      make(map[gen.PID]deploymentWorkerStatus),
 		},
-		Candidate: DeploymentPoolStatus{
-			Lifecycle:    DeploymentPoolStopped,
-			Availability: runtime.AvailabilityUnavailable,
-			Workers:      make(map[gen.PID]deploymentWorkerStatus),
+		candidate: deploymentPoolStatus{
+			lifecycle:    DeploymentPoolStopped,
+			availability: runtime.AvailabilityUnavailable,
+			workers:      make(map[gen.PID]deploymentWorkerStatus),
 		},
 	}
 	a.reconcileStatus()
@@ -404,8 +404,8 @@ func (a *catalogActor[T]) startRouter(id string) (*routerState, error) {
 		}
 	}, gen.ProcessOptions{LinkParent: true})
 	if err != nil {
-		ref.status.Lifecycle = RouterActorRestarting
-		ref.status.LastError = fmt.Errorf("spawn router: %w", err)
+		ref.status.lifecycle = RouterActorRestarting
+		ref.status.lastError = fmt.Errorf("spawn router: %w", err)
 		return ref, err
 	}
 
@@ -413,8 +413,8 @@ func (a *catalogActor[T]) startRouter(id string) (*routerState, error) {
 	if err := a.MonitorPID(pid); err != nil {
 		_ = a.Node().SendExit(pid, gen.TerminateReasonShutdown)
 		ref.pid = gen.PID{}
-		ref.status.Lifecycle = RouterActorRestarting
-		ref.status.LastError = fmt.Errorf("monitor router: %w", err)
+		ref.status.lifecycle = RouterActorRestarting
+		ref.status.lastError = fmt.Errorf("monitor router: %w", err)
 		return ref, err
 	}
 	if err := a.SendWithPriority(pid, MessageRouterActivate{generation: generation}, gen.MessagePriorityHigh); err != nil {
@@ -447,21 +447,21 @@ func (a *catalogActor[T]) retireRouter(id string, callErr error) {
 	ref.pid = gen.PID{}
 	ref.lastEpoch = 0
 	ref.retiring = false
-	prevErr := ref.status.LastError
-	ref.status = RouterActorStatus{
-		Lifecycle:    RouterActorStopped,
-		Availability: runtime.AvailabilityUnavailable,
-		LastError:    prevErr,
-		Revision:     a.desiredRevision,
-		Primary: DeploymentPoolStatus{
-			Lifecycle:    DeploymentPoolStopped,
-			Availability: runtime.AvailabilityUnavailable,
-			Workers:      make(map[gen.PID]deploymentWorkerStatus),
+	prevErr := ref.status.lastError
+	ref.status = routerActorStatus{
+		lifecycle:    RouterActorStopped,
+		availability: runtime.AvailabilityUnavailable,
+		lastError:    prevErr,
+		revision:     a.desiredRevision,
+		primary: deploymentPoolStatus{
+			lifecycle:    DeploymentPoolStopped,
+			availability: runtime.AvailabilityUnavailable,
+			workers:      make(map[gen.PID]deploymentWorkerStatus),
 		},
-		Candidate: DeploymentPoolStatus{
-			Lifecycle:    DeploymentPoolStopped,
-			Availability: runtime.AvailabilityUnavailable,
-			Workers:      make(map[gen.PID]deploymentWorkerStatus),
+		candidate: deploymentPoolStatus{
+			lifecycle:    DeploymentPoolStopped,
+			availability: runtime.AvailabilityUnavailable,
+			workers:      make(map[gen.PID]deploymentWorkerStatus),
 		},
 	}
 }
@@ -510,8 +510,8 @@ func (a *catalogActor[T]) scheduleRouterRestart(id string) error {
 	state.Pending = true
 	state.Cancel = cancel
 	if ref := a.routers[id]; ref != nil {
-		ref.status.Lifecycle = RouterActorRestarting
-		ref.status.Availability = runtime.AvailabilityUnavailable
+		ref.status.lifecycle = RouterActorRestarting
+		ref.status.availability = runtime.AvailabilityUnavailable
 	}
 	a.reconcileStatus()
 	return nil
@@ -568,7 +568,7 @@ func (a *catalogActor[T]) finishTrackedCall(callID uint64, err error) {
 
 // reconcileStatus recomputes and publishes the aggregate catalog status.
 func (a *catalogActor[T]) reconcileStatus() {
-	routers := make(map[string]RouterActorStatus, len(a.desired))
+	routers := make(map[string]routerActorStatus, len(a.desired))
 	routable := 0
 	degraded := 0
 	unavailable := 0
@@ -577,19 +577,19 @@ func (a *catalogActor[T]) reconcileStatus() {
 		ref := a.routers[id]
 		if ref == nil {
 			unavailable++
-			routers[id] = RouterActorStatus{
-				Lifecycle:    RouterActorStarting,
-				Availability: runtime.AvailabilityUnavailable,
+			routers[id] = routerActorStatus{
+				lifecycle:    RouterActorStarting,
+				availability: runtime.AvailabilityUnavailable,
 			}
 			continue
 		}
 
 		status := ref.status.clone()
 		routers[id] = status
-		if status.NormalRoutable {
+		if status.normalRoutable {
 			routable++
 		}
-		switch status.Availability {
+		switch status.availability {
 		case runtime.AvailabilityDegraded:
 			degraded++
 		case runtime.AvailabilityUnavailable:
@@ -619,16 +619,16 @@ func (a *catalogActor[T]) reconcileStatus() {
 		availability = runtime.AvailabilityDegraded
 	}
 
-	next := CatalogActorStatus{
-		Lifecycle:          lifecycle,
-		Availability:       availability,
-		Generation:         a.generation,
-		Revision:           a.desiredRevision,
-		DesiredRouters:     len(a.desired),
-		RoutableRouters:    routable,
-		DegradedRouters:    degraded,
-		UnavailableRouters: unavailable,
-		Routers:            routers,
+	next := catalogActorStatus{
+		lifecycle:          lifecycle,
+		availability:       availability,
+		generation:         a.generation,
+		revision:           a.desiredRevision,
+		desiredRouters:     len(a.desired),
+		routableRouters:    routable,
+		degradedRouters:    degraded,
+		unavailableRouters: unavailable,
+		routers:            routers,
 	}
 	if sameCatalogStatus(a.liveStatus, next) && a.statusEpoch != 0 {
 		return
@@ -648,20 +648,20 @@ func (a *catalogActor[T]) reconcileStatus() {
 }
 
 // sameCatalogStatus reports whether two catalog statuses are equal.
-func sameCatalogStatus(left, right CatalogActorStatus) bool {
-	if left.Lifecycle != right.Lifecycle ||
-		left.Availability != right.Availability ||
-		left.Generation != right.Generation ||
-		left.Revision != right.Revision ||
-		left.DesiredRouters != right.DesiredRouters ||
-		left.RoutableRouters != right.RoutableRouters ||
-		left.DegradedRouters != right.DegradedRouters ||
-		left.UnavailableRouters != right.UnavailableRouters ||
-		len(left.Routers) != len(right.Routers) {
+func sameCatalogStatus(left, right catalogActorStatus) bool {
+	if left.lifecycle != right.lifecycle ||
+		left.availability != right.availability ||
+		left.generation != right.generation ||
+		left.revision != right.revision ||
+		left.desiredRouters != right.desiredRouters ||
+		left.routableRouters != right.routableRouters ||
+		left.degradedRouters != right.degradedRouters ||
+		left.unavailableRouters != right.unavailableRouters ||
+		len(left.routers) != len(right.routers) {
 		return false
 	}
-	for id, leftRouter := range left.Routers {
-		rightRouter, ok := right.Routers[id]
+	for id, leftRouter := range left.routers {
+		rightRouter, ok := right.routers[id]
 		if !ok || !sameRouterStatus(leftRouter, rightRouter) {
 			return false
 		}

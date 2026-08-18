@@ -26,17 +26,17 @@ const (
 	DeploymentManagerStopped  DeploymentManagerLifecycle = "stopped"
 )
 
-// DeploymentManagerStatus is the manager-owned deployment availability snapshot.
-type DeploymentManagerStatus struct {
-	Lifecycle    DeploymentManagerLifecycle
-	Availability runtime.Availability
-	CurrentProcs int
-	ReadyWorkers int
-	QueueDepth   int
-	Dispatching  int
-	Active       int
-	LastError    error
-	Workers      map[gen.PID]deploymentWorkerStatus
+// deploymentManagerStatus is the manager-owned deployment availability snapshot.
+type deploymentManagerStatus struct {
+	lifecycle    DeploymentManagerLifecycle
+	availability runtime.Availability
+	currentProcs int
+	readyWorkers int
+	queueDepth   int
+	dispatching  int
+	active       int
+	lastError    error
+	workers      map[gen.PID]deploymentWorkerStatus
 }
 
 // ---------------------------------------------------------------------------
@@ -66,8 +66,8 @@ type deploymentManagerCall[T Syncable] struct {
 // Deployment Manager
 // ---------------------------------------------------------------------------
 
-// DeploymentManager owns invocation, scaling, and Pool lifecycle for one concrete deployment.
-type DeploymentManager[T Syncable] struct {
+// deploymentManager owns invocation, scaling, and Pool lifecycle for one concrete deployment.
+type deploymentManager[T Syncable] struct {
 	act.Actor
 	adapter        *Adapter[T]
 	options        DeploymentManagerOptions
@@ -115,7 +115,7 @@ type MessageDeploymentManagerRetry struct {
 type MessageDeploymentManagerStatusChanged struct {
 	route   gen.Atom
 	manager gen.PID
-	status  DeploymentManagerStatus
+	status  deploymentManagerStatus
 }
 
 // MessageInvocationAccepted acknowledges manager ownership of an invocation.
@@ -143,13 +143,13 @@ type MessageDeploymentManagerTerminated struct {
 // ---------------------------------------------------------------------------
 
 // Init validates configuration and starts the deployment's minimum Pool capacity.
-func (m *DeploymentManager[T]) Init(...any) error {
+func (m *deploymentManager[T]) Init(...any) error {
 	m.options = deploymentManagerOptionsWithDefaults(m.options)
 	if m.deployment.MinProcs < 0 || m.deployment.MaxProcs > 100 || m.deployment.MinProcs > m.deployment.WorkerCount() {
 		return fmt.Errorf("deployment manager: invalid worker bounds min=%d max=%d", m.deployment.MinProcs, m.deployment.WorkerCount())
 	}
 	m.inFlightCalls = make(map[uint64]*deploymentManagerCall[T])
-	m.pool.status.Workers = make(map[gen.PID]deploymentWorkerStatus)
+	m.pool.status.workers = make(map[gen.PID]deploymentWorkerStatus)
 	if m.draining {
 		_, _ = m.SendAfter(m.PID(), MessageDeploymentManagerDrainDeadline{}, m.options.DrainTimeout)
 		m.reconcile()
@@ -163,7 +163,7 @@ func (m *DeploymentManager[T]) Init(...any) error {
 }
 
 // Terminate cancels local work and reports manager termination to the Router.
-func (m *DeploymentManager[T]) Terminate(reason error) {
+func (m *deploymentManager[T]) Terminate(reason error) {
 	if m.pool.restart != nil {
 		m.pool.restart.CancelScheduled(false)
 	}
@@ -183,7 +183,7 @@ func (m *DeploymentManager[T]) Terminate(reason error) {
 // ---------------------------------------------------------------------------
 
 // HandleMessage processes invocations, child facts, timers, scaling, and drain controls.
-func (m *DeploymentManager[T]) HandleMessage(from gen.PID, message any) error {
+func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 	switch msg := message.(type) {
 	case MessageInvokePlugin[T]:
 		m.acceptInvocation(msg)
@@ -273,7 +273,7 @@ func (m *DeploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 			return nil
 		}
 		m.pool.pid, m.pool.resizePending = gen.PID{}, false
-		m.pool.status = DeploymentPoolStatus{Lifecycle: DeploymentPoolStopped, Availability: runtime.AvailabilityUnavailable, Workers: make(map[gen.PID]deploymentWorkerStatus)}
+		m.pool.status = deploymentPoolStatus{lifecycle: DeploymentPoolStopped, availability: runtime.AvailabilityUnavailable, workers: make(map[gen.PID]deploymentWorkerStatus)}
 		m.lastError = msg.Reason
 		for callID, entry := range m.inFlightCalls {
 			if entry.phase != deploymentManagerPending {
@@ -361,13 +361,13 @@ func (m *DeploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 }
 
 // HandleInspect exposes concise operational manager metrics.
-func (m *DeploymentManager[T]) HandleInspect(_ gen.PID, _ ...string) map[string]string {
+func (m *deploymentManager[T]) HandleInspect(_ gen.PID, _ ...string) map[string]string {
 	status := m.status()
 	return map[string]string{
-		"deployment:availability": string(status.Availability),
-		"deployment:current":      fmt.Sprintf("%d", status.CurrentProcs),
-		"deployment:ready":        fmt.Sprintf("%d", status.ReadyWorkers),
-		"deployment:queue":        fmt.Sprintf("%d", status.QueueDepth),
+		"deployment:availability": string(status.availability),
+		"deployment:current":      fmt.Sprintf("%d", status.currentProcs),
+		"deployment:ready":        fmt.Sprintf("%d", status.readyWorkers),
+		"deployment:queue":        fmt.Sprintf("%d", status.queueDepth),
 	}
 }
 
@@ -376,7 +376,7 @@ func (m *DeploymentManager[T]) HandleInspect(_ gen.PID, _ ...string) map[string]
 // ---------------------------------------------------------------------------
 
 // acceptInvocation records one invocation or rejects it with an exact completion.
-func (m *DeploymentManager[T]) acceptInvocation(call MessageInvokePlugin[T]) {
+func (m *deploymentManager[T]) acceptInvocation(call MessageInvokePlugin[T]) {
 	_ = m.SendWithPriority(m.Parent(), MessageInvocationAccepted{
 		route: m.route, manager: m.PID(), callID: call.CallID,
 	}, gen.MessagePriorityHigh)
@@ -408,7 +408,7 @@ func (m *DeploymentManager[T]) acceptInvocation(call MessageInvokePlugin[T]) {
 // ---------------------------------------------------------------------------
 
 // reconcile advances drain, Pool lifecycle, dispatch, scaling, and status publication.
-func (m *DeploymentManager[T]) reconcile() {
+func (m *deploymentManager[T]) reconcile() {
 	if m.draining || m.circuitOpen || m.pool.recovering {
 		m.publishStatus()
 		if m.draining && !m.drained && len(m.inFlightCalls) == 0 {
@@ -435,11 +435,11 @@ func (m *DeploymentManager[T]) reconcile() {
 }
 
 // dispatchInvocation forwards queued invocations while ready Pool capacity is available.
-func (m *DeploymentManager[T]) dispatchInvocation() {
-	if m.draining || m.circuitOpen || m.pool.recovering || m.pool.status.Lifecycle == DeploymentPoolFailed {
+func (m *deploymentManager[T]) dispatchInvocation() {
+	if m.draining || m.circuitOpen || m.pool.recovering || m.pool.status.lifecycle == DeploymentPoolFailed {
 		return
 	}
-	for len(m.pendingCalls) > 0 && m.pool.pid != (gen.PID{}) && !m.pool.expectedStop && m.active()+m.dispatching() < min(m.pool.status.DesiredWorkers, m.ready()) {
+	for len(m.pendingCalls) > 0 && m.pool.pid != (gen.PID{}) && !m.pool.expectedStop && m.active()+m.dispatching() < min(m.pool.status.desiredWorkers, m.ready()) {
 		callID := m.pendingCalls[0]
 		m.pendingCalls = m.pendingCalls[1:]
 		entry := m.inFlightCalls[callID]
@@ -466,15 +466,15 @@ func (m *DeploymentManager[T]) dispatchInvocation() {
 }
 
 // scale changes Pool capacity by at most one worker per reconciliation.
-func (m *DeploymentManager[T]) scale() {
-	if m.draining || m.circuitOpen || m.pool.recovering || m.pool.status.Lifecycle == DeploymentPoolFailed {
+func (m *deploymentManager[T]) scale() {
+	if m.draining || m.circuitOpen || m.pool.recovering || m.pool.status.lifecycle == DeploymentPoolFailed {
 		return
 	}
 	if m.pool.resizePending || m.pool.pid == (gen.PID{}) || time.Since(m.lastScale) < m.options.ScaleCooldown {
 		m.scheduleScaleReconcile()
 		return
 	}
-	if len(m.pendingCalls) > 0 && m.pool.status.DesiredWorkers < m.deployment.WorkerCount() && m.ready() >= m.pool.status.DesiredWorkers && m.active()+m.dispatching() >= min(m.pool.status.DesiredWorkers, m.ready()) {
+	if len(m.pendingCalls) > 0 && m.pool.status.desiredWorkers < m.deployment.WorkerCount() && m.ready() >= m.pool.status.desiredWorkers && m.active()+m.dispatching() >= min(m.pool.status.desiredWorkers, m.ready()) {
 		m.pool.resizePending = true
 		if err := m.SendWithPriority(m.pool.pid, MessageDeploymentPoolAddWorker{}, gen.MessagePriorityHigh); err != nil {
 			m.pool.resizePending = false
@@ -482,12 +482,12 @@ func (m *DeploymentManager[T]) scale() {
 		}
 		return
 	}
-	if len(m.pendingCalls) == 0 && m.dispatching() == 0 && m.pool.status.DesiredWorkers > m.deployment.MinProcs {
+	if len(m.pendingCalls) == 0 && m.dispatching() == 0 && m.pool.status.desiredWorkers > m.deployment.MinProcs {
 		if time.Since(m.idleSince) < m.options.IdleTimeout {
 			m.scheduleScaleReconcile()
 			return
 		}
-		if m.pool.status.DesiredWorkers == 1 && m.deployment.MinProcs == 0 {
+		if m.pool.status.desiredWorkers == 1 && m.deployment.MinProcs == 0 {
 			if m.active() == 0 {
 				m.pool.expectedStop = true
 				_ = m.Node().SendExit(m.pool.pid, gen.TerminateReasonNormal)
@@ -507,7 +507,7 @@ func (m *DeploymentManager[T]) scale() {
 // ---------------------------------------------------------------------------
 
 // startDeploymentPool spawns and monitors a fresh Pool incarnation.
-func (m *DeploymentManager[T]) startDeploymentPool(initial int) {
+func (m *deploymentManager[T]) startDeploymentPool(initial int) {
 	if m.draining || m.circuitOpen || m.pool.pid != (gen.PID{}) {
 		return
 	}
@@ -516,7 +516,7 @@ func (m *DeploymentManager[T]) startDeploymentPool(initial int) {
 	poolOptions.InitialSize = int64(initial)
 	poolOptions.MaxSize = int64(m.deployment.WorkerCount())
 	pid, err := m.Spawn(func() gen.ProcessBehavior {
-		return &DeploymentPool[T]{
+		return &deploymentPool[T]{
 			adapter:    m.adapter,
 			options:    poolOptions,
 			deployment: m.deployment,
@@ -530,20 +530,20 @@ func (m *DeploymentManager[T]) startDeploymentPool(initial int) {
 	m.pool.pid = pid
 	m.pool.expectedStop = false
 	m.pool.recovering = false
-	m.pool.status = DeploymentPoolStatus{
-		Lifecycle:      DeploymentPoolStarting,
-		Availability:   runtime.AvailabilityUnavailable,
-		DesiredWorkers: initial,
-		Workers:        make(map[gen.PID]deploymentWorkerStatus),
+	m.pool.status = deploymentPoolStatus{
+		lifecycle:      DeploymentPoolStarting,
+		availability:   runtime.AvailabilityUnavailable,
+		desiredWorkers: initial,
+		workers:        make(map[gen.PID]deploymentWorkerStatus),
 	}
 	if err := m.MonitorPID(pid); err != nil {
 		m.lastError = fmt.Errorf("monitor deployment pool: %w", err)
 		_ = m.Node().SendExit(pid, gen.TerminateReasonShutdown)
 		m.pool.pid = gen.PID{}
-		m.pool.status = DeploymentPoolStatus{
-			Lifecycle:    DeploymentPoolStopped,
-			Availability: runtime.AvailabilityUnavailable,
-			Workers:      make(map[gen.PID]deploymentWorkerStatus),
+		m.pool.status = deploymentPoolStatus{
+			lifecycle:    DeploymentPoolStopped,
+			availability: runtime.AvailabilityUnavailable,
+			workers:      make(map[gen.PID]deploymentWorkerStatus),
 		}
 		m.scheduleDeploymentPoolRestart()
 		return
@@ -551,7 +551,7 @@ func (m *DeploymentManager[T]) startDeploymentPool(initial int) {
 }
 
 // scheduleDeploymentPoolRestart consumes the finite manager-level retry budget.
-func (m *DeploymentManager[T]) scheduleDeploymentPoolRestart() {
+func (m *deploymentManager[T]) scheduleDeploymentPoolRestart() {
 	m.pool.recovering = true
 	if m.pool.restart == nil {
 		m.pool.restart = runtime.NewScheduledBackoff(m.options.PoolOptions.RetryMin, m.options.PoolOptions.RetryMax)
@@ -574,7 +574,7 @@ func (m *DeploymentManager[T]) scheduleDeploymentPoolRestart() {
 }
 
 // openCircuit stops Pool recovery and fails all tracked invocations.
-func (m *DeploymentManager[T]) openCircuit(err error) {
+func (m *deploymentManager[T]) openCircuit(err error) {
 	if m.circuitOpen {
 		return
 	}
@@ -590,7 +590,7 @@ func (m *DeploymentManager[T]) openCircuit(err error) {
 }
 
 // scheduleScaleReconcile replaces the pending autoscaling timer with a fenced one.
-func (m *DeploymentManager[T]) scheduleScaleReconcile() {
+func (m *deploymentManager[T]) scheduleScaleReconcile() {
 	if m.circuitOpen || m.pool.recovering || m.pool.pid == (gen.PID{}) || m.pool.resizePending {
 		return
 	}
@@ -598,7 +598,7 @@ func (m *DeploymentManager[T]) scheduleScaleReconcile() {
 	if remaining := m.options.ScaleCooldown - time.Since(m.lastScale); remaining > delay {
 		delay = remaining
 	}
-	if len(m.pendingCalls) == 0 && m.dispatching() == 0 && m.pool.status.DesiredWorkers > m.deployment.MinProcs {
+	if len(m.pendingCalls) == 0 && m.dispatching() == 0 && m.pool.status.desiredWorkers > m.deployment.MinProcs {
 		if remaining := m.options.IdleTimeout - time.Since(m.idleSince); remaining > delay {
 			delay = remaining
 		}
@@ -621,14 +621,14 @@ func (m *DeploymentManager[T]) scheduleScaleReconcile() {
 // ---------------------------------------------------------------------------
 
 // cancel signals the invocation context when a cancellation callback exists.
-func (m *DeploymentManager[T]) cancel(entry *deploymentManagerCall[T]) {
+func (m *deploymentManager[T]) cancel(entry *deploymentManagerCall[T]) {
 	if entry.call.Cancel != nil {
 		entry.call.Cancel()
 	}
 }
 
 // removeCall releases all state for one invocation and completes it once.
-func (m *DeploymentManager[T]) removeCall(callID uint64, err error) {
+func (m *deploymentManager[T]) removeCall(callID uint64, err error) {
 	entry := m.inFlightCalls[callID]
 	if entry == nil {
 		return
@@ -648,7 +648,7 @@ func (m *DeploymentManager[T]) removeCall(callID uint64, err error) {
 }
 
 // completeInvocation publishes one idempotent invocation result to the Router.
-func (m *DeploymentManager[T]) completeInvocation(entry *deploymentManagerCall[T], err error) {
+func (m *deploymentManager[T]) completeInvocation(entry *deploymentManagerCall[T], err error) {
 	if entry.completed {
 		return
 	}
@@ -660,7 +660,7 @@ func (m *DeploymentManager[T]) completeInvocation(entry *deploymentManagerCall[T
 }
 
 // reportDrained publishes the manager's terminal graceful-drain fact once.
-func (m *DeploymentManager[T]) reportDrained() {
+func (m *deploymentManager[T]) reportDrained() {
 	if m.drained {
 		return
 	}
@@ -676,12 +676,12 @@ func (m *DeploymentManager[T]) reportDrained() {
 // ---------------------------------------------------------------------------
 
 // ready returns the Pool's currently healthy worker count.
-func (m *DeploymentManager[T]) ready() int {
-	return m.pool.status.HealthyWorkers
+func (m *deploymentManager[T]) ready() int {
+	return m.pool.status.healthyWorkers
 }
 
 // dispatching counts invocations sent to the Pool but not yet started.
-func (m *DeploymentManager[T]) dispatching() int {
+func (m *deploymentManager[T]) dispatching() int {
 	count := 0
 	for _, entry := range m.inFlightCalls {
 		if entry.phase == deploymentManagerDispatching {
@@ -692,7 +692,7 @@ func (m *DeploymentManager[T]) dispatching() int {
 }
 
 // active counts invocations currently executing in workers.
-func (m *DeploymentManager[T]) active() int {
+func (m *deploymentManager[T]) active() int {
 	count := 0
 	for _, entry := range m.inFlightCalls {
 		if entry.phase == deploymentManagerActive {
@@ -703,12 +703,12 @@ func (m *DeploymentManager[T]) active() int {
 }
 
 // status derives the manager's public snapshot from owned state.
-func (m *DeploymentManager[T]) status() DeploymentManagerStatus {
+func (m *deploymentManager[T]) status() deploymentManagerStatus {
 	zeroPoolIdle := m.pool.pid == (gen.PID{}) && m.deployment.MinProcs == 0 && len(m.inFlightCalls) == 0 &&
 		(m.pool.restart == nil || !m.pool.restart.Pending) && m.lastError == nil
-	noCommittedCapacity := m.pool.recovering || m.pool.status.Lifecycle == DeploymentPoolFailed ||
-		(m.ready() == 0 && (m.pool.status.Lifecycle == DeploymentPoolRestarting ||
-			m.pool.status.Lifecycle == DeploymentPoolStarting))
+	noCommittedCapacity := m.pool.recovering || m.pool.status.lifecycle == DeploymentPoolFailed ||
+		(m.ready() == 0 && (m.pool.status.lifecycle == DeploymentPoolRestarting ||
+			m.pool.status.lifecycle == DeploymentPoolStarting))
 	availability := runtime.AvailabilityUnavailable
 	if m.circuitOpen {
 		availability = runtime.AvailabilityUnavailable
@@ -735,18 +735,18 @@ func (m *DeploymentManager[T]) status() DeploymentManagerStatus {
 	} else if m.pool.pid == (gen.PID{}) && !zeroPoolIdle {
 		lifecycle = DeploymentManagerStarting
 	}
-	status := DeploymentManagerStatus{
-		Lifecycle: lifecycle, Availability: availability,
-		CurrentProcs: m.pool.status.DesiredWorkers, ReadyWorkers: m.ready(),
-		QueueDepth: len(m.pendingCalls), Dispatching: m.dispatching(), Active: m.active(),
-		LastError: m.lastError,
-		Workers:   m.pool.status.clone().Workers,
+	status := deploymentManagerStatus{
+		lifecycle: lifecycle, availability: availability,
+		currentProcs: m.pool.status.desiredWorkers, readyWorkers: m.ready(),
+		queueDepth: len(m.pendingCalls), dispatching: m.dispatching(), active: m.active(),
+		lastError: m.lastError,
+		workers:   m.pool.status.clone().workers,
 	}
 	return status
 }
 
 // publishStatus sends the latest manager snapshot to its Router parent.
-func (m *DeploymentManager[T]) publishStatus() {
+func (m *deploymentManager[T]) publishStatus() {
 	_ = m.SendWithPriority(m.Parent(), MessageDeploymentManagerStatusChanged{
 		route: m.route, manager: m.PID(),
 		status: m.status(),

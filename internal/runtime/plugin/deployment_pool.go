@@ -29,44 +29,44 @@ const (
 type deploymentPoolState struct {
 	pid           gen.PID
 	restart       *runtime.ScheduledBackoff
-	status        DeploymentPoolStatus
+	status        deploymentPoolStatus
 	resizePending bool
 	expectedStop  bool
 	recovering    bool
 }
 
-// DeploymentPoolStatus preserves the existing router/catalog status contract.
-type DeploymentPoolStatus struct {
-	Lifecycle      DeploymentPoolLifecycle
-	Availability   runtime.Availability
-	HealthyWorkers int
-	DesiredWorkers int
-	QueueDepth     int
-	ActiveCalls    int
-	Workers        map[gen.PID]deploymentWorkerStatus
+// deploymentPoolStatus preserves the existing router/catalog status contract.
+type deploymentPoolStatus struct {
+	lifecycle      DeploymentPoolLifecycle
+	availability   runtime.Availability
+	healthyWorkers int
+	desiredWorkers int
+	queueDepth     int
+	activeCalls    int
+	workers        map[gen.PID]deploymentWorkerStatus
 }
 
 // clone copies a pool status and its worker map.
-func (s DeploymentPoolStatus) clone() DeploymentPoolStatus {
+func (s deploymentPoolStatus) clone() deploymentPoolStatus {
 	clone := s
-	clone.Workers = make(map[gen.PID]deploymentWorkerStatus, len(s.Workers))
-	maps.Copy(clone.Workers, s.Workers)
+	clone.workers = make(map[gen.PID]deploymentWorkerStatus, len(s.workers))
+	maps.Copy(clone.workers, s.workers)
 	return clone
 }
 
 // sameDeploymentPoolStatus compares pool status snapshots.
-func sameDeploymentPoolStatus(left, right DeploymentPoolStatus) bool {
-	if left.Lifecycle != right.Lifecycle ||
-		left.Availability != right.Availability ||
-		left.HealthyWorkers != right.HealthyWorkers ||
-		left.DesiredWorkers != right.DesiredWorkers ||
-		left.QueueDepth != right.QueueDepth ||
-		left.ActiveCalls != right.ActiveCalls ||
-		len(left.Workers) != len(right.Workers) {
+func sameDeploymentPoolStatus(left, right deploymentPoolStatus) bool {
+	if left.lifecycle != right.lifecycle ||
+		left.availability != right.availability ||
+		left.healthyWorkers != right.healthyWorkers ||
+		left.desiredWorkers != right.desiredWorkers ||
+		left.queueDepth != right.queueDepth ||
+		left.activeCalls != right.activeCalls ||
+		len(left.workers) != len(right.workers) {
 		return false
 	}
-	for pid, worker := range left.Workers {
-		other, ok := right.Workers[pid]
+	for pid, worker := range left.workers {
+		other, ok := right.workers[pid]
 		if !ok || !sameDeploymentWorkerStatus(worker, other) {
 			return false
 		}
@@ -74,8 +74,8 @@ func sameDeploymentPoolStatus(left, right DeploymentPoolStatus) bool {
 	return true
 }
 
-// DeploymentPool places deployment workers and forwards normal-priority traffic.
-type DeploymentPool[T Syncable] struct {
+// deploymentPool places deployment workers and forwards normal-priority traffic.
+type deploymentPool[T Syncable] struct {
 	act.Pool
 	adapter    *Adapter[T]
 	options    DeploymentPoolOptions
@@ -104,7 +104,7 @@ type MessageDeploymentPoolResized struct {
 // MessageDeploymentPoolStatusChanged reports a pool status update to its manager.
 type MessageDeploymentPoolStatusChanged struct {
 	pool   gen.PID
-	status DeploymentPoolStatus
+	status deploymentPoolStatus
 }
 
 // ---------------------------------------------------------------------------
@@ -112,7 +112,7 @@ type MessageDeploymentPoolStatusChanged struct {
 // ---------------------------------------------------------------------------
 
 // Init configures the pool and creates its worker factory.
-func (p *DeploymentPool[T]) Init(...any) (act.PoolOptions, error) {
+func (p *deploymentPool[T]) Init(...any) (act.PoolOptions, error) {
 	p.options = deploymentPoolOptionsWithDefaults(p.options)
 	p.size = p.options.InitialSize
 	p.workers = make(map[gen.PID]deploymentWorkerStatus)
@@ -121,7 +121,7 @@ func (p *DeploymentPool[T]) Init(...any) (act.PoolOptions, error) {
 		PoolSize:          p.size,
 		WorkerMailboxSize: 1,
 		WorkerFactory: func() gen.ProcessBehavior {
-			return &DeploymentWorker[T]{
+			return &deploymentWorker[T]{
 				adapter:    p.adapter,
 				options:    p.options.WorkerOptions,
 				deployment: p.deployment,
@@ -135,7 +135,7 @@ func (p *DeploymentPool[T]) Init(...any) (act.PoolOptions, error) {
 // ---------------------------------------------------------------------------
 
 // HandleMessage processes worker state and manager resize requests.
-func (p *DeploymentPool[T]) HandleMessage(from gen.PID, message any) error {
+func (p *deploymentPool[T]) HandleMessage(from gen.PID, message any) error {
 	switch msg := message.(type) {
 	case MessageDeploymentWorkerStatusChanged:
 		if from != msg.worker {
@@ -200,12 +200,12 @@ func (p *DeploymentPool[T]) HandleMessage(from gen.PID, message any) error {
 }
 
 // HandleCall rejects unsupported synchronous pool calls.
-func (p *DeploymentPool[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
+func (p *deploymentPool[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
 	return fmt.Errorf("actorruntime: unsupported deployment pool call %T", request), nil
 }
 
 // HandleInspect exposes the current pool size.
-func (p *DeploymentPool[T]) HandleInspect(_ gen.PID, _ ...string) map[string]string {
+func (p *deploymentPool[T]) HandleInspect(_ gen.PID, _ ...string) map[string]string {
 	return map[string]string{"ergo:pool_size": fmt.Sprintf("%d", p.size)}
 }
 
@@ -214,17 +214,17 @@ func (p *DeploymentPool[T]) HandleInspect(_ gen.PID, _ ...string) map[string]str
 // ---------------------------------------------------------------------------
 
 // publishStatus reports aggregate worker health to the manager.
-func (p *DeploymentPool[T]) publishStatus() {
-	next := DeploymentPoolStatus{
-		DesiredWorkers: int(p.size),
-		Workers:        make(map[gen.PID]deploymentWorkerStatus, len(p.workers)),
+func (p *deploymentPool[T]) publishStatus() {
+	next := deploymentPoolStatus{
+		desiredWorkers: int(p.size),
+		workers:        make(map[gen.PID]deploymentWorkerStatus, len(p.workers)),
 	}
 	failed := false
 	restarting := false
 	for pid, worker := range p.workers {
-		next.Workers[pid] = worker
+		next.workers[pid] = worker
 		if worker.availability == runtime.AvailabilityReady {
-			next.HealthyWorkers++
+			next.healthyWorkers++
 		}
 		switch worker.lifecycle {
 		case DeploymentWorkerFailed:
@@ -234,21 +234,21 @@ func (p *DeploymentPool[T]) publishStatus() {
 		}
 	}
 	if failed {
-		next.Lifecycle = DeploymentPoolFailed
-		next.Availability = runtime.AvailabilityUnavailable
-	} else if next.HealthyWorkers > 0 {
-		next.Lifecycle = DeploymentPoolRunning
-		if next.HealthyWorkers >= next.DesiredWorkers {
-			next.Availability = runtime.AvailabilityReady
+		next.lifecycle = DeploymentPoolFailed
+		next.availability = runtime.AvailabilityUnavailable
+	} else if next.healthyWorkers > 0 {
+		next.lifecycle = DeploymentPoolRunning
+		if next.healthyWorkers >= next.desiredWorkers {
+			next.availability = runtime.AvailabilityReady
 		} else {
-			next.Availability = runtime.AvailabilityDegraded
+			next.availability = runtime.AvailabilityDegraded
 		}
 	} else if restarting {
-		next.Lifecycle = DeploymentPoolRestarting
-		next.Availability = runtime.AvailabilityUnavailable
+		next.lifecycle = DeploymentPoolRestarting
+		next.availability = runtime.AvailabilityUnavailable
 	} else {
-		next.Lifecycle = DeploymentPoolStarting
-		next.Availability = runtime.AvailabilityUnavailable
+		next.lifecycle = DeploymentPoolStarting
+		next.availability = runtime.AvailabilityUnavailable
 	}
 	_ = p.SendWithPriority(p.Parent(), MessageDeploymentPoolStatusChanged{pool: p.PID(), status: next}, gen.MessagePriorityHigh)
 }

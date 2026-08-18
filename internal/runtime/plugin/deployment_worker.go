@@ -31,8 +31,8 @@ type deploymentWorkerStatus struct {
 	meta         workerMetaStatus
 }
 
-// DeploymentWorker owns one plugin worker meta-process incarnation.
-type DeploymentWorker[T Syncable] struct {
+// deploymentWorker owns one plugin worker meta-process incarnation.
+type deploymentWorker[T Syncable] struct {
 	act.Actor
 	adapter    *Adapter[T]
 	options    DeploymentWorkerOptions
@@ -93,7 +93,7 @@ type MessageWorkerMetaHealthTimeout struct {
 // ---------------------------------------------------------------------------
 
 // Init configures retry state and starts the worker meta-process.
-func (w *DeploymentWorker[T]) Init(...any) error {
+func (w *deploymentWorker[T]) Init(...any) error {
 	w.options = deploymentWorkerOptionsWithDefaults(w.options)
 	w.workerMeta.restart = runtime.NewScheduledBackoff(w.options.RetryMin, w.options.RetryMax)
 	w.workerMeta.healthRestart = runtime.NewScheduledBackoff(w.options.RetryMin, w.options.RetryMax)
@@ -106,7 +106,7 @@ func (w *DeploymentWorker[T]) Init(...any) error {
 }
 
 // Terminate cancels scheduled recovery and notifies the pool of shutdown.
-func (w *DeploymentWorker[T]) Terminate(error) {
+func (w *deploymentWorker[T]) Terminate(error) {
 	w.workerMeta.restart.CancelScheduled(false)
 	w.workerMeta.healthRestart.CancelScheduled(false)
 	_ = w.SendWithPriority(w.Parent(), MessageDeploymentWorkerStopped{worker: w.PID(), pool: w.Parent()}, gen.MessagePriorityHigh)
@@ -117,7 +117,7 @@ func (w *DeploymentWorker[T]) Terminate(error) {
 // ---------------------------------------------------------------------------
 
 // HandleMessage processes worker lifecycle, health, and invocation messages.
-func (w *DeploymentWorker[T]) HandleMessage(from gen.PID, message any) error {
+func (w *deploymentWorker[T]) HandleMessage(from gen.PID, message any) error {
 	switch msg := message.(type) {
 	case MessageInvokePlugin[T]:
 		w.invoke(from, msg)
@@ -207,7 +207,7 @@ func (w *DeploymentWorker[T]) HandleMessage(from gen.PID, message any) error {
 }
 
 // HandleCall rejects unsupported synchronous worker calls.
-func (w *DeploymentWorker[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
+func (w *deploymentWorker[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
 	return fmt.Errorf("actorruntime: unsupported deployment worker call %T", request), nil
 }
 
@@ -216,7 +216,7 @@ func (w *DeploymentWorker[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any
 // ---------------------------------------------------------------------------
 
 // invoke executes one plugin invocation through the active meta-process.
-func (w *DeploymentWorker[T]) invoke(manager gen.PID, call MessageInvokePlugin[T]) {
+func (w *deploymentWorker[T]) invoke(manager gen.PID, call MessageInvokePlugin[T]) {
 	ctx := call.Context
 	if ctx == nil {
 		ctx = context.Background()
@@ -269,7 +269,7 @@ func (w *DeploymentWorker[T]) invoke(manager gen.PID, call MessageInvokePlugin[T
 // ---------------------------------------------------------------------------
 
 // startWorkerMeta creates and monitors the worker's meta-process.
-func (w *DeploymentWorker[T]) startWorkerMeta() error {
+func (w *deploymentWorker[T]) startWorkerMeta() error {
 	if w.workerMeta.alias != (gen.Alias{}) {
 		return nil
 	}
@@ -302,7 +302,7 @@ func (w *DeploymentWorker[T]) startWorkerMeta() error {
 // ---------------------------------------------------------------------------
 
 // scheduleWorkerMetaRestart schedules normal or health recovery.
-func (w *DeploymentWorker[T]) scheduleWorkerMetaRestart(health bool) error {
+func (w *deploymentWorker[T]) scheduleWorkerMetaRestart(health bool) error {
 	if w.workerMeta.status.lifecycle == WorkerMetaFailed {
 		return nil
 	}
@@ -331,7 +331,7 @@ func (w *DeploymentWorker[T]) scheduleWorkerMetaRestart(health bool) error {
 }
 
 // failWorkerMeta records terminal recovery failure and notifies the pool.
-func (w *DeploymentWorker[T]) failWorkerMeta(err error) {
+func (w *deploymentWorker[T]) failWorkerMeta(err error) {
 	if w.workerMeta.status.lifecycle == WorkerMetaFailed {
 		return
 	}
@@ -350,7 +350,7 @@ func (w *DeploymentWorker[T]) failWorkerMeta(err error) {
 }
 
 // retireWorkerMeta stops the active meta-process and begins recovery.
-func (w *DeploymentWorker[T]) retireWorkerMeta(alias gen.Alias, err error, health bool) {
+func (w *deploymentWorker[T]) retireWorkerMeta(alias gen.Alias, err error, health bool) {
 	if alias != w.workerMeta.alias {
 		return
 	}
@@ -366,7 +366,7 @@ func (w *DeploymentWorker[T]) retireWorkerMeta(alias gen.Alias, err error, healt
 // ---------------------------------------------------------------------------
 
 // scheduleHealthCheck queues a health check for the active meta-process.
-func (w *DeploymentWorker[T]) scheduleHealthCheck(alias gen.Alias) {
+func (w *deploymentWorker[T]) scheduleHealthCheck(alias gen.Alias) {
 	if w.workerMeta.status.availability != runtime.AvailabilityReady || alias != w.workerMeta.alias {
 		return
 	}
@@ -379,7 +379,7 @@ func (w *DeploymentWorker[T]) scheduleHealthCheck(alias gen.Alias) {
 }
 
 // cancelHealthCheck invalidates pending health checks.
-func (w *DeploymentWorker[T]) cancelHealthCheck() {
+func (w *deploymentWorker[T]) cancelHealthCheck() {
 	w.workerMeta.healthRestart.Token++
 	w.workerMeta.pingPending = false
 }
@@ -389,7 +389,7 @@ func (w *DeploymentWorker[T]) cancelHealthCheck() {
 // ---------------------------------------------------------------------------
 
 // reportUnavailable records a recoverable meta-process failure.
-func (w *DeploymentWorker[T]) reportUnavailable(err error) {
+func (w *deploymentWorker[T]) reportUnavailable(err error) {
 	w.workerMeta.status = workerMetaStatus{
 		lifecycle:    WorkerMetaRestarting,
 		availability: runtime.AvailabilityUnavailable,
@@ -400,7 +400,7 @@ func (w *DeploymentWorker[T]) reportUnavailable(err error) {
 }
 
 // publishStatus sends the current worker status to its pool.
-func (w *DeploymentWorker[T]) publishStatus(lifecycle DeploymentWorkerLifecycle) {
+func (w *deploymentWorker[T]) publishStatus(lifecycle DeploymentWorkerLifecycle) {
 	_ = w.SendWithPriority(w.Parent(), MessageDeploymentWorkerStatusChanged{
 		worker: w.PID(),
 		status: deploymentWorkerStatus{
