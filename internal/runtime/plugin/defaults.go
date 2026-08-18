@@ -16,11 +16,32 @@ const (
 	DefaultWorkerHealthInterval             = 15 * time.Second
 	DefaultWorkerRetryMin                   = time.Second
 	DefaultWorkerRetryMax                   = time.Minute
+	DefaultSupervisorRetryMin               = DefaultWorkerRetryMin
+	DefaultSupervisorRetryMax               = DefaultWorkerRetryMax
+	DefaultSupervisorControlTimeout         = 30 * time.Second
 	DefaultCatalogRetryMin                  = DefaultWorkerRetryMin
 	DefaultCatalogRetryMax                  = DefaultWorkerRetryMax
 	DefaultRouterRetryMin                   = DefaultWorkerRetryMin
 	DefaultRouterRetryMax                   = DefaultWorkerRetryMax
 )
+
+// supervisorOptionsWithDefaults fills supervisor and child option defaults.
+func supervisorOptionsWithDefaults[P Syncable, M any](opts SupervisorOptions[P, M]) SupervisorOptions[P, M] {
+	if opts.RetryMin <= 0 {
+		opts.RetryMin = DefaultSupervisorRetryMin
+	}
+	if opts.RetryMax <= 0 {
+		opts.RetryMax = DefaultSupervisorRetryMax
+	}
+	if opts.RetryMax < opts.RetryMin {
+		opts.RetryMax = opts.RetryMin
+	}
+	if opts.ControlTimeout <= 0 {
+		opts.ControlTimeout = DefaultSupervisorControlTimeout
+	}
+	opts.CatalogOptions = catalogOptionsWithDefaults(opts.CatalogOptions)
+	return opts
+}
 
 // catalogOptionsWithDefaults fills catalog and router defaults.
 func catalogOptionsWithDefaults[T Syncable](opts CatalogOptions[T]) CatalogOptions[T] {

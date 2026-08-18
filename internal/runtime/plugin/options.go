@@ -4,16 +4,18 @@ import (
 	"time"
 
 	"ergo.services/ergo/gen"
-	projection "github.com/harishhary/blink/internal/runtime/snapshot"
+	"github.com/harishhary/blink/internal/runtime/snapshot"
 )
 
 // supervisorOptions configures a runtime supervisor.
 type SupervisorOptions[P Syncable, M any] struct {
 	Name           gen.Atom
-	Dependencies   ActorDependencies[P]
+	RetryMin       time.Duration
+	RetryMax       time.Duration
+	ControlTimeout time.Duration
 	CatalogOptions CatalogOptions[P]
-	SnapshotReader projection.ReaderActorOptions
-	Projection     projection.ProjectionSpec[M]
+	SnapshotReader snapshot.ReaderActorOptions
+	Projection     snapshot.ProjectionSpec[M]
 	Directory      string
 	Stopped        chan<- error
 }

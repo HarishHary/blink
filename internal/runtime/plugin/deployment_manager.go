@@ -71,16 +71,16 @@ type DeploymentManager[T Syncable] struct {
 	act.Actor
 	adapter        *Adapter[T]
 	options        DeploymentManagerOptions
+	draining       bool
+	drained        bool
 	deployment     Deployment
 	route          gen.Atom
 	pool           deploymentPoolState
-	calls          map[uint64]*deploymentManagerCall[T]
+	inFlightCalls  map[uint64]*deploymentManagerCall[T]
 	pendingCalls   []uint64
 	circuitOpen    bool
 	reconcileToken uint64
 	reconcileStop  gen.CancelFunc
-	draining       bool
-	drained        bool
 	idleSince      time.Time
 	lastScale      time.Time
 	lastError      error
@@ -148,7 +148,7 @@ func (m *DeploymentManager[T]) Init(...any) error {
 	if m.deployment.MinProcs < 0 || m.deployment.MaxProcs > 100 || m.deployment.MinProcs > m.deployment.WorkerCount() {
 		return fmt.Errorf("deployment manager: invalid worker bounds min=%d max=%d", m.deployment.MinProcs, m.deployment.WorkerCount())
 	}
-	m.calls = make(map[uint64]*deploymentManagerCall[T])
+	m.inFlightCalls = make(map[uint64]*deploymentManagerCall[T])
 	m.pool.status.Workers = make(map[gen.PID]DeploymentWorkerStatus)
 	if m.draining {
 		_, _ = m.SendAfter(m.PID(), MessageDeploymentManagerDrainDeadline{}, m.options.DrainTimeout)
@@ -170,7 +170,7 @@ func (m *DeploymentManager[T]) Terminate(reason error) {
 	if m.reconcileStop != nil {
 		m.reconcileStop()
 	}
-	for _, entry := range m.calls {
+	for _, entry := range m.inFlightCalls {
 		m.cancel(entry)
 	}
 	_ = m.SendWithPriority(m.Parent(), MessageDeploymentManagerTerminated{
@@ -189,7 +189,7 @@ func (m *DeploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 		m.acceptInvocation(msg)
 
 	case MessageCancelInvocation:
-		entry := m.calls[msg.CallID]
+		entry := m.inFlightCalls[msg.CallID]
 		if entry == nil {
 			return nil
 		}
@@ -225,7 +225,7 @@ func (m *DeploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 		m.publishStatus()
 
 	case MessageInvocationStarted:
-		entry := m.calls[msg.callID]
+		entry := m.inFlightCalls[msg.callID]
 		if entry == nil || entry.phase != deploymentManagerDispatching {
 			return nil
 		}
@@ -237,7 +237,7 @@ func (m *DeploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 		m.reconcile()
 
 	case MessageInvocationFinished:
-		entry := m.calls[msg.callID]
+		entry := m.inFlightCalls[msg.callID]
 		if entry == nil || entry.phase != deploymentManagerActive || entry.worker != from {
 			return nil
 		}
@@ -248,7 +248,7 @@ func (m *DeploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 		if from != m.pool.pid || msg.pool != m.pool.pid || m.pool.pid == (gen.PID{}) {
 			return nil
 		}
-		for callID, entry := range m.calls {
+		for callID, entry := range m.inFlightCalls {
 			if entry.phase == deploymentManagerActive && entry.worker == msg.worker {
 				m.cancel(entry)
 				m.removeCall(callID, runtime.ErrPluginUnavailable)
@@ -275,7 +275,7 @@ func (m *DeploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 		m.pool.pid, m.pool.resizePending = gen.PID{}, false
 		m.pool.status = DeploymentPoolStatus{Lifecycle: DeploymentPoolStopped, Availability: runtime.AvailabilityUnavailable, Workers: make(map[gen.PID]DeploymentWorkerStatus)}
 		m.lastError = msg.Reason
-		for callID, entry := range m.calls {
+		for callID, entry := range m.inFlightCalls {
 			if entry.phase != deploymentManagerPending {
 				m.cancel(entry)
 				m.removeCall(callID, runtime.ErrPluginUnavailable)
@@ -296,7 +296,7 @@ func (m *DeploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 		m.reconcile()
 
 	case MessageDeploymentManagerDispatchDeadline:
-		entry := m.calls[msg.callID]
+		entry := m.inFlightCalls[msg.callID]
 		if entry == nil || entry.phase != deploymentManagerDispatching || entry.dispatchToken != msg.token {
 			return nil
 		}
@@ -346,10 +346,10 @@ func (m *DeploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 		if !m.draining || m.drained {
 			return nil
 		}
-		for callID, entry := range m.calls {
+		for callID, entry := range m.inFlightCalls {
 			m.cancel(entry)
 			m.completeInvocation(entry, context.DeadlineExceeded)
-			delete(m.calls, callID)
+			delete(m.inFlightCalls, callID)
 		}
 		m.pendingCalls = nil
 		m.reportDrained()
@@ -380,7 +380,7 @@ func (m *DeploymentManager[T]) acceptInvocation(call MessageInvokePlugin[T]) {
 	_ = m.SendWithPriority(m.Parent(), MessageInvocationAccepted{
 		route: m.route, manager: m.PID(), callID: call.CallID,
 	}, gen.MessagePriorityHigh)
-	if _, exists := m.calls[call.CallID]; exists {
+	if _, exists := m.inFlightCalls[call.CallID]; exists {
 		return
 	}
 	if m.draining || m.circuitOpen {
@@ -398,7 +398,7 @@ func (m *DeploymentManager[T]) acceptInvocation(call MessageInvokePlugin[T]) {
 		m.completeInvocation(&deploymentManagerCall[T]{call: call}, runtime.ErrQueueFull)
 		return
 	}
-	m.calls[call.CallID] = &deploymentManagerCall[T]{call: call, phase: deploymentManagerPending}
+	m.inFlightCalls[call.CallID] = &deploymentManagerCall[T]{call: call, phase: deploymentManagerPending}
 	m.pendingCalls = append(m.pendingCalls, call.CallID)
 	m.reconcile()
 }
@@ -411,7 +411,7 @@ func (m *DeploymentManager[T]) acceptInvocation(call MessageInvokePlugin[T]) {
 func (m *DeploymentManager[T]) reconcile() {
 	if m.draining || m.circuitOpen || m.pool.recovering {
 		m.publishStatus()
-		if m.draining && !m.drained && len(m.calls) == 0 {
+		if m.draining && !m.drained && len(m.inFlightCalls) == 0 {
 			m.reportDrained()
 		}
 		return
@@ -429,7 +429,7 @@ func (m *DeploymentManager[T]) reconcile() {
 	m.dispatchInvocation()
 	m.scale()
 	m.publishStatus()
-	if m.draining && !m.drained && len(m.calls) == 0 {
+	if m.draining && !m.drained && len(m.inFlightCalls) == 0 {
 		m.reportDrained()
 	}
 }
@@ -442,7 +442,7 @@ func (m *DeploymentManager[T]) dispatchInvocation() {
 	for len(m.pendingCalls) > 0 && m.pool.pid != (gen.PID{}) && !m.pool.expectedStop && m.active()+m.dispatching() < min(m.pool.status.DesiredWorkers, m.ready()) {
 		callID := m.pendingCalls[0]
 		m.pendingCalls = m.pendingCalls[1:]
-		entry := m.calls[callID]
+		entry := m.inFlightCalls[callID]
 		if entry == nil || entry.phase != deploymentManagerPending {
 			continue
 		}
@@ -582,7 +582,7 @@ func (m *DeploymentManager[T]) openCircuit(err error) {
 	if m.pool.restart != nil {
 		m.pool.restart.CancelScheduled(false)
 	}
-	for callID := range m.calls {
+	for callID := range m.inFlightCalls {
 		m.removeCall(callID, runtime.ErrPluginUnavailable)
 	}
 	m.pendingCalls = nil
@@ -629,7 +629,7 @@ func (m *DeploymentManager[T]) cancel(entry *deploymentManagerCall[T]) {
 
 // removeCall releases all state for one invocation and completes it once.
 func (m *DeploymentManager[T]) removeCall(callID uint64, err error) {
-	entry := m.calls[callID]
+	entry := m.inFlightCalls[callID]
 	if entry == nil {
 		return
 	}
@@ -643,7 +643,7 @@ func (m *DeploymentManager[T]) removeCall(callID uint64, err error) {
 			break
 		}
 	}
-	delete(m.calls, callID)
+	delete(m.inFlightCalls, callID)
 	m.completeInvocation(entry, err)
 }
 
@@ -683,7 +683,7 @@ func (m *DeploymentManager[T]) ready() int {
 // dispatching counts invocations sent to the Pool but not yet started.
 func (m *DeploymentManager[T]) dispatching() int {
 	count := 0
-	for _, entry := range m.calls {
+	for _, entry := range m.inFlightCalls {
 		if entry.phase == deploymentManagerDispatching {
 			count++
 		}
@@ -694,7 +694,7 @@ func (m *DeploymentManager[T]) dispatching() int {
 // active counts invocations currently executing in workers.
 func (m *DeploymentManager[T]) active() int {
 	count := 0
-	for _, entry := range m.calls {
+	for _, entry := range m.inFlightCalls {
 		if entry.phase == deploymentManagerActive {
 			count++
 		}
@@ -704,7 +704,7 @@ func (m *DeploymentManager[T]) active() int {
 
 // status derives the manager's public snapshot from owned state.
 func (m *DeploymentManager[T]) status() DeploymentManagerStatus {
-	zeroPoolIdle := m.pool.pid == (gen.PID{}) && m.deployment.MinProcs == 0 && len(m.calls) == 0 &&
+	zeroPoolIdle := m.pool.pid == (gen.PID{}) && m.deployment.MinProcs == 0 && len(m.inFlightCalls) == 0 &&
 		(m.pool.restart == nil || !m.pool.restart.Pending) && m.lastError == nil
 	noCommittedCapacity := m.pool.recovering || m.pool.status.Lifecycle == DeploymentPoolFailed ||
 		(m.ready() == 0 && (m.pool.status.Lifecycle == DeploymentPoolRestarting ||

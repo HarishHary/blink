@@ -3,7 +3,6 @@ package plugin
 import (
 	"context"
 	"crypto/sha256"
-	"time"
 
 	"ergo.services/ergo/gen"
 	"github.com/harishhary/blink/internal/runtime"
@@ -12,21 +11,6 @@ import (
 // ---------------------------------------------------------------------------
 // Shared types
 // ---------------------------------------------------------------------------
-
-// ActorDependencies contains dependencies and settings shared by plugin actors.
-type ActorDependencies[T Syncable] struct {
-	Node              gen.Node
-	Adapter           *Adapter[T]
-	QueueSize         int
-	DrainTimeout      time.Duration
-	HealthInterval    time.Duration
-	RetryMin          time.Duration
-	RetryMax          time.Duration
-	PoolRetryMin      time.Duration
-	PoolRetryMax      time.Duration
-	InvocationTimeout time.Duration
-	ControlTimeout    time.Duration
-}
 
 // Deployment describes one deployed plugin artifact.
 type Deployment struct {
