@@ -31,16 +31,6 @@ func EventsFor(node gen.Node, name gen.Atom) Events {
 	}
 }
 
-// Supervisor owns a reader followed by a typed projection actor.
-// Rest-for-one restarts the projection whenever its reader restarts.
-type Supervisor[T any] struct {
-	act.Supervisor
-	opts            SupervisorOptions[T]
-	readerActor     readerActorState
-	projectionActor projectionActorState
-	events          Events
-}
-
 type readerActorState struct {
 	pid    gen.PID
 	status ReaderActorStatus
@@ -52,17 +42,26 @@ type projectionActorState struct {
 	status           ProjectionActorStatus
 }
 
+// runtimeSnapshotState tracks the snapshot supervisor incarnation.
+type SupervisorState struct {
+	Pid   gen.PID
+	Epoch uint64
+}
+
+// Supervisor owns a reader followed by a typed projection actor.
+// Rest-for-one restarts the projection whenever its reader restarts.
+type Supervisor[T any] struct {
+	act.Supervisor
+	opts            SupervisorOptions[T]
+	readerActor     readerActorState
+	projectionActor projectionActorState
+	events          Events
+}
+
 // NewSupervisor creates a reader/projection supervisor with stable child names.
 func NewSupervisor[T any](opts SupervisorOptions[T]) *Supervisor[T] {
 	return &Supervisor[T]{opts: optionsWithDefaults(opts)}
 }
-
-// --- messages ---
-
-// The supervisor accepts status only from its current reader child PID.
-type MessageReaderActorStatusChanged struct{ status ReaderActorStatus }
-
-// --- messages ---
 
 // Init validates options and configures the supervised reader and projection actors.
 func (s *Supervisor[T]) Init(...any) (act.SupervisorSpec, error) {

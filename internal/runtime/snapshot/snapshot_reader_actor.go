@@ -54,6 +54,8 @@ type MessageReaderActorActivate struct {
 	snapshotEventToken gen.Ref
 }
 
+type MessageReaderActorStatusChanged struct{ status ReaderActorStatus }
+
 // --- messages ---
 
 // Init initializes reader state and its restart backoff.
