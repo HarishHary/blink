@@ -387,12 +387,12 @@ func (a *catalogActor[T]) startRouter(id string) (*routerState, error) {
 		Primary: DeploymentPoolStatus{
 			Lifecycle:    DeploymentPoolStopped,
 			Availability: runtime.AvailabilityUnavailable,
-			Workers:      make(map[gen.PID]DeploymentWorkerStatus),
+			Workers:      make(map[gen.PID]deploymentWorkerStatus),
 		},
 		Candidate: DeploymentPoolStatus{
 			Lifecycle:    DeploymentPoolStopped,
 			Availability: runtime.AvailabilityUnavailable,
-			Workers:      make(map[gen.PID]DeploymentWorkerStatus),
+			Workers:      make(map[gen.PID]deploymentWorkerStatus),
 		},
 	}
 	a.reconcileStatus()
@@ -456,12 +456,12 @@ func (a *catalogActor[T]) retireRouter(id string, callErr error) {
 		Primary: DeploymentPoolStatus{
 			Lifecycle:    DeploymentPoolStopped,
 			Availability: runtime.AvailabilityUnavailable,
-			Workers:      make(map[gen.PID]DeploymentWorkerStatus),
+			Workers:      make(map[gen.PID]deploymentWorkerStatus),
 		},
 		Candidate: DeploymentPoolStatus{
 			Lifecycle:    DeploymentPoolStopped,
 			Availability: runtime.AvailabilityUnavailable,
-			Workers:      make(map[gen.PID]DeploymentWorkerStatus),
+			Workers:      make(map[gen.PID]deploymentWorkerStatus),
 		},
 	}
 }

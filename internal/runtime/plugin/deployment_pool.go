@@ -43,13 +43,13 @@ type DeploymentPoolStatus struct {
 	DesiredWorkers int
 	QueueDepth     int
 	ActiveCalls    int
-	Workers        map[gen.PID]DeploymentWorkerStatus
+	Workers        map[gen.PID]deploymentWorkerStatus
 }
 
 // clone copies a pool status and its worker map.
 func (s DeploymentPoolStatus) clone() DeploymentPoolStatus {
 	clone := s
-	clone.Workers = make(map[gen.PID]DeploymentWorkerStatus, len(s.Workers))
+	clone.Workers = make(map[gen.PID]deploymentWorkerStatus, len(s.Workers))
 	maps.Copy(clone.Workers, s.Workers)
 	return clone
 }
@@ -81,7 +81,7 @@ type DeploymentPool[T Syncable] struct {
 	options    DeploymentPoolOptions
 	deployment Deployment
 	size       int64
-	workers    map[gen.PID]DeploymentWorkerStatus
+	workers    map[gen.PID]deploymentWorkerStatus
 }
 
 // ---------------------------------------------------------------------------
@@ -115,7 +115,7 @@ type MessageDeploymentPoolStatusChanged struct {
 func (p *DeploymentPool[T]) Init(...any) (act.PoolOptions, error) {
 	p.options = deploymentPoolOptionsWithDefaults(p.options)
 	p.size = p.options.InitialSize
-	p.workers = make(map[gen.PID]DeploymentWorkerStatus)
+	p.workers = make(map[gen.PID]deploymentWorkerStatus)
 	p.publishStatus()
 	return act.PoolOptions{
 		PoolSize:          p.size,
@@ -217,16 +217,16 @@ func (p *DeploymentPool[T]) HandleInspect(_ gen.PID, _ ...string) map[string]str
 func (p *DeploymentPool[T]) publishStatus() {
 	next := DeploymentPoolStatus{
 		DesiredWorkers: int(p.size),
-		Workers:        make(map[gen.PID]DeploymentWorkerStatus, len(p.workers)),
+		Workers:        make(map[gen.PID]deploymentWorkerStatus, len(p.workers)),
 	}
 	failed := false
 	restarting := false
 	for pid, worker := range p.workers {
 		next.Workers[pid] = worker
-		if worker.Availability == runtime.AvailabilityReady {
+		if worker.availability == runtime.AvailabilityReady {
 			next.HealthyWorkers++
 		}
-		switch worker.Lifecycle {
+		switch worker.lifecycle {
 		case DeploymentWorkerFailed:
 			failed = true
 		case DeploymentWorkerRestarting:

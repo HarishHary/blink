@@ -489,7 +489,7 @@ func (a *routerActor[T]) newDeploymentManager(ref *deploymentRouteState) *Deploy
 	ref.status = DeploymentManagerStatus{
 		Lifecycle:    DeploymentManagerStarting,
 		Availability: runtime.AvailabilityUnavailable,
-		Workers:      make(map[gen.PID]DeploymentWorkerStatus),
+		Workers:      make(map[gen.PID]deploymentWorkerStatus),
 	}
 	return &DeploymentManager[T]{
 		adapter:    a.opts.Adapter,
@@ -772,7 +772,7 @@ func (a *routerActor[T]) deploymentStatusFor(deployment *Deployment) DeploymentP
 		return DeploymentPoolStatus{
 			Lifecycle:    DeploymentPoolStopped,
 			Availability: runtime.AvailabilityUnavailable,
-			Workers:      make(map[gen.PID]DeploymentWorkerStatus),
+			Workers:      make(map[gen.PID]deploymentWorkerStatus),
 		}
 	}
 	ref := a.routesByKey[deployment.PoolKey()]
@@ -781,7 +781,7 @@ func (a *routerActor[T]) deploymentStatusFor(deployment *Deployment) DeploymentP
 			Lifecycle:      DeploymentPoolStarting,
 			Availability:   runtime.AvailabilityUnavailable,
 			DesiredWorkers: deployment.WorkerCount(),
-			Workers:        make(map[gen.PID]DeploymentWorkerStatus),
+			Workers:        make(map[gen.PID]deploymentWorkerStatus),
 		}
 	}
 	lifecycle := DeploymentPoolStarting

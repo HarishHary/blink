@@ -36,7 +36,7 @@ type DeploymentManagerStatus struct {
 	Dispatching  int
 	Active       int
 	LastError    error
-	Workers      map[gen.PID]DeploymentWorkerStatus
+	Workers      map[gen.PID]deploymentWorkerStatus
 }
 
 // ---------------------------------------------------------------------------
@@ -149,7 +149,7 @@ func (m *DeploymentManager[T]) Init(...any) error {
 		return fmt.Errorf("deployment manager: invalid worker bounds min=%d max=%d", m.deployment.MinProcs, m.deployment.WorkerCount())
 	}
 	m.inFlightCalls = make(map[uint64]*deploymentManagerCall[T])
-	m.pool.status.Workers = make(map[gen.PID]DeploymentWorkerStatus)
+	m.pool.status.Workers = make(map[gen.PID]deploymentWorkerStatus)
 	if m.draining {
 		_, _ = m.SendAfter(m.PID(), MessageDeploymentManagerDrainDeadline{}, m.options.DrainTimeout)
 		m.reconcile()
@@ -273,7 +273,7 @@ func (m *DeploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 			return nil
 		}
 		m.pool.pid, m.pool.resizePending = gen.PID{}, false
-		m.pool.status = DeploymentPoolStatus{Lifecycle: DeploymentPoolStopped, Availability: runtime.AvailabilityUnavailable, Workers: make(map[gen.PID]DeploymentWorkerStatus)}
+		m.pool.status = DeploymentPoolStatus{Lifecycle: DeploymentPoolStopped, Availability: runtime.AvailabilityUnavailable, Workers: make(map[gen.PID]deploymentWorkerStatus)}
 		m.lastError = msg.Reason
 		for callID, entry := range m.inFlightCalls {
 			if entry.phase != deploymentManagerPending {
@@ -534,7 +534,7 @@ func (m *DeploymentManager[T]) startDeploymentPool(initial int) {
 		Lifecycle:      DeploymentPoolStarting,
 		Availability:   runtime.AvailabilityUnavailable,
 		DesiredWorkers: initial,
-		Workers:        make(map[gen.PID]DeploymentWorkerStatus),
+		Workers:        make(map[gen.PID]deploymentWorkerStatus),
 	}
 	if err := m.MonitorPID(pid); err != nil {
 		m.lastError = fmt.Errorf("monitor deployment pool: %w", err)
@@ -543,7 +543,7 @@ func (m *DeploymentManager[T]) startDeploymentPool(initial int) {
 		m.pool.status = DeploymentPoolStatus{
 			Lifecycle:    DeploymentPoolStopped,
 			Availability: runtime.AvailabilityUnavailable,
-			Workers:      make(map[gen.PID]DeploymentWorkerStatus),
+			Workers:      make(map[gen.PID]deploymentWorkerStatus),
 		}
 		m.scheduleDeploymentPoolRestart()
 		return

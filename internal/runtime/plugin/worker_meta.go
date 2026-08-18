@@ -47,16 +47,16 @@ type workerMetaState struct {
 	alias         gen.Alias
 	restart       *runtime.ScheduledBackoff
 	healthRestart *runtime.ScheduledBackoff
-	status        WorkerMetaStatus
+	status        workerMetaStatus
 	pingPending   bool
 }
 
-// WorkerMetaStatus is owned by its deployment worker.
-type WorkerMetaStatus struct {
-	Lifecycle    WorkerMetaLifecycle
-	Availability runtime.Availability
-	Activity     WorkerMetaActivity
-	LastError    error
+// workerMetaStatus is owned by its deployment worker.
+type workerMetaStatus struct {
+	lifecycle    WorkerMetaLifecycle
+	availability runtime.Availability
+	activity     WorkerMetaActivity
+	lastError    error
 }
 
 // workerMetaSession is the atomically published plugin session.
