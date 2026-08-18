@@ -11,6 +11,10 @@ import (
 	"github.com/harishhary/blink/internal/runtime"
 )
 
+// ---------------------------------------------------------------------------
+// Types & state
+// ---------------------------------------------------------------------------
+
 // DeploymentManagerLifecycle describes the lifecycle of one deployment manager.
 type DeploymentManagerLifecycle string
 
@@ -38,6 +42,10 @@ type DeploymentManagerStatus struct {
 	Workers        map[gen.PID]DeploymentWorkerStatus
 }
 
+// ---------------------------------------------------------------------------
+// Invocation State
+// ---------------------------------------------------------------------------
+
 // deploymentManagerCallPhase tracks one invocation through the manager pipeline.
 type deploymentManagerCallPhase uint8
 
@@ -56,6 +64,10 @@ type deploymentManagerCall[T Syncable] struct {
 	dispatchStop  gen.CancelFunc
 	completed     bool
 }
+
+// ---------------------------------------------------------------------------
+// Deployment Manager
+// ---------------------------------------------------------------------------
 
 // DeploymentManager owns invocation, scaling, and Pool lifecycle for one concrete deployment.
 type DeploymentManager[T Syncable] struct {
@@ -77,7 +89,9 @@ type DeploymentManager[T Syncable] struct {
 	lastError      error
 }
 
-// --- messages ---
+// ---------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------
 
 // MessageDeploymentManagerDispatchDeadline expires an invocation awaiting worker acceptance.
 type MessageDeploymentManagerDispatchDeadline struct {
@@ -133,7 +147,9 @@ type DeploymentManagerStatusRequest struct{}
 // DeploymentManagerStatusResponse returns the current manager status.
 type DeploymentManagerStatusResponse struct{ Status DeploymentManagerStatus }
 
-// --- messages ---
+// ---------------------------------------------------------------------------
+// Actor lifecycle
+// ---------------------------------------------------------------------------
 
 // Init validates configuration and starts the deployment's minimum Pool capacity.
 func (m *DeploymentManager[T]) Init(...any) error {
@@ -170,6 +186,10 @@ func (m *DeploymentManager[T]) Terminate(reason error) {
 		route: m.route, manager: m.PID(), reason: reason,
 	}, gen.MessagePriorityHigh)
 }
+
+// ---------------------------------------------------------------------------
+// Message handling
+// ---------------------------------------------------------------------------
 
 // HandleMessage processes invocations, child facts, timers, scaling, and drain controls.
 func (m *DeploymentManager[T]) HandleMessage(from gen.PID, message any) error {
@@ -370,6 +390,10 @@ func (m *DeploymentManager[T]) HandleInspect(_ gen.PID, _ ...string) map[string]
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Invocation Handling
+// ---------------------------------------------------------------------------
+
 // accept records one invocation or rejects it with an exact completion.
 func (m *DeploymentManager[T]) accept(call MessageInvokePlugin[T]) {
 	_ = m.SendWithPriority(m.Parent(), MessageDeploymentManagerAccepted{
@@ -397,6 +421,10 @@ func (m *DeploymentManager[T]) accept(call MessageInvokePlugin[T]) {
 	m.pendingCalls = append(m.pendingCalls, call.CallID)
 	m.reconcile()
 }
+
+// ---------------------------------------------------------------------------
+// Reconciliation and Scaling
+// ---------------------------------------------------------------------------
 
 // reconcile advances drain, Pool lifecycle, dispatch, scaling, and status publication.
 func (m *DeploymentManager[T]) reconcile() {
@@ -492,6 +520,10 @@ func (m *DeploymentManager[T]) scale() {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Pool Lifecycle
+// ---------------------------------------------------------------------------
 
 // startDeploymentPool spawns and monitors a fresh Pool incarnation.
 func (m *DeploymentManager[T]) startDeploymentPool(initial int) {
@@ -591,6 +623,10 @@ func (m *DeploymentManager[T]) scheduleScaleReconcile() {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Invocation Bookkeeping
+// ---------------------------------------------------------------------------
+
 // cancel signals the invocation context when a cancellation callback exists.
 func (m *DeploymentManager[T]) cancel(entry *deploymentManagerCall[T]) {
 	if entry.call.Cancel != nil {
@@ -641,6 +677,10 @@ func (m *DeploymentManager[T]) reportDrained() {
 	}, gen.MessagePriorityHigh)
 	m.publishStatus()
 }
+
+// ---------------------------------------------------------------------------
+// Status Reporting
+// ---------------------------------------------------------------------------
 
 // ready returns the Pool's currently healthy worker count.
 func (m *DeploymentManager[T]) ready() int {

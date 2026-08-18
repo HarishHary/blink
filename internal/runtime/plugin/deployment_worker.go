@@ -10,6 +10,10 @@ import (
 	"github.com/harishhary/blink/internal/runtime"
 )
 
+// ---------------------------------------------------------------------------
+// Types & state
+// ---------------------------------------------------------------------------
+
 // DeploymentWorkerLifecycle describes a deployment worker's lifecycle.
 type DeploymentWorkerLifecycle string
 
@@ -41,7 +45,9 @@ type DeploymentWorker[T Syncable] struct {
 	workerMeta workerMetaState
 }
 
-// --- messages ---
+// ---------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------
 
 // MessageDeploymentWorkerStatusChanged reports a worker status update to its pool.
 type MessageDeploymentWorkerStatusChanged struct {
@@ -87,7 +93,9 @@ type MessageWorkerMetaHealthTimeout struct {
 	token uint64
 }
 
-// --- messages ---
+// ---------------------------------------------------------------------------
+// Actor lifecycle
+// ---------------------------------------------------------------------------
 
 // Init configures retry state and starts the worker meta-process.
 func (w *DeploymentWorker[T]) Init(...any) error {
@@ -108,6 +116,10 @@ func (w *DeploymentWorker[T]) Terminate(error) {
 	w.workerMeta.healthRestart.CancelScheduled(false)
 	_ = w.SendWithPriority(w.Parent(), MessageDeploymentWorkerStopped{worker: w.PID(), pool: w.Parent()}, gen.MessagePriorityHigh)
 }
+
+// ---------------------------------------------------------------------------
+// Message handling
+// ---------------------------------------------------------------------------
 
 // HandleMessage processes worker lifecycle, health, and invocation messages.
 func (w *DeploymentWorker[T]) HandleMessage(from gen.PID, message any) error {
@@ -204,6 +216,10 @@ func (w *DeploymentWorker[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any
 	return fmt.Errorf("actorruntime: unsupported deployment worker call %T", request), nil
 }
 
+// ---------------------------------------------------------------------------
+// Invocation handling
+// ---------------------------------------------------------------------------
+
 // invoke executes one plugin invocation through the active meta-process.
 func (w *DeploymentWorker[T]) invoke(manager gen.PID, call MessageInvokePlugin[T]) {
 	ctx := call.Context
@@ -253,6 +269,10 @@ func (w *DeploymentWorker[T]) invoke(manager gen.PID, call MessageInvokePlugin[T
 	_ = w.SendWithPriority(manager, MessageInvocationFinished{callID: call.CallID, err: err}, gen.MessagePriorityHigh)
 }
 
+// ---------------------------------------------------------------------------
+// Worker meta lifecycle
+// ---------------------------------------------------------------------------
+
 // startWorkerMeta creates and monitors the worker's meta-process.
 func (w *DeploymentWorker[T]) startWorkerMeta() error {
 	if w.workerMeta.alias != (gen.Alias{}) {
@@ -281,6 +301,10 @@ func (w *DeploymentWorker[T]) startWorkerMeta() error {
 	w.workerMeta.alias = alias
 	return nil
 }
+
+// ---------------------------------------------------------------------------
+// Worker meta recovery
+// ---------------------------------------------------------------------------
 
 // scheduleWorkerMetaRestart schedules normal or health recovery.
 func (w *DeploymentWorker[T]) scheduleWorkerMetaRestart(health bool) error {
@@ -342,6 +366,10 @@ func (w *DeploymentWorker[T]) retireWorkerMeta(alias gen.Alias, err error, healt
 	_ = w.scheduleWorkerMetaRestart(health)
 }
 
+// ---------------------------------------------------------------------------
+// Health monitoring
+// ---------------------------------------------------------------------------
+
 // scheduleHealthCheck queues a health check for the active meta-process.
 func (w *DeploymentWorker[T]) scheduleHealthCheck(alias gen.Alias) {
 	if w.workerMeta.status.Availability != runtime.AvailabilityReady || alias != w.workerMeta.alias {
@@ -360,6 +388,10 @@ func (w *DeploymentWorker[T]) cancelHealthCheck() {
 	w.workerMeta.healthRestart.Token++
 	w.workerMeta.pingPending = false
 }
+
+// ---------------------------------------------------------------------------
+// Status projection
+// ---------------------------------------------------------------------------
 
 // reportUnavailable records a recoverable meta-process failure.
 func (w *DeploymentWorker[T]) reportUnavailable(err error) {
@@ -383,6 +415,10 @@ func (w *DeploymentWorker[T]) publishStatus(lifecycle DeploymentWorkerLifecycle)
 		},
 	}, gen.MessagePriorityHigh)
 }
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 // sameDeploymentWorkerStatus compares worker status snapshots.
 func sameDeploymentWorkerStatus(left, right DeploymentWorkerStatus) bool {
