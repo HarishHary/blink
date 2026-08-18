@@ -9,8 +9,7 @@ import (
 	"github.com/harishhary/blink/internal/runtime"
 )
 
-// DeploymentPoolLifecycle remains the catalog-facing lifecycle facade for a
-// deployment manager.
+// DeploymentPoolLifecycle remains the catalog-facing deployment manager lifecycle facade.
 type DeploymentPoolLifecycle string
 
 const (
@@ -33,6 +32,7 @@ type DeploymentPoolStatus struct {
 	Workers        map[gen.PID]DeploymentWorkerStatus
 }
 
+// clone copies a pool status and its worker map.
 func (s DeploymentPoolStatus) clone() DeploymentPoolStatus {
 	clone := s
 	clone.Workers = make(map[gen.PID]DeploymentWorkerStatus, len(s.Workers))
@@ -40,6 +40,7 @@ func (s DeploymentPoolStatus) clone() DeploymentPoolStatus {
 	return clone
 }
 
+// sameDeploymentPoolStatus compares pool status snapshots.
 func sameDeploymentPoolStatus(left, right DeploymentPoolStatus) bool {
 	if left.Lifecycle != right.Lifecycle ||
 		left.Availability != right.Availability ||
@@ -71,13 +72,20 @@ type DeploymentPool[T Syncable] struct {
 
 // --- messages ---
 
+// MessageDeploymentPoolAddWorker requests one additional pool worker.
 type MessageDeploymentPoolAddWorker struct{}
+
+// MessageDeploymentPoolRemoveWorker requests one fewer pool worker.
 type MessageDeploymentPoolRemoveWorker struct{}
+
+// MessageDeploymentPoolResized reports the result of a pool resize request.
 type MessageDeploymentPoolResized struct {
 	pool gen.PID
 	size int64
 	err  error
 }
+
+// MessageDeploymentPoolStatusChanged reports a pool status update to its manager.
 type MessageDeploymentPoolStatusChanged struct {
 	pool   gen.PID
 	status DeploymentPoolStatus
@@ -85,6 +93,7 @@ type MessageDeploymentPoolStatusChanged struct {
 
 // --- messages ---
 
+// Init configures the pool and creates its worker factory.
 func (p *DeploymentPool[T]) Init(...any) (act.PoolOptions, error) {
 	p.options = deploymentPoolOptionsWithDefaults(p.options)
 	p.size = p.options.InitialSize
@@ -103,6 +112,7 @@ func (p *DeploymentPool[T]) Init(...any) (act.PoolOptions, error) {
 	}, nil
 }
 
+// HandleMessage processes worker state and manager resize requests.
 func (p *DeploymentPool[T]) HandleMessage(from gen.PID, message any) error {
 	switch msg := message.(type) {
 	case MessageDeploymentWorkerStatusChanged:
@@ -167,6 +177,7 @@ func (p *DeploymentPool[T]) HandleMessage(from gen.PID, message any) error {
 	return nil
 }
 
+// publishStatus reports aggregate worker health to the manager.
 func (p *DeploymentPool[T]) publishStatus() {
 	next := DeploymentPoolStatus{
 		DesiredWorkers: int(p.size),
@@ -206,10 +217,12 @@ func (p *DeploymentPool[T]) publishStatus() {
 	_ = p.SendWithPriority(p.Parent(), MessageDeploymentPoolStatusChanged{pool: p.PID(), status: next}, gen.MessagePriorityHigh)
 }
 
+// HandleCall rejects unsupported synchronous pool calls.
 func (p *DeploymentPool[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
 	return fmt.Errorf("actorruntime: unsupported deployment pool call %T", request), nil
 }
 
+// HandleInspect exposes the current pool size.
 func (p *DeploymentPool[T]) HandleInspect(_ gen.PID, _ ...string) map[string]string {
 	return map[string]string{"ergo:pool_size": fmt.Sprintf("%d", p.size)}
 }

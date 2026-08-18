@@ -20,6 +20,7 @@ const (
 	DeploymentWorkerFailed     DeploymentWorkerLifecycle = "failed"
 )
 
+// deploymentWorkerState stores the worker's current status.
 type deploymentWorkerState struct {
 	status DeploymentWorkerStatus
 }
@@ -42,10 +43,13 @@ type DeploymentWorker[T Syncable] struct {
 
 // --- messages ---
 
+// MessageDeploymentWorkerStatusChanged reports a worker status update to its pool.
 type MessageDeploymentWorkerStatusChanged struct {
 	worker gen.PID
 	status DeploymentWorkerStatus
 }
+
+// MessageDeploymentWorkerStopped reports worker shutdown to its pool.
 type MessageDeploymentWorkerStopped struct {
 	worker gen.PID
 	pool   gen.PID
@@ -56,21 +60,28 @@ type MessageDeploymentWorkerRestartExhausted struct {
 	cause error
 }
 
-// MessageInvocationStarted and MessageInvocationFinished bracket every
-// invocation accepted by a worker, including unavailable workers.
+// MessageInvocationStarted marks an invocation accepted by a worker.
 type MessageInvocationStarted struct{ callID uint64 }
+
+// MessageInvocationFinished reports an invocation result to its manager.
 type MessageInvocationFinished struct {
 	callID uint64
 	err    error
 }
+
+// MessageWorkerMetaRestart triggers a scheduled meta-process restart.
 type MessageWorkerMetaRestart struct {
 	token  uint64
 	health bool
 }
+
+// MessageWorkerMetaHealthTick triggers a scheduled health check.
 type MessageWorkerMetaHealthTick struct {
 	alias gen.Alias
 	token uint64
 }
+
+// MessageWorkerMetaHealthTimeout reports an unanswered health check.
 type MessageWorkerMetaHealthTimeout struct {
 	alias gen.Alias
 	token uint64
@@ -78,6 +89,7 @@ type MessageWorkerMetaHealthTimeout struct {
 
 // --- messages ---
 
+// Init configures retry state and starts the worker meta-process.
 func (w *DeploymentWorker[T]) Init(...any) error {
 	w.options = deploymentWorkerOptionsWithDefaults(w.options)
 	w.meta.restart = runtime.NewScheduledBackoff(w.options.RetryMin, w.options.RetryMax)
@@ -90,12 +102,14 @@ func (w *DeploymentWorker[T]) Init(...any) error {
 	return w.startWorkerMeta()
 }
 
+// Terminate cancels scheduled recovery and notifies the pool of shutdown.
 func (w *DeploymentWorker[T]) Terminate(error) {
 	w.meta.restart.CancelScheduled(false)
 	w.meta.healthRestart.CancelScheduled(false)
 	_ = w.SendWithPriority(w.Parent(), MessageDeploymentWorkerStopped{worker: w.PID(), pool: w.Parent()}, gen.MessagePriorityHigh)
 }
 
+// HandleMessage processes worker lifecycle, health, and invocation messages.
 func (w *DeploymentWorker[T]) HandleMessage(from gen.PID, message any) error {
 	switch msg := message.(type) {
 	case MessageInvokePlugin[T]:
@@ -185,10 +199,12 @@ func (w *DeploymentWorker[T]) HandleMessage(from gen.PID, message any) error {
 	return nil
 }
 
+// HandleCall rejects unsupported synchronous worker calls.
 func (w *DeploymentWorker[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
 	return fmt.Errorf("actorruntime: unsupported deployment worker call %T", request), nil
 }
 
+// invoke executes one plugin invocation through the active meta-process.
 func (w *DeploymentWorker[T]) invoke(manager gen.PID, call MessageInvokePlugin[T]) {
 	ctx := call.Context
 	if ctx == nil {
@@ -237,6 +253,7 @@ func (w *DeploymentWorker[T]) invoke(manager gen.PID, call MessageInvokePlugin[T
 	_ = w.SendWithPriority(manager, MessageInvocationFinished{callID: call.CallID, err: err}, gen.MessagePriorityHigh)
 }
 
+// startWorkerMeta creates and monitors the worker's meta-process.
 func (w *DeploymentWorker[T]) startWorkerMeta() error {
 	if w.meta.alias != (gen.Alias{}) {
 		return nil
@@ -265,6 +282,7 @@ func (w *DeploymentWorker[T]) startWorkerMeta() error {
 	return nil
 }
 
+// scheduleWorkerMetaRestart schedules normal or health recovery.
 func (w *DeploymentWorker[T]) scheduleWorkerMetaRestart(health bool) error {
 	if w.meta.status.Lifecycle == WorkerMetaFailed {
 		return nil
@@ -293,6 +311,7 @@ func (w *DeploymentWorker[T]) scheduleWorkerMetaRestart(health bool) error {
 	return nil
 }
 
+// failWorkerMeta records terminal recovery failure and notifies the pool.
 func (w *DeploymentWorker[T]) failWorkerMeta(err error) {
 	if w.meta.status.Lifecycle == WorkerMetaFailed {
 		return
@@ -311,6 +330,7 @@ func (w *DeploymentWorker[T]) failWorkerMeta(err error) {
 	_ = w.SendWithPriority(w.Parent(), MessageDeploymentWorkerRestartExhausted{cause: err}, gen.MessagePriorityHigh)
 }
 
+// retireWorkerMeta stops the active meta-process and begins recovery.
 func (w *DeploymentWorker[T]) retireWorkerMeta(alias gen.Alias, err error, health bool) {
 	if alias != w.meta.alias {
 		return
@@ -322,6 +342,7 @@ func (w *DeploymentWorker[T]) retireWorkerMeta(alias gen.Alias, err error, healt
 	_ = w.scheduleWorkerMetaRestart(health)
 }
 
+// scheduleHealthCheck queues a health check for the active meta-process.
 func (w *DeploymentWorker[T]) scheduleHealthCheck(alias gen.Alias) {
 	if w.meta.status.Availability != runtime.AvailabilityReady || alias != w.meta.alias {
 		return
@@ -334,11 +355,13 @@ func (w *DeploymentWorker[T]) scheduleHealthCheck(alias gen.Alias) {
 	}
 }
 
+// cancelHealthCheck invalidates pending health checks.
 func (w *DeploymentWorker[T]) cancelHealthCheck() {
 	w.meta.healthRestart.Token++
 	w.meta.pingPending = false
 }
 
+// reportUnavailable records a recoverable meta-process failure.
 func (w *DeploymentWorker[T]) reportUnavailable(err error) {
 	w.meta.status = WorkerMetaStatus{
 		Lifecycle:    WorkerMetaRestarting,
@@ -349,6 +372,7 @@ func (w *DeploymentWorker[T]) reportUnavailable(err error) {
 	w.publishStatus(DeploymentWorkerRestarting)
 }
 
+// publishStatus sends the current worker status to its pool.
 func (w *DeploymentWorker[T]) publishStatus(lifecycle DeploymentWorkerLifecycle) {
 	_ = w.SendWithPriority(w.Parent(), MessageDeploymentWorkerStatusChanged{
 		worker: w.PID(),
@@ -360,6 +384,7 @@ func (w *DeploymentWorker[T]) publishStatus(lifecycle DeploymentWorkerLifecycle)
 	}, gen.MessagePriorityHigh)
 }
 
+// sameDeploymentWorkerStatus compares worker status snapshots.
 func sameDeploymentWorkerStatus(left, right DeploymentWorkerStatus) bool {
 	return left.Lifecycle == right.Lifecycle && left.Availability == right.Availability &&
 		left.Meta.Lifecycle == right.Meta.Lifecycle && left.Meta.Availability == right.Meta.Availability &&

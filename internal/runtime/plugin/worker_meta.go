@@ -89,9 +89,7 @@ type MessageWorkerMetaPingResult struct {
 	err   error
 }
 
-// workerInvokeCall is the synchronous worker-to-meta callback contract.
-// Plugin errors are returned in workerInvokeResponse so they do not
-// terminate the meta-process.
+// workerInvokeCall carries a synchronous callback without terminating the meta-process on plugin errors.
 type workerInvokeCall[T Syncable] struct {
 	context context.Context
 	fn      func(context.Context, T) error
