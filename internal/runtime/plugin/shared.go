@@ -8,10 +8,6 @@ import (
 	"github.com/harishhary/blink/internal/runtime"
 )
 
-// ---------------------------------------------------------------------------
-// Shared types
-// ---------------------------------------------------------------------------
-
 // Deployment describes one deployed plugin artifact.
 type Deployment struct {
 	Id         string
