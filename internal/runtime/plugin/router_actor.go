@@ -14,6 +14,10 @@ import (
 	"github.com/harishhary/blink/internal/runtime"
 )
 
+// ---------------------------------------------------------------------------
+// Types & state
+// ---------------------------------------------------------------------------
+
 // RouterLifecycle describes one logical-plugin router actor incarnation.
 type RouterLifecycle string
 
@@ -40,6 +44,7 @@ type RouterStatus struct {
 	Candidate       DeploymentPoolStatus
 }
 
+// clone deep-copies the nested pool statuses so a receiver cannot mutate router state.
 func (s RouterStatus) clone() RouterStatus {
 	clone := s
 	clone.Primary = s.Primary.clone()
@@ -47,6 +52,11 @@ func (s RouterStatus) clone() RouterStatus {
 	return clone
 }
 
+// ---------------------------------------------------------------------------
+// Route state
+// ---------------------------------------------------------------------------
+
+// deploymentRoutePhase is the lifecycle phase of a single dynamic route.
 type deploymentRoutePhase uint8
 
 const (
@@ -56,6 +66,7 @@ const (
 	deploymentRouteRemoving
 )
 
+// deploymentRouteState is one dynamic route: a stable address that outlives many manager PIDs.
 type deploymentRouteState struct {
 	key        DeploymentPoolKey
 	deployment Deployment
@@ -66,6 +77,10 @@ type deploymentRouteState struct {
 	phase      deploymentRoutePhase
 	managers   map[gen.PID]struct{}
 }
+
+// ---------------------------------------------------------------------------
+// Router actor
+// ---------------------------------------------------------------------------
 
 // routerActor owns one dynamic Ergo route per concrete DeploymentPoolKey.
 type routerActor[T Syncable] struct {
@@ -89,8 +104,11 @@ type routerActor[T Syncable] struct {
 	drainReported    bool
 }
 
-// --- messages ---
+// ---------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------
 
+// routerInvocation tracks one in-flight call routed to a manager, awaiting accept/complete.
 type routerInvocation struct {
 	route    gen.Atom
 	ackToken uint64
@@ -99,15 +117,22 @@ type routerInvocation struct {
 	manager  gen.PID
 }
 
+// RouterAcceptanceTimedout fires when a routed call is not accepted before its deadline.
 type RouterAcceptanceTimedout struct {
 	callID uint64
 	token  uint64
 }
+
+// MessageRouterActivate promotes the router to a new generation and lets it publish status.
 type MessageRouterActivate struct{ generation uint64 }
+
+// MessageRetryDeployment asks the router to nudge a specific manager to retry.
 type MessageRetryDeployment struct {
 	key     DeploymentPoolKey
 	manager gen.PID
 }
+
+// MessageApplyRouterDesiredState delivers the desired primary/candidate deployments to apply.
 type MessageApplyRouterDesiredState struct {
 	desiredRevision   uint64
 	primary           *Deployment
@@ -115,11 +140,15 @@ type MessageApplyRouterDesiredState struct {
 	primaryDeferred   bool
 	candidateDeferred bool
 }
+
+// MessageRouterDrained reports to the catalog that the router has fully drained.
 type MessageRouterDrained struct {
 	pluginID   string
 	pid        gen.PID
 	generation uint64
 }
+
+// MessageRouterStatusChanged publishes an epoch-ordered router status to the catalog.
 type MessageRouterStatusChanged struct {
 	pluginID   string
 	pid        gen.PID
@@ -127,13 +156,18 @@ type MessageRouterStatusChanged struct {
 	epoch      uint64
 	status     RouterStatus
 }
+
+// MessageRetryRouteStep is the self-timer that re-drives a route's pending lifecycle step.
 type MessageRetryRouteStep struct {
 	route gen.Atom
 	token uint64
 }
 
-// --- messages ---
+// ---------------------------------------------------------------------------
+// Actor lifecycle
+// ---------------------------------------------------------------------------
 
+// Init allocates the router's route and in-flight-call indexes.
 func (a *routerActor[T]) Init(...any) (act.RouterOptions, error) {
 	a.routesByKey = make(map[DeploymentPoolKey]*deploymentRouteState)
 	a.routesByName = make(map[gen.Atom]DeploymentPoolKey)
@@ -141,6 +175,7 @@ func (a *routerActor[T]) Init(...any) (act.RouterOptions, error) {
 	return act.RouterOptions{}, nil
 }
 
+// Terminate cancels pending timers for in-flight calls and route restarts.
 func (a *routerActor[T]) Terminate(error) {
 	for _, call := range a.inFlightCalls {
 		if call.ackStop != nil {
@@ -153,6 +188,10 @@ func (a *routerActor[T]) Terminate(error) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Message handling
+// ---------------------------------------------------------------------------
 
 // RouteMessage is the only normal-priority ingress path. Timers are normal too,
 // so their expiration is consumed here rather than forwarded to a route.
@@ -174,6 +213,7 @@ func (a *routerActor[T]) RouteMessage(_ gen.PID, message any) gen.Atom {
 	}
 }
 
+// RouteCall discards synchronous calls; the router serves none over the route path.
 func (a *routerActor[T]) RouteCall(_ gen.PID, _ gen.Ref, _ any) gen.Atom { return act.RouteDiscard }
 
 // HandleMessage receives all router administration and route lifecycle facts at
@@ -302,10 +342,16 @@ func (a *routerActor[T]) HandleMessage(from gen.PID, message any) error {
 	return nil
 }
 
+// HandleCall rejects synchronous calls; the router exposes no request/response API.
 func (a *routerActor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
 	return fmt.Errorf("actorruntime: unsupported router call %T", request), nil
 }
 
+// ---------------------------------------------------------------------------
+// Desired-state reconciliation
+// ---------------------------------------------------------------------------
+
+// applyDeployment creates or updates the route backing one desired deployment.
 func (a *routerActor[T]) applyDeployment(d *Deployment) error {
 	if d == nil || a.draining {
 		return nil
@@ -330,7 +376,42 @@ func (a *routerActor[T]) applyDeployment(d *Deployment) error {
 	return a.addRoute(ref)
 }
 
-// Pending step: addRoute adds the route to the router and schedules a step if it fails to register.
+// reconcileDeployments promotes healthy desired routes to active and drains obsolete ones.
+func (a *routerActor[T]) reconcileDeployments() {
+	a.activateDesired(&a.activePrimary, a.desiredPrimary)
+	a.activateDesired(&a.activeCandidate, a.desiredCandidate)
+	keep := make(map[DeploymentPoolKey]bool)
+	for _, deployment := range []*Deployment{a.desiredPrimary, a.desiredCandidate, a.activePrimary, a.activeCandidate} {
+		if deployment != nil {
+			keep[deployment.PoolKey()] = true
+		}
+	}
+	for key, ref := range a.routesByKey {
+		if keep[key] || ref.phase >= deploymentRouteDraining {
+			continue
+		}
+		a.drainRoute(ref)
+	}
+}
+
+// activateDesired marks a desired deployment active once its route is running and ready.
+func (a *routerActor[T]) activateDesired(active **Deployment, desired *Deployment) {
+	if desired == nil {
+		*active = nil
+		return
+	}
+	ref := a.routesByKey[desired.PoolKey()]
+	if ref != nil && ref.phase == deploymentRouteActive &&
+		ref.status.Lifecycle == DeploymentManagerRunning && ref.status.Availability == runtime.AvailabilityReady {
+		*active = desired
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Route lifecycle
+// ---------------------------------------------------------------------------
+
+// addRoute registers the dynamic route and schedules a retry step if registration fails.
 func (a *routerActor[T]) addRoute(ref *deploymentRouteState) error {
 	err := a.AddRoute(act.Route{Name: ref.name, Factory: func() gen.ProcessBehavior {
 		return a.newDeploymentManager(ref)
@@ -343,6 +424,7 @@ func (a *routerActor[T]) addRoute(ref *deploymentRouteState) error {
 	return nil
 }
 
+// retryRouteStep re-drives a route's pending lifecycle step after backoff, per its current phase.
 func (a *routerActor[T]) retryRouteStep(message MessageRetryRouteStep) {
 	key, ok := a.routesByName[message.route]
 	if !ok {
@@ -374,6 +456,7 @@ func (a *routerActor[T]) retryRouteStep(message MessageRetryRouteStep) {
 	a.reconcileStatus()
 }
 
+// scheduleRouteStep arms a per-route backoff timer that re-drives its pending lifecycle step.
 func (a *routerActor[T]) scheduleRouteStep(ref *deploymentRouteState) error {
 	if a.draining && ref.phase < deploymentRouteDraining {
 		return nil
@@ -397,6 +480,7 @@ func (a *routerActor[T]) scheduleRouteStep(ref *deploymentRouteState) error {
 	return nil
 }
 
+// newDeploymentManager builds the DeploymentManager child that serves this route.
 func (a *routerActor[T]) newDeploymentManager(ref *deploymentRouteState) *DeploymentManager[T] {
 	ref.status = DeploymentManagerStatus{
 		Lifecycle: DeploymentManagerStarting, Availability: runtime.AvailabilityUnavailable,
@@ -423,6 +507,7 @@ func (a *routerActor[T]) newDeploymentManager(ref *deploymentRouteState) *Deploy
 	}
 }
 
+// refreshRoutePID reads the route's live manager PID and records it in the fencing set.
 func (a *routerActor[T]) refreshRoutePID(ref *deploymentRouteState) gen.PID {
 	info, ok := a.Route(ref.name)
 	if !ok {
@@ -438,6 +523,7 @@ func (a *routerActor[T]) refreshRoutePID(ref *deploymentRouteState) gen.PID {
 	return info.PID
 }
 
+// currentManager resolves the route for an authenticated fact from its current live manager.
 func (a *routerActor[T]) currentManager(route gen.Atom, from, manager gen.PID) (*deploymentRouteState, bool) {
 	key, ok := a.routesByName[route]
 	if !ok {
@@ -456,7 +542,11 @@ func (a *routerActor[T]) currentManager(route gen.Atom, from, manager gen.PID) (
 	return ref, true
 }
 
-// invocation
+// ---------------------------------------------------------------------------
+// Invocation routing
+// ---------------------------------------------------------------------------
+
+// routeInvocation selects the rollout target route and tracks the call awaiting acceptance.
 func (a *routerActor[T]) routeInvocation(call MessageInvokePlugin[T]) gen.Atom {
 	if a.draining {
 		_ = a.SendWithPriority(a.Parent(), MessageInvocationCompleted{CallID: call.CallID, Err: runtime.ErrPluginUnavailable}, gen.MessagePriorityHigh)
@@ -501,6 +591,7 @@ func (a *routerActor[T]) routeInvocation(call MessageInvokePlugin[T]) gen.Atom {
 	return ref.name
 }
 
+// acceptInvocation binds an in-flight call to the manager that accepted it.
 func (a *routerActor[T]) acceptInvocation(message MessageDeploymentManagerAccepted) {
 	call := a.inFlightCalls[message.callID]
 	if call == nil || call.accepted || call.route != message.route {
@@ -513,6 +604,7 @@ func (a *routerActor[T]) acceptInvocation(message MessageDeploymentManagerAccept
 	call.accepted, call.manager = true, message.manager
 }
 
+// completeInvocation finishes an in-flight call reported done by its bound manager.
 func (a *routerActor[T]) completeInvocation(from gen.PID, message MessageInvocationCompleted) {
 	call := a.inFlightCalls[message.CallID]
 	if call == nil || !call.accepted || call.route != message.Route || call.manager != from ||
@@ -522,6 +614,7 @@ func (a *routerActor[T]) completeInvocation(from gen.PID, message MessageInvocat
 	a.finishTrackedCall(message.CallID, message.Err)
 }
 
+// cancelInvocation forwards a cancellation to the call's manager, or fails it locally.
 func (a *routerActor[T]) cancelInvocation(message MessageCancelInvocation) {
 	call := a.inFlightCalls[message.CallID]
 	if call == nil {
@@ -542,6 +635,24 @@ func (a *routerActor[T]) cancelInvocation(message MessageCancelInvocation) {
 	}
 }
 
+// finishTrackedCall stops the acceptance timer and reports the call complete to the catalog.
+func (a *routerActor[T]) finishTrackedCall(callID uint64, err error) {
+	call := a.inFlightCalls[callID]
+	if call == nil {
+		return
+	}
+	if call.ackStop != nil {
+		call.ackStop()
+	}
+	delete(a.inFlightCalls, callID)
+	_ = a.SendWithPriority(a.Parent(), MessageInvocationCompleted{CallID: callID, Err: err}, gen.MessagePriorityHigh)
+}
+
+// ---------------------------------------------------------------------------
+// Manager failure
+// ---------------------------------------------------------------------------
+
+// deploymentManagerTerminated fences a manager-death fact, fails its calls, and recovers the route.
 func (a *routerActor[T]) deploymentManagerTerminated(from gen.PID, message MessageDeploymentManagerTerminated) {
 	key, ok := a.routesByName[message.route]
 	if !ok || from != message.manager {
@@ -571,48 +682,11 @@ func (a *routerActor[T]) deploymentManagerTerminated(from gen.PID, message Messa
 	a.reconcileStatus()
 }
 
-func (a *routerActor[T]) finishTrackedCall(callID uint64, err error) {
-	call := a.inFlightCalls[callID]
-	if call == nil {
-		return
-	}
-	if call.ackStop != nil {
-		call.ackStop()
-	}
-	delete(a.inFlightCalls, callID)
-	_ = a.SendWithPriority(a.Parent(), MessageInvocationCompleted{CallID: callID, Err: err}, gen.MessagePriorityHigh)
-}
+// ---------------------------------------------------------------------------
+// Draining
+// ---------------------------------------------------------------------------
 
-func (a *routerActor[T]) reconcileDeployments() {
-	a.activateDesired(&a.activePrimary, a.desiredPrimary)
-	a.activateDesired(&a.activeCandidate, a.desiredCandidate)
-	keep := make(map[DeploymentPoolKey]bool)
-	for _, deployment := range []*Deployment{a.desiredPrimary, a.desiredCandidate, a.activePrimary, a.activeCandidate} {
-		if deployment != nil {
-			keep[deployment.PoolKey()] = true
-		}
-	}
-	for key, ref := range a.routesByKey {
-		if keep[key] || ref.phase >= deploymentRouteDraining {
-			continue
-		}
-		a.drainRoute(ref)
-	}
-}
-
-func (a *routerActor[T]) activateDesired(active **Deployment, desired *Deployment) {
-	if desired == nil {
-		*active = nil
-		return
-	}
-	ref := a.routesByKey[desired.PoolKey()]
-	if ref != nil && ref.phase == deploymentRouteActive &&
-		ref.status.Lifecycle == DeploymentManagerRunning && ref.status.Availability == runtime.AvailabilityReady {
-		*active = desired
-	}
-}
-
-// Draining route...
+// drainRoute advances one route toward teardown: quiesce its manager, then let it be removed.
 func (a *routerActor[T]) drainRoute(ref *deploymentRouteState) {
 	switch ref.phase {
 	case deploymentRoutePending:
@@ -655,6 +729,7 @@ func (a *routerActor[T]) drainRoute(ref *deploymentRouteState) {
 	_ = a.scheduleRouteStep(ref)
 }
 
+// beginDrain starts a global drain of every route and reports if it is already complete.
 func (a *routerActor[T]) beginDrain() {
 	if a.draining {
 		return
@@ -667,6 +742,7 @@ func (a *routerActor[T]) beginDrain() {
 	a.reportDrained()
 }
 
+// reportDrained announces router drain completion to the catalog once no routes remain.
 func (a *routerActor[T]) reportDrained() {
 	if !a.draining || len(a.routesByKey) > 0 || a.drainReported {
 		return
@@ -676,6 +752,7 @@ func (a *routerActor[T]) reportDrained() {
 	_ = a.SendWithPriority(a.Parent(), MessageRouterDrained{pluginID: a.pluginID, pid: a.PID(), generation: a.actorGeneration}, gen.MessagePriorityHigh)
 }
 
+// removeDrainedRoute unregisters a drained route and clears any active pointer to it.
 func (a *routerActor[T]) removeDrainedRoute(ref *deploymentRouteState) {
 	ref.phase = deploymentRouteRemoving
 	if err := a.RemoveRoute(ref.name); err != nil {
@@ -692,7 +769,11 @@ func (a *routerActor[T]) removeDrainedRoute(ref *deploymentRouteState) {
 	}
 }
 
-// Getting status...
+// ---------------------------------------------------------------------------
+// Status projection
+// ---------------------------------------------------------------------------
+
+// deploymentStatusFor projects a deployment's route into the catalog-facing pool status.
 func (a *routerActor[T]) deploymentStatusFor(deployment *Deployment) DeploymentPoolStatus {
 	if deployment == nil {
 		return DeploymentPoolStatus{
@@ -735,6 +816,7 @@ func (a *routerActor[T]) deploymentStatusFor(deployment *Deployment) DeploymentP
 	}
 }
 
+// activeRouteAvailable reports whether a deployment's route is active with a live manager.
 func (a *routerActor[T]) activeRouteAvailable(deployment *Deployment) bool {
 	if deployment == nil {
 		return false
@@ -743,6 +825,7 @@ func (a *routerActor[T]) activeRouteAvailable(deployment *Deployment) bool {
 	return ref != nil && ref.phase == deploymentRouteActive && a.refreshRoutePID(ref) != (gen.PID{})
 }
 
+// reconcileStatus recomputes router status and publishes an epoch-tagged update on change.
 func (a *routerActor[T]) reconcileStatus() {
 	primaryStatus, candidateStatus := a.deploymentStatusFor(a.desiredPrimary), a.deploymentStatusFor(a.desiredCandidate)
 	primaryRoutable, candidateRoutable := a.activeRouteAvailable(a.activePrimary), a.activeRouteAvailable(a.activeCandidate)
@@ -786,6 +869,7 @@ func (a *routerActor[T]) reconcileStatus() {
 	}
 }
 
+// sameRouterStatus reports whether two router statuses are equal, for publish deduplication.
 func sameRouterStatus(left, right RouterStatus) bool {
 	return left.Lifecycle == right.Lifecycle &&
 		left.Availability == right.Availability &&
@@ -800,6 +884,11 @@ func sameRouterStatus(left, right RouterStatus) bool {
 		sameDeploymentPoolStatus(left.Candidate, right.Candidate)
 }
 
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+// deploymentRouteName derives a stable, collision-resistant route atom from a pool key.
 func deploymentRouteName(key DeploymentPoolKey) (gen.Atom, error) {
 	encoded, err := json.Marshal(key)
 	if err != nil {
