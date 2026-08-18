@@ -18,6 +18,16 @@ import (
 // Types & state
 // ---------------------------------------------------------------------------
 
+// routerState tracks one router actor and its restart state.
+type routerState struct {
+	pid        gen.PID
+	generation uint64
+	lastEpoch  uint64
+	restart    *runtime.ScheduledBackoff
+	status     RouterStatus
+	retiring   bool
+}
+
 // RouterLifecycle describes one logical-plugin router actor incarnation.
 type RouterLifecycle string
 
@@ -34,7 +44,7 @@ type RouterStatus struct {
 	Lifecycle      RouterLifecycle
 	Availability   runtime.Availability
 	Generation     uint64
-	LastError      string
+	LastError      error
 	Revision       uint64
 	NormalRoutable bool
 	ShadowRoutable bool
@@ -85,8 +95,11 @@ type routerActor[T Syncable] struct {
 	act.Router
 	opts             RouterOptions[T]
 	pluginID         string
-	actorGeneration  uint64
+	generation       uint64
+	desiredRevision  uint64
 	activated        bool
+	draining         bool
+	drainReported    bool
 	everRoutable     bool
 	routesByKey      map[DeploymentPoolKey]*deploymentRouteState
 	routesByName     map[gen.Atom]DeploymentPoolKey
@@ -95,11 +108,8 @@ type routerActor[T Syncable] struct {
 	desiredCandidate *Deployment
 	activePrimary    *Deployment
 	activeCandidate  *Deployment
-	desiredRevision  uint64
 	liveStatus       RouterStatus
 	statusEpoch      uint64
-	draining         bool
-	drainReported    bool
 }
 
 // ---------------------------------------------------------------------------
@@ -219,13 +229,13 @@ func (a *routerActor[T]) RouteCall(_ gen.PID, _ gen.Ref, _ any) gen.Atom { retur
 func (a *routerActor[T]) HandleMessage(from gen.PID, message any) error {
 	switch m := message.(type) {
 	case MessageRouterActivate:
-		if m.generation <= a.actorGeneration {
+		if m.generation <= a.generation {
 			return nil
 		}
 		if a.activated {
-			return fmt.Errorf("router %q already activated as generation %d", a.pluginID, a.actorGeneration)
+			return fmt.Errorf("router %q already activated as generation %d", a.pluginID, a.generation)
 		}
-		a.actorGeneration, a.activated = m.generation, true
+		a.generation, a.activated = m.generation, true
 		a.reconcileStatus()
 
 	case MessageApplyRouterDesiredState:
@@ -736,7 +746,7 @@ func (a *routerActor[T]) reportDrained() {
 	}
 	a.drainReported = true
 	a.reconcileStatus()
-	_ = a.SendWithPriority(a.Parent(), MessageRouterDrained{pluginID: a.pluginID, pid: a.PID(), generation: a.actorGeneration}, gen.MessagePriorityHigh)
+	_ = a.SendWithPriority(a.Parent(), MessageRouterDrained{pluginID: a.pluginID, pid: a.PID(), generation: a.generation}, gen.MessagePriorityHigh)
 }
 
 // removeDrainedRoute unregisters a drained route and clears any active pointer to it.
@@ -845,14 +855,14 @@ func (a *routerActor[T]) reconcileStatus() {
 	case normalRoutable || shadowRoutable:
 		availability = runtime.AvailabilityDegraded
 	}
-	next := RouterStatus{Lifecycle: lifecycle, Availability: availability, Generation: a.actorGeneration, Revision: a.desiredRevision,
+	next := RouterStatus{Lifecycle: lifecycle, Availability: availability, Generation: a.generation, Revision: a.desiredRevision,
 		NormalRoutable: normalRoutable, ShadowRoutable: shadowRoutable, Primary: primaryStatus, Candidate: candidateStatus}
 	if sameRouterStatus(a.liveStatus, next) && a.statusEpoch != 0 {
 		return
 	}
 	a.statusEpoch, a.liveStatus = a.statusEpoch+1, next
 	if a.activated {
-		_ = a.SendWithPriority(a.Parent(), MessageRouterStatusChanged{pluginID: a.pluginID, pid: a.PID(), generation: a.actorGeneration, epoch: a.statusEpoch, status: next.clone()}, gen.MessagePriorityHigh)
+		_ = a.SendWithPriority(a.Parent(), MessageRouterStatusChanged{pluginID: a.pluginID, pid: a.PID(), generation: a.generation, epoch: a.statusEpoch, status: next.clone()}, gen.MessagePriorityHigh)
 	}
 }
 
@@ -861,7 +871,7 @@ func sameRouterStatus(left, right RouterStatus) bool {
 	return left.Lifecycle == right.Lifecycle &&
 		left.Availability == right.Availability &&
 		left.Generation == right.Generation &&
-		left.LastError == right.LastError &&
+		errorText(left.LastError) == errorText(right.LastError) &&
 		left.Revision == right.Revision &&
 		left.NormalRoutable == right.NormalRoutable &&
 		left.ShadowRoutable == right.ShadowRoutable &&

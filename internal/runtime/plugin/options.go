@@ -2,6 +2,13 @@ package plugin
 
 import "time"
 
+// CatalogOptions configures one plugin catalog and the routers it spawns.
+type CatalogOptions[T Syncable] struct {
+	RetryMin      time.Duration // router-level restart backoff
+	RetryMax      time.Duration
+	RouterOptions RouterOptions[T] // handed straight to each spawned router
+}
+
 // RouterOptions configures one deployment router and the managers it spawns.
 type RouterOptions[T Syncable] struct {
 	Adapter        *Adapter[T]
