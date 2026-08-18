@@ -14,6 +14,10 @@ import (
 	"github.com/harishhary/blink/internal/runtime"
 )
 
+// ---------------------------------------------------------------------------
+// Types & state
+// ---------------------------------------------------------------------------
+
 const (
 	artifactWatchDebounce = 300 * time.Millisecond
 	artifactWatchPoll     = 5 * time.Second
@@ -51,19 +55,7 @@ type artifactWatcherMeta struct {
 	cancelRun context.CancelFunc
 }
 
-// --- messages ---
-
-// MessageArtifactDirectoryChanged reports possible filesystem drift.
-type MessageArtifactDirectoryChanged struct{ source gen.Alias }
-
-type MessageArtifactWatcherStateChanged struct {
-	source            gen.Alias
-	directoryReadable bool
-	watchingDirectory bool
-}
-
-// --- messages ---
-
+// artifactWatcherRunState tracks the watcher and its last published state.
 type artifactWatcherRunState struct {
 	watcher           *fsnotify.Watcher
 	fingerprint       [sha256.Size]byte
@@ -74,6 +66,25 @@ type artifactWatcherRunState struct {
 	publishedWatching bool
 }
 
+// ---------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------
+
+// MessageArtifactDirectoryChanged reports possible filesystem drift.
+type MessageArtifactDirectoryChanged struct{ source gen.Alias }
+
+// MessageArtifactWatcherStateChanged reports watcher readability and attachment state.
+type MessageArtifactWatcherStateChanged struct {
+	source            gen.Alias
+	directoryReadable bool
+	watchingDirectory bool
+}
+
+// ---------------------------------------------------------------------------
+// Meta lifecycle
+// ---------------------------------------------------------------------------
+
+// Init validates the watcher directory and initializes its cancellation context.
 func (m *artifactWatcherMeta) Init(process gen.MetaProcess) error {
 	if m.directory == "" {
 		return fmt.Errorf("artifact watcher meta: directory is required")
@@ -83,6 +94,7 @@ func (m *artifactWatcherMeta) Init(process gen.MetaProcess) error {
 	return nil
 }
 
+// Start attaches the watcher and runs its filesystem change-detection loop.
 func (m *artifactWatcherMeta) Start() error {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -235,20 +247,33 @@ func (m *artifactWatcherMeta) Start() error {
 	}
 }
 
-func (m *artifactWatcherMeta) HandleMessage(gen.PID, any) error { return nil }
-
-func (m *artifactWatcherMeta) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
-	return fmt.Errorf("actorruntime: unsupported artifact watcher call %T", request), nil
-}
-
+// Terminate cancels the watcher change-detection loop.
 func (m *artifactWatcherMeta) Terminate(error) {
 	if m.cancelRun != nil {
 		m.cancelRun()
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Message handling
+// ---------------------------------------------------------------------------
+
+// HandleMessage ignores asynchronous messages because the watcher receives none.
+func (m *artifactWatcherMeta) HandleMessage(gen.PID, any) error { return nil }
+
+// HandleCall rejects synchronous calls because the watcher exposes no call API.
+func (m *artifactWatcherMeta) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
+	return fmt.Errorf("actorruntime: unsupported artifact watcher call %T", request), nil
+}
+
+// HandleInspect exposes no watcher inspection fields.
 func (m *artifactWatcherMeta) HandleInspect(gen.PID, ...string) map[string]string { return nil }
 
+// ---------------------------------------------------------------------------
+// Watcher operations
+// ---------------------------------------------------------------------------
+
+// tryAttachWatch attaches fsnotify to the configured directory when needed.
 func (m *artifactWatcherMeta) tryAttachWatch(state *artifactWatcherRunState) error {
 	if state.watchingDirectory {
 		return nil
@@ -261,6 +286,7 @@ func (m *artifactWatcherMeta) tryAttachWatch(state *artifactWatcherRunState) err
 	return nil
 }
 
+// publishWatchError logs a watcher error when state changes and publishes the state.
 func (m *artifactWatcherMeta) publishWatchError(state *artifactWatcherRunState, err error) error {
 	if !state.statePublished ||
 		state.publishedReadable != state.directoryReadable ||
@@ -270,6 +296,7 @@ func (m *artifactWatcherMeta) publishWatchError(state *artifactWatcherRunState, 
 	return m.publishWatchState(state)
 }
 
+// publishWatchState publishes changed watcher readability and attachment state.
 func (m *artifactWatcherMeta) publishWatchState(state *artifactWatcherRunState) error {
 	if state.statePublished &&
 		state.publishedReadable == state.directoryReadable &&
@@ -290,6 +317,10 @@ func (m *artifactWatcherMeta) publishWatchState(state *artifactWatcherRunState) 
 	state.publishedWatching = state.watchingDirectory
 	return nil
 }
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 // artifactDirectoryFingerprint intentionally hashes metadata rather than file
 // contents. It is only a change detector; artifactResolverMeta performs the
