@@ -12,6 +12,10 @@ import (
 	"go.yaml.in/yaml/v4"
 )
 
+// ---------------------------------------------------------------------------
+// Types & state
+// ---------------------------------------------------------------------------
+
 // ArtifactResolverMetaLifecycle describes the resolver meta-process lifecycle.
 type ArtifactResolverMetaLifecycle string
 
@@ -40,12 +44,16 @@ type artifactResolverMeta struct {
 	jobs      chan MessageResolveArtifacts
 }
 
-// --- messages ---
+// ---------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------
 
+// MessageResolveArtifacts requests resolution for a snapshot.
 type MessageResolveArtifacts struct {
 	snapshot snapshot.Snapshot
 }
 
+// MessageArtifactResolutionResult reports resolved desired routes for a snapshot.
 type MessageArtifactResolutionResult struct {
 	source             gen.Alias
 	snapshotGeneration int64
@@ -53,8 +61,11 @@ type MessageArtifactResolutionResult struct {
 	deferred           bool
 }
 
-// --- messages ---
+// ---------------------------------------------------------------------------
+// Meta lifecycle
+// ---------------------------------------------------------------------------
 
+// Init initializes the artifact resolver meta-process.
 func (m *artifactResolverMeta) Init(process gen.MetaProcess) error {
 	if m.directory == "" {
 		return fmt.Errorf("artifact resolver meta: directory is required")
@@ -65,6 +76,7 @@ func (m *artifactResolverMeta) Init(process gen.MetaProcess) error {
 	return nil
 }
 
+// Start resolves queued artifact requests until termination.
 func (m *artifactResolverMeta) Start() error {
 	for {
 		select {
@@ -84,6 +96,18 @@ func (m *artifactResolverMeta) Start() error {
 	}
 }
 
+// Terminate cancels the resolver's running context.
+func (m *artifactResolverMeta) Terminate(error) {
+	if m.cancelRun != nil {
+		m.cancelRun()
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Message handling
+// ---------------------------------------------------------------------------
+
+// HandleMessage queues artifact resolution requests.
 func (m *artifactResolverMeta) HandleMessage(_ gen.PID, message any) error {
 	request, ok := message.(MessageResolveArtifacts)
 	if !ok {
@@ -97,18 +121,19 @@ func (m *artifactResolverMeta) HandleMessage(_ gen.PID, message any) error {
 	}
 }
 
+// HandleCall rejects synchronous artifact resolver calls.
 func (m *artifactResolverMeta) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
 	return fmt.Errorf("actorruntime: unsupported artifact resolver call %T", request), nil
 }
 
-func (m *artifactResolverMeta) Terminate(error) {
-	if m.cancelRun != nil {
-		m.cancelRun()
-	}
-}
-
+// HandleInspect exposes no inspect fields for the artifact resolver.
 func (m *artifactResolverMeta) HandleInspect(gen.PID, ...string) map[string]string { return nil }
 
+// ---------------------------------------------------------------------------
+// Artifact resolution
+// ---------------------------------------------------------------------------
+
+// buildDesiredRoutes resolves all enabled snapshot entries into desired routes.
 func (m *artifactResolverMeta) buildDesiredRoutes(snap snapshot.Snapshot) (map[string]MessageApplyRouterDesiredState, bool) {
 	desired := make(map[string]MessageApplyRouterDesiredState)
 
@@ -126,6 +151,7 @@ func (m *artifactResolverMeta) buildDesiredRoutes(snap snapshot.Snapshot) (map[s
 	return desired, deferred
 }
 
+// resolveDeployment validates and resolves an artifact reference into a deployment.
 func (m *artifactResolverMeta) resolveDeployment(entry snapshot.EffectiveEntry, ref *snapshot.ArtifactRef) (*Deployment, bool) {
 	if ref == nil || !entry.Enabled {
 		return nil, false
