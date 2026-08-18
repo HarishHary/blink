@@ -483,8 +483,9 @@ func (a *routerActor[T]) scheduleRouteStep(ref *deploymentRouteState) error {
 // newDeploymentManager builds the DeploymentManager child that serves this route.
 func (a *routerActor[T]) newDeploymentManager(ref *deploymentRouteState) *DeploymentManager[T] {
 	ref.status = DeploymentManagerStatus{
-		Lifecycle: DeploymentManagerStarting, Availability: runtime.AvailabilityUnavailable,
-		Workers: make(map[gen.PID]DeploymentWorkerStatus),
+		Lifecycle:    DeploymentManagerStarting,
+		Availability: runtime.AvailabilityUnavailable,
+		Workers:      make(map[gen.PID]DeploymentWorkerStatus),
 	}
 	return &DeploymentManager[T]{
 		adapter:    a.opts.Adapter,

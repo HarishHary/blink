@@ -28,18 +28,15 @@ const (
 
 // DeploymentManagerStatus is the manager-owned deployment availability snapshot.
 type DeploymentManagerStatus struct {
-	Lifecycle      DeploymentManagerLifecycle
-	Availability   runtime.Availability
-	MinProcs       int
-	MaxProcs       int
-	CurrentProcs   int
-	ReadyWorkers   int
-	QueueDepth     int
-	Dispatching    int
-	Active         int
-	ScalingPending bool
-	LastError      string
-	Workers        map[gen.PID]DeploymentWorkerStatus
+	Lifecycle    DeploymentManagerLifecycle
+	Availability runtime.Availability
+	CurrentProcs int
+	ReadyWorkers int
+	QueueDepth   int
+	Dispatching  int
+	Active       int
+	Error        string
+	Workers      map[gen.PID]DeploymentWorkerStatus
 }
 
 // ---------------------------------------------------------------------------
@@ -140,12 +137,6 @@ type MessageDeploymentManagerTerminated struct {
 	manager gen.PID
 	reason  error
 }
-
-// DeploymentManagerStatusRequest requests the current manager status.
-type DeploymentManagerStatusRequest struct{}
-
-// DeploymentManagerStatusResponse returns the current manager status.
-type DeploymentManagerStatusResponse struct{ Status DeploymentManagerStatus }
 
 // ---------------------------------------------------------------------------
 // Actor lifecycle
@@ -367,16 +358,6 @@ func (m *DeploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 		return gen.TerminateReasonNormal
 	}
 	return nil
-}
-
-// HandleCall serves synchronous manager status requests.
-func (m *DeploymentManager[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
-	switch request.(type) {
-	case DeploymentManagerStatusRequest:
-		return DeploymentManagerStatusResponse{Status: m.status()}, nil
-	default:
-		return fmt.Errorf("actorruntime: unsupported deployment manager call %T", request), nil
-	}
 }
 
 // HandleInspect exposes concise operational manager metrics.
@@ -756,9 +737,9 @@ func (m *DeploymentManager[T]) status() DeploymentManagerStatus {
 	}
 	status := DeploymentManagerStatus{
 		Lifecycle: lifecycle, Availability: availability,
-		MinProcs: m.deployment.MinProcs, MaxProcs: m.deployment.WorkerCount(), CurrentProcs: m.pool.status.DesiredWorkers, ReadyWorkers: m.ready(),
+		CurrentProcs: m.pool.status.DesiredWorkers, ReadyWorkers: m.ready(),
 		QueueDepth: len(m.pendingCalls), Dispatching: m.dispatching(), Active: m.active(),
-		ScalingPending: !m.circuitOpen && (m.pool.resizePending || m.pool.recovering || (m.pool.restart != nil && m.pool.restart.Pending)), LastError: errorText(m.lastError),
+		Error:   errorText(m.lastError),
 		Workers: m.pool.status.clone().Workers,
 	}
 	return status
