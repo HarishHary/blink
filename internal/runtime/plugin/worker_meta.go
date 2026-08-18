@@ -18,6 +18,10 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
+// ---------------------------------------------------------------------------
+// Types & state
+// ---------------------------------------------------------------------------
+
 // WorkerMetaLifecycle describes one worker meta-process incarnation.
 type WorkerMetaLifecycle string
 
@@ -72,7 +76,9 @@ type workerMeta[T Syncable] struct {
 	session    atomic.Pointer[workerMetaSession[T]]
 }
 
-// --- messages ---
+// ---------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------
 
 // MessageWorkerMetaStartResult reports whether the plugin session started.
 type MessageWorkerMetaStartResult struct {
@@ -101,7 +107,9 @@ type workerInvokeResponse struct {
 	recycle bool
 }
 
-// --- messages ---
+// ---------------------------------------------------------------------------
+// Plugin configuration
+// ---------------------------------------------------------------------------
 
 const pluginRetryPolicy = `{
   "methodConfig": [{
@@ -115,6 +123,10 @@ const pluginRetryPolicy = `{
     }
   }]
 }`
+
+// ---------------------------------------------------------------------------
+// Meta lifecycle
+// ---------------------------------------------------------------------------
 
 // Init initializes the meta process and its lifecycle context.
 func (m *workerMeta[T]) Init(process gen.MetaProcess) error {
@@ -149,6 +161,13 @@ func (m *workerMeta[T]) Start() error {
 	}
 	return nil
 }
+
+// Terminate requests plugin session shutdown.
+func (m *workerMeta[T]) Terminate(error) { m.close() }
+
+// ---------------------------------------------------------------------------
+// Message handling
+// ---------------------------------------------------------------------------
 
 // HandleMessage processes parent-issued plugin health checks.
 func (m *workerMeta[T]) HandleMessage(from gen.PID, message any) error {
@@ -220,11 +239,12 @@ func (m *workerMeta[T]) HandleCall(from gen.PID, _ gen.Ref, request any) (any, e
 	return fmt.Errorf("actorruntime: unsupported plugin worker call %T", request), nil
 }
 
-// Terminate requests plugin session shutdown.
-func (m *workerMeta[T]) Terminate(error) { m.close() }
-
 // HandleInspect exposes no custom worker metadata.
 func (m *workerMeta[T]) HandleInspect(gen.PID, ...string) map[string]string { return nil }
+
+// ---------------------------------------------------------------------------
+// Plugin session management
+// ---------------------------------------------------------------------------
 
 // close idempotently signals the session to stop.
 func (m *workerMeta[T]) close() {
