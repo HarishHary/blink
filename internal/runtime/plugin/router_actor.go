@@ -31,17 +31,15 @@ const (
 
 // RouterStatus is the catalog-facing router status contract.
 type RouterStatus struct {
-	Lifecycle       RouterLifecycle
-	Availability    runtime.Availability
-	ActorGeneration uint64
-	RestartCount    uint64
-	RestartPending  bool
-	ActorLastError  string
-	Revision        uint64
-	NormalRoutable  bool
-	ShadowRoutable  bool
-	Primary         DeploymentPoolStatus
-	Candidate       DeploymentPoolStatus
+	Lifecycle      RouterLifecycle
+	Availability   runtime.Availability
+	Generation     uint64
+	LastError      string
+	Revision       uint64
+	NormalRoutable bool
+	ShadowRoutable bool
+	Primary        DeploymentPoolStatus
+	Candidate      DeploymentPoolStatus
 }
 
 // clone deep-copies the nested pool statuses so a receiver cannot mutate router state.
@@ -847,7 +845,7 @@ func (a *routerActor[T]) reconcileStatus() {
 	case normalRoutable || shadowRoutable:
 		availability = runtime.AvailabilityDegraded
 	}
-	next := RouterStatus{Lifecycle: lifecycle, Availability: availability, ActorGeneration: a.actorGeneration, Revision: a.desiredRevision,
+	next := RouterStatus{Lifecycle: lifecycle, Availability: availability, Generation: a.actorGeneration, Revision: a.desiredRevision,
 		NormalRoutable: normalRoutable, ShadowRoutable: shadowRoutable, Primary: primaryStatus, Candidate: candidateStatus}
 	if sameRouterStatus(a.liveStatus, next) && a.statusEpoch != 0 {
 		return
@@ -862,10 +860,8 @@ func (a *routerActor[T]) reconcileStatus() {
 func sameRouterStatus(left, right RouterStatus) bool {
 	return left.Lifecycle == right.Lifecycle &&
 		left.Availability == right.Availability &&
-		left.ActorGeneration == right.ActorGeneration &&
-		left.RestartCount == right.RestartCount &&
-		left.RestartPending == right.RestartPending &&
-		left.ActorLastError == right.ActorLastError &&
+		left.Generation == right.Generation &&
+		left.LastError == right.LastError &&
 		left.Revision == right.Revision &&
 		left.NormalRoutable == right.NormalRoutable &&
 		left.ShadowRoutable == right.ShadowRoutable &&
