@@ -81,7 +81,7 @@ type DeploymentPool[T Syncable] struct {
 	options    DeploymentPoolOptions
 	deployment Deployment
 	size       int64
-	workers    map[gen.PID]deploymentWorkerState
+	workers    map[gen.PID]DeploymentWorkerStatus
 }
 
 // ---------------------------------------------------------------------------
@@ -115,7 +115,7 @@ type MessageDeploymentPoolStatusChanged struct {
 func (p *DeploymentPool[T]) Init(...any) (act.PoolOptions, error) {
 	p.options = deploymentPoolOptionsWithDefaults(p.options)
 	p.size = p.options.InitialSize
-	p.workers = make(map[gen.PID]deploymentWorkerState)
+	p.workers = make(map[gen.PID]DeploymentWorkerStatus)
 	p.publishStatus()
 	return act.PoolOptions{
 		PoolSize:          p.size,
@@ -141,7 +141,7 @@ func (p *DeploymentPool[T]) HandleMessage(from gen.PID, message any) error {
 		if from != msg.worker {
 			return nil
 		}
-		p.workers[msg.worker] = deploymentWorkerState{status: msg.status}
+		p.workers[msg.worker] = msg.status
 		p.publishStatus()
 
 	case MessageDeploymentWorkerStopped:
@@ -222,11 +222,11 @@ func (p *DeploymentPool[T]) publishStatus() {
 	failed := false
 	restarting := false
 	for pid, worker := range p.workers {
-		next.Workers[pid] = worker.status
-		if worker.status.Availability == runtime.AvailabilityReady {
+		next.Workers[pid] = worker
+		if worker.Availability == runtime.AvailabilityReady {
 			next.HealthyWorkers++
 		}
-		switch worker.status.Lifecycle {
+		switch worker.Lifecycle {
 		case DeploymentWorkerFailed:
 			failed = true
 		case DeploymentWorkerRestarting:

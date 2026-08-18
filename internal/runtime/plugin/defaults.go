@@ -16,7 +16,41 @@ const (
 	DefaultWorkerHealthInterval             = 15 * time.Second
 	DefaultWorkerRetryMin                   = time.Second
 	DefaultWorkerRetryMax                   = time.Minute
+	DefaultCatalogRetryMin                  = DefaultWorkerRetryMin
+	DefaultCatalogRetryMax                  = DefaultWorkerRetryMax
+	DefaultRouterRetryMin                   = DefaultWorkerRetryMin
+	DefaultRouterRetryMax                   = DefaultWorkerRetryMax
 )
+
+// catalogOptionsWithDefaults fills catalog and router defaults.
+func catalogOptionsWithDefaults[T Syncable](opts CatalogOptions[T]) CatalogOptions[T] {
+	if opts.RetryMin <= 0 {
+		opts.RetryMin = DefaultCatalogRetryMin
+	}
+	if opts.RetryMax <= 0 {
+		opts.RetryMax = DefaultCatalogRetryMax
+	}
+	if opts.RetryMax < opts.RetryMin {
+		opts.RetryMax = opts.RetryMin
+	}
+	opts.RouterOptions = routerOptionsWithDefaults(opts.RouterOptions)
+	return opts
+}
+
+// routerOptionsWithDefaults fills router and manager defaults.
+func routerOptionsWithDefaults[T Syncable](opts RouterOptions[T]) RouterOptions[T] {
+	if opts.RetryMin <= 0 {
+		opts.RetryMin = DefaultRouterRetryMin
+	}
+	if opts.RetryMax <= 0 {
+		opts.RetryMax = DefaultRouterRetryMax
+	}
+	if opts.RetryMax < opts.RetryMin {
+		opts.RetryMax = opts.RetryMin
+	}
+	opts.ManagerOptions = deploymentManagerOptionsWithDefaults(opts.ManagerOptions)
+	return opts
+}
 
 // deploymentManagerOptionsWithDefaults fills manager and pool defaults.
 func deploymentManagerOptionsWithDefaults(opts DeploymentManagerOptions) DeploymentManagerOptions {

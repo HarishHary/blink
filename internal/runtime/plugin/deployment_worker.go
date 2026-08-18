@@ -24,11 +24,6 @@ const (
 	DeploymentWorkerFailed     DeploymentWorkerLifecycle = "failed"
 )
 
-// deploymentWorkerState stores the worker's current status.
-type deploymentWorkerState struct {
-	status DeploymentWorkerStatus
-}
-
 // DeploymentWorkerStatus is the immutable worker snapshot sent to its pool.
 type DeploymentWorkerStatus struct {
 	Lifecycle    DeploymentWorkerLifecycle

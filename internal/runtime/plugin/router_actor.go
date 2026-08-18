@@ -177,6 +177,7 @@ type MessageRetryRouteStep struct {
 
 // Init allocates the router's route and in-flight-call indexes.
 func (a *routerActor[T]) Init(...any) (act.RouterOptions, error) {
+	a.opts = routerOptionsWithDefaults(a.opts)
 	a.routesByKey = make(map[DeploymentPoolKey]*deploymentRouteState)
 	a.routesByName = make(map[gen.Atom]DeploymentPoolKey)
 	a.inFlightCalls = make(map[uint64]*routerInvocation)
