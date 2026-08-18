@@ -27,6 +27,12 @@ const (
 	ReconcilerActorStopped    ReconcilerActorLifecycle = "stopped"
 )
 
+// reconcilerActorState tracks the desired-state reconciler actor.
+type reconcilerActorState struct {
+	pid    gen.PID
+	status ReconcilerActorStatus
+}
+
 // ReconcilerActorStatus reports the reconciler state to its supervisor.
 type ReconcilerActorStatus struct {
 	Lifecycle          ReconcilerActorLifecycle

@@ -1,6 +1,22 @@
 package plugin
 
-import "time"
+import (
+	"time"
+
+	"ergo.services/ergo/gen"
+	projection "github.com/harishhary/blink/internal/runtime/snapshot"
+)
+
+// supervisorOptions configures a runtime supervisor.
+type SupervisorOptions[P Syncable, M any] struct {
+	Name           gen.Atom
+	Dependencies   ActorDependencies[P]
+	CatalogOptions CatalogOptions[P]
+	SnapshotReader projection.ReaderActorOptions
+	Projection     projection.ProjectionSpec[M]
+	Directory      string
+	Stopped        chan<- error
+}
 
 // CatalogOptions configures one plugin catalog and the routers it spawns.
 type CatalogOptions[T Syncable] struct {

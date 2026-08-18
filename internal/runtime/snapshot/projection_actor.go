@@ -45,6 +45,19 @@ const (
 	ProjectionActorStopped    ProjectionActorLifecycle = "stopped"
 )
 
+// ProjectionActorState tracks the active projection and its commit lifecycle.
+type ProjectionActorState struct {
+	CommittedGeneration int64
+	ReadyGeneration     int64
+	PendingGeneration   int64
+	PendingPID          gen.PID
+	Pid                 gen.PID
+	Retry               *runtime.ScheduledBackoff
+	DeadlineCancel      gen.CancelFunc
+	DeadlineToken       uint64
+	Status              ProjectionActorStatus
+}
+
 // ProjectionActorStatus is the projection actor's current runtime status.
 type ProjectionActorStatus struct {
 	Lifecycle           ProjectionActorLifecycle

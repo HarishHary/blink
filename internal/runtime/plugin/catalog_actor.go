@@ -24,6 +24,14 @@ const (
 	CatalogActorStopped    CatalogActorLifecycle = "stopped"
 )
 
+// catalogActorState tracks the catalog actor incarnation and status.
+type catalogActorState struct {
+	pid             gen.PID
+	actorGeneration uint64
+	lastEpoch       uint64
+	status          CatalogActorStatus
+}
+
 // CatalogActorStatus is owned by catalogActor, except for LastError, which is
 // owned by runtimeSupervisor because the supervisor replaces catalog actor
 // incarnations.
