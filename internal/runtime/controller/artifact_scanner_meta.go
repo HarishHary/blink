@@ -41,7 +41,7 @@ type artifactScannerMetaStatus struct {
 }
 
 // artifactScannerMeta owns filesystem observation and parsing for one scanner instance.
-type artifactScannerMeta[T plugin.Syncable] struct {
+type artifactScannerMeta[T plugin.Artifact] struct {
 	gen.MetaProcess
 	directory string
 	loader    plugin.Loader[T]

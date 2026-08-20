@@ -37,8 +37,8 @@ func (s *Spec) SetName(name string) { s.Name = name }
 // Checksum returns the plugin checksum.
 func (s Spec) Checksum() string { return "" }
 
-// Syncable defines the metadata contract for synchronizable plugins.
-type Syncable interface {
+// Artifact defines the metadata contract for synchronizable plugins.
+type Artifact interface {
 	Metadata() Spec
 	Checksum() string
 }
@@ -51,7 +51,7 @@ type RPC interface {
 }
 
 // Adapter describes the go-plugin adapter for a plugin type.
-type Adapter[T Syncable] struct {
+type Adapter[T Artifact] struct {
 	Key         string
 	Magic       string
 	Plugin      goplugin.Plugin

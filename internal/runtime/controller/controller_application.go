@@ -14,7 +14,7 @@ import (
 )
 
 // Application owns the resources for one plugin-type controller application.
-type Application[T plugin.Syncable] struct {
+type Application[T plugin.Artifact] struct {
 	app.Application
 	opts     Options[T]
 	database *sql.DB
@@ -24,7 +24,7 @@ type Application[T plugin.Syncable] struct {
 }
 
 // NewApplication creates an unloaded application for one plugin type.
-func NewApplication[T plugin.Syncable](opts Options[T]) *Application[T] {
+func NewApplication[T plugin.Artifact](opts Options[T]) *Application[T] {
 	return &Application[T]{
 		opts:    optionsWithDefaults(opts),
 		barrier: newPublisherIOBarrier(),

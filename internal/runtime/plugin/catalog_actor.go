@@ -61,7 +61,7 @@ func (s catalogActorStatus) clone() catalogActorStatus {
 // ---------------------------------------------------------------------------
 
 // catalogActor owns router actors and projects their aggregate status.
-type catalogActor[T Syncable] struct {
+type catalogActor[T Artifact] struct {
 	act.Actor
 	opts            CatalogOptions
 	adapter         *Adapter[T]
@@ -110,7 +110,7 @@ type MessageRouterRestart struct {
 }
 
 // newCatalogActor creates a catalog actor with its runtime options.
-func newCatalogActor[T Syncable](opts CatalogOptions, adapter *Adapter[T]) gen.ProcessBehavior {
+func newCatalogActor[T Artifact](opts CatalogOptions, adapter *Adapter[T]) gen.ProcessBehavior {
 	return &catalogActor[T]{opts: opts, adapter: adapter}
 }
 

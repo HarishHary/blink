@@ -13,7 +13,7 @@ const (
 )
 
 // optionsWithDefaults fills application option defaults.
-func optionsWithDefaults[T plugin.Syncable](opts Options[T]) Options[T] {
+func optionsWithDefaults[T plugin.Artifact](opts Options[T]) Options[T] {
 	if opts.Name == "" {
 		opts.Name = gen.Atom("controller-" + opts.Namespace)
 	}
@@ -22,7 +22,7 @@ func optionsWithDefaults[T plugin.Syncable](opts Options[T]) Options[T] {
 }
 
 // supervisorOptionsWithDefaults fills supervisor option defaults.
-func supervisorOptionsWithDefaults[T plugin.Syncable](applicationName gen.Atom, opts SupervisorOptions[T]) SupervisorOptions[T] {
+func supervisorOptionsWithDefaults[T plugin.Artifact](applicationName gen.Atom, opts SupervisorOptions[T]) SupervisorOptions[T] {
 	if opts.Name == "" {
 		opts.Name = applicationName + "-supervisor"
 	}
@@ -31,7 +31,7 @@ func supervisorOptionsWithDefaults[T plugin.Syncable](applicationName gen.Atom, 
 }
 
 // actorOptionsWithDefaults fills actor names and timing defaults.
-func actorOptionsWithDefaults[T plugin.Syncable](applicationName gen.Atom, opts ActorOptions[T]) ActorOptions[T] {
+func actorOptionsWithDefaults[T plugin.Artifact](applicationName gen.Atom, opts ActorOptions[T]) ActorOptions[T] {
 	if opts.Name == "" {
 		opts.Name = applicationName + "-actor"
 	}

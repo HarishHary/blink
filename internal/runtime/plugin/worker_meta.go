@@ -60,14 +60,14 @@ type workerMetaStatus struct {
 }
 
 // workerMetaSession is the atomically published plugin session.
-type workerMetaSession[T Syncable] struct {
+type workerMetaSession[T Artifact] struct {
 	instance T
 	client   *goplugin.Client
 	rpc      RPC
 }
 
 // workerMeta owns one plugin subprocess and its RPC session.
-type workerMeta[T Syncable] struct {
+type workerMeta[T Artifact] struct {
 	gen.MetaProcess
 	adapter    *Adapter[T]
 	deployment Deployment
@@ -96,7 +96,7 @@ type MessageWorkerMetaPingResult struct {
 }
 
 // workerInvokeCall carries a synchronous callback without terminating the meta-process on plugin errors.
-type workerInvokeCall[T Syncable] struct {
+type workerInvokeCall[T Artifact] struct {
 	context context.Context
 	fn      func(context.Context, T) error
 }

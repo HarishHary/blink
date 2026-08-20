@@ -25,7 +25,7 @@ func (m *MatcherMetadata) Clone() *MatcherMetadata {
 
 // Matcher matches batches of events and exposes its live sidecar metadata.
 type Matcher interface {
-	plugin.Syncable
+	plugin.Artifact
 	MatchBatch(ctx context.Context, events []evts.Event) MatchResult
 	MatcherMetadata() *MatcherMetadata
 }

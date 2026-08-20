@@ -52,7 +52,7 @@ type MessageDrain struct{}
 type MessageStop struct{}
 
 // MessageInvokePlugin requests a plugin invocation.
-type MessageInvokePlugin[T Syncable] struct {
+type MessageInvokePlugin[T Artifact] struct {
 	CallID     uint64
 	Context    context.Context
 	Cancel     context.CancelFunc

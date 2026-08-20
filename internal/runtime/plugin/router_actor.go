@@ -86,7 +86,7 @@ type deploymentRouteState struct {
 // ---------------------------------------------------------------------------
 
 // routerActor owns one dynamic Ergo route per concrete DeploymentPoolKey.
-type routerActor[T Syncable] struct {
+type routerActor[T Artifact] struct {
 	act.Router
 	opts             RouterOptions
 	lifecycle        RouterActorLifecycle

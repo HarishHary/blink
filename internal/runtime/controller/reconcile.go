@@ -9,13 +9,13 @@ import (
 )
 
 // CatalogGroup holds all YAML entries sharing a logical plugin ID (healthy: one BG Primary + at most one CN/SH Candidate).
-type CatalogGroup[T plugin.Syncable] struct {
+type CatalogGroup[T plugin.Artifact] struct {
 	Id      string
 	Entries []T
 }
 
 // ValidateGroup returns rollout-policy violations for a catalog group.
-func ValidateGroup[T plugin.Syncable](group CatalogGroup[T]) []string {
+func ValidateGroup[T plugin.Artifact](group CatalogGroup[T]) []string {
 	var bgCount, altCount int
 	for _, item := range group.Entries {
 		switch item.Metadata().RolloutMode {
@@ -38,7 +38,7 @@ func ValidateGroup[T plugin.Syncable](group CatalogGroup[T]) []string {
 }
 
 // ElectGroup derives an effective entry from a validated catalog group.
-func ElectGroup[T plugin.Syncable](id string, group CatalogGroup[T], digests map[string]string) snapshot.EffectiveEntry {
+func ElectGroup[T plugin.Artifact](id string, group CatalogGroup[T], digests map[string]string) snapshot.EffectiveEntry {
 	e := snapshot.EffectiveEntry{Id: id}
 	anyEnabled := false
 	for _, item := range group.Entries {

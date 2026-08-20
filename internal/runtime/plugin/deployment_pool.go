@@ -75,7 +75,7 @@ func sameDeploymentPoolStatus(left, right deploymentPoolStatus) bool {
 }
 
 // deploymentPool places deployment workers and forwards normal-priority traffic.
-type deploymentPool[T Syncable] struct {
+type deploymentPool[T Artifact] struct {
 	act.Pool
 	adapter    *Adapter[T]
 	options    DeploymentPoolOptions

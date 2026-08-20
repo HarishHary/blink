@@ -29,18 +29,17 @@ func newRpcFormatter(fileName string, client rpc_formatters.FormatterClient, met
 }
 
 // FormatterMetadata returns an independently owned snapshot-derived formatter configuration.
-func (f *rpcFormatter) FormatterMetadata() *FormatterMetadata {
-	metadata := f.metadata
-	return &metadata
+func (r *rpcFormatter) FormatterMetadata() *FormatterMetadata {
+	return r.metadata.Clone()
 }
 
-func (f *rpcFormatter) Metadata() plugin.Spec {
-	return f.FormatterMetadata().Metadata()
+func (r *rpcFormatter) Metadata() plugin.Spec {
+	return r.FormatterMetadata().Metadata()
 }
 
-func (f *rpcFormatter) Checksum() string { return f.checksum }
+func (r *rpcFormatter) Checksum() string { return r.checksum }
 
-func (f *rpcFormatter) FormatBatch(ctx context.Context, batch []*alerts.Alert) FormatResult {
+func (r *rpcFormatter) FormatBatch(ctx context.Context, batch []*alerts.Alert) FormatResult {
 	pbAlerts := make([]*pb.Alert, 0, len(batch))
 	for _, a := range batch {
 		pa, err := alerts.AlertToProto(a)
@@ -49,15 +48,15 @@ func (f *rpcFormatter) FormatBatch(ctx context.Context, batch []*alerts.Alert) F
 		}
 		pbAlerts = append(pbAlerts, pa)
 	}
-	resp, err := f.client.FormatBatch(ctx, &rpc_formatters.FormatBatchRequest{Alerts: pbAlerts})
+	resp, err := r.client.FormatBatch(ctx, &rpc_formatters.FormatBatchRequest{Alerts: pbAlerts})
 	if err != nil {
 		return FormatResult{CallErr: errors.NewE(err)}
 	}
 	if resp == nil {
-		return FormatResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "formatter", PluginID: f.fileName, Field: "response", Expected: 1})}
+		return FormatResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "formatter", PluginID: r.fileName, Field: "response", Expected: 1})}
 	}
 	if len(resp.GetItems()) != len(batch) {
-		return FormatResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "formatter", PluginID: f.fileName, Field: "items", Expected: len(batch), Actual: len(resp.GetItems())})}
+		return FormatResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "formatter", PluginID: r.fileName, Field: "items", Expected: len(batch), Actual: len(resp.GetItems())})}
 	}
 	items := make([]FormatItem, len(batch))
 	for i, item := range resp.GetItems() {
@@ -69,7 +68,7 @@ func (f *rpcFormatter) FormatBatch(ctx context.Context, batch []*alerts.Alert) F
 		}
 		var result map[string]any
 		if err := json.Unmarshal(item.GetResultJson(), &result); err != nil {
-			return FormatResult{CallErr: errors.NewE(fmt.Errorf("decode formatter %q result for alert %q: %w", f.fileName, batch[i].Id, err))}
+			return FormatResult{CallErr: errors.NewE(fmt.Errorf("decode formatter %q result for alert %q: %w", r.fileName, batch[i].Id, err))}
 		}
 		items[i].Output = result
 	}

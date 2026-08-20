@@ -9,7 +9,7 @@ import (
 )
 
 // Options configures one plugin-type controller application.
-type Options[T plugin.Syncable] struct {
+type Options[T plugin.Artifact] struct {
 	// Names default to controller-<namespace>, <name>-supervisor, and <name>-actor.
 	Name              gen.Atom
 	DatabaseDSN       string
@@ -19,13 +19,13 @@ type Options[T plugin.Syncable] struct {
 	SupervisorOptions SupervisorOptions[T]
 }
 
-type SupervisorOptions[T plugin.Syncable] struct {
+type SupervisorOptions[T plugin.Artifact] struct {
 	Name         gen.Atom
 	ActorOptions ActorOptions[T]
 }
 
 // ActorOptions configures the controller actor.
-type ActorOptions[T plugin.Syncable] struct {
+type ActorOptions[T plugin.Artifact] struct {
 	Name       gen.Atom
 	Directory  string
 	Loader     plugin.Loader[T]

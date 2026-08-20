@@ -45,7 +45,7 @@ type Loader[T any] interface {
 // BaseLoader[U, T] provides default Parse/ParseSpec/Validate/CrossValidate; U is the struct, T its pointer.
 type BaseLoader[U any, T interface {
 	*U
-	Syncable
+	Artifact
 	Clone() T
 }] struct{}
 

@@ -3,21 +3,32 @@ package tuning_rules
 import (
 	"context"
 
-	"github.com/harishhary/blink/internal/plugin"
+	"github.com/harishhary/blink/internal/errors"
+	"github.com/harishhary/blink/internal/runtime/plugin"
+	"github.com/harishhary/blink/internal/runtime/snapshot"
 	"github.com/harishhary/blink/pkg/alerts"
 	"github.com/harishhary/blink/pkg/scoring"
 )
 
 // TuningRuleMetadata is the in-memory representation of a tuning rule YAML sidecar.
 type TuningRuleMetadata struct {
-	plugin.PluginMetadata `yaml:",inline"`
-	Global                bool   `yaml:"global"`
-	RuleTypeStr           string `yaml:"rule_type"`  // "ignore", "set_confidence", "increase_confidence", "decrease_confidence"
-	ConfidenceStr         string `yaml:"confidence"` // meaningful only for *_confidence rule types
+	plugin.Spec   `yaml:",inline"`
+	Global        bool   `yaml:"global"`
+	RuleTypeStr   string `yaml:"rule_type"`  // "ignore", "set_confidence", "increase_confidence", "decrease_confidence"
+	ConfidenceStr string `yaml:"confidence"` // meaningful only for *_confidence rule types
 
 	// Resolved once at load (resolveTyped); yaml:"-" so they aren't (re)serialized.
 	RuleType   RuleType           `yaml:"-"`
 	Confidence scoring.Confidence `yaml:"-"`
+}
+
+// Clone returns an independently owned copy safe to pass across actor boundaries.
+func (m *TuningRuleMetadata) Clone() *TuningRuleMetadata {
+	if m == nil {
+		return nil
+	}
+	clone := *m
+	return &clone
 }
 
 // RuleType is the tuning action a rule applies to an alert's confidence.
@@ -33,10 +44,28 @@ const (
 
 // TuningRule is the host-side runtime interface for a live tuning-rule plugin.
 type TuningRule interface {
+	plugin.Artifact
 	TuneBatch(ctx context.Context, alerts []alerts.Alert) TuneResult
-
-	plugin.Syncable
 	TuningRuleMetadata() *TuningRuleMetadata
+}
+
+// Runtime is the tuning-rule call surface consumed by rule_tuner.
+type Runtime interface {
+	Tune(context.Context, snapshot.ProjectionState[*TuningRuleMetadata], string, []alerts.Alert) TuneResult
+}
+
+// TuneItem holds one alert's tuning outcome and the metadata of the selected plugin version.
+type TuneItem struct {
+	RuleType   RuleType
+	Confidence scoring.Confidence
+	Applies    bool
+	Err        errors.Error
+}
+
+// TuneResult holds the batch-level result from tuning alerts.
+type TuneResult struct {
+	Items   []TuneItem
+	CallErr errors.Error // whole-call failure; never alert-scoped
 }
 
 // resolveTyped parses the raw YAML strings into their typed fields; called once at load by the Loader.

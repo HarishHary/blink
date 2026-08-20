@@ -53,7 +53,7 @@ const (
 )
 
 // deploymentManagerCall owns one accepted invocation until physical completion.
-type deploymentManagerCall[T Syncable] struct {
+type deploymentManagerCall[T Artifact] struct {
 	call          MessageInvokePlugin[T]
 	phase         deploymentManagerCallPhase
 	worker        gen.PID
@@ -67,7 +67,7 @@ type deploymentManagerCall[T Syncable] struct {
 // ---------------------------------------------------------------------------
 
 // deploymentManager owns invocation, scaling, and Pool lifecycle for one concrete deployment.
-type deploymentManager[T Syncable] struct {
+type deploymentManager[T Artifact] struct {
 	act.Actor
 	adapter        *Adapter[T]
 	options        DeploymentManagerOptions

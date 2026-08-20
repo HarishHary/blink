@@ -137,7 +137,7 @@ type runtimeCall struct {
 // ---------------------------------------------------------------------------
 
 // supervisor coordinates the runtime actor subtree.
-type supervisor[P Syncable, M any] struct {
+type supervisor[P Artifact, M any] struct {
 	act.Supervisor
 	opts                 SupervisorOptions
 	adapter              *Adapter[P]
@@ -168,7 +168,7 @@ type MessageProposeDesiredState struct {
 }
 
 // MessageSubmitInvocation requests execution of a plugin invocation.
-type MessageSubmitInvocation[T Syncable] struct {
+type MessageSubmitInvocation[T Artifact] struct {
 	callID               uint64
 	context              context.Context
 	cancel               context.CancelFunc
@@ -184,7 +184,7 @@ type MessageSubmitInvocation[T Syncable] struct {
 // ---------------------------------------------------------------------------
 
 // newRuntimeSupervisor creates a runtime supervisor process behavior.
-func newRuntimeSupervisor[P Syncable, M any](opts SupervisorOptions, adapter *Adapter[P], loader snapshot.Loader[M]) gen.ProcessBehavior {
+func newRuntimeSupervisor[P Artifact, M any](opts SupervisorOptions, adapter *Adapter[P], loader snapshot.Loader[M]) gen.ProcessBehavior {
 	return &supervisor[P, M]{
 		opts:    opts,
 		adapter: adapter,

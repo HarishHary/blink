@@ -32,7 +32,7 @@ type actorState struct {
 	activationSent bool
 }
 
-type supervisor[T plugin.Syncable] struct {
+type supervisor[T plugin.Artifact] struct {
 	act.Supervisor
 	opts            SupervisorOptions[T]
 	database        backends.Database
@@ -44,7 +44,7 @@ type supervisor[T plugin.Syncable] struct {
 }
 
 // newSupervisor constructs the controller supervisor with normalized options.
-func newSupervisor[T plugin.Syncable](opts SupervisorOptions[T], database backends.Database, writer brokers.Writer, barrier *publisherIOBarrier) gen.ProcessBehavior {
+func newSupervisor[T plugin.Artifact](opts SupervisorOptions[T], database backends.Database, writer brokers.Writer, barrier *publisherIOBarrier) gen.ProcessBehavior {
 	return &supervisor[T]{opts: supervisorOptionsWithDefaults("", opts), database: database, writer: writer, barrier: barrier}
 }
 

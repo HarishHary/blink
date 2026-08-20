@@ -57,7 +57,7 @@ type reconcilePlan struct {
 	tombstones    []string
 }
 
-type actor[T plugin.Syncable] struct {
+type actor[T plugin.Artifact] struct {
 	act.Actor
 	opts                  ActorOptions[T]
 	database              backends.Database
@@ -75,7 +75,7 @@ type actor[T plugin.Syncable] struct {
 }
 
 // newActor constructs the controller actor with normalized options.
-func newActor[T plugin.Syncable](opts ActorOptions[T], database backends.Database, writer brokers.Writer, barrier *publisherIOBarrier) gen.ProcessBehavior {
+func newActor[T plugin.Artifact](opts ActorOptions[T], database backends.Database, writer brokers.Writer, barrier *publisherIOBarrier) gen.ProcessBehavior {
 	return &actor[T]{opts: actorOptionsWithDefaults("", opts), database: database, writer: writer, barrier: barrier}
 }
 

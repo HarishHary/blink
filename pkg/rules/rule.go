@@ -119,7 +119,7 @@ func (c *RuleMetadata) MergeWindowMins() time.Duration {
 
 // Rule is the host-side interface for evaluating a batch of events.
 type Rule interface {
-	plugin.Syncable
+	plugin.Artifact
 	EvaluateBatch(ctx context.Context, evts []events.Event) EvaluateResult
 	RuleMetadata() *RuleMetadata
 }

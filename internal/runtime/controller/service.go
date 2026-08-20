@@ -14,7 +14,7 @@ import (
 const serviceShutdownTimeout = 45 * time.Second
 
 // Service runs one controller application for a plugin type.
-type Service[T plugin.Syncable] struct {
+type Service[T plugin.Artifact] struct {
 	node            gen.Node
 	name            string
 	opts            Options[T]
@@ -22,7 +22,7 @@ type Service[T plugin.Syncable] struct {
 }
 
 // NewService creates a service that constructs a fresh application per Run.
-func NewService[T plugin.Syncable](node gen.Node, name string, opts Options[T]) *Service[T] {
+func NewService[T plugin.Artifact](node gen.Node, name string, opts Options[T]) *Service[T] {
 	return &Service[T]{node: node, name: name, opts: opts, shutdownTimeout: serviceShutdownTimeout}
 }
 

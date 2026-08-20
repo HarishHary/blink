@@ -32,7 +32,7 @@ type deploymentWorkerStatus struct {
 }
 
 // deploymentWorker owns one plugin worker meta-process incarnation.
-type deploymentWorker[T Syncable] struct {
+type deploymentWorker[T Artifact] struct {
 	act.Actor
 	adapter    *Adapter[T]
 	options    DeploymentWorkerOptions

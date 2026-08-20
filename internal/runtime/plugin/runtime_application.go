@@ -40,7 +40,7 @@ type runtimeCompletion struct {
 
 // Application bridges external Go callers and snapshot updates into one
 // runtimeSupervisor application member on a shared, process-owned Ergo node.
-type Application[P Syncable, M any] struct {
+type Application[P Artifact, M any] struct {
 	app.Application
 	opts                Options
 	logger              *logger.Logger
@@ -61,7 +61,7 @@ type Application[P Syncable, M any] struct {
 // ---------------------------------------------------------------------------
 
 // NewApplication creates an unloaded plugin application.
-func NewApplication[P Syncable, M any](opts Options, adapter *Adapter[P], loader Loader[M], runtimeLogger *logger.Logger) *Application[P, M] {
+func NewApplication[P Artifact, M any](opts Options, adapter *Adapter[P], loader Loader[M], runtimeLogger *logger.Logger) *Application[P, M] {
 	opts = runtimeOptionsWithDefaults(opts)
 	return &Application[P, M]{
 		opts:                opts,
