@@ -7,19 +7,14 @@ import (
 	"fmt"
 	"regexp"
 
-	"github.com/harishhary/blink/internal/config"
-	"github.com/harishhary/blink/internal/logger"
-	"github.com/harishhary/blink/internal/plugin"
+	"github.com/harishhary/blink/internal/runtime/plugin"
 )
-
-// ValidationError aliases config.ValidationError for rules callers.
-type ValidationError = config.ValidationError
 
 var semverRE = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+`)
 
 // Loader parses and validates rule metadata.
 type Loader struct {
-	config.BaseLoader[RuleMetadata, *RuleMetadata]
+	plugin.BaseLoader[RuleMetadata, *RuleMetadata]
 }
 
 // Parse loads rule metadata from a YAML sidecar on disk.
@@ -47,17 +42,17 @@ func (r Loader) ParseSpec(name string, spec []byte) (*RuleMetadata, error) {
 }
 
 // Validate applies rule-specific validation on top of the shared loader checks.
-func (r Loader) Validate(items []*RuleMetadata, binaries []string) []ValidationError {
-	var errs []ValidationError
+func (r Loader) Validate(items []*RuleMetadata, binaries []string) []plugin.ValidationError {
+	var errs []plugin.ValidationError
 	for _, cfg := range items {
 		name := cfg.Name + ".yaml"
 		if cfg.Id == "" {
-			errs = append(errs, ValidationError{File: name, Field: "id", Blocking: true, Message: "required field missing"})
+			errs = append(errs, plugin.ValidationError{File: name, Field: "id", Blocking: true, Message: "required field missing"})
 		}
 		if cfg.Version == "" {
-			errs = append(errs, ValidationError{File: name, Field: "version", PluginID: cfg.Id, Blocking: true, Message: "required field missing"})
+			errs = append(errs, plugin.ValidationError{File: name, Field: "version", PluginID: cfg.Id, Blocking: true, Message: "required field missing"})
 		} else if !semverRE.MatchString(cfg.Version) {
-			errs = append(errs, ValidationError{
+			errs = append(errs, plugin.ValidationError{
 				File:     name,
 				Field:    "version",
 				PluginID: cfg.Id,
@@ -68,12 +63,4 @@ func (r Loader) Validate(items []*RuleMetadata, binaries []string) []ValidationE
 	}
 	errs = append(errs, r.BaseLoader.Validate(items, binaries)...)
 	return errs
-}
-
-// SnapshotConfig adapts snapshots into the rules catalog and desired state.
-type SnapshotConfig = config.SnapshotConfig[*RuleMetadata]
-
-// NewSnapshotConfig builds a SnapshotConfig backed by the given snapshot source.
-func NewSnapshotConfig(logger *logger.Logger, src plugin.SnapshotSource) *SnapshotConfig {
-	return config.NewSnapshotConfig[*RuleMetadata](logger, src, Loader{})
 }

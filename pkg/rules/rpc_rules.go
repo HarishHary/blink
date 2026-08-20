@@ -5,54 +5,35 @@ import (
 
 	"google.golang.org/protobuf/types/known/structpb"
 
-	"github.com/harishhary/blink/internal/config"
 	"github.com/harishhary/blink/internal/errors"
-	"github.com/harishhary/blink/internal/plugin"
+	"github.com/harishhary/blink/internal/runtime/plugin"
 	"github.com/harishhary/blink/pkg/events"
 	"github.com/harishhary/blink/pkg/rules/rpc_rules"
 )
 
 type rpcRule struct {
-	cfg      config.Source[*RuleMetadata]
+	metadata RuleMetadata
 	fileName string
 	checksum string
 	client   rpc_rules.RuleClient
 }
 
-func newRpcRule(fileName string, client rpc_rules.RuleClient, cfg config.Source[*RuleMetadata], checksum string) *rpcRule {
+func newRpcRule(fileName string, client rpc_rules.RuleClient, metadata RuleMetadata, checksum string) *rpcRule {
 	return &rpcRule{
-		cfg:      cfg,
+		metadata: *metadata.Clone(),
 		fileName: fileName,
 		checksum: checksum,
 		client:   client,
 	}
 }
 
-func (r *rpcRule) config() *RuleMetadata {
-	if r.cfg == nil {
-		return nil
-	}
-	v, ok := r.cfg.ByFileName(r.fileName)
-	if !ok {
-		return nil
-	}
-	return v
-}
-
-// RuleMetadata returns the snapshot-derived rule configuration for this plugin.
+// RuleMetadata returns an independently owned snapshot-derived rule configuration.
 func (r *rpcRule) RuleMetadata() *RuleMetadata {
-	if c := r.config(); c != nil {
-		return c
-	}
-	// Return a minimal stub so callers don't need to nil-check.
-	return &RuleMetadata{PluginMetadata: plugin.PluginMetadata{Id: r.fileName, Name: r.fileName}}
+	return r.metadata.Clone()
 }
 
-func (r *rpcRule) Metadata() plugin.PluginMetadata {
-	if c := r.config(); c != nil {
-		return c.Metadata()
-	}
-	return plugin.PluginMetadata{Id: r.fileName, Name: r.fileName}
+func (r *rpcRule) Metadata() plugin.Spec {
+	return r.RuleMetadata().Metadata()
 }
 
 func (r *rpcRule) Checksum() string { return r.checksum }
