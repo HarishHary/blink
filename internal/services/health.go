@@ -45,6 +45,7 @@ func (s *HealthService) Run(ctx context.Context) errors.Error {
 		return errors.NewE(err)
 	}
 	server := &http.Server{Handler: s.handler(), ReadHeaderTimeout: 5 * time.Second}
+	defer server.Close()
 	done := make(chan error, 1)
 	go func() { done <- server.Serve(listener) }()
 
