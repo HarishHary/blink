@@ -8,8 +8,6 @@ import (
 	"syscall"
 	"time"
 
-	"ergo.services/application/observer"
-	"ergo.services/ergo/gen"
 	"github.com/harishhary/blink/internal/brokers"
 	"github.com/harishhary/blink/internal/logger"
 	"github.com/harishhary/blink/internal/runtime/controller"
@@ -52,10 +50,8 @@ func main() {
 	rootLogger := logger.New("controller", cfg.Env)
 	host, err := plugin.Start(plugin.NodeOptions{
 		Name:            "controller@localhost",
+		Env:             cfg.Env,
 		ShutdownTimeout: runtimeShutdownTimeout,
-		Applications: []gen.ApplicationBehavior{
-			observer.CreateApp(observer.Options{}),
-		},
 	})
 	if err != nil {
 		rootLogger.FatalF("start controller node: %v", err)
@@ -64,61 +60,61 @@ func main() {
 	node := host.Node()
 	runner := services.New(rootLogger.With("component", "runner"))
 	runner.Register(
-		controller.NewService(node, "controller-rule", controller.ControllerApplicationOptions[*rules.RuleMetadata]{
+		controller.NewService(node, "controller-rule", controller.Options[*rules.RuleMetadata]{
 			DatabaseDSN: cfg.ControllerDatabaseDSN,
 			Namespace:   "rule",
 			Topic:       cfg.ExecutorSnapshotTopic,
 			Broker:      broker,
-			SupervisorOptions: controller.ControllerSupervisorOptions[*rules.RuleMetadata]{
-				ActorOptions: controller.ControllerActorOptions[*rules.RuleMetadata]{
+			SupervisorOptions: controller.SupervisorOptions[*rules.RuleMetadata]{
+				ActorOptions: controller.ActorOptions[*rules.RuleMetadata]{
 					Directory: cfg.RulePluginDir,
 					Loader:    rules.Loader{},
 				},
 			},
 		}),
-		controller.NewService(node, "controller-matcher", controller.ControllerApplicationOptions[*matchers.MatcherMetadata]{
+		controller.NewService(node, "controller-matcher", controller.Options[*matchers.MatcherMetadata]{
 			DatabaseDSN: cfg.ControllerDatabaseDSN,
 			Namespace:   "matcher",
 			Topic:       cfg.MatcherSnapshotTopic,
 			Broker:      broker,
-			SupervisorOptions: controller.ControllerSupervisorOptions[*matchers.MatcherMetadata]{
-				ActorOptions: controller.ControllerActorOptions[*matchers.MatcherMetadata]{
+			SupervisorOptions: controller.SupervisorOptions[*matchers.MatcherMetadata]{
+				ActorOptions: controller.ActorOptions[*matchers.MatcherMetadata]{
 					Directory: cfg.MatcherPluginDir,
 					Loader:    matchers.Loader{},
 				},
 			},
 		}),
-		controller.NewService(node, "controller-tuning", controller.ControllerApplicationOptions[*tuning_rules.TuningRuleMetadata]{
+		controller.NewService(node, "controller-tuning", controller.Options[*tuning_rules.TuningRuleMetadata]{
 			DatabaseDSN: cfg.ControllerDatabaseDSN,
 			Namespace:   "tuning",
 			Topic:       cfg.TunerSnapshotTopic,
 			Broker:      broker,
-			SupervisorOptions: controller.ControllerSupervisorOptions[*tuning_rules.TuningRuleMetadata]{
-				ActorOptions: controller.ControllerActorOptions[*tuning_rules.TuningRuleMetadata]{
+			SupervisorOptions: controller.SupervisorOptions[*tuning_rules.TuningRuleMetadata]{
+				ActorOptions: controller.ActorOptions[*tuning_rules.TuningRuleMetadata]{
 					Directory: cfg.TuningPluginDir,
 					Loader:    tuning_rules.Loader{},
 				},
 			},
 		}),
-		controller.NewService(node, "controller-formatter", controller.ControllerApplicationOptions[*formatters.FormatterMetadata]{
+		controller.NewService(node, "controller-formatter", controller.Options[*formatters.FormatterMetadata]{
 			DatabaseDSN: cfg.ControllerDatabaseDSN,
 			Namespace:   "formatter",
 			Topic:       cfg.FormatterSnapshotTopic,
 			Broker:      broker,
-			SupervisorOptions: controller.ControllerSupervisorOptions[*formatters.FormatterMetadata]{
-				ActorOptions: controller.ControllerActorOptions[*formatters.FormatterMetadata]{
+			SupervisorOptions: controller.SupervisorOptions[*formatters.FormatterMetadata]{
+				ActorOptions: controller.ActorOptions[*formatters.FormatterMetadata]{
 					Directory: cfg.FormatterPluginDir,
 					Loader:    formatters.Loader{},
 				},
 			},
 		}),
-		controller.NewService(node, "controller-enrichment", controller.ControllerApplicationOptions[*enrichments.EnrichmentMetadata]{
+		controller.NewService(node, "controller-enrichment", controller.Options[*enrichments.EnrichmentMetadata]{
 			DatabaseDSN: cfg.ControllerDatabaseDSN,
 			Namespace:   "enrichment",
 			Topic:       cfg.EnricherSnapshotTopic,
 			Broker:      broker,
-			SupervisorOptions: controller.ControllerSupervisorOptions[*enrichments.EnrichmentMetadata]{
-				ActorOptions: controller.ControllerActorOptions[*enrichments.EnrichmentMetadata]{
+			SupervisorOptions: controller.SupervisorOptions[*enrichments.EnrichmentMetadata]{
+				ActorOptions: controller.ActorOptions[*enrichments.EnrichmentMetadata]{
 					Directory: cfg.EnrichmentPluginDir,
 					Loader:    enrichments.Loader{},
 				},
