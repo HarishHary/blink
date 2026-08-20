@@ -6,17 +6,12 @@ package tuning_rules
 import (
 	"fmt"
 
-	"github.com/harishhary/blink/internal/config"
-	"github.com/harishhary/blink/internal/logger"
-	"github.com/harishhary/blink/internal/plugin"
+	"github.com/harishhary/blink/internal/runtime/plugin"
 )
 
-// SnapshotConfig is the tuning-rule instantiation of cfg.SnapshotConfig.
-type SnapshotConfig = config.SnapshotConfig[*TuningRuleMetadata]
-
-// Loader implements cfg.Loader[*TuningRuleMetadata]; Parse/ParseSpec resolve the typed rule_type/confidence fields.
+// Loader implements plugin.Loader[*TuningRuleMetadata]; Parse/ParseSpec resolve the typed rule_type/confidence fields.
 type Loader struct {
-	config.BaseLoader[TuningRuleMetadata, *TuningRuleMetadata]
+	plugin.BaseLoader[TuningRuleMetadata, *TuningRuleMetadata]
 }
 
 // Parse loads a sidecar via the BaseLoader default, then resolves the typed rule_type/confidence fields.
@@ -41,9 +36,4 @@ func (l Loader) ParseSpec(name string, spec []byte) (*TuningRuleMetadata, error)
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
 	return cfg, nil
-}
-
-// NewSnapshotConfig builds the snapshot-backed tuning-rule config, parsing specs with Loader.
-func NewSnapshotConfig(logger *logger.Logger, src plugin.SnapshotSource) *SnapshotConfig {
-	return config.NewSnapshotConfig[*TuningRuleMetadata](logger, src, Loader{})
 }

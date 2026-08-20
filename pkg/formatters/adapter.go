@@ -3,22 +3,24 @@ package formatters
 import (
 	"context"
 
-	"github.com/harishhary/blink/internal/config"
-	"github.com/harishhary/blink/internal/plugin"
+	"github.com/harishhary/blink/internal/runtime/plugin"
 	"github.com/harishhary/blink/pkg/formatters/rpc_formatters"
 )
 
 // NewAdapter builds the PluginAdapter for the formatters plugin type.
-func NewAdapter(cfg config.Source[*FormatterMetadata]) *plugin.PluginAdapter[Formatter] {
-	return &plugin.PluginAdapter[Formatter]{
+func NewAdapter() *plugin.Adapter[Formatter] {
+	return &plugin.Adapter[Formatter]{
 		Key:    "formatter",
 		Magic:  MagicValue,
 		Plugin: &pluginImpl{},
-		Config: cfg,
-		DoHandshake: func(ctx context.Context, raw any, binPath, hash string) (Formatter, plugin.PluginRPC, error) {
-			return plugin.Handshake(ctx, raw, binPath, hash,
+		DoHandshake: func(ctx context.Context, raw any, deployment plugin.Deployment) (Formatter, plugin.RPC, error) {
+			metadata, err := (Loader{}).ParseSpec(deployment.Name, deployment.Spec)
+			if err != nil {
+				return nil, nil, err
+			}
+			return plugin.Handshake(ctx, raw, deployment,
 				func(fileName string, rpc rpc_formatters.FormatterClient, hash string) Formatter {
-					return newRpcFormatter(fileName, rpc, cfg, hash)
+					return newRpcFormatter(fileName, rpc, *metadata, hash)
 				})
 		},
 	}

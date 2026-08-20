@@ -5,56 +5,41 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/harishhary/blink/internal/config"
 	"github.com/harishhary/blink/internal/errors"
-	"github.com/harishhary/blink/internal/plugin"
+	"github.com/harishhary/blink/internal/runtime/plugin"
 	"github.com/harishhary/blink/pkg/alerts"
 	pb "github.com/harishhary/blink/pkg/alerts/pb"
 	"github.com/harishhary/blink/pkg/formatters/rpc_formatters"
 )
 
 type rpcFormatter struct {
-	cfg      config.Source[*FormatterMetadata]
+	metadata FormatterMetadata
 	fileName string
 	checksum string
 	client   rpc_formatters.FormatterClient
 }
 
-func newRpcFormatter(fileName string, client rpc_formatters.FormatterClient, cfg config.Source[*FormatterMetadata], checksum string) *rpcFormatter {
+func newRpcFormatter(fileName string, client rpc_formatters.FormatterClient, metadata FormatterMetadata, checksum string) *rpcFormatter {
 	return &rpcFormatter{
-		cfg:      cfg,
+		metadata: metadata,
 		fileName: fileName,
 		checksum: checksum,
 		client:   client,
 	}
 }
 
-func (f *rpcFormatter) config() *FormatterMetadata {
-	if f.cfg == nil {
-		return nil
-	}
-	v, _ := f.cfg.ByFileName(f.fileName)
-	return v
+// FormatterMetadata returns an independently owned snapshot-derived formatter configuration.
+func (r *rpcFormatter) FormatterMetadata() *FormatterMetadata {
+	return r.metadata.Clone()
 }
 
-// FormatterMetadata returns the live YAML-derived formatter configuration.
-func (f *rpcFormatter) FormatterMetadata() *FormatterMetadata {
-	if c := f.config(); c != nil {
-		return c
-	}
-	return &FormatterMetadata{PluginMetadata: plugin.PluginMetadata{Id: f.fileName, Name: f.fileName}}
+func (r *rpcFormatter) Metadata() plugin.Spec {
+	return r.FormatterMetadata().Metadata()
 }
 
-func (f *rpcFormatter) Metadata() plugin.PluginMetadata {
-	if c := f.config(); c != nil {
-		return c.Metadata()
-	}
-	return plugin.PluginMetadata{Id: f.fileName, Name: f.fileName}
-}
+func (r *rpcFormatter) Checksum() string { return r.checksum }
 
-func (f *rpcFormatter) Checksum() string { return f.checksum }
-
-func (f *rpcFormatter) FormatBatch(ctx context.Context, batch []*alerts.Alert) FormatResult {
+func (r *rpcFormatter) FormatBatch(ctx context.Context, batch []*alerts.Alert) FormatResult {
 	pbAlerts := make([]*pb.Alert, 0, len(batch))
 	for _, a := range batch {
 		pa, err := alerts.AlertToProto(a)
@@ -63,15 +48,15 @@ func (f *rpcFormatter) FormatBatch(ctx context.Context, batch []*alerts.Alert) F
 		}
 		pbAlerts = append(pbAlerts, pa)
 	}
-	resp, err := f.client.FormatBatch(ctx, &rpc_formatters.FormatBatchRequest{Alerts: pbAlerts})
+	resp, err := r.client.FormatBatch(ctx, &rpc_formatters.FormatBatchRequest{Alerts: pbAlerts})
 	if err != nil {
 		return FormatResult{CallErr: errors.NewE(err)}
 	}
 	if resp == nil {
-		return FormatResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "formatter", PluginID: f.fileName, Field: "response", Expected: 1})}
+		return FormatResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "formatter", PluginID: r.fileName, Field: "response", Expected: 1})}
 	}
 	if len(resp.GetItems()) != len(batch) {
-		return FormatResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "formatter", PluginID: f.fileName, Field: "items", Expected: len(batch), Actual: len(resp.GetItems())})}
+		return FormatResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "formatter", PluginID: r.fileName, Field: "items", Expected: len(batch), Actual: len(resp.GetItems())})}
 	}
 	items := make([]FormatItem, len(batch))
 	for i, item := range resp.GetItems() {
@@ -83,7 +68,7 @@ func (f *rpcFormatter) FormatBatch(ctx context.Context, batch []*alerts.Alert) F
 		}
 		var result map[string]any
 		if err := json.Unmarshal(item.GetResultJson(), &result); err != nil {
-			return FormatResult{CallErr: errors.NewE(fmt.Errorf("decode formatter %q result for alert %q: %w", f.fileName, batch[i].Id, err))}
+			return FormatResult{CallErr: errors.NewE(fmt.Errorf("decode formatter %q result for alert %q: %w", r.fileName, batch[i].Id, err))}
 		}
 		items[i].Output = result
 	}

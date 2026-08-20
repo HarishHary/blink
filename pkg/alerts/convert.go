@@ -4,7 +4,7 @@ import (
 	"time"
 
 	"github.com/harishhary/blink/internal/errors"
-	"github.com/harishhary/blink/internal/plugin"
+	"github.com/harishhary/blink/internal/runtime/plugin"
 	"github.com/harishhary/blink/pkg/alerts/pb"
 	"github.com/harishhary/blink/pkg/events"
 	"github.com/harishhary/blink/pkg/rules"
@@ -142,7 +142,7 @@ func ProtoToRuleMetadata(m *pb.RuleMetadata) (*rules.RuleMetadata, error) {
 		return nil, errors.New("nil protobuf rule metadata")
 	}
 	cfg, err := rules.NewRuleMetadata(rules.RuleMetadata{
-		PluginMetadata: plugin.PluginMetadata{
+		Spec: plugin.Spec{
 			Id:          m.GetId(),
 			Name:        m.GetName(),
 			DisplayName: m.GetDisplayName(),

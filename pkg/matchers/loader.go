@@ -3,23 +3,10 @@
 
 package matchers
 
-import (
-	"github.com/harishhary/blink/internal/config"
-	"github.com/harishhary/blink/internal/logger"
-	"github.com/harishhary/blink/internal/plugin"
-)
+import "github.com/harishhary/blink/internal/runtime/plugin"
 
-// SnapshotConfig is the control plane backed config source (published snapshot)
-type SnapshotConfig = config.SnapshotConfig[*MatcherMetadata]
-
-// Loader implements config.Loader[*MatcherMetadata] for matchers.
-// Embed config.BaseLoader to inherit default Parse, ParseSpec, Validate, and CrossValidate.
+// Loader implements pluginruntime.Loader[*MatcherMetadata] for matchers.
+// Embed pluginruntime.BaseLoader to inherit default Parse, ParseSpec, Validate, and CrossValidate.
 type Loader struct {
-	config.BaseLoader[MatcherMetadata, *MatcherMetadata]
-}
-
-// NewSnapshotConfig builds the snapshot-backed matcher config, parsing specs with
-// Loader.
-func NewSnapshotConfig(logger *logger.Logger, src plugin.SnapshotSource) *SnapshotConfig {
-	return config.NewSnapshotConfig[*MatcherMetadata](logger, src, Loader{})
+	plugin.BaseLoader[MatcherMetadata, *MatcherMetadata]
 }

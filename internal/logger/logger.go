@@ -49,3 +49,9 @@ func (l *Logger) Error(err errors.Error) {
 func (l *Logger) ErrorF(message string, v ...any) {
 	l.logger.Error(fmt.Sprintf(message, v...))
 }
+
+// FatalF logs a formatted error and exits with status 1.
+func (l *Logger) FatalF(message string, v ...any) {
+	l.logger.Error(fmt.Sprintf(message, v...))
+	os.Exit(1)
+}

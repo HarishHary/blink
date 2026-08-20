@@ -11,7 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/helpers"
-	"github.com/harishhary/blink/internal/pools"
+	"github.com/harishhary/blink/internal/runtime"
 	"github.com/harishhary/blink/pkg/events"
 	"github.com/harishhary/blink/pkg/rules"
 	"github.com/harishhary/blink/pkg/scoring"
@@ -42,15 +42,18 @@ type Alert struct {
 	OverrideMergeByKeys []string
 }
 
-// Clone returns a shallow alert copy with a deeply cloned Event.
+// Clone returns an alert copy with independently owned mutable fields.
 func (a *Alert) Clone() *Alert {
 	clone := *a
 	clone.Event = a.Event.Clone()
+	clone.OutputsSent = append([]string(nil), a.OutputsSent...)
+	clone.EnrichmentsApplied = append([]string(nil), a.EnrichmentsApplied...)
+	clone.OverrideMergeByKeys = append([]string(nil), a.OverrideMergeByKeys...)
 	return &clone
 }
 
-// CloneBatch returns alert copies with deeply cloned Events, preserving input order.
-func CloneBatch(in []*Alert) []*Alert {
+// CloneAlerts returns alert copies with deeply cloned Events, preserving input order.
+func CloneAlerts(in []*Alert) []*Alert {
 	out := make([]*Alert, len(in))
 	for i, alert := range in {
 		out[i] = alert.Clone()
@@ -273,9 +276,9 @@ func (a *Alert) MergePartitionKey() string {
 		ruleID = ruleIdentity(a.Rule)
 		version = a.Rule.Version
 	}
-	tenant := pools.NormalizeRolloutKey(nil)
+	tenant := runtime.NormalizeRolloutKey(nil)
 	if a.Event != nil {
-		tenant = pools.NormalizeRolloutKey(a.Event["tenant_id"])
+		tenant = runtime.NormalizeRolloutKey(a.Event["tenant_id"])
 	}
 	parts := []string{
 		"tenant=" + mergeKeyValue(tenant, true),
