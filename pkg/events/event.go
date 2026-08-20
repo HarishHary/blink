@@ -20,6 +20,14 @@ func (e Event) Clone() Event {
 	return clone
 }
 
+func CloneEvents(in []Event) []Event {
+	out := make([]Event, len(in))
+	for i, event := range in {
+		out[i] = event.Clone()
+	}
+	return out
+}
+
 func cloneValue(value any) any {
 	switch value := value.(type) {
 	case Event:

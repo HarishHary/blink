@@ -40,10 +40,10 @@ func (r *rpcTuningRule) Metadata() plugin.Spec {
 func (r *rpcTuningRule) Checksum() string { return r.checksum }
 
 // Tune converts alerts to protobufs, invokes the RPC batch method, and returns per-alert apply decisions.
-func (r *rpcTuningRule) TuneBatch(ctx context.Context, batch []alerts.Alert) TuneResult {
+func (r *rpcTuningRule) TuneBatch(ctx context.Context, batch []*alerts.Alert) TuneResult {
 	pbAlerts := make([]*pb.Alert, 0, len(batch))
 	for i := range batch {
-		pa, err := alerts.AlertToProto(&batch[i])
+		pa, err := alerts.AlertToProto(batch[i])
 		if err != nil {
 			return TuneResult{CallErr: errors.NewE(err)}
 		}

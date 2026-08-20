@@ -5,7 +5,6 @@ import (
 
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/runtime/plugin"
-	"github.com/harishhary/blink/internal/runtime/snapshot"
 	"github.com/harishhary/blink/pkg/alerts"
 	"github.com/harishhary/blink/pkg/scoring"
 )
@@ -45,13 +44,8 @@ const (
 // TuningRule is the host-side runtime interface for a live tuning-rule plugin.
 type TuningRule interface {
 	plugin.Artifact
-	TuneBatch(ctx context.Context, alerts []alerts.Alert) TuneResult
+	TuneBatch(ctx context.Context, alerts []*alerts.Alert) TuneResult
 	TuningRuleMetadata() *TuningRuleMetadata
-}
-
-// Runtime is the tuning-rule call surface consumed by rule_tuner.
-type Runtime interface {
-	Tune(context.Context, snapshot.ProjectionState[*TuningRuleMetadata], string, []alerts.Alert) TuneResult
 }
 
 // TuneItem holds one alert's tuning outcome and the metadata of the selected plugin version.

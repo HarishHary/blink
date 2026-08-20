@@ -52,8 +52,8 @@ func (a *Alert) Clone() *Alert {
 	return &clone
 }
 
-// CloneBatch returns alert copies with deeply cloned Events, preserving input order.
-func CloneBatch(in []*Alert) []*Alert {
+// CloneAlerts returns alert copies with deeply cloned Events, preserving input order.
+func CloneAlerts(in []*Alert) []*Alert {
 	out := make([]*Alert, len(in))
 	for i, alert := range in {
 		out[i] = alert.Clone()
