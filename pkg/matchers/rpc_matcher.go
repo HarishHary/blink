@@ -5,50 +5,35 @@ import (
 
 	"google.golang.org/protobuf/types/known/structpb"
 
-	"github.com/harishhary/blink/internal/config"
 	"github.com/harishhary/blink/internal/errors"
-	"github.com/harishhary/blink/internal/plugin"
+	"github.com/harishhary/blink/internal/runtime/plugin"
 	evts "github.com/harishhary/blink/pkg/events"
 	"github.com/harishhary/blink/pkg/matchers/rpc_matchers"
 )
 
 type rpcMatcher struct {
-	cfg      config.Source[*MatcherMetadata]
+	metadata MatcherMetadata
 	fileName string
 	checksum string
 	client   rpc_matchers.MatcherClient
 }
 
-func newRpcMatcher(fileName string, client rpc_matchers.MatcherClient, cfg config.Source[*MatcherMetadata], checksum string) *rpcMatcher {
+func newRpcMatcher(fileName string, client rpc_matchers.MatcherClient, metadata MatcherMetadata, checksum string) *rpcMatcher {
 	return &rpcMatcher{
-		cfg:      cfg,
+		metadata: metadata,
 		fileName: fileName,
 		checksum: checksum,
 		client:   client,
 	}
 }
 
-func (r *rpcMatcher) config() *MatcherMetadata {
-	if r.cfg == nil {
-		return nil
-	}
-	v, _ := r.cfg.ByFileName(r.fileName)
-	return v
-}
-
-// MatcherMetadata returns the live YAML-derived matcher configuration.
+// MatcherMetadata returns an independently owned snapshot-derived matcher configuration.
 func (r *rpcMatcher) MatcherMetadata() *MatcherMetadata {
-	if c := r.config(); c != nil {
-		return c
-	}
-	return &MatcherMetadata{PluginMetadata: plugin.PluginMetadata{Id: r.fileName, Name: r.fileName}}
+	return r.metadata.Clone()
 }
 
-func (r *rpcMatcher) Metadata() plugin.PluginMetadata {
-	if c := r.config(); c != nil {
-		return c.Metadata()
-	}
-	return plugin.PluginMetadata{Id: r.fileName, Name: r.fileName}
+func (r *rpcMatcher) Metadata() plugin.Spec {
+	return r.MatcherMetadata().Metadata()
 }
 
 func (r *rpcMatcher) Checksum() string { return r.checksum }
