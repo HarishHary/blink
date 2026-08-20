@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"github.com/harishhary/blink/internal/runtime"
+	"github.com/harishhary/blink/internal/runtime/snapshot"
 	"go.yaml.in/yaml/v4"
 )
 
@@ -27,12 +29,12 @@ func (e ValidationError) Error() string {
 	return fmt.Sprintf("%s: %s", e.File, e.Message)
 }
 
-// Loader[T] handles per-plugin-type config loading; embed BaseLoader[T] for defaults.
-type Loader[T Syncable] interface {
+// Loader[T] handles per-plugin-type metadata loading and projection behavior;
+// embed BaseLoader[U, T] for defaults.
+type Loader[T any] interface {
+	snapshot.Loader[T]
 	// Parse reads a single YAML sidecar file and returns the parsed metadata.
 	Parse(path string) (T, error)
-	// ParseSpec reconstructs metadata from a snapshot artifact's spec bytes (snapshot counterpart to Parse).
-	ParseSpec(name string, spec []byte) (T, error)
 	// Validate runs directory-level checks given already-parsed items and
 	// executable binary names present in the directory.
 	Validate(items []T, binaries []string) []ValidationError
@@ -41,9 +43,10 @@ type Loader[T Syncable] interface {
 }
 
 // BaseLoader[U, T] provides default Parse/ParseSpec/Validate/CrossValidate; U is the struct, T its pointer.
-type BaseLoader[U Syncable, T interface {
+type BaseLoader[U any, T interface {
 	*U
 	Syncable
+	Clone() T
 }] struct{}
 
 // named is satisfied by metadata that embeds *PluginMetadata; unexported because name injection is a loader concern, not a runtime one.
@@ -78,6 +81,22 @@ func (BaseLoader[U, T]) ParseSpec(name string, spec []byte) (T, error) {
 		n.SetName(name)
 	}
 	return p, nil
+}
+
+// Clone returns an independently owned metadata value.
+func (BaseLoader[U, T]) Clone(value T) T { return value.Clone() }
+
+// MaxProcs returns the configured worker limit.
+func (BaseLoader[U, T]) MaxProcs(value T) int { return value.Metadata().MaxProcs }
+
+func isNilLoader[T any](loader Loader[T]) bool {
+	value := reflect.ValueOf(loader)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 // Validate checks parsed metadata against its directory binaries and rollout rules.

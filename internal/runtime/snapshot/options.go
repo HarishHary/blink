@@ -20,7 +20,7 @@ type ReaderActorOptions struct {
 // SupervisorOptions configures a raw reader and its typed projection sibling.
 type SupervisorOptions[T any] struct {
 	ReaderActorOptions
-	Projection     ProjectionSpec[T]
+	Loader         Loader[T]
 	ProjectionMode ProjectionCommitMode
 	Stopped        chan<- error
 }

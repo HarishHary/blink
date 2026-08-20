@@ -27,14 +27,6 @@ const (
 	ProjectionCommitExternal
 )
 
-// ProjectionSpec supplies the type-specific behavior owned by a projection actor.
-// Parse and Clone must not retain references to their inputs.
-type ProjectionSpec[T any] struct {
-	Parse    func(name string, spec []byte) (T, error)
-	Clone    func(T) T
-	MaxProcs func(T) int
-}
-
 // ProjectionActorLifecycle describes the projection actor's lifecycle.
 type ProjectionActorLifecycle string
 
@@ -66,6 +58,12 @@ type ProjectionActorStatus struct {
 	PreparedGeneration  int64
 }
 
+// ProjectionState is an independently owned typed snapshot view.
+type ProjectionState[T any] struct {
+	ProjectionActorStatus
+	ProjectionData[T]
+}
+
 // ProjectionData is the independently owned typed data from a snapshot.
 type ProjectionData[T any] struct {
 	Primaries    []T
@@ -75,22 +73,16 @@ type ProjectionData[T any] struct {
 }
 
 // clone returns an independently owned copy of the projection data.
-func (s ProjectionData[T]) clone(spec ProjectionSpec[T]) ProjectionData[T] {
+func (s ProjectionData[T]) clone(loader Loader[T]) ProjectionData[T] {
 	clone := s
-	clone.Primaries = cloneValues(s.Primaries, spec.Clone)
-	clone.Candidates = cloneValues(s.Candidates, spec.Clone)
+	clone.Primaries = cloneValues(s.Primaries, loader.Clone)
+	clone.Candidates = cloneValues(s.Candidates, loader.Clone)
 	clone.ByFileName = make(map[string]T, len(s.ByFileName))
 	for name, value := range s.ByFileName {
-		clone.ByFileName[name] = spec.Clone(value)
+		clone.ByFileName[name] = loader.Clone(value)
 	}
 	clone.MaxProcsByID = maps.Clone(s.MaxProcsByID)
 	return clone
-}
-
-// ProjectionState is an independently owned typed snapshot view.
-type ProjectionState[T any] struct {
-	ProjectionActorStatus
-	ProjectionData[T]
 }
 
 // cloneValues returns independently cloned values.
@@ -105,7 +97,7 @@ func cloneValues[T any](values []T, clone func(T) T) []T {
 type projectionActor[T any] struct {
 	act.Actor
 	events             Events
-	spec               ProjectionSpec[T]
+	loader             Loader[T]
 	mode               ProjectionCommitMode
 	readerActorReady   bool
 	readerGeneration   int64
@@ -233,7 +225,7 @@ func (a *projectionActor[T]) applyEvent(event gen.MessageEvent) error {
 		}
 		a.observedGeneration = snap.Generation
 		a.prepared = nil
-		parsed, err := parseProjection(snap, a.spec)
+		parsed, err := newParsedProjection(snap, a.loader)
 		if err != nil {
 			a.lastError = err
 			return nil
@@ -280,7 +272,7 @@ func (a *projectionActor[T]) reportState() ProjectionState[T] {
 	if a.committed == nil {
 		return state
 	}
-	state.ProjectionData = a.committed.data.clone(a.spec)
+	state.ProjectionData = a.committed.data.clone(a.loader)
 	return state
 }
 
@@ -294,8 +286,8 @@ type parsedProjection[T any] struct {
 	data       ProjectionData[T]
 }
 
-// parseProjection converts a snapshot into independently owned typed data.
-func parseProjection[T any](snap *snapshot.Snapshot, spec ProjectionSpec[T]) (parsedProjection[T], error) {
+// newParsedProjection converts a snapshot into independently owned typed data.
+func newParsedProjection[T any](snap *snapshot.Snapshot, loader Loader[T]) (parsedProjection[T], error) {
 	data := ProjectionData[T]{
 		ByFileName:   make(map[string]T),
 		MaxProcsByID: make(map[string]int),
@@ -305,21 +297,21 @@ func parseProjection[T any](snap *snapshot.Snapshot, spec ProjectionSpec[T]) (pa
 			if ref == nil || len(ref.Spec) == 0 {
 				continue
 			}
-			value, err := spec.Parse(ref.Name, append([]byte(nil), ref.Spec...))
+			value, err := loader.ParseSpec(ref.Name, append([]byte(nil), ref.Spec...))
 			if err != nil {
 				return parsedProjection[T]{}, fmt.Errorf("parse snapshot spec %q (id %q): %w", ref.Name, entry.Id, err)
 			}
-			value = spec.Clone(value)
-			data.ByFileName[ref.Name] = spec.Clone(value)
-			maxProcs := spec.MaxProcs(value)
+			value = loader.Clone(value)
+			data.ByFileName[ref.Name] = loader.Clone(value)
+			maxProcs := loader.MaxProcs(value)
 			maxProcs = max(1, maxProcs)
 			if maxProcs > data.MaxProcsByID[entry.Id] {
 				data.MaxProcsByID[entry.Id] = maxProcs
 			}
 			if index == 0 {
-				data.Primaries = append(data.Primaries, spec.Clone(value))
+				data.Primaries = append(data.Primaries, loader.Clone(value))
 			} else {
-				data.Candidates = append(data.Candidates, spec.Clone(value))
+				data.Candidates = append(data.Candidates, loader.Clone(value))
 			}
 		}
 	}

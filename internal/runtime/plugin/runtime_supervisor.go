@@ -144,7 +144,7 @@ type supervisor[P Syncable, M any] struct {
 	lifecycle            SupervisorLifecycle
 	transition           SupervisorTransitionPhase
 	liveStatus           SupervisorStatus
-	projectionSpec       snapshot.ProjectionSpec[M]
+	loader               snapshot.Loader[M]
 	events               RuntimeEvents
 	statusToken          gen.Ref
 	reconciler           reconcilerActorState
@@ -184,11 +184,11 @@ type MessageSubmitInvocation[T Syncable] struct {
 // ---------------------------------------------------------------------------
 
 // newRuntimeSupervisor creates a runtime supervisor process behavior.
-func newRuntimeSupervisor[P Syncable, M any](opts SupervisorOptions, adapter *Adapter[P], projectionSpec snapshot.ProjectionSpec[M]) gen.ProcessBehavior {
+func newRuntimeSupervisor[P Syncable, M any](opts SupervisorOptions, adapter *Adapter[P], loader snapshot.Loader[M]) gen.ProcessBehavior {
 	return &supervisor[P, M]{
-		opts:           opts,
-		adapter:        adapter,
-		projectionSpec: projectionSpec,
+		opts:    opts,
+		adapter: adapter,
+		loader:  loader,
 	}
 }
 
@@ -198,8 +198,7 @@ func (s *supervisor[P, M]) Init(...any) (act.SupervisorSpec, error) {
 	if s.opts.Name == "" ||
 		s.adapter == nil ||
 		s.opts.Directory == "" ||
-		s.opts.SnapshotReader.ReaderFactory == nil ||
-		s.projectionSpec.Parse == nil || s.projectionSpec.Clone == nil || s.projectionSpec.MaxProcs == nil {
+		s.opts.SnapshotReader.ReaderFactory == nil || s.loader == nil {
 		return act.SupervisorSpec{}, fmt.Errorf(
 			"actorruntime: name, adapter, reader options, projection, and directory are required",
 		)
@@ -247,7 +246,7 @@ func (s *supervisor[P, M]) Init(...any) (act.SupervisorSpec, error) {
 					readerOptions.Name = s.snapshotSupervisorName()
 					return snapshot.NewSupervisor(snapshot.SupervisorOptions[M]{
 						ReaderActorOptions: readerOptions,
-						Projection:         s.projectionSpec,
+						Loader:             s.loader,
 						ProjectionMode:     snapshot.ProjectionCommitExternal,
 					})
 				},

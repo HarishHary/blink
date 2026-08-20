@@ -70,8 +70,8 @@ func (s *Supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 	if s.opts.Name == "" || s.opts.Logger == nil || s.opts.ReaderFactory == nil {
 		return act.SupervisorSpec{}, fmt.Errorf("actor snapshot: name, logger, and reader factory are required")
 	}
-	if s.opts.Projection.Parse == nil || s.opts.Projection.Clone == nil || s.opts.Projection.MaxProcs == nil {
-		return act.SupervisorSpec{}, fmt.Errorf("snapshot projection: parse, clone, and max procs are required")
+	if s.opts.Loader == nil {
+		return act.SupervisorSpec{}, fmt.Errorf("snapshot projection: loader is required")
 	}
 	if s.opts.ProjectionMode != ProjectionCommitDirect && s.opts.ProjectionMode != ProjectionCommitExternal {
 		return act.SupervisorSpec{}, fmt.Errorf("snapshot projection: invalid commit mode")
@@ -114,7 +114,7 @@ func (s *Supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 			{
 				Name: projectionActorName(s.opts.Name),
 				Factory: func() gen.ProcessBehavior {
-					return &projectionActor[T]{events: s.events, spec: s.opts.Projection, mode: s.opts.ProjectionMode}
+					return &projectionActor[T]{events: s.events, loader: s.opts.Loader, mode: s.opts.ProjectionMode}
 				},
 			},
 		},
