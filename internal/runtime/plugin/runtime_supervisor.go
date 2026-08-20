@@ -139,7 +139,13 @@ type runtimeCall struct {
 // supervisor coordinates the runtime actor subtree.
 type supervisor[P Syncable, M any] struct {
 	act.Supervisor
-	opts                 SupervisorOptions[P, M]
+	opts                 SupervisorOptions
+	adapter              *Adapter[P]
+	lifecycle            SupervisorLifecycle
+	transition           SupervisorTransitionPhase
+	liveStatus           SupervisorStatus
+	projectionSpec       snapshot.ProjectionSpec[M]
+	terminated           chan<- error
 	events               RuntimeEvents
 	statusToken          gen.Ref
 	reconciler           reconcilerActorState
@@ -150,10 +156,7 @@ type supervisor[P Syncable, M any] struct {
 	pendingDesiredState  MessageApplyCatalogDesiredState
 	inFlightCalls        map[uint64]runtimeCall
 	drainWaiters         []runtimeDrainWaiter
-	lifecycle            SupervisorLifecycle
-	transition           SupervisorTransitionPhase
 	transitionGeneration int64
-	liveStatus           SupervisorStatus
 }
 
 // ---------------------------------------------------------------------------
@@ -182,18 +185,23 @@ type MessageSubmitInvocation[T Syncable] struct {
 // ---------------------------------------------------------------------------
 
 // newRuntimeSupervisor creates a runtime supervisor process behavior.
-func newRuntimeSupervisor[P Syncable, M any](opts SupervisorOptions[P, M]) gen.ProcessBehavior {
-	return &supervisor[P, M]{opts: opts}
+func newRuntimeSupervisor[P Syncable, M any](opts SupervisorOptions, adapter *Adapter[P], projectionSpec snapshot.ProjectionSpec[M], terminated chan<- error) gen.ProcessBehavior {
+	return &supervisor[P, M]{
+		opts:           opts,
+		adapter:        adapter,
+		projectionSpec: projectionSpec,
+		terminated:     terminated,
+	}
 }
 
 // Init validates and initializes the runtime supervisor subtree.
 func (s *supervisor[P, M]) Init(...any) (act.SupervisorSpec, error) {
 	s.opts = supervisorOptionsWithDefaults(s.opts)
 	if s.opts.Name == "" ||
-		s.opts.CatalogOptions.RouterOptions.Adapter == nil ||
+		s.adapter == nil ||
 		s.opts.Directory == "" ||
 		s.opts.SnapshotReader.ReaderFactory == nil ||
-		s.opts.Projection.Parse == nil || s.opts.Projection.Clone == nil || s.opts.Projection.MaxProcs == nil {
+		s.projectionSpec.Parse == nil || s.projectionSpec.Clone == nil || s.projectionSpec.MaxProcs == nil {
 		return act.SupervisorSpec{}, fmt.Errorf(
 			"actorruntime: name, adapter, reader options, projection, and directory are required",
 		)
@@ -241,7 +249,7 @@ func (s *supervisor[P, M]) Init(...any) (act.SupervisorSpec, error) {
 					readerOptions.Name = s.snapshotSupervisorName()
 					return snapshot.NewSupervisor(snapshot.SupervisorOptions[M]{
 						ReaderActorOptions: readerOptions,
-						Projection:         s.opts.Projection,
+						Projection:         s.projectionSpec,
 						ProjectionMode:     snapshot.ProjectionCommitExternal,
 					})
 				},
@@ -261,7 +269,7 @@ func (s *supervisor[P, M]) Init(...any) (act.SupervisorSpec, error) {
 			{
 				Name: s.catalogActorName(),
 				Factory: func() gen.ProcessBehavior {
-					return newCatalogActor(s.opts.CatalogOptions)
+					return newCatalogActor(s.opts.CatalogOptions, s.adapter)
 				},
 				Options: gen.ProcessOptions{},
 			},
@@ -531,9 +539,9 @@ func (s *supervisor[P, M]) Terminate(reason error) {
 	for callID := range s.inFlightCalls {
 		s.finishCall(callID, runtime.ErrPluginUnavailable)
 	}
-	if s.opts.Stopped != nil {
+	if s.terminated != nil {
 		select {
-		case s.opts.Stopped <- reason:
+		case s.terminated <- reason:
 		default:
 		}
 	}

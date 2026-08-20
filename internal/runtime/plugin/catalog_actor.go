@@ -63,7 +63,8 @@ func (s catalogActorStatus) clone() catalogActorStatus {
 // catalogActor owns router actors and projects their aggregate status.
 type catalogActor[T Syncable] struct {
 	act.Actor
-	opts            CatalogOptions[T]
+	opts            CatalogOptions
+	adapter         *Adapter[T]
 	desiredRevision uint64
 	activated       bool
 	draining        bool
@@ -109,8 +110,8 @@ type MessageRouterRestart struct {
 }
 
 // newCatalogActor creates a catalog actor with its runtime options.
-func newCatalogActor[T Syncable](opts CatalogOptions[T]) gen.ProcessBehavior {
-	return &catalogActor[T]{opts: opts}
+func newCatalogActor[T Syncable](opts CatalogOptions, adapter *Adapter[T]) gen.ProcessBehavior {
+	return &catalogActor[T]{opts: opts, adapter: adapter}
 }
 
 // ---------------------------------------------------------------------------
@@ -391,6 +392,7 @@ func (a *catalogActor[T]) startRouter(id string) (*routerState, error) {
 	pid, err := a.Spawn(func() gen.ProcessBehavior {
 		return &routerActor[T]{
 			opts:     a.opts.RouterOptions,
+			adapter:  a.adapter,
 			pluginID: id,
 		}
 	}, gen.ProcessOptions{LinkParent: true})

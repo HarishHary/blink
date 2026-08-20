@@ -4,29 +4,47 @@ import "time"
 
 // DefaultDeploymentManagerQueueSize and related constants define default deployment options.
 const (
-	DefaultDeploymentManagerQueueSize       = 128
-	DefaultDeploymentManagerDispatchTimeout = 30 * time.Second
-	DefaultDeploymentManagerScaleCooldown   = time.Second
-	DefaultDeploymentManagerIdleTimeout     = 30 * time.Second
-	DefaultDeploymentManagerDrainTimeout    = 30 * time.Second
-	DefaultDeploymentPoolSize               = 1
-	DefaultDeploymentPoolRetryMin           = 5 * time.Second
-	DefaultDeploymentPoolRetryMax           = 5 * time.Minute
-	DefaultWorkerInvocationTimeout          = 30 * time.Second
-	DefaultWorkerHealthInterval             = 15 * time.Second
-	DefaultWorkerRetryMin                   = time.Second
-	DefaultWorkerRetryMax                   = time.Minute
-	DefaultSupervisorRetryMin               = DefaultWorkerRetryMin
-	DefaultSupervisorRetryMax               = DefaultWorkerRetryMax
-	DefaultSupervisorControlTimeout         = 30 * time.Second
-	DefaultCatalogRetryMin                  = DefaultWorkerRetryMin
-	DefaultCatalogRetryMax                  = DefaultWorkerRetryMax
-	DefaultRouterRetryMin                   = DefaultWorkerRetryMin
-	DefaultRouterRetryMax                   = DefaultWorkerRetryMax
+	DefaultRuntimeMaxOutstandingInvocations       = 512
+	DefaultRuntimeShadowMaxOutstandingInvocations = 32
+	DefaultRuntimeCloseGracePeriod                = 5 * time.Second
+	DefaultDeploymentManagerQueueSize             = 128
+	DefaultDeploymentManagerDispatchTimeout       = 30 * time.Second
+	DefaultDeploymentManagerScaleCooldown         = time.Second
+	DefaultDeploymentManagerIdleTimeout           = 30 * time.Second
+	DefaultDeploymentManagerDrainTimeout          = 30 * time.Second
+	DefaultDeploymentPoolSize                     = 1
+	DefaultDeploymentPoolRetryMin                 = 5 * time.Second
+	DefaultDeploymentPoolRetryMax                 = 5 * time.Minute
+	DefaultWorkerInvocationTimeout                = 30 * time.Second
+	DefaultWorkerHealthInterval                   = 15 * time.Second
+	DefaultWorkerRetryMin                         = time.Second
+	DefaultWorkerRetryMax                         = time.Minute
+	DefaultSupervisorRetryMin                     = DefaultWorkerRetryMin
+	DefaultSupervisorRetryMax                     = DefaultWorkerRetryMax
+	DefaultSupervisorControlTimeout               = 30 * time.Second
+	DefaultCatalogRetryMin                        = DefaultWorkerRetryMin
+	DefaultCatalogRetryMax                        = DefaultWorkerRetryMax
+	DefaultRouterRetryMin                         = DefaultWorkerRetryMin
+	DefaultRouterRetryMax                         = DefaultWorkerRetryMax
 )
 
+// runtimeOptionsWithDefaults fills public runtime option defaults.
+func runtimeOptionsWithDefaults(opts Options) Options {
+	if opts.MaxOutstandingInvocations <= 0 {
+		opts.MaxOutstandingInvocations = DefaultRuntimeMaxOutstandingInvocations
+	}
+	if opts.ShadowMaxOutstandingInvocations <= 0 {
+		opts.ShadowMaxOutstandingInvocations = DefaultRuntimeShadowMaxOutstandingInvocations
+	}
+	opts.SupervisorOptions = supervisorOptionsWithDefaults(opts.SupervisorOptions)
+	if opts.CloseTimeout <= 0 {
+		opts.CloseTimeout = opts.SupervisorOptions.CatalogOptions.RouterOptions.ManagerOptions.DrainTimeout + DefaultRuntimeCloseGracePeriod
+	}
+	return opts
+}
+
 // supervisorOptionsWithDefaults fills supervisor and child option defaults.
-func supervisorOptionsWithDefaults[P Syncable, M any](opts SupervisorOptions[P, M]) SupervisorOptions[P, M] {
+func supervisorOptionsWithDefaults(opts SupervisorOptions) SupervisorOptions {
 	if opts.RetryMin <= 0 {
 		opts.RetryMin = DefaultSupervisorRetryMin
 	}
@@ -44,7 +62,7 @@ func supervisorOptionsWithDefaults[P Syncable, M any](opts SupervisorOptions[P, 
 }
 
 // catalogOptionsWithDefaults fills catalog and router defaults.
-func catalogOptionsWithDefaults[T Syncable](opts CatalogOptions[T]) CatalogOptions[T] {
+func catalogOptionsWithDefaults(opts CatalogOptions) CatalogOptions {
 	if opts.RetryMin <= 0 {
 		opts.RetryMin = DefaultCatalogRetryMin
 	}
@@ -59,7 +77,7 @@ func catalogOptionsWithDefaults[T Syncable](opts CatalogOptions[T]) CatalogOptio
 }
 
 // routerOptionsWithDefaults fills router and manager defaults.
-func routerOptionsWithDefaults[T Syncable](opts RouterOptions[T]) RouterOptions[T] {
+func routerOptionsWithDefaults(opts RouterOptions) RouterOptions {
 	if opts.RetryMin <= 0 {
 		opts.RetryMin = DefaultRouterRetryMin
 	}

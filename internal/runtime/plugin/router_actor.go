@@ -88,13 +88,14 @@ type deploymentRouteState struct {
 // routerActor owns one dynamic Ergo route per concrete DeploymentPoolKey.
 type routerActor[T Syncable] struct {
 	act.Router
-	opts             RouterOptions[T]
+	opts             RouterOptions
+	lifecycle        RouterActorLifecycle
+	liveStatus       routerActorStatus
 	pluginID         string
 	generation       uint64
 	desiredRevision  uint64
-	lifecycle        RouterActorLifecycle
-	liveStatus       routerActorStatus
 	statusEpoch      uint64
+	adapter          *Adapter[T]
 	routesByKey      map[DeploymentPoolKey]*deploymentRouteState
 	routesByName     map[gen.Atom]DeploymentPoolKey
 	inFlightCalls    map[uint64]*routerInvocation
@@ -495,7 +496,7 @@ func (a *routerActor[T]) newDeploymentManager(ref *deploymentRouteState) *deploy
 		workers:      make(map[gen.PID]deploymentWorkerStatus),
 	}
 	return &deploymentManager[T]{
-		adapter:    a.opts.Adapter,
+		adapter:    a.adapter,
 		options:    a.opts.ManagerOptions,
 		deployment: ref.deployment,
 		route:      ref.name,

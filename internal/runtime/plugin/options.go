@@ -7,29 +7,37 @@ import (
 	"github.com/harishhary/blink/internal/runtime/snapshot"
 )
 
-// supervisorOptions configures a runtime supervisor.
-type SupervisorOptions[P Syncable, M any] struct {
+// Options configures one plugin actor subtree on a process-owned Ergo node.
+type Options struct {
+	SupervisorOptions SupervisorOptions
+	// MaxOutstandingInvocations bounds all accepted production invocations,
+	// including calls waiting in deployment queues.
+	MaxOutstandingInvocations int
+	// ShadowMaxOutstandingInvocations is an independent best-effort budget.
+	ShadowMaxOutstandingInvocations int
+	CloseTimeout                    time.Duration
+}
+
+// SupervisorOptions configures a runtime supervisor.
+type SupervisorOptions struct {
 	Name           gen.Atom
+	Directory      string
 	RetryMin       time.Duration
 	RetryMax       time.Duration
 	ControlTimeout time.Duration
-	CatalogOptions CatalogOptions[P]
+	CatalogOptions CatalogOptions
 	SnapshotReader snapshot.ReaderActorOptions
-	Projection     snapshot.ProjectionSpec[M]
-	Directory      string
-	Stopped        chan<- error
 }
 
 // CatalogOptions configures one plugin catalog and the routers it spawns.
-type CatalogOptions[T Syncable] struct {
+type CatalogOptions struct {
 	RetryMin      time.Duration // router-level restart backoff
 	RetryMax      time.Duration
-	RouterOptions RouterOptions[T] // handed straight to each spawned router
+	RouterOptions RouterOptions // handed straight to each spawned router
 }
 
 // RouterOptions configures one deployment router and the managers it spawns.
-type RouterOptions[T Syncable] struct {
-	Adapter        *Adapter[T]
+type RouterOptions struct {
 	RetryMin       time.Duration // route-level restart backoff
 	RetryMax       time.Duration
 	ManagerOptions DeploymentManagerOptions // handed straight to each spawned manager
