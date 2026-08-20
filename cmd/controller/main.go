@@ -59,19 +59,20 @@ func main() {
 
 	node := host.Node()
 	runner := services.New(rootLogger.With("component", "runner"))
-	runner.Register(
-		controller.NewService(node, "controller-rule", controller.Options[*rules.RuleMetadata]{
-			DatabaseDSN: cfg.ControllerDatabaseDSN,
-			Namespace:   "rule",
-			Topic:       cfg.ExecutorSnapshotTopic,
-			Broker:      broker,
-			SupervisorOptions: controller.SupervisorOptions[*rules.RuleMetadata]{
-				ActorOptions: controller.ActorOptions[*rules.RuleMetadata]{
-					Directory: cfg.RulePluginDir,
-					Loader:    rules.Loader{},
-				},
+	ruleControllerSvc := controller.NewService(node, "controller-rule", controller.Options[*rules.RuleMetadata]{
+		DatabaseDSN: cfg.ControllerDatabaseDSN,
+		Namespace:   "rule",
+		Topic:       cfg.ExecutorSnapshotTopic,
+		Broker:      broker,
+		SupervisorOptions: controller.SupervisorOptions[*rules.RuleMetadata]{
+			ActorOptions: controller.ActorOptions[*rules.RuleMetadata]{
+				Directory: cfg.RulePluginDir,
+				Loader:    rules.Loader{},
 			},
-		}),
+		},
+	})
+	runner.Register(
+		ruleControllerSvc,
 		controller.NewService(node, "controller-matcher", controller.Options[*matchers.MatcherMetadata]{
 			DatabaseDSN: cfg.ControllerDatabaseDSN,
 			Namespace:   "matcher",
