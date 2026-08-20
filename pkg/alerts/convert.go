@@ -142,7 +142,7 @@ func ProtoToRuleMetadata(m *pb.RuleMetadata) (*rules.RuleMetadata, error) {
 		return nil, errors.New("nil protobuf rule metadata")
 	}
 	cfg, err := rules.NewRuleMetadata(rules.RuleMetadata{
-		PluginMetadata: plugin.PluginMetadata{
+		Spec: plugin.Spec{
 			Id:          m.GetId(),
 			Name:        m.GetName(),
 			DisplayName: m.GetDisplayName(),
