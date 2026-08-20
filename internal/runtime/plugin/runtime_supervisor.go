@@ -302,7 +302,7 @@ func (s *supervisor[P, M]) HandleCall(from gen.PID, ref gen.Ref, request any) (a
 
 	case SupervisorStateRequest:
 		if !s.supervisorStateReader() {
-			return nil, runtime.ErrPluginUnavailable
+			return SupervisorStateResponse{}, nil
 		}
 		return SupervisorStateResponse{Generation: s.projection.ReadyGeneration}, nil
 
@@ -374,6 +374,13 @@ func (s *supervisor[P, M]) HandleMessage(from gen.PID, message any) error {
 			return nil
 		}
 		s.transition = SupervisorTransitionAwaitingProjection
+		if s.projection.ReadyGeneration == m.snapshotGeneration &&
+			s.projection.CommittedGeneration == m.snapshotGeneration {
+			s.finishDesiredStateTransition()
+			s.reconcileStatus()
+			s.publishStatus()
+			return nil
+		}
 		s.projection.CommittedGeneration = m.snapshotGeneration
 		s.projection.ReadyGeneration = 0
 		err := s.requestProjectionCommit()
@@ -731,7 +738,6 @@ func (s *supervisor[P, M]) pendingProjectionReady() bool {
 			s.projection.Status.PreparedGeneration == 0
 	}
 	return s.projection.Status.Lifecycle == snapshot.ProjectionActorRunning &&
-		s.projection.Status.Availability == runtime.AvailabilityReady &&
 		s.projection.Status.PreparedGeneration == target
 }
 

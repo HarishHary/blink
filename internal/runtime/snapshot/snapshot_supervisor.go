@@ -76,8 +76,12 @@ func (s *Supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 	if s.opts.ProjectionMode != ProjectionCommitDirect && s.opts.ProjectionMode != ProjectionCommitExternal {
 		return act.SupervisorSpec{}, fmt.Errorf("snapshot projection: invalid commit mode")
 	}
-	if err := s.RegisterName(s.opts.Name); err != nil {
-		return act.SupervisorSpec{}, fmt.Errorf("register snapshot supervisor %q: %w", s.opts.Name, err)
+	if s.Name() == "" {
+		if err := s.RegisterName(s.opts.Name); err != nil {
+			return act.SupervisorSpec{}, fmt.Errorf("register snapshot supervisor %q: %w", s.opts.Name, err)
+		}
+	} else if s.Name() != s.opts.Name {
+		return act.SupervisorSpec{}, fmt.Errorf("snapshot supervisor registered as %q, want %q", s.Name(), s.opts.Name)
 	}
 
 	s.events = EventsFor(s.Node(), s.opts.Name)

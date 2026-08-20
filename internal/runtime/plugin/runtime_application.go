@@ -97,7 +97,6 @@ func (a *Application[P, M]) Load(...any) (gen.ApplicationSpec, error) {
 		Mode:        gen.ApplicationModePermanent,
 		StopTimeout: a.opts.CloseTimeout,
 		Group: []gen.ApplicationMemberSpec{{
-			Name: supervisorOpts.Name,
 			Factory: func() gen.ProcessBehavior {
 				return newRuntimeSupervisor(supervisorOpts, a.adapter, a.loader)
 			},

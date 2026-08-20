@@ -583,7 +583,8 @@ func (a *reconcilerActor) publishStatus() {
 		a.deferred ||
 		a.resolver.status.availability == runtime.AvailabilityUnavailable:
 		availability = runtime.AvailabilityUnavailable
-	case a.watcher.status.availability != runtime.AvailabilityReady:
+	case a.resolver.status.availability != runtime.AvailabilityReady ||
+		a.watcher.status.availability != runtime.AvailabilityReady:
 		availability = runtime.AvailabilityDegraded
 	}
 
