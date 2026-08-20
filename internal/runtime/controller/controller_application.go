@@ -79,7 +79,7 @@ func (a *Application[T]) Load(_ ...any) (gen.ApplicationSpec, error) {
 	return gen.ApplicationSpec{
 		Name:        a.opts.Name,
 		Description: fmt.Sprintf("Blink %s controller", a.opts.Namespace),
-		Mode:        gen.ApplicationModeTransient,
+		Mode:        gen.ApplicationModePermanent,
 		Group: []gen.ApplicationMemberSpec{{
 			Name: a.opts.SupervisorOptions.Name,
 			Factory: func() gen.ProcessBehavior {

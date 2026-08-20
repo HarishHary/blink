@@ -129,9 +129,8 @@ func (h *NodeHost) Close(ctx context.Context) error {
 			return nil
 		default:
 		}
-		// Only the initiating caller may force shutdown.
-		// Do not wait afterward because ctx has expired.
-		h.node.StopForce()
+		// The node's configured ShutdownTimeout owns escalation. StopForce cannot
+		// replace a graceful Stop that is already in progress.
 		return fmt.Errorf("stop Ergo node: %w", ctx.Err())
 	}
 }

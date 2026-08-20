@@ -145,7 +145,6 @@ type supervisor[P Syncable, M any] struct {
 	transition           SupervisorTransitionPhase
 	liveStatus           SupervisorStatus
 	projectionSpec       snapshot.ProjectionSpec[M]
-	terminated           chan<- error
 	events               RuntimeEvents
 	statusToken          gen.Ref
 	reconciler           reconcilerActorState
@@ -185,12 +184,11 @@ type MessageSubmitInvocation[T Syncable] struct {
 // ---------------------------------------------------------------------------
 
 // newRuntimeSupervisor creates a runtime supervisor process behavior.
-func newRuntimeSupervisor[P Syncable, M any](opts SupervisorOptions, adapter *Adapter[P], projectionSpec snapshot.ProjectionSpec[M], terminated chan<- error) gen.ProcessBehavior {
+func newRuntimeSupervisor[P Syncable, M any](opts SupervisorOptions, adapter *Adapter[P], projectionSpec snapshot.ProjectionSpec[M]) gen.ProcessBehavior {
 	return &supervisor[P, M]{
 		opts:           opts,
 		adapter:        adapter,
 		projectionSpec: projectionSpec,
-		terminated:     terminated,
 	}
 }
 
@@ -538,12 +536,6 @@ func (s *supervisor[P, M]) Terminate(reason error) {
 	s.cancelProjectionDeadline()
 	for callID := range s.inFlightCalls {
 		s.finishCall(callID, runtime.ErrPluginUnavailable)
-	}
-	if s.terminated != nil {
-		select {
-		case s.terminated <- reason:
-		default:
-		}
 	}
 }
 
@@ -1049,17 +1041,13 @@ func (s *supervisor[P, M]) cancelProjectionCommitRetry(reset bool) {
 // scheduleProjectionDeadline schedules a deadline for the pending projection commit.
 func (s *supervisor[P, M]) scheduleProjectionDeadline() error {
 	delay := s.opts.ControlTimeout
-	if delay <= 0 {
-		delay = s.opts.RetryMin
-	}
-	if delay <= 0 {
-		delay = time.Second
-	}
 	s.cancelProjectionDeadline()
 	s.projection.DeadlineToken++
 	token := s.projection.DeadlineToken
 	cancel, err := s.SendAfter(s.PID(), MessageProjectionCommitDeadline{
-		token: token, generation: s.projection.PendingGeneration, projectionPID: s.projection.PendingPID,
+		token:         token,
+		generation:    s.projection.PendingGeneration,
+		projectionPID: s.projection.PendingPID,
 	}, delay)
 	if err == nil {
 		s.projection.DeadlineCancel = cancel
