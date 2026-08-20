@@ -127,7 +127,6 @@ func (s *Supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 
 // HandleChildStart tracks and activates a started reader or projection child.
 func (s *Supervisor[T]) HandleChildStart(name gen.Atom, pid gen.PID) error {
-	defer s.reportStatus()
 	switch name {
 	case projectionActorName(s.opts.Name):
 		if s.projectionActor.pid != (gen.PID{}) {
@@ -144,7 +143,11 @@ func (s *Supervisor[T]) HandleChildStart(name gen.Atom, pid gen.PID) error {
 			return nil
 		}
 		s.readerActor.pid = pid
-		s.readerActor.status = newReaderActorStatus()
+		status := newReaderActorStatus()
+		if s.readerActor.status != status {
+			s.readerActor.status = status
+			s.reportStatus()
+		}
 		return s.Send(pid, MessageReaderActorActivate{
 			snapshotEventName:  s.events.Snapshot.Name,
 			snapshotEventToken: s.events.snapshotToken,
@@ -156,7 +159,6 @@ func (s *Supervisor[T]) HandleChildStart(name gen.Atom, pid gen.PID) error {
 
 // HandleChildTerminate records a terminated child and reports external commit failures.
 func (s *Supervisor[T]) HandleChildTerminate(_ gen.Atom, pid gen.PID, reason error) error {
-	defer s.reportStatus()
 	switch pid {
 	case s.projectionActor.pid:
 		s.projectionActor.pid = gen.PID{}
@@ -175,8 +177,11 @@ func (s *Supervisor[T]) HandleChildTerminate(_ gen.Atom, pid gen.PID, reason err
 		return nil
 	case s.readerActor.pid:
 		s.readerActor.pid = gen.PID{}
-		s.readerActor.status.Lifecycle = ReaderActorRestarting
-		s.readerActor.status.Availability = runtime.AvailabilityUnavailable
+		status := s.readerActor.status
+		status.Lifecycle = ReaderActorRestarting
+		status.Availability = runtime.AvailabilityUnavailable
+		s.readerActor.status = status
+		s.reportStatus()
 		return nil
 	default:
 		return nil
@@ -185,11 +190,13 @@ func (s *Supervisor[T]) HandleChildTerminate(_ gen.Atom, pid gen.PID, reason err
 
 // HandleMessage routes child status and external projection commit messages.
 func (s *Supervisor[T]) HandleMessage(from gen.PID, message any) error {
-	defer s.reportStatus()
 	switch message := message.(type) {
 	case MessageReaderActorStatusChanged:
 		if from == s.readerActor.pid {
-			s.readerActor.status = message.status
+			if s.readerActor.status != message.status {
+				s.readerActor.status = message.status
+				s.reportStatus()
+			}
 		}
 	case MessageProjectionActorStatusChanged:
 		if from == s.projectionActor.pid {
