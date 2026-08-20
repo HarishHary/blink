@@ -121,7 +121,7 @@ func main() {
 			},
 		}),
 	)
-	go services.ServeHealth(rootLogger.With("component", "health"), ":8080", nil)
+	runner.Register(services.NewHealthService(":8080", nil))
 	runner.Run(ctx)
 
 	closeCtx, cancel := context.WithTimeout(context.Background(), runtimeShutdownTimeout)

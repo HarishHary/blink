@@ -2,19 +2,23 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
+	"ergo.services/ergo/gen"
 	"github.com/harishhary/blink/cmd/event_matcher/matcher"
 	"github.com/harishhary/blink/internal/brokers"
-	"github.com/harishhary/blink/internal/controller"
 	"github.com/harishhary/blink/internal/logger"
+	"github.com/harishhary/blink/internal/runtime/plugin"
+	"github.com/harishhary/blink/internal/runtime/snapshot"
 	"github.com/harishhary/blink/internal/services"
-	"github.com/harishhary/blink/pkg/matchers"
 	"github.com/harishhary/blink/pkg/rules"
 )
+
+const runtimeShutdownTimeout = 45 * time.Second
 
 // config is everything event_matcher needs. See docs/services/event_matcher.md.
 type config struct {
@@ -31,44 +35,51 @@ func main() {
 
 	var cfg config
 	if err := services.LoadFromEnvironment(&cfg); err != nil {
-		log.Fatalf("config: %v", err)
+		slog.Error("load config", "error", err)
+		os.Exit(1)
 	}
 	cfg.Config.Broker = brokers.NewKafkaBroker(cfg.Kafka)
-	b := cfg.Config.Broker
 	rootLogger := logger.New("event-matcher", cfg.Env)
-
-	// The matcher snapshot is the data plane's matcher configuration source.
-	matcherSnap := controller.NewSnapshotReader(rootLogger.With("component", "matcher_snapshot"), b.NewBroadcastReader(cfg.MatcherSnapshotTopic))
-	matcherSnapSvc := services.NewManagedService("matcher-snapshot-sync", matcherSnap)
-
-	// The rule snapshot is the data plane's rule configuration source.
-	ruleSnap := controller.NewSnapshotReader(rootLogger.With("component", "rule_snapshot"), b.NewBroadcastReader(cfg.ExecutorSnapshotTopic))
-	ruleSnapSvc := services.NewManagedService("rule-snapshot-sync", ruleSnap)
-
-	// The plugin executor reconciles matcher processes from the matcher snapshot.
-	matcherCfg := matchers.NewSnapshotConfig(rootLogger.With("component", "matcher_config"), matcherSnap)
-	matcherPool := matchers.NewPool(rootLogger.With("component", "matcher_pool"), matcherCfg, 0)
-	pluginExecutor := matchers.NewPluginExecutor(rootLogger.With("component", "plugin_executor"), matcherPool.Sync, cfg.MatcherPluginDir, matcherSnap, matcherCfg)
-	pluginExecutorSvc := services.NewManagedService("event-matcher-sync", pluginExecutor)
-
-	// The rule catalog selects candidates by event log type.
-	ruleCfg := rules.NewSnapshotConfig(rootLogger.With("component", "rule_config"), ruleSnap)
-	// Consumption waits for synchronized, non-empty matcher and rule catalogs.
-	cfg.Config.ReadyFn = func() bool {
-		return matcherSnap.Ready() && ruleSnap.Ready() && len(matcherCfg.Primaries()) > 0 && len(ruleCfg.Primaries()) > 0
+	broker := cfg.Config.Broker
+	opts := matcher.Options{
+		ApplicationOpts: plugin.Options{SupervisorOptions: plugin.SupervisorOptions{
+			Name:      gen.Atom("event-matcher-runtime"),
+			Directory: cfg.MatcherPluginDir,
+			SnapshotReader: snapshot.ReaderActorOptions{
+				Name:          gen.Atom("event-matcher-runtime"),
+				Logger:        rootLogger.With("component", "matcher_snapshot"),
+				ReaderFactory: func() brokers.Reader { return broker.NewBroadcastReader(cfg.MatcherSnapshotTopic) },
+			},
+		}},
+		RuleSnapshotOpts: snapshot.SupervisorOptions[*rules.RuleMetadata]{
+			ReaderActorOptions: snapshot.ReaderActorOptions{
+				Name:          gen.Atom("event-matcher-rule-snapshot"),
+				Logger:        rootLogger.With("component", "rule_snapshot"),
+				ReaderFactory: func() brokers.Reader { return broker.NewBroadcastReader(cfg.ExecutorSnapshotTopic) },
+			},
+			Loader: rules.Loader{}, ProjectionMode: snapshot.ProjectionCommitDirect,
+		},
 	}
-	matcherSvc := matcher.NewService(rootLogger.With("component", "service"), cfg.Config, matcherPool, ruleCfg, matcherCfg)
+	host, err := plugin.Start(plugin.NodeOptions{
+		Name:            "event-matcher@localhost",
+		Env:             cfg.Env,
+		ShutdownTimeout: runtimeShutdownTimeout,
+	})
+	if err != nil {
+		rootLogger.FatalF("start Ergo node: %v", err)
+	}
+	defer func() {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), runtimeShutdownTimeout)
+		defer shutdownCancel()
+		if err := host.Close(shutdownCtx); err != nil {
+			rootLogger.ErrorF("stop Ergo node: %v", err)
+		}
+	}()
 
-	// Health requires synchronized snapshots but does not require non-empty catalogs.
-	go services.ServeHealth(rootLogger.With("component", "health"), ":8080", func() bool { return matcherSnap.Ready() && ruleSnap.Ready() })
-
+	matcherSvc := matcher.NewService(host.Node(), rootLogger.With("component", "service"), cfg.Config, opts)
+	healthSvc := services.NewHealthService(":8080", matcherSvc.Ready)
 	runner := services.New(rootLogger.With("component", "runner"))
-	runner.Register(
-		matcherSnapSvc,
-		ruleSnapSvc,
-		pluginExecutorSvc,
-		matcherSvc,
-	)
+	runner.Register(matcherSvc, healthSvc)
 	runner.Run(ctx)
-	log.Println("Shutting down event-matcher")
+	rootLogger.Info("Shutting down event-matcher")
 }
