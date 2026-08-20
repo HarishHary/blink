@@ -167,8 +167,8 @@ func (m *artifactResolverMeta) resolveDeployment(entry snapshot.EffectiveEntry, 
 		return nil, true
 	}
 
-	var metadata PluginMetadata
-	if err := yaml.Unmarshal(ref.Spec, &metadata); err != nil || !metadata.Enabled || metadata.Id != entry.Id {
+	var spec Spec
+	if err := yaml.Unmarshal(ref.Spec, &spec); err != nil || !spec.Enabled || spec.Id != entry.Id {
 		return nil, true
 	}
 
@@ -181,11 +181,11 @@ func (m *artifactResolverMeta) resolveDeployment(entry snapshot.EffectiveEntry, 
 	return &Deployment{
 		Id:         entry.Id,
 		Name:       ref.Name,
-		Enabled:    metadata.Enabled,
+		Enabled:    spec.Enabled,
 		Mode:       ref.RolloutMode,
-		RolloutPct: metadata.RolloutPct,
-		MinProcs:   metadata.MinProcs,
-		MaxProcs:   metadata.MaxProcs,
+		RolloutPct: spec.RolloutPct,
+		MinProcs:   spec.MinProcs,
+		MaxProcs:   spec.MaxProcs,
 		Path:       path,
 		Hash:       digest,
 		Spec:       append([]byte(nil), ref.Spec...),

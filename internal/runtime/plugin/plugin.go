@@ -12,8 +12,8 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
-// PluginMetadata holds the common identity and rollout fields shared by all plugin types.
-type PluginMetadata struct {
+// Spec holds the common identity and rollout fields shared by all plugin types.
+type Spec struct {
 	Id          string              `yaml:"id"`
 	Name        string              `yaml:"-"`
 	DisplayName string              `yaml:"display_name"`
@@ -26,18 +26,20 @@ type PluginMetadata struct {
 	MaxProcs    int                 `yaml:"max_procs"`
 }
 
+func (s Spec) Spec() Spec { return s }
+
 // Metadata returns the plugin metadata.
-func (m PluginMetadata) Metadata() PluginMetadata { return m }
+func (s Spec) Metadata() Spec { return s }
 
 // SetName sets the plugin name.
-func (m *PluginMetadata) SetName(name string) { m.Name = name }
+func (s *Spec) SetName(name string) { s.Name = name }
 
 // Checksum returns the plugin checksum.
-func (m PluginMetadata) Checksum() string { return "" }
+func (s Spec) Checksum() string { return "" }
 
 // Syncable defines the metadata contract for synchronizable plugins.
 type Syncable interface {
-	Metadata() PluginMetadata
+	Metadata() Spec
 	Checksum() string
 }
 
@@ -71,12 +73,7 @@ func (a *Adapter[T]) Handshake(ctx context.Context, raw any, deployment Deployme
 }
 
 // Handshake initializes a plugin RPC and returns its typed plugin.
-func Handshake[T any, C RPC](
-	ctx context.Context,
-	raw any,
-	deployment Deployment,
-	newPlugin func(string, C, string) T,
-) (T, RPC, error) {
+func Handshake[T any, C RPC](ctx context.Context, raw any, deployment Deployment, newPlugin func(string, C, string) T) (T, RPC, error) {
 	var zero T
 	rpc, ok := raw.(C)
 	if !ok {
