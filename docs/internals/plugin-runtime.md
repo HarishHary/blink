@@ -42,22 +42,22 @@ The runtime supervisor's RestForOne child order is snapshot, reconciler, catalog
 
 ## Roles
 
-| Role | Default name or identity | Owner | Responsibility |
-| --- | --- | --- |
-| Plugin Application | `<runtime-name>-application` application name | Ergo application group | Caller lifecycle, production/shadow admission, and async-result ownership. |
-| Runtime Supervisor | configured `<runtime-name>` (registered) | Plugin Application | Coordinates snapshot, reconciler, catalog, desired-state promotion, and drain. |
-| Snapshot Supervisor | configured `<runtime-name>-snapshot` (registered) | Runtime Supervisor | Supplies reader/projection state with external projection commit. |
-| Reconciler Actor | `<runtime-name>-desired-state-reconciler` child name | Runtime Supervisor | Resolves snapshot and local artifacts into desired router state. |
-| Artifact Resolver Meta | dynamic `gen.Alias` | Reconciler Actor | Resolves locally valid artifacts and desired routes. |
-| Artifact Watcher Meta | dynamic `gen.Alias` | Reconciler Actor | Reports artifact-directory watch/poll drift. |
-| Catalog Actor | `<runtime-name>-catalog` child name | Runtime Supervisor | Owns router incarnations and aggregates router status. |
-| Router Actor | dynamic PID/generation/epoch per plugin | Catalog Actor | Selects rollout routes and owns dynamic deployment routes. |
-| Deployment Route | stable SHA-256-derived atom per `DeploymentPoolKey` | Router Actor | Creates, respawns, drains, and removes one manager route. |
-| Deployment Manager | dynamic route process PID | Deployment Route | Owns bounded queueing, dispatch, scaling, pool recovery, and drain. |
-| Deployment Pool | dynamic actor-pool PID | Deployment Manager | Places workers and aggregates their health; it is not a supervisor. |
-| Deployment Worker | dynamic pool worker PID | Deployment Pool | Delivers one invocation at a time and recovers its plugin session. |
-| Worker Meta | dynamic `gen.Alias` | Deployment Worker | Owns one plugin subprocess and RPC session. |
-| Invocation | `callID` and one `runtime.Invocation` handle | caller | Its `AsyncResult` remains owned by the application/runtime tree. |
+| Role                   | Default name or identity                             | Owner                  | Responsibility                                                                 |
+| ---------------------- | ---------------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------ |
+| Plugin Application     | `<runtime-name>-application` application name        | Ergo application group | Caller lifecycle, production/shadow admission, and async-result ownership.     |
+| Runtime Supervisor     | configured `<runtime-name>` (registered)             | Plugin Application     | Coordinates snapshot, reconciler, catalog, desired-state promotion, and drain. |
+| Snapshot Supervisor    | configured `<runtime-name>-snapshot` (registered)    | Runtime Supervisor     | Supplies reader/projection state with external projection commit.              |
+| Reconciler Actor       | `<runtime-name>-desired-state-reconciler` child name | Runtime Supervisor     | Resolves snapshot and local artifacts into desired router state.               |
+| Artifact Resolver Meta | dynamic `gen.Alias`                                  | Reconciler Actor       | Resolves locally valid artifacts and desired routes.                           |
+| Artifact Watcher Meta  | dynamic `gen.Alias`                                  | Reconciler Actor       | Reports artifact-directory watch/poll drift.                                   |
+| Catalog Actor          | `<runtime-name>-catalog` child name                  | Runtime Supervisor     | Owns router incarnations and aggregates router status.                         |
+| Router Actor           | dynamic PID/generation/epoch per plugin              | Catalog Actor          | Selects rollout routes and owns dynamic deployment routes.                     |
+| Deployment Route       | stable SHA-256-derived atom per `DeploymentPoolKey`  | Router Actor           | Creates, respawns, drains, and removes one manager route.                      |
+| Deployment Manager     | dynamic route process PID                            | Deployment Route       | Owns bounded queueing, dispatch, scaling, pool recovery, and drain.            |
+| Deployment Pool        | dynamic actor-pool PID                               | Deployment Manager     | Places workers and aggregates their health; it is not a supervisor.            |
+| Deployment Worker      | dynamic pool worker PID                              | Deployment Pool        | Delivers one invocation at a time and recovers its plugin session.             |
+| Worker Meta            | dynamic `gen.Alias`                                  | Deployment Worker      | Owns one plugin subprocess and RPC session.                                    |
+| Invocation             | `callID` and one `runtime.Invocation` handle         | caller                 | Its `AsyncResult` remains owned by the application/runtime tree.               |
 
 The runtime and snapshot supervisors are registered; all remaining listed names are child or dynamic identities.
 
