@@ -49,9 +49,9 @@ merge_window_mins: 60
 tags: ["t1078", "initial-access"]
 references: ["https://attack.mitre.org/techniques/T1110/"]
 observables:
-  - name: "source_ip"
-    description: "Originating IP"
-    aggregation: true
+    - name: "source_ip"
+      description: "Originating IP"
+      aggregation: true
 dispatchers: ["pagerduty", "slack"]
 formatters: ["json-summary"]
 enrichments: ["geoip"]

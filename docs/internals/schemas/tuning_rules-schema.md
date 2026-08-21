@@ -5,9 +5,9 @@ fields](README.md#common-fields-every-plugin-type) and adds the fields below (`p
 
 ## Tuning-rule-specific fields
 
-| Field        | Type   | Notes                                                                                                    |
-| ------------ | ------ | -------------------------------------------------------------------------------------------------------- |
-| `global`     | bool   | When `true`, applies to every rule regardless of a rule's `tuning_rules` list.                           |
+| Field        | Type   | Notes                                                                                                     |
+| ------------ | ------ | --------------------------------------------------------------------------------------------------------- |
+| `global`     | bool   | When `true`, applies to every rule regardless of a rule's `tuning_rules` list.                            |
 | `rule_type`  | string | One of `ignore`, `set_confidence`, `increase_confidence`, `decrease_confidence`.                          |
 | `confidence` | string | Meaningful only for the `*_confidence` rule types (e.g. `"0.8"` or `"medium"`); leave empty for `ignore`. |
 
@@ -24,6 +24,6 @@ min_procs: 1
 max_procs: 2
 
 global: false
-rule_type: "ignore"   # ignore | set_confidence | increase_confidence | decrease_confidence
-confidence: ""        # only used when rule_type is *_confidence
+rule_type: "ignore" # ignore | set_confidence | increase_confidence | decrease_confidence
+confidence: "" # only used when rule_type is *_confidence
 ```

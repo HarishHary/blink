@@ -5,9 +5,9 @@ An enrichment binary `<name>` ships alongside `<name>.yaml`. Enrichments add ext
 
 ## Enrichment-specific fields
 
-| Field        | Type     | Notes                                                                          |
-| ------------ | -------- | ------------------------------------------------------------------------------ |
-| `depends_on` | []string | Names of enrichments that must run before this one (ordering dependencies).    |
+| Field        | Type     | Notes                                                                       |
+| ------------ | -------- | --------------------------------------------------------------------------- |
+| `depends_on` | []string | Names of enrichments that must run before this one (ordering dependencies). |
 
 ## Example
 
