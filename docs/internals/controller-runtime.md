@@ -27,39 +27,39 @@ The application owns the root supervisor. The supervisor owns one controller act
 
 ## Messages
 
-| Message | Direction | Meaning |
-| --- | --- | --- |
-| `gen.ApplicationSpec.Group` | application → supervisor | `Application.Load` supplies the root-supervisor factory. |
-| `act.SupervisorSpec.Children` | supervisor → actor | `supervisor.Init` supplies the controller-actor child factory. |
-| `SpawnMeta` | actor → artifact_scanner meta | The actor starts the filesystem scanner. |
-| `SpawnMeta` | actor → snapshot publisher meta | The actor starts the publisher after its I/O barrier reservation. |
-| `MessageArtifactScanResult` | artifact_scanner meta → actor | Delivers the effective catalog and present IDs. |
-| `MessageSnapshotLoadResult`, `MessageSnapshotPublishResult` | snapshot publisher meta → actor | Delivers bootstrap state and publication outcomes. |
-| `MessageSnapshotPublisherIOStarted` | snapshot publisher meta → supervisor | Registers the publisher I/O fence. |
-| `MessageSnapshotPublisherIOStopped` | snapshot publisher meta → supervisor → owning actor | Releases the fence and notifies the owning actor only if it is still current. |
+| Message                                                     | Direction                                           | Meaning                                                                       |
+| ----------------------------------------------------------- | --------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `gen.ApplicationSpec.Group`                                 | application → supervisor                            | `Application.Load` supplies the root-supervisor factory.                      |
+| `act.SupervisorSpec.Children`                               | supervisor → actor                                  | `supervisor.Init` supplies the controller-actor child factory.                |
+| `SpawnMeta`                                                 | actor → artifact_scanner meta                       | The actor starts the filesystem scanner.                                      |
+| `SpawnMeta`                                                 | actor → snapshot publisher meta                     | The actor starts the publisher after its I/O barrier reservation.             |
+| `MessageArtifactScanResult`                                 | artifact_scanner meta → actor                       | Delivers the effective catalog and present IDs.                               |
+| `MessageSnapshotLoadResult`, `MessageSnapshotPublishResult` | snapshot publisher meta → actor                     | Delivers bootstrap state and publication outcomes.                            |
+| `MessageSnapshotPublisherIOStarted`                         | snapshot publisher meta → supervisor                | Registers the publisher I/O fence.                                            |
+| `MessageSnapshotPublisherIOStopped`                         | snapshot publisher meta → supervisor → owning actor | Releases the fence and notifies the owning actor only if it is still current. |
 
 ## Roles
 
-| Role | Default name or identity | Owner | Responsibility |
-| --- | --- | --- | --- |
-| Application | `controller-<namespace>` | service | Owns the SQLite handle, Kafka writer, barrier, and root supervisor. |
-| Supervisor | `<application>-supervisor` | application | Starts, restarts, activates, drains, and stops the actor. |
-| Actor | `<application>-actor` | supervisor | Serializes catalog state, reconciliation, readiness, and worker restart decisions. |
-| `artifact_scanner` meta | `gen.Alias` | actor | Watches, polls, parses, validates, and elects catalog entries. |
-| Snapshot publisher meta | `gen.Alias` | actor | Loads state; persists and publishes plans without blocking the actor. |
+| Role                    | Default name or identity   | Owner       | Responsibility                                                                     |
+| ----------------------- | -------------------------- | ----------- | ---------------------------------------------------------------------------------- |
+| Application             | `controller-<namespace>`   | service     | Owns the SQLite handle, Kafka writer, barrier, and root supervisor.                |
+| Supervisor              | `<application>-supervisor` | application | Starts, restarts, activates, drains, and stops the actor.                          |
+| Actor                   | `<application>-actor`      | supervisor  | Serializes catalog state, reconciliation, readiness, and worker restart decisions. |
+| `artifact_scanner` meta | `gen.Alias`                | actor       | Watches, polls, parses, validates, and elects catalog entries.                     |
+| Snapshot publisher meta | `gen.Alias`                | actor       | Loads state; persists and publishes plans without blocking the actor.              |
 
 `optionsWithDefaults` supplies the application, supervisor, and actor names; `cmd/controller` relies on those defaults. Meta processes are addressed and monitored by `gen.Alias`, not a stable
 registered name.
 
 ## Readiness
 
-| Component | Readiness summary |
-| --- | --- |
-| Controller application | `Load` must validate its options and open the database, namespace store, and writer; it exposes no independent availability status. |
-| Controller supervisor | It tracks the current actor's status and publisher fences; it exposes no independent availability status. |
-| Controller actor | It reports `ready` only while running when the scanner is complete and ready and the publisher is loaded and ready. |
-| `artifact_scanner` meta | The actor derives its status from scan completeness and any nonfatal watch-attachment error. |
-| Snapshot publisher meta | The actor derives its status from bootstrap, pending work, and publication failures. |
+| Component               | Readiness summary                                                                                                                   |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Controller application  | `Load` must validate its options and open the database, namespace store, and writer; it exposes no independent availability status. |
+| Controller supervisor   | It tracks the current actor's status and publisher fences; it exposes no independent availability status.                           |
+| Controller actor        | It reports `ready` only while running when the scanner is complete and ready and the publisher is loaded and ready.                 |
+| `artifact_scanner` meta | The actor derives its status from scan completeness and any nonfatal watch-attachment error.                                        |
+| Snapshot publisher meta | The actor derives its status from bootstrap, pending work, and publication failures.                                                |
 
 ## Controller Application
 
@@ -83,14 +83,14 @@ stateDiagram-v2
 
 ### Messages
 
-| Message | Direction | Meaning |
-| --- | --- | --- |
-| `Application.Load` | service → application | Validates options and constructs the application specification. |
-| `backends.OpenSQLite`, `backends.NewSQLite`, `Broker.NewWriter` | application → resources | Opens SQLite, creates the namespace store, and creates the topic writer. |
-| `gen.Node.ApplicationStart` | service → Ergo application | Starts the configured root supervisor. |
-| `Application.Terminate` | Ergo application → barrier | Seals the application during Ergo termination. |
-| `Application.Seal` | service → barrier | Seals the application during service shutdown. |
-| `Application.WaitQuiesced`, `Application.Close` | service → application resources | Waits for publisher I/O, then closes the writer and database. |
+| Message                                                         | Direction                       | Meaning                                                                  |
+| --------------------------------------------------------------- | ------------------------------- | ------------------------------------------------------------------------ |
+| `Application.Load`                                              | service → application           | Validates options and constructs the application specification.          |
+| `backends.OpenSQLite`, `backends.NewSQLite`, `Broker.NewWriter` | application → resources         | Opens SQLite, creates the namespace store, and creates the topic writer. |
+| `gen.Node.ApplicationStart`                                     | service → Ergo application      | Starts the configured root supervisor.                                   |
+| `Application.Terminate`                                         | Ergo application → barrier      | Seals the application during Ergo termination.                           |
+| `Application.Seal`                                              | service → barrier               | Seals the application during service shutdown.                           |
+| `Application.WaitQuiesced`, `Application.Close`                 | service → application resources | Waits for publisher I/O, then closes the writer and database.            |
 
 ### Readiness
 
@@ -121,16 +121,16 @@ stateDiagram-v2
 
 ### Messages
 
-| Message | Direction | Meaning |
-| --- | --- | --- |
-| `HandleChildStart`, `MessageActorActivate` | Ergo supervisor → actor | Tracks and activates the child after publisher fences clear. |
-| `HandleChildTerminate` | Ergo → supervisor | A transient abnormal child exit is eligible for restart; an unexpected clean exit fails the supervisor. |
-| `plugin.MessageStop` | service → supervisor | Starts supervisor draining. |
-| `plugin.MessageDrain` | supervisor → actor | Stops new work after the supervisor receives `plugin.MessageStop`. |
-| `MessageActorStatusChanged` | actor → supervisor | Reports that the actor is drained so shutdown can advance. |
-| `MessageSnapshotPublisherIOStarted` | snapshot publisher meta → supervisor | Registers a publisher fence before the meta accesses application resources. |
-| `MessageSnapshotPublisherIOStopped` | snapshot publisher meta → supervisor → owning actor | Releases the fence and is forwarded to the owning actor only if it is still current. |
-| `plugin.MessageStop` | supervisor → actor | Stops the drained actor after all publisher fences clear. |
+| Message                                    | Direction                                           | Meaning                                                                                                 |
+| ------------------------------------------ | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `HandleChildStart`, `MessageActorActivate` | Ergo supervisor → actor                             | Tracks and activates the child after publisher fences clear.                                            |
+| `HandleChildTerminate`                     | Ergo → supervisor                                   | A transient abnormal child exit is eligible for restart; an unexpected clean exit fails the supervisor. |
+| `plugin.MessageStop`                       | service → supervisor                                | Starts supervisor draining.                                                                             |
+| `plugin.MessageDrain`                      | supervisor → actor                                  | Stops new work after the supervisor receives `plugin.MessageStop`.                                      |
+| `MessageActorStatusChanged`                | actor → supervisor                                  | Reports that the actor is drained so shutdown can advance.                                              |
+| `MessageSnapshotPublisherIOStarted`        | snapshot publisher meta → supervisor                | Registers a publisher fence before the meta accesses application resources.                             |
+| `MessageSnapshotPublisherIOStopped`        | snapshot publisher meta → supervisor → owning actor | Releases the fence and is forwarded to the owning actor only if it is still current.                    |
+| `plugin.MessageStop`                       | supervisor → actor                                  | Stops the drained actor after all publisher fences clear.                                               |
 
 ### Readiness
 
@@ -158,18 +158,18 @@ stateDiagram-v2
 
 ### Messages
 
-| Message | Direction | Meaning |
-| --- | --- | --- |
-| `MessageActorActivate` | supervisor → actor | Starts artifact_scanner and publisher once. |
-| `plugin.MessageDrain`, `plugin.MessageStop` | supervisor → actor | Stop new work and then terminate, respectively. |
-| `MessageArtifactScanResult` | artifact_scanner meta → actor | Complete or incomplete effective catalog and present IDs. |
-| `MessageSnapshotLoadResult` | snapshot publisher meta → actor | Bootstrap records, generation, and prior snapshot. |
-| `MessagePublishSnapshot` | actor → snapshot publisher meta | One pending reconciliation plan. |
-| `MessageSnapshotPublishResult` | snapshot publisher meta → actor | Per-attempt failure or final success. |
-| `MessageArtifactScannerMetaRestart`, `MessageSnapshotPublisherMetaRestart` | actor → actor | Token-checked worker replacement timer messages. |
-| `gen.MessageDownAlias` | Ergo → actor | Observes worker termination. |
-| `MessageSnapshotPublisherIOStopped` | snapshot publisher meta → supervisor → owning actor | If the owner remains current, it clears `activeIO`. |
-| `MessageActorStatusChanged` | actor → supervisor | Reports lifecycle, availability, and committed generation. |
+| Message                                                                    | Direction                                           | Meaning                                                    |
+| -------------------------------------------------------------------------- | --------------------------------------------------- | ---------------------------------------------------------- |
+| `MessageActorActivate`                                                     | supervisor → actor                                  | Starts artifact_scanner and publisher once.                |
+| `plugin.MessageDrain`, `plugin.MessageStop`                                | supervisor → actor                                  | Stop new work and then terminate, respectively.            |
+| `MessageArtifactScanResult`                                                | artifact_scanner meta → actor                       | Complete or incomplete effective catalog and present IDs.  |
+| `MessageSnapshotLoadResult`                                                | snapshot publisher meta → actor                     | Bootstrap records, generation, and prior snapshot.         |
+| `MessagePublishSnapshot`                                                   | actor → snapshot publisher meta                     | One pending reconciliation plan.                           |
+| `MessageSnapshotPublishResult`                                             | snapshot publisher meta → actor                     | Per-attempt failure or final success.                      |
+| `MessageArtifactScannerMetaRestart`, `MessageSnapshotPublisherMetaRestart` | actor → actor                                       | Token-checked worker replacement timer messages.           |
+| `gen.MessageDownAlias`                                                     | Ergo → actor                                        | Observes worker termination.                               |
+| `MessageSnapshotPublisherIOStopped`                                        | snapshot publisher meta → supervisor → owning actor | If the owner remains current, it clears `activeIO`.        |
+| `MessageActorStatusChanged`                                                | actor → supervisor                                  | Reports lifecycle, availability, and committed generation. |
 
 ### Readiness
 
@@ -198,15 +198,15 @@ stateDiagram-v2
 
 ### Messages
 
-| Message | Direction | Meaning |
-| --- | --- | --- |
-| `Start`, `fsnotify.NewWatcher` | artifact_scanner meta → filesystem | Creates the watcher and begins the immediate scan. |
-| `sendScan`, `MessageArtifactScanResult` | artifact_scanner meta → actor | Scans the directory and reports the effective catalog. |
-| `fsnotify.Event`, `time.NewTimer` | filesystem → artifact_scanner meta | Debounces a filesystem event for 400 ms before rescanning. |
-| `time.NewTicker` | artifact_scanner meta → artifact_scanner meta | Triggers the five-second polling rescan. |
-| `Terminate` | actor → artifact_scanner meta | Cancels filesystem observation. |
-| `os.ReadDir` | artifact_scanner meta → filesystem | Produces an incomplete, unavailable result and continues scanning. |
-| `fsnotify.NewWatcher`, `Send` | artifact_scanner meta → actor | Watcher or result-delivery failure terminates the meta process. |
+| Message                                 | Direction                                     | Meaning                                                            |
+| --------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------ |
+| `Start`, `fsnotify.NewWatcher`          | artifact_scanner meta → filesystem            | Creates the watcher and begins the immediate scan.                 |
+| `sendScan`, `MessageArtifactScanResult` | artifact_scanner meta → actor                 | Scans the directory and reports the effective catalog.             |
+| `fsnotify.Event`, `time.NewTimer`       | filesystem → artifact_scanner meta            | Debounces a filesystem event for 400 ms before rescanning.         |
+| `time.NewTicker`                        | artifact_scanner meta → artifact_scanner meta | Triggers the five-second polling rescan.                           |
+| `Terminate`                             | actor → artifact_scanner meta                 | Cancels filesystem observation.                                    |
+| `os.ReadDir`                            | artifact_scanner meta → filesystem            | Produces an incomplete, unavailable result and continues scanning. |
+| `fsnotify.NewWatcher`, `Send`           | artifact_scanner meta → actor                 | Watcher or result-delivery failure terminates the meta process.    |
 
 ### Readiness
 
@@ -242,16 +242,16 @@ stateDiagram-v2
 
 ### Messages
 
-| Message | Direction | Meaning |
-| --- | --- | --- |
-| `publisherIOBarrier.Acquire`, `MessageSnapshotPublisherIOStarted` | snapshot publisher meta → supervisor | Reserves application I/O and registers its fence. |
-| `Database.LoadAll`, `Database.LoadGeneration`, `Database.LoadSnapshot` | snapshot publisher meta → SQLite | Loads bootstrap records, generation, and snapshot. |
-| `MessageSnapshotLoadResult` | snapshot publisher meta → actor | Delivers the bootstrap result. |
-| `MessagePublishSnapshot` | actor → snapshot publisher meta | Queues the one buffered publication job. |
-| `MessageSnapshotPublishResult` | snapshot publisher meta → actor | Reports each failed attempt and final success. |
-| `Terminate` | actor → snapshot publisher meta | Cancels loading or publication. |
-| `MessageSnapshotPublisherIOStopped` | snapshot publisher meta → supervisor → owning actor | Releases the fence and notifies the owning actor only if it is still current when `Start` returns. |
-| `publisherIOBarrier.Release` | snapshot publisher meta → barrier | Releases the application I/O reservation when `Start` returns. |
+| Message                                                                | Direction                                           | Meaning                                                                                            |
+| ---------------------------------------------------------------------- | --------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `publisherIOBarrier.Acquire`, `MessageSnapshotPublisherIOStarted`      | snapshot publisher meta → supervisor                | Reserves application I/O and registers its fence.                                                  |
+| `Database.LoadAll`, `Database.LoadGeneration`, `Database.LoadSnapshot` | snapshot publisher meta → SQLite                    | Loads bootstrap records, generation, and snapshot.                                                 |
+| `MessageSnapshotLoadResult`                                            | snapshot publisher meta → actor                     | Delivers the bootstrap result.                                                                     |
+| `MessagePublishSnapshot`                                               | actor → snapshot publisher meta                     | Queues the one buffered publication job.                                                           |
+| `MessageSnapshotPublishResult`                                         | snapshot publisher meta → actor                     | Reports each failed attempt and final success.                                                     |
+| `Terminate`                                                            | actor → snapshot publisher meta                     | Cancels loading or publication.                                                                    |
+| `MessageSnapshotPublisherIOStopped`                                    | snapshot publisher meta → supervisor → owning actor | Releases the fence and notifies the owning actor only if it is still current when `Start` returns. |
+| `publisherIOBarrier.Release`                                           | snapshot publisher meta → barrier                   | Releases the application I/O reservation when `Start` returns.                                     |
 
 ### Readiness
 
@@ -281,13 +281,13 @@ stateDiagram-v2
 
 ### Messages
 
-| Message | Direction | Meaning |
-| --- | --- | --- |
-| `MessageArtifactScanResult`, `MessageSnapshotLoadResult` | worker metas → actor | A complete scan and bootstrap permit reconciliation. |
-| `makePlan` | actor → actor | Derives records, entries, diff, and the next generation. |
-| `MessagePublishSnapshot` | actor → snapshot publisher meta | Queues the pending plan when the publisher is loaded. |
-| `MessageSnapshotPublishResult` | snapshot publisher meta → actor | A failed attempt retains the plan; final success commits it. |
-| `gen.MessageDownAlias` | Ergo → actor | A missing publisher returns the pending plan to waiting for replacement/bootstrap. |
+| Message                                                  | Direction                       | Meaning                                                                            |
+| -------------------------------------------------------- | ------------------------------- | ---------------------------------------------------------------------------------- |
+| `MessageArtifactScanResult`, `MessageSnapshotLoadResult` | worker metas → actor            | A complete scan and bootstrap permit reconciliation.                               |
+| `makePlan`                                               | actor → actor                   | Derives records, entries, diff, and the next generation.                           |
+| `MessagePublishSnapshot`                                 | actor → snapshot publisher meta | Queues the pending plan when the publisher is loaded.                              |
+| `MessageSnapshotPublishResult`                           | snapshot publisher meta → actor | A failed attempt retains the plan; final success commits it.                       |
+| `gen.MessageDownAlias`                                   | Ergo → actor                    | A missing publisher returns the pending plan to waiting for replacement/bootstrap. |
 
 ### Readiness
 
@@ -322,10 +322,10 @@ stateDiagram-v2
 
 ### Messages
 
-| Message | Direction | Meaning |
-| --- | --- | --- |
-| `Acquire` | snapshot publisher meta → publisher I/O barrier | Reserves I/O unless the barrier is sealed. |
-| `Seal` | application/service → publisher I/O barrier | Rejects new reservations and begins shutdown quiescence. |
+| Message   | Direction                                       | Meaning                                                                      |
+| --------- | ----------------------------------------------- | ---------------------------------------------------------------------------- |
+| `Acquire` | snapshot publisher meta → publisher I/O barrier | Reserves I/O unless the barrier is sealed.                                   |
+| `Seal`    | application/service → publisher I/O barrier     | Rejects new reservations and begins shutdown quiescence.                     |
 | `Release` | snapshot publisher meta → publisher I/O barrier | Frees one reservation; the final release makes the sealed barrier quiescent. |
 
 ### Readiness
@@ -336,12 +336,12 @@ barrier quiescence, closes writer and database, and unloads the application. The
 
 ## Retry Domains
 
-| Domain | Policy | Exhaustion |
-| --- | --- | --- |
-| artifact_scanner/publisher meta replacement | Five scheduled exponential retries; defaults 100 ms–5 s. | Actor fails; the transient supervisor restarts it subject to its intensity. |
-| Publication of one plan | Five total exponential attempts. | Publisher exits; actor retains plan and schedules replacement. |
-| Actor child | Transient one-for-one supervisor restart; five restarts/10 s. | Supervisor/application terminates. |
-| Controller service | Runner exponential 1 s–60 s plus up to 25% jitter. | Continues until process context cancellation. |
+| Domain                                      | Policy                                                        | Exhaustion                                                                  |
+| ------------------------------------------- | ------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| artifact_scanner/publisher meta replacement | Five scheduled exponential retries; defaults 100 ms–5 s.      | Actor fails; the transient supervisor restarts it subject to its intensity. |
+| Publication of one plan                     | Five total exponential attempts.                              | Publisher exits; actor retains plan and schedules replacement.              |
+| Actor child                                 | Transient one-for-one supervisor restart; five restarts/10 s. | Supervisor/application terminates.                                          |
+| Controller service                          | Runner exponential 1 s–60 s plus up to 25% jitter.            | Continues until process context cancellation.                               |
 
 ## Source References
 

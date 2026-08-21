@@ -32,13 +32,13 @@ The runtime supervisor's RestForOne child order is snapshot, reconciler, catalog
 
 ## Messages
 
-| Message | Direction | Meaning |
-| --- | --- | --- |
-| Admission and invocation | caller → application → runtime supervisor → catalog → router → manager → pool → worker | Carries an admitted production or shadow invocation to one worker. |
-| Desired-state promotion | reconciler → runtime supervisor → catalog → router | Moves a resolved desired revision through the drain, freshness, and projection-commit barrier. |
-| Status and readiness | child/meta/worker → parent owner | Aggregates fenced lifecycle, activity, and availability facts upward. |
-| Drain | application → runtime supervisor → catalog → router → manager | Stops admission and drains dynamically owned work from the top down. |
-| Completion and cancellation | worker → runtime supervisor; application → runtime supervisor | Completes one result idempotently or follows the fenced accepted/pending path to cancel it. |
+| Message                     | Direction                                                                              | Meaning                                                                                        |
+| --------------------------- | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Admission and invocation    | caller → application → runtime supervisor → catalog → router → manager → pool → worker | Carries an admitted production or shadow invocation to one worker.                             |
+| Desired-state promotion     | reconciler → runtime supervisor → catalog → router                                     | Moves a resolved desired revision through the drain, freshness, and projection-commit barrier. |
+| Status and readiness        | child/meta/worker → parent owner                                                       | Aggregates fenced lifecycle, activity, and availability facts upward.                          |
+| Drain                       | application → runtime supervisor → catalog → router → manager                          | Stops admission and drains dynamically owned work from the top down.                           |
+| Completion and cancellation | worker → runtime supervisor; application → runtime supervisor                          | Completes one result idempotently or follows the fenced accepted/pending path to cancel it.    |
 
 ## Roles
 
@@ -83,12 +83,12 @@ stateDiagram-v2
 
 ### Messages
 
-| Message | Direction | Meaning |
-| --- | --- | --- |
-| `Start` | Ergo application lifecycle → `plugin.Application` | Starts the single-use application after Ergo starts its group and finds its registered supervisor. |
-| `Stop` | Ergo application lifecycle → `plugin.Application` | Closes admission and begins runtime drain within Ergo's stop deadline. |
-| `DrainRequest` | `plugin.Application` → runtime supervisor | Requests bounded graceful drain. |
-| `Terminate` | Ergo application lifecycle → `plugin.Application` | Completes pending calls with `ErrRuntimeStopped`, or `ErrPluginUnavailable` when already stopping. |
+| Message        | Direction                                         | Meaning                                                                                            |
+| -------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `Start`        | Ergo application lifecycle → `plugin.Application` | Starts the single-use application after Ergo starts its group and finds its registered supervisor. |
+| `Stop`         | Ergo application lifecycle → `plugin.Application` | Closes admission and begins runtime drain within Ergo's stop deadline.                             |
+| `DrainRequest` | `plugin.Application` → runtime supervisor         | Requests bounded graceful drain.                                                                   |
+| `Terminate`    | Ergo application lifecycle → `plugin.Application` | Completes pending calls with `ErrRuntimeStopped`, or `ErrPluginUnavailable` when already stopping. |
 
 ### Readiness
 
@@ -110,21 +110,21 @@ stateDiagram-v2
 
 ### Messages
 
-| Message | Direction | Meaning |
-| --- | --- | --- |
-| `MessageCatalogActivate` | runtime supervisor → catalog | Permits catalog status publication after child setup. |
-| `DrainRequest` | application → runtime supervisor | Starts the runtime's downward drain. |
-| `MessageDrain` | runtime supervisor → catalog | Drains the catalog after admission closes. |
-| `SupervisorStatusRequest` | `plugin.Application` → runtime supervisor | Reads the availability/status snapshot. |
-| `SupervisorStateRequest` | `plugin.Application` → runtime supervisor | Reads the ready generation used for admission. |
-| `HandleChildStart` | Ergo supervisor runtime → runtime supervisor | Records each snapshot, reconciler, or catalog child incarnation and activates/replays it. |
-| `HandleChildTerminate` | Ergo supervisor runtime → runtime supervisor | Retires a child incarnation and recomputes runtime availability. |
-| `MessageReconcilerActorStatusChanged` | reconciler → runtime supervisor | Updates reconciler readiness and transition state. |
-| `MessageCatalogStatusChanged` | catalog → runtime supervisor | Updates catalog revision/readiness and completes transition checks. |
-| `MessageCatalogDrained` | catalog → runtime supervisor | Completes drain waiters and terminates the runtime after calls are failed. |
-| `snapshot.MessageProjectionActorStatusChanged` | snapshot supervisor → runtime supervisor | Updates committed/ready projection state for the external-commit subtree. |
-| `MessageProjectionCommitRetry` | runtime supervisor → runtime supervisor | Token-fenced deferred projection-commit retry. |
-| `MessageProjectionCommitDeadline` | runtime supervisor → runtime supervisor | Token-, PID-, and generation-fenced pending projection-commit expiry. |
+| Message                                        | Direction                                    | Meaning                                                                                   |
+| ---------------------------------------------- | -------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `MessageCatalogActivate`                       | runtime supervisor → catalog                 | Permits catalog status publication after child setup.                                     |
+| `DrainRequest`                                 | application → runtime supervisor             | Starts the runtime's downward drain.                                                      |
+| `MessageDrain`                                 | runtime supervisor → catalog                 | Drains the catalog after admission closes.                                                |
+| `SupervisorStatusRequest`                      | `plugin.Application` → runtime supervisor    | Reads the availability/status snapshot.                                                   |
+| `SupervisorStateRequest`                       | `plugin.Application` → runtime supervisor    | Reads the ready generation used for admission.                                            |
+| `HandleChildStart`                             | Ergo supervisor runtime → runtime supervisor | Records each snapshot, reconciler, or catalog child incarnation and activates/replays it. |
+| `HandleChildTerminate`                         | Ergo supervisor runtime → runtime supervisor | Retires a child incarnation and recomputes runtime availability.                          |
+| `MessageReconcilerActorStatusChanged`          | reconciler → runtime supervisor              | Updates reconciler readiness and transition state.                                        |
+| `MessageCatalogStatusChanged`                  | catalog → runtime supervisor                 | Updates catalog revision/readiness and completes transition checks.                       |
+| `MessageCatalogDrained`                        | catalog → runtime supervisor                 | Completes drain waiters and terminates the runtime after calls are failed.                |
+| `snapshot.MessageProjectionActorStatusChanged` | snapshot supervisor → runtime supervisor     | Updates committed/ready projection state for the external-commit subtree.                 |
+| `MessageProjectionCommitRetry`                 | runtime supervisor → runtime supervisor      | Token-fenced deferred projection-commit retry.                                            |
+| `MessageProjectionCommitDeadline`              | runtime supervisor → runtime supervisor      | Token-, PID-, and generation-fenced pending projection-commit expiry.                     |
 
 ### Readiness
 
@@ -151,14 +151,14 @@ stateDiagram-v2
 
 ### Messages
 
-| Message | Direction | Meaning |
-| --- | --- | --- |
-| `MessageProposeDesiredState` | reconciler → runtime supervisor | Offers a resolved, monotonic desired revision. |
-| `MessageApplyCatalogDesiredState` | runtime supervisor → catalog | Applies the revision after tracked calls drain. |
-| `MessageDesiredStateFreshness` | runtime supervisor → reconciler | Challenges the proposed generation/revision after catalog convergence. |
-| `MessageDesiredStateFreshness` | reconciler → runtime supervisor | Confirms the exact generation/revision remains current and locally ready. |
-| `MessageProjectionCommit` | runtime supervisor → snapshot supervisor | Requests external commit of the matching projection generation. |
-| `MessageProjectionCommitResult` | snapshot supervisor → runtime supervisor | Acknowledges the PID/generation-fenced projection commit. |
+| Message                           | Direction                                | Meaning                                                                   |
+| --------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------- |
+| `MessageProposeDesiredState`      | reconciler → runtime supervisor          | Offers a resolved, monotonic desired revision.                            |
+| `MessageApplyCatalogDesiredState` | runtime supervisor → catalog             | Applies the revision after tracked calls drain.                           |
+| `MessageDesiredStateFreshness`    | runtime supervisor → reconciler          | Challenges the proposed generation/revision after catalog convergence.    |
+| `MessageDesiredStateFreshness`    | reconciler → runtime supervisor          | Confirms the exact generation/revision remains current and locally ready. |
+| `MessageProjectionCommit`         | runtime supervisor → snapshot supervisor | Requests external commit of the matching projection generation.           |
+| `MessageProjectionCommitResult`   | snapshot supervisor → runtime supervisor | Acknowledges the PID/generation-fenced projection commit.                 |
 
 ### Readiness
 
@@ -186,20 +186,20 @@ stateDiagram-v2
 
 ### Messages
 
-| Message | Direction | Meaning |
-| --- | --- | --- |
-| `MessageReconcilerActorActivate` | runtime supervisor → reconciler | Activates event monitoring and sets the revision base. |
-| `MessageResolveArtifacts` | reconciler → artifact resolver meta | Requests resolution for the current snapshot. |
-| `MessageArtifactResolutionResult` | artifact resolver meta → reconciler | Returns alias-, generation-, and dirtiness-fenced desired routes. |
-| `MessageArtifactDirectoryChanged` | artifact watcher meta → reconciler | Marks artifact state dirty and triggers resolution. |
-| `MessageResolutionRetry` | reconciler → reconciler | Token-fenced retry timer for deferred or failed resolution. |
-| `MessageArtifactResolverMetaRestart` | reconciler → reconciler | Token-fenced timer that restarts the resolver meta. |
-| `MessageArtifactWatcherMetaRestart` | reconciler → reconciler | Token-fenced timer that restarts the watcher meta. |
-| `gen.MessageEvent` | snapshot supervisor event → reconciler | Buffered and live snapshot/reader-status events drive resolution and readiness. |
-| `gen.MessageDownAlias` | Ergo meta monitor → reconciler | Marks the resolver or watcher unavailable and schedules its restart. |
-| `MessageReconcilerActorStatusChanged` | reconciler → runtime supervisor | Publishes reconciler lifecycle, availability, generation, and revision. |
-| `SendExitMeta` | reconciler → Ergo meta runtime | Requests resolver/watcher meta termination during replacement or shutdown. |
-| `Terminate` | Ergo meta runtime → artifact resolver/watcher meta | Invokes meta cleanup after the parent's exit request. |
+| Message                               | Direction                                          | Meaning                                                                         |
+| ------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `MessageReconcilerActorActivate`      | runtime supervisor → reconciler                    | Activates event monitoring and sets the revision base.                          |
+| `MessageResolveArtifacts`             | reconciler → artifact resolver meta                | Requests resolution for the current snapshot.                                   |
+| `MessageArtifactResolutionResult`     | artifact resolver meta → reconciler                | Returns alias-, generation-, and dirtiness-fenced desired routes.               |
+| `MessageArtifactDirectoryChanged`     | artifact watcher meta → reconciler                 | Marks artifact state dirty and triggers resolution.                             |
+| `MessageResolutionRetry`              | reconciler → reconciler                            | Token-fenced retry timer for deferred or failed resolution.                     |
+| `MessageArtifactResolverMetaRestart`  | reconciler → reconciler                            | Token-fenced timer that restarts the resolver meta.                             |
+| `MessageArtifactWatcherMetaRestart`   | reconciler → reconciler                            | Token-fenced timer that restarts the watcher meta.                              |
+| `gen.MessageEvent`                    | snapshot supervisor event → reconciler             | Buffered and live snapshot/reader-status events drive resolution and readiness. |
+| `gen.MessageDownAlias`                | Ergo meta monitor → reconciler                     | Marks the resolver or watcher unavailable and schedules its restart.            |
+| `MessageReconcilerActorStatusChanged` | reconciler → runtime supervisor                    | Publishes reconciler lifecycle, availability, generation, and revision.         |
+| `SendExitMeta`                        | reconciler → Ergo meta runtime                     | Requests resolver/watcher meta termination during replacement or shutdown.      |
+| `Terminate`                           | Ergo meta runtime → artifact resolver/watcher meta | Invokes meta cleanup after the parent's exit request.                           |
 
 ### Readiness
 
@@ -223,12 +223,12 @@ stateDiagram-v2
 
 ### Messages
 
-| Message | Direction | Meaning |
-| --- | --- | --- |
-| `MessageResolveArtifacts` | reconciler → artifact resolver meta | Supplies the snapshot to resolve. |
-| `MessageArtifactResolutionResult` | artifact resolver meta → reconciler | Returns resolved/deferred route candidates for its meta alias. |
-| `SendExitMeta` | reconciler → Ergo meta runtime | Requests termination of the resolver meta. |
-| `Terminate` | Ergo meta runtime → artifact resolver meta | Invokes cleanup for the resolver's one-slot worker. |
+| Message                           | Direction                                  | Meaning                                                        |
+| --------------------------------- | ------------------------------------------ | -------------------------------------------------------------- |
+| `MessageResolveArtifacts`         | reconciler → artifact resolver meta        | Supplies the snapshot to resolve.                              |
+| `MessageArtifactResolutionResult` | artifact resolver meta → reconciler        | Returns resolved/deferred route candidates for its meta alias. |
+| `SendExitMeta`                    | reconciler → Ergo meta runtime             | Requests termination of the resolver meta.                     |
+| `Terminate`                       | Ergo meta runtime → artifact resolver meta | Invokes cleanup for the resolver's one-slot worker.            |
 
 ### Readiness
 
@@ -253,12 +253,12 @@ stateDiagram-v2
 
 ### Messages
 
-| Message | Direction | Meaning |
-| --- | --- | --- |
-| `MessageArtifactDirectoryChanged` | artifact watcher meta → reconciler | Reports a debounced filesystem or poll-detected change. |
-| `MessageArtifactWatcherStateChanged` | artifact watcher meta → reconciler | Reports watch/poll availability and drift state. |
-| `SendExitMeta` | reconciler → Ergo meta runtime | Requests termination of the watcher meta. |
-| `Terminate` | Ergo meta runtime → artifact watcher meta | Invokes cleanup for fsnotify and polling. |
+| Message                              | Direction                                 | Meaning                                                 |
+| ------------------------------------ | ----------------------------------------- | ------------------------------------------------------- |
+| `MessageArtifactDirectoryChanged`    | artifact watcher meta → reconciler        | Reports a debounced filesystem or poll-detected change. |
+| `MessageArtifactWatcherStateChanged` | artifact watcher meta → reconciler        | Reports watch/poll availability and drift state.        |
+| `SendExitMeta`                       | reconciler → Ergo meta runtime            | Requests termination of the watcher meta.               |
+| `Terminate`                          | Ergo meta runtime → artifact watcher meta | Invokes cleanup for fsnotify and polling.               |
 
 ### Readiness
 
@@ -284,17 +284,17 @@ stateDiagram-v2
 
 ### Messages
 
-| Message | Direction | Meaning |
-| --- | --- | --- |
-| `MessageCatalogActivate` | runtime supervisor → catalog | Enables catalog status publication. |
-| `MessageApplyCatalogDesiredState` | runtime supervisor → catalog | Adds, updates, retires, or drains logical-plugin routers. |
-| `gen.MessageDownPID` | Ergo monitor → catalog | Reports a router incarnation death for PID/generation fencing. |
-| `MessageRouterRestart` | catalog → catalog | Token-fenced timer that retries creating a desired router. |
-| `MessageDrain` | runtime supervisor → catalog | Retires/drains every live router and suppresses restart. |
-| `MessageRouterStatusChanged` | router → catalog | Updates the PID/generation/epoch-fenced router aggregate. |
-| `MessageRouterDrained` | router → catalog | Retires a draining router and advances catalog drain/replacement work. |
-| `MessageCatalogStatusChanged` | catalog → runtime supervisor | Publishes the epoch-ordered aggregate catalog state. |
-| `MessageCatalogDrained` | catalog → runtime supervisor | Reports that every live router has drained. |
+| Message                           | Direction                    | Meaning                                                                |
+| --------------------------------- | ---------------------------- | ---------------------------------------------------------------------- |
+| `MessageCatalogActivate`          | runtime supervisor → catalog | Enables catalog status publication.                                    |
+| `MessageApplyCatalogDesiredState` | runtime supervisor → catalog | Adds, updates, retires, or drains logical-plugin routers.              |
+| `gen.MessageDownPID`              | Ergo monitor → catalog       | Reports a router incarnation death for PID/generation fencing.         |
+| `MessageRouterRestart`            | catalog → catalog            | Token-fenced timer that retries creating a desired router.             |
+| `MessageDrain`                    | runtime supervisor → catalog | Retires/drains every live router and suppresses restart.               |
+| `MessageRouterStatusChanged`      | router → catalog             | Updates the PID/generation/epoch-fenced router aggregate.              |
+| `MessageRouterDrained`            | router → catalog             | Retires a draining router and advances catalog drain/replacement work. |
+| `MessageCatalogStatusChanged`     | catalog → runtime supervisor | Publishes the epoch-ordered aggregate catalog state.                   |
+| `MessageCatalogDrained`           | catalog → runtime supervisor | Reports that every live router has drained.                            |
 
 ### Readiness
 
@@ -318,18 +318,18 @@ stateDiagram-v2
 
 ### Messages
 
-| Message | Direction | Meaning |
-| --- | --- | --- |
-| `MessageRouterActivate` | catalog → router | Fences the new router incarnation with its Catalog generation. |
-| `MessageApplyRouterDesiredState` | catalog → router | Creates/updates primary, canary, and shadow route intent. |
-| `MessageInvokePlugin` | catalog → router | Routes production or shadow work to an eligible deployment route. |
-| `MessageInvocationTimedOut` | router → router | Expires an unacknowledged route acceptance. |
-| `MessageDrain` | catalog → router | Drains and removes all deployment routes. |
+| Message                                 | Direction                   | Meaning                                                             |
+| --------------------------------------- | --------------------------- | ------------------------------------------------------------------- |
+| `MessageRouterActivate`                 | catalog → router            | Fences the new router incarnation with its Catalog generation.      |
+| `MessageApplyRouterDesiredState`        | catalog → router            | Creates/updates primary, canary, and shadow route intent.           |
+| `MessageInvokePlugin`                   | catalog → router            | Routes production or shadow work to an eligible deployment route.   |
+| `MessageInvocationTimedOut`             | router → router             | Expires an unacknowledged route acceptance.                         |
+| `MessageDrain`                          | catalog → router            | Drains and removes all deployment routes.                           |
 | `MessageDeploymentManagerStatusChanged` | deployment manager → router | Updates a live route's manager status and active rollout selection. |
-| `MessageDeploymentManagerDrained` | deployment manager → router | Permits removal of a draining route. |
-| `MessageDeploymentManagerTerminated` | deployment manager → router | Fences manager loss and schedules an active-route recovery step. |
-| `MessageRouterStatusChanged` | router → catalog | Publishes router availability, rollout, and route state. |
-| `MessageRouterDrained` | router → catalog | Reports that all routes were removed during drain. |
+| `MessageDeploymentManagerDrained`       | deployment manager → router | Permits removal of a draining route.                                |
+| `MessageDeploymentManagerTerminated`    | deployment manager → router | Fences manager loss and schedules an active-route recovery step.    |
+| `MessageRouterStatusChanged`            | router → catalog            | Publishes router availability, rollout, and route state.            |
+| `MessageRouterDrained`                  | router → catalog            | Reports that all routes were removed during drain.                  |
 
 ### Readiness
 
@@ -357,15 +357,15 @@ stateDiagram-v2
 
 ### Messages
 
-| Message | Direction | Meaning |
-| --- | --- | --- |
-| `AddRoute` | router → `act.Router` | Registers the stable route atom and starts its manager factory. |
-| `MessageRetryRouteStep` | router → router | Token-fenced retry for `AddRoute`, manager respawn, drain, or removal. |
-| `MessageDeploymentManagerStatusChanged` | deployment manager → router | Drives active-route readiness and router status. |
-| `MessageDeploymentManagerTerminated` | manager → router | Fences manager loss and schedules route recovery. |
-| `RespawnRoute` | router → `act.Router` | Recreates the manager only after the active-route retry step, or to finish a drain. |
-| `MessageDeploymentManagerDrained` | manager → router | Permits route removal after graceful manager drain. |
-| `RemoveRoute` | router → `act.Router` | Removes the drained route; failures retry. |
+| Message                                 | Direction                   | Meaning                                                                             |
+| --------------------------------------- | --------------------------- | ----------------------------------------------------------------------------------- |
+| `AddRoute`                              | router → `act.Router`       | Registers the stable route atom and starts its manager factory.                     |
+| `MessageRetryRouteStep`                 | router → router             | Token-fenced retry for `AddRoute`, manager respawn, drain, or removal.              |
+| `MessageDeploymentManagerStatusChanged` | deployment manager → router | Drives active-route readiness and router status.                                    |
+| `MessageDeploymentManagerTerminated`    | manager → router            | Fences manager loss and schedules route recovery.                                   |
+| `RespawnRoute`                          | router → `act.Router`       | Recreates the manager only after the active-route retry step, or to finish a drain. |
+| `MessageDeploymentManagerDrained`       | manager → router            | Permits route removal after graceful manager drain.                                 |
+| `RemoveRoute`                           | router → `act.Router`       | Removes the drained route; failures retry.                                          |
 
 ### Readiness
 
@@ -393,24 +393,24 @@ stateDiagram-v2
 
 ### Messages
 
-| Message | Direction | Meaning |
-| --- | --- | --- |
-| `MessageInvokePlugin` | runtime supervisor → catalog → router → deployment manager | Acknowledges ownership, then queues or rejects the routed call. |
-| `MessageInvocationAccepted` | deployment manager → router | Binds the router's completion/cancellation path to this manager PID. |
-| `MessageCancelInvocation` | `plugin.Application` → runtime supervisor → catalog → router → deployment manager | Cancels the accepted or pending invocation at its fenced manager. |
-| `MessageDeploymentManagerDispatchDeadline` | manager → manager | Times out an invocation awaiting worker start. |
-| `MessageDeploymentManagerRestart` | manager → manager | Token-fenced pool-creation retry. |
-| `MessageDeploymentManagerReconcile` | deployment manager → deployment manager | Token-fenced autoscaling pass. |
-| `MessageDeploymentManagerDrainDeadline` | manager → manager | Cancels remaining work with `context.DeadlineExceeded`. |
-| `MessageDrain` | router → deployment manager | Stops new work, cancels recovery/scale activity, and starts graceful drain. |
-| `MessageDeploymentPoolStatusChanged` | deployment pool → deployment manager | Drives capacity, availability, dispatch, and scaling decisions. |
-| `MessageDeploymentWorkerRestartExhausted` | deployment worker → deployment pool → deployment manager | Replaces the exhausted pool or opens the manager circuit if recovery cannot proceed. |
-| `MessageDeploymentWorkerStopped` | deployment worker → deployment pool → deployment manager | Fails calls active on a stopped worker. |
-| `gen.MessageDownPID` | Ergo monitor → deployment manager | Marks the current pool down and starts bounded pool recovery when unexpected. |
-| `MessageDeploymentManagerStatusChanged` | deployment manager → router | Publishes queue, worker, lifecycle, and availability state. |
-| `MessageDeploymentManagerDrained` | deployment manager → router | Reports that calls and pool work are drained. |
-| `MessageRetryDeployment` | no production sender | Defined router control message; no production path emits it. |
-| `MessageDeploymentManagerRetry` | router → deployment manager | Authenticated circuit reset if a caller sends the otherwise unproduced retry message. |
+| Message                                    | Direction                                                                         | Meaning                                                                               |
+| ------------------------------------------ | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `MessageInvokePlugin`                      | runtime supervisor → catalog → router → deployment manager                        | Acknowledges ownership, then queues or rejects the routed call.                       |
+| `MessageInvocationAccepted`                | deployment manager → router                                                       | Binds the router's completion/cancellation path to this manager PID.                  |
+| `MessageCancelInvocation`                  | `plugin.Application` → runtime supervisor → catalog → router → deployment manager | Cancels the accepted or pending invocation at its fenced manager.                     |
+| `MessageDeploymentManagerDispatchDeadline` | manager → manager                                                                 | Times out an invocation awaiting worker start.                                        |
+| `MessageDeploymentManagerRestart`          | manager → manager                                                                 | Token-fenced pool-creation retry.                                                     |
+| `MessageDeploymentManagerReconcile`        | deployment manager → deployment manager                                           | Token-fenced autoscaling pass.                                                        |
+| `MessageDeploymentManagerDrainDeadline`    | manager → manager                                                                 | Cancels remaining work with `context.DeadlineExceeded`.                               |
+| `MessageDrain`                             | router → deployment manager                                                       | Stops new work, cancels recovery/scale activity, and starts graceful drain.           |
+| `MessageDeploymentPoolStatusChanged`       | deployment pool → deployment manager                                              | Drives capacity, availability, dispatch, and scaling decisions.                       |
+| `MessageDeploymentWorkerRestartExhausted`  | deployment worker → deployment pool → deployment manager                          | Replaces the exhausted pool or opens the manager circuit if recovery cannot proceed.  |
+| `MessageDeploymentWorkerStopped`           | deployment worker → deployment pool → deployment manager                          | Fails calls active on a stopped worker.                                               |
+| `gen.MessageDownPID`                       | Ergo monitor → deployment manager                                                 | Marks the current pool down and starts bounded pool recovery when unexpected.         |
+| `MessageDeploymentManagerStatusChanged`    | deployment manager → router                                                       | Publishes queue, worker, lifecycle, and availability state.                           |
+| `MessageDeploymentManagerDrained`          | deployment manager → router                                                       | Reports that calls and pool work are drained.                                         |
+| `MessageRetryDeployment`                   | no production sender                                                              | Defined router control message; no production path emits it.                          |
+| `MessageDeploymentManagerRetry`            | router → deployment manager                                                       | Authenticated circuit reset if a caller sends the otherwise unproduced retry message. |
 
 ### Readiness
 
@@ -437,16 +437,16 @@ stateDiagram-v2
 
 ### Messages
 
-| Message | Direction | Meaning |
-| --- | --- | --- |
-| `MessageDeploymentPoolAddWorker` | deployment manager → deployment pool | Requests exactly one additional worker. |
-| `MessageDeploymentPoolRemoveWorker` | deployment manager → deployment pool | Requests exactly one fewer worker, never the final worker. |
-| `MessageDeploymentPoolResized` | deployment pool → deployment manager | Reports the one-worker resize result. |
-| `MessageDeploymentPoolStatusChanged` | deployment pool → deployment manager | Reports aggregated worker lifecycle and availability. |
-| `MessageDeploymentWorkerStatusChanged` | deployment worker → deployment pool | Updates worker health before aggregate pool status is published. |
-| `MessageDeploymentWorkerStopped` | deployment worker → deployment pool → deployment manager | Removes the worker and reports calls that can no longer complete. |
-| `MessageDeploymentWorkerRestartExhausted` | deployment worker → deployment pool → deployment manager | Escalates exhausted worker recovery to pool replacement. |
-| `MessageInvokePlugin` | deployment manager → deployment pool → deployment worker | Pool-routes one manager-dispatched call to a mailbox-size-one worker. |
+| Message                                   | Direction                                                | Meaning                                                               |
+| ----------------------------------------- | -------------------------------------------------------- | --------------------------------------------------------------------- |
+| `MessageDeploymentPoolAddWorker`          | deployment manager → deployment pool                     | Requests exactly one additional worker.                               |
+| `MessageDeploymentPoolRemoveWorker`       | deployment manager → deployment pool                     | Requests exactly one fewer worker, never the final worker.            |
+| `MessageDeploymentPoolResized`            | deployment pool → deployment manager                     | Reports the one-worker resize result.                                 |
+| `MessageDeploymentPoolStatusChanged`      | deployment pool → deployment manager                     | Reports aggregated worker lifecycle and availability.                 |
+| `MessageDeploymentWorkerStatusChanged`    | deployment worker → deployment pool                      | Updates worker health before aggregate pool status is published.      |
+| `MessageDeploymentWorkerStopped`          | deployment worker → deployment pool → deployment manager | Removes the worker and reports calls that can no longer complete.     |
+| `MessageDeploymentWorkerRestartExhausted` | deployment worker → deployment pool → deployment manager | Escalates exhausted worker recovery to pool replacement.              |
+| `MessageInvokePlugin`                     | deployment manager → deployment pool → deployment worker | Pool-routes one manager-dispatched call to a mailbox-size-one worker. |
 
 ### Readiness
 
@@ -472,23 +472,23 @@ stateDiagram-v2
 
 ### Messages
 
-| Message | Direction | Meaning |
-| --- | --- | --- |
-| `MessageInvokePlugin` | deployment manager → deployment pool → deployment worker | Delivers one routed call to a mailbox-size-one worker. |
-| `MessageInvocationStarted` | deployment worker → deployment manager | Confirms worker start and clears dispatch deadline. |
-| `MessageInvocationFinished` | deployment worker → deployment manager | Returns the one-shot invocation result. |
-| `MessageWorkerMetaRestart` | deployment worker → deployment worker | Token-fenced normal or health restart timer. |
-| `MessageWorkerMetaHealthTick` | deployment worker → deployment worker | Drives the next meta Ping attempt. |
-| `MessageWorkerMetaHealthTimeout` | deployment worker → deployment worker | Retires an unanswered meta health check. |
-| `MessageWorkerMetaStartResult` | worker meta → deployment worker | Drives ready state or normal restart. |
-| `MessageWorkerMetaPing` | deployment worker → worker meta | Performs the parent-authorized health RPC. |
-| `MessageWorkerMetaPingResult` | worker meta → deployment worker | Drives health confirmation or health restart. |
-| `gen.MessageDownAlias` | Ergo meta monitor → deployment worker | Retires the current meta and starts normal/health recovery. |
-| `MessageDeploymentWorkerStatusChanged` | deployment worker → deployment pool | Publishes lifecycle, availability, and idle/busy activity. |
-| `MessageDeploymentWorkerStopped` | deployment worker → deployment pool | Reports worker shutdown. |
-| `MessageDeploymentWorkerRestartExhausted` | deployment worker → deployment pool → deployment manager | Escalates exhausted local recovery. |
-| `SendExitMeta` | deployment worker → Ergo meta runtime | Requests worker-meta termination before recovery. |
-| `Terminate` | Ergo meta runtime → worker meta | Invokes meta cleanup after the worker's exit request. |
+| Message                                   | Direction                                                | Meaning                                                     |
+| ----------------------------------------- | -------------------------------------------------------- | ----------------------------------------------------------- |
+| `MessageInvokePlugin`                     | deployment manager → deployment pool → deployment worker | Delivers one routed call to a mailbox-size-one worker.      |
+| `MessageInvocationStarted`                | deployment worker → deployment manager                   | Confirms worker start and clears dispatch deadline.         |
+| `MessageInvocationFinished`               | deployment worker → deployment manager                   | Returns the one-shot invocation result.                     |
+| `MessageWorkerMetaRestart`                | deployment worker → deployment worker                    | Token-fenced normal or health restart timer.                |
+| `MessageWorkerMetaHealthTick`             | deployment worker → deployment worker                    | Drives the next meta Ping attempt.                          |
+| `MessageWorkerMetaHealthTimeout`          | deployment worker → deployment worker                    | Retires an unanswered meta health check.                    |
+| `MessageWorkerMetaStartResult`            | worker meta → deployment worker                          | Drives ready state or normal restart.                       |
+| `MessageWorkerMetaPing`                   | deployment worker → worker meta                          | Performs the parent-authorized health RPC.                  |
+| `MessageWorkerMetaPingResult`             | worker meta → deployment worker                          | Drives health confirmation or health restart.               |
+| `gen.MessageDownAlias`                    | Ergo meta monitor → deployment worker                    | Retires the current meta and starts normal/health recovery. |
+| `MessageDeploymentWorkerStatusChanged`    | deployment worker → deployment pool                      | Publishes lifecycle, availability, and idle/busy activity.  |
+| `MessageDeploymentWorkerStopped`          | deployment worker → deployment pool                      | Reports worker shutdown.                                    |
+| `MessageDeploymentWorkerRestartExhausted` | deployment worker → deployment pool → deployment manager | Escalates exhausted local recovery.                         |
+| `SendExitMeta`                            | deployment worker → Ergo meta runtime                    | Requests worker-meta termination before recovery.           |
+| `Terminate`                               | Ergo meta runtime → worker meta                          | Invokes meta cleanup after the worker's exit request.       |
 
 ### Readiness
 
@@ -513,15 +513,15 @@ stateDiagram-v2
 
 ### Messages
 
-| Message | Direction | Meaning |
-| --- | --- | --- |
-| `MessageWorkerMetaStartResult` | worker meta → deployment worker | Reports checksum/handshake/session startup outcome for its alias. |
-| `MessageWorkerMetaPing` | deployment worker → worker meta | Requests a parent-authorized health RPC. |
-| `MessageWorkerMetaPingResult` | worker meta → deployment worker | Returns the alias-fenced Ping result. |
-| `workerInvokeCall` | deployment worker → worker meta | Synchronous parent-only callback invocation. |
-| `Shutdown` | worker meta → plugin RPC | Bounded session shutdown before client kill. |
-| `SendExitMeta` | deployment worker → Ergo meta runtime | Requests meta termination after a recycle-worthy failure or shutdown. |
-| `Terminate` | Ergo meta runtime → worker meta | Invokes session close after the worker's exit request. |
+| Message                        | Direction                             | Meaning                                                               |
+| ------------------------------ | ------------------------------------- | --------------------------------------------------------------------- |
+| `MessageWorkerMetaStartResult` | worker meta → deployment worker       | Reports checksum/handshake/session startup outcome for its alias.     |
+| `MessageWorkerMetaPing`        | deployment worker → worker meta       | Requests a parent-authorized health RPC.                              |
+| `MessageWorkerMetaPingResult`  | worker meta → deployment worker       | Returns the alias-fenced Ping result.                                 |
+| `workerInvokeCall`             | deployment worker → worker meta       | Synchronous parent-only callback invocation.                          |
+| `Shutdown`                     | worker meta → plugin RPC              | Bounded session shutdown before client kill.                          |
+| `SendExitMeta`                 | deployment worker → Ergo meta runtime | Requests meta termination after a recycle-worthy failure or shutdown. |
+| `Terminate`                    | Ergo meta runtime → worker meta       | Invokes session close after the worker's exit request.                |
 
 ### Readiness
 
@@ -555,17 +555,17 @@ stateDiagram-v2
 
 ### Messages
 
-| Message | Direction | Meaning |
-| --- | --- | --- |
-| `Submit` | caller → `plugin.Application` | Acquires the blocking production permit. |
-| `SubmitShadow` | caller → `plugin.Application` | Uses the separate non-blocking best-effort shadow permit. |
-| `MessageSubmitInvocation` | `plugin.Application` → runtime supervisor | Enters an admitted invocation into the runtime tree. |
-| `MessageInvokePlugin` | runtime supervisor → catalog → router → deployment manager → deployment pool → deployment worker | Carries the routed call to one worker. |
-| `MessageCancelInvocation` | `plugin.Application` → runtime supervisor → catalog → router → deployment manager | Follows the fenced accepted/pending manager path. |
-| `MessageInvocationAccepted` | deployment manager → router | Binds the routed call to its manager before completion/cancellation. |
-| `MessageInvocationStarted` | deployment worker → deployment manager | Moves the accepted call from dispatching to running. |
-| `MessageInvocationFinished` | deployment worker → deployment manager | Returns the worker invocation result. |
-| `MessageInvocationCompleted` | manager → router → catalog → runtime supervisor | Completes the idempotent `runtime.AsyncResult` once. |
+| Message                      | Direction                                                                                        | Meaning                                                              |
+| ---------------------------- | ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------- |
+| `Submit`                     | caller → `plugin.Application`                                                                    | Acquires the blocking production permit.                             |
+| `SubmitShadow`               | caller → `plugin.Application`                                                                    | Uses the separate non-blocking best-effort shadow permit.            |
+| `MessageSubmitInvocation`    | `plugin.Application` → runtime supervisor                                                        | Enters an admitted invocation into the runtime tree.                 |
+| `MessageInvokePlugin`        | runtime supervisor → catalog → router → deployment manager → deployment pool → deployment worker | Carries the routed call to one worker.                               |
+| `MessageCancelInvocation`    | `plugin.Application` → runtime supervisor → catalog → router → deployment manager                | Follows the fenced accepted/pending manager path.                    |
+| `MessageInvocationAccepted`  | deployment manager → router                                                                      | Binds the routed call to its manager before completion/cancellation. |
+| `MessageInvocationStarted`   | deployment worker → deployment manager                                                           | Moves the accepted call from dispatching to running.                 |
+| `MessageInvocationFinished`  | deployment worker → deployment manager                                                           | Returns the worker invocation result.                                |
+| `MessageInvocationCompleted` | manager → router → catalog → runtime supervisor                                                  | Completes the idempotent `runtime.AsyncResult` once.                 |
 
 ### Readiness
 

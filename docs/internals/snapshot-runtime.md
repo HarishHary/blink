@@ -19,23 +19,23 @@ Rest-for-one ordering is significant: a reader restart restarts the following pr
 
 ## Messages
 
-| Message | Direction | Meaning |
-| --- | --- | --- |
-| `MessageReaderActorActivate` | snapshot supervisor → reader actor | Authenticates reader-meta startup and supplies the snapshot event identity. |
-| `MessageProjectionActorActivate` | snapshot supervisor → projection actor | Authorizes buffered snapshot/status event monitoring. |
-| `MessageReaderActorStatusChanged` | reader actor → snapshot supervisor | Publishes the current reader lifecycle, availability, and committed generation. |
-| `MessageProjectionActorStatusChanged` | projection actor → snapshot supervisor | Publishes projection lifecycle, availability, and committed/prepared generations. |
-| `MessageProjectionCommit` | external parent → snapshot supervisor → projection actor | Requests a PID/generation-fenced commit in external-commit mode only. |
-| `MessageProjectionCommitResult` | projection actor → snapshot supervisor → external parent | Returns the PID/generation-fenced external-commit result. |
+| Message                               | Direction                                                | Meaning                                                                           |
+| ------------------------------------- | -------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `MessageReaderActorActivate`          | snapshot supervisor → reader actor                       | Authenticates reader-meta startup and supplies the snapshot event identity.       |
+| `MessageProjectionActorActivate`      | snapshot supervisor → projection actor                   | Authorizes buffered snapshot/status event monitoring.                             |
+| `MessageReaderActorStatusChanged`     | reader actor → snapshot supervisor                       | Publishes the current reader lifecycle, availability, and committed generation.   |
+| `MessageProjectionActorStatusChanged` | projection actor → snapshot supervisor                   | Publishes projection lifecycle, availability, and committed/prepared generations. |
+| `MessageProjectionCommit`             | external parent → snapshot supervisor → projection actor | Requests a PID/generation-fenced commit in external-commit mode only.             |
+| `MessageProjectionCommitResult`       | projection actor → snapshot supervisor → external parent | Returns the PID/generation-fenced external-commit result.                         |
 
 ## Roles
 
-| Role | Default name or identity | Owner | Responsibility |
-| --- | --- | --- | --- |
-| Snapshot supervisor | registered `SupervisorOptions.Name` | parent runtime | Owns child PIDs, stable events, and external-commit forwarding. |
-| Reader actor | child PID named `<SupervisorOptions.Name>-reader` | snapshot supervisor | Owns effective entries, the committed generation, and reader-meta restart. |
-| Reader meta | `gen.Alias` returned by `SpawnMeta` | reader actor | Owns blocking broker reads and catch-up detection. |
-| Projection actor | child PID named `<SupervisorOptions.Name>-projection` | snapshot supervisor | Owns typed parsed committed/prepared state. |
+| Role                | Default name or identity                              | Owner               | Responsibility                                                             |
+| ------------------- | ----------------------------------------------------- | ------------------- | -------------------------------------------------------------------------- |
+| Snapshot supervisor | registered `SupervisorOptions.Name`                   | parent runtime      | Owns child PIDs, stable events, and external-commit forwarding.            |
+| Reader actor        | child PID named `<SupervisorOptions.Name>-reader`     | snapshot supervisor | Owns effective entries, the committed generation, and reader-meta restart. |
+| Reader meta         | `gen.Alias` returned by `SpawnMeta`                   | reader actor        | Owns blocking broker reads and catch-up detection.                         |
+| Projection actor    | child PID named `<SupervisorOptions.Name>-projection` | snapshot supervisor | Owns typed parsed committed/prepared state.                                |
 
 ## Readiness
 
@@ -57,9 +57,9 @@ stateDiagram-v2
 
 ### Messages
 
-| Message | Direction | Meaning |
-| --- | --- | --- |
-| `HandleChildStart` | Ergo supervisor runtime → snapshot supervisor | Records and activates the reader or projection child incarnation. |
+| Message                | Direction                                     | Meaning                                                                                    |
+| ---------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `HandleChildStart`     | Ergo supervisor runtime → snapshot supervisor | Records and activates the reader or projection child incarnation.                          |
 | `HandleChildTerminate` | Ergo supervisor runtime → snapshot supervisor | Marks a child unavailable and reports external commit failure for a terminated projection. |
 
 ### Readiness
@@ -87,13 +87,13 @@ stateDiagram-v2
 
 ### Messages
 
-| Message | Direction | Meaning |
-| --- | --- | --- |
-| `MessageRecord` | reader meta → reader actor | Alias-fenced compacted-topic record or generation marker. |
-| `MessageCaughtUp` | reader meta → reader actor | Alias-fenced zero-lag boundary that permits readiness after a marker. |
-| `MessageReaderMetaRestart` | reader actor → reader actor | Token-fenced reader-meta restart timer. |
-| `gen.MessageDownAlias` | Ergo meta monitor → reader actor | Marks the reader meta unavailable and schedules retry. |
-| `SendEvent` | reader actor → snapshot supervisor event subscribers | Publishes a committed snapshot to buffered and live consumers. |
+| Message                    | Direction                                            | Meaning                                                               |
+| -------------------------- | ---------------------------------------------------- | --------------------------------------------------------------------- |
+| `MessageRecord`            | reader meta → reader actor                           | Alias-fenced compacted-topic record or generation marker.             |
+| `MessageCaughtUp`          | reader meta → reader actor                           | Alias-fenced zero-lag boundary that permits readiness after a marker. |
+| `MessageReaderMetaRestart` | reader actor → reader actor                          | Token-fenced reader-meta restart timer.                               |
+| `gen.MessageDownAlias`     | Ergo meta monitor → reader actor                     | Marks the reader meta unavailable and schedules retry.                |
+| `SendEvent`                | reader actor → snapshot supervisor event subscribers | Publishes a committed snapshot to buffered and live consumers.        |
 
 ### Readiness
 
@@ -120,12 +120,12 @@ stateDiagram-v2
 
 ### Messages
 
-| Message | Direction | Meaning |
-| --- | --- | --- |
-| `ReadMessage` | reader meta → broker reader | Reads one compacted-topic record without committing offsets. |
-| `ReadLag` | reader meta → broker reader | Checks lag after a read timeout. |
-| `SendExitMeta` | reader actor → Ergo runtime | Requests reader-meta termination during replacement or shutdown. |
-| `Terminate` | Ergo runtime → reader meta | Cancels reads and closes the concrete reader after the parent's exit request. |
+| Message        | Direction                   | Meaning                                                                       |
+| -------------- | --------------------------- | ----------------------------------------------------------------------------- |
+| `ReadMessage`  | reader meta → broker reader | Reads one compacted-topic record without committing offsets.                  |
+| `ReadLag`      | reader meta → broker reader | Checks lag after a read timeout.                                              |
+| `SendExitMeta` | reader actor → Ergo runtime | Requests reader-meta termination during replacement or shutdown.              |
+| `Terminate`    | Ergo runtime → reader meta  | Cancels reads and closes the concrete reader after the parent's exit request. |
 
 ### Readiness
 
@@ -154,12 +154,12 @@ stateDiagram-v2
 
 ### Messages
 
-| Message | Direction | Meaning |
-| --- | --- | --- |
-| `gen.MessageEvent` | snapshot supervisor event → projection actor | Buffered and live snapshot events drive observed, prepared, or committed state. |
-| `gen.MessageEvent` | snapshot supervisor event → projection actor | Buffered and live reader-status events drive readiness. |
-| `ProjectionStateRequest` | `ProjectionClient.State` → projection actor | Reads a deep-cloned current committed projection. |
-| `gen.MessageDownEvent` | Ergo event monitor → projection actor | Terminates the projection when a monitored snapshot or status event ends. |
+| Message                  | Direction                                    | Meaning                                                                         |
+| ------------------------ | -------------------------------------------- | ------------------------------------------------------------------------------- |
+| `gen.MessageEvent`       | snapshot supervisor event → projection actor | Buffered and live snapshot events drive observed, prepared, or committed state. |
+| `gen.MessageEvent`       | snapshot supervisor event → projection actor | Buffered and live reader-status events drive readiness.                         |
+| `ProjectionStateRequest` | `ProjectionClient.State` → projection actor  | Reads a deep-cloned current committed projection.                               |
+| `gen.MessageDownEvent`   | Ergo event monitor → projection actor        | Terminates the projection when a monitored snapshot or status event ends.       |
 
 ### Readiness
 
