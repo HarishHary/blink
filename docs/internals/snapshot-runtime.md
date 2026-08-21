@@ -171,11 +171,11 @@ No actor accepts an unrelated synchronous call. Reader restart uses the shared `
 
 ## Source Map
 
-- [`internal/runtime/snapshot/snapshot_supervisor.go`](../../internal/runtime/snapshot/snapshot_supervisor.go) — child order, RestForOne policy, event registration,
+- [`internal/runtime/snapshot/snapshot_supervisor.go`](../../internal/runtime/snapshot/snapshot_supervisor.go) - child order, RestForOne policy, event registration,
   and external commit fencing.
-- [`internal/runtime/snapshot/snapshot_reader_actor.go`](../../internal/runtime/snapshot/snapshot_reader_actor.go) — snapshot construction, reader status, alias
+- [`internal/runtime/snapshot/snapshot_reader_actor.go`](../../internal/runtime/snapshot/snapshot_reader_actor.go) - snapshot construction, reader status, alias
   fencing, and restart.
-- [`internal/runtime/snapshot/snapshot_reader_meta.go`](../../internal/runtime/snapshot/snapshot_reader_meta.go) — blocking reads, catch-up/lag protocol, and close.
-- [`internal/runtime/snapshot/projection_actor.go`](../../internal/runtime/snapshot/projection_actor.go) — projection modes, state call, parse, and commit semantics.
-- [`internal/runtime/backoff.go`](../../internal/runtime/backoff.go) and [`internal/runtime/snapshot/options.go`](../../internal/runtime/snapshot/options.go) — shared
+- [`internal/runtime/snapshot/snapshot_reader_meta.go`](../../internal/runtime/snapshot/snapshot_reader_meta.go) - blocking reads, catch-up/lag protocol, and close.
+- [`internal/runtime/snapshot/projection_actor.go`](../../internal/runtime/snapshot/projection_actor.go) - projection modes, state call, parse, and commit semantics.
+- [`internal/runtime/backoff.go`](../../internal/runtime/backoff.go) and [`internal/runtime/snapshot/options.go`](../../internal/runtime/snapshot/options.go) - shared
   retry policy and configuration.

@@ -70,7 +70,6 @@ terraform.rc
 
 ## Temporary files
 .claude/*
-docs/*
 bin/*
 .serena/*
 openwiki/*

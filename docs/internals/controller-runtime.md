@@ -2,7 +2,9 @@
 
 [Internals index](README.md) · [Controller service](../services/controller.md)
 
-This is the authoritative implementation reference for the Ergo controller runtime in `internal/runtime/controller`. One application manages one catalog namespace; `cmd/controller` creates five such applications. The design has one supervisor child (the controller actor) and two actor-owned meta processes.
+This is the authoritative implementation reference for the Ergo controller runtime in `internal/runtime/controller`. One application manages one catalog namespace;
+`cmd/controller` creates five such applications.
+The design has one supervisor child (the controller actor) and two actor-owned meta processes.
 
 ## Composition
 
@@ -46,7 +48,8 @@ The application owns the root supervisor. The supervisor owns one controller act
 | `artifact_scanner` meta | `gen.Alias` | actor | Watches, polls, parses, validates, and elects catalog entries. |
 | Snapshot publisher meta | `gen.Alias` | actor | Loads state; persists and publishes plans without blocking the actor. |
 
-`optionsWithDefaults` supplies the application, supervisor, and actor names; `cmd/controller` relies on those defaults. Meta processes are addressed and monitored by `gen.Alias`, not a stable registered name.
+`optionsWithDefaults` supplies the application, supervisor, and actor names; `cmd/controller` relies on those defaults. Meta processes are addressed and monitored by `gen.Alias`, not a stable
+registered name.
 
 ## Readiness
 
@@ -62,7 +65,8 @@ The application owns the root supervisor. The supervisor owns one controller act
 
 ### Lifecycle
 
-`Application.Load` validates name, supervisor name, namespace, topic, and broker; opens SQLite; initializes a namespace-scoped store; creates a topic writer; and returns a permanent Ergo application with the root supervisor.
+`Application.Load` validates name, supervisor name, namespace, topic, and broker; opens SQLite; initializes a namespace-scoped store; creates a topic writer; and returns a permanent
+Ergo application with the root supervisor.
 
 ```mermaid
 stateDiagram-v2
@@ -90,13 +94,17 @@ stateDiagram-v2
 
 ### Readiness
 
-The application has no independent availability enum. It is prepared to start only after `Load` validates its required options and constructs the supervisor specification with open resources. `Close` rejects resource closure until the barrier proves the application is quiesced.
+The application has no independent availability enum. It is prepared to start only after `Load` validates its required options and constructs the supervisor specification with open resources.
+`Close` rejects resource closure until the barrier proves the application is quiesced.
 
 ## Controller Supervisor
 
 ### Lifecycle
 
-The supervisor is one-for-one, transient, has one actor child, preserves that child's mailbox, handles child events, and disables automatic shutdown. Its restart intensity is five restarts in ten seconds. An abnormal child exit is eligible for restart; a normal or shutdown child exit outside supervisor draining or stopping fails the supervisor. Restart intensity exhaustion terminates the application. After `plugin.MessageStop`, it forwards `plugin.MessageDrain` to the actor.
+The supervisor is one-for-one, transient, has one actor child, preserves that child's mailbox, handles child events, and disables automatic shutdown.
+Its restart intensity is five restarts in ten seconds.
+An abnormal child exit is eligible for restart; a normal or shutdown child exit outside supervisor draining or stopping fails the supervisor. Restart intensity exhaustion terminates the application.
+After `plugin.MessageStop`, it forwards `plugin.MessageDrain` to the actor.
 
 ```mermaid
 stateDiagram-v2
@@ -126,13 +134,15 @@ stateDiagram-v2
 
 ### Readiness
 
-The supervisor initializes the tracked actor as `starting` and `unavailable`; it has no independent availability enum. It activates a current actor only after publisher fences clear and waits for that actor's `drained` status plus all fences before stopping it.
+The supervisor initializes the tracked actor as `starting` and `unavailable`; it has no independent availability enum. It activates a current actor only after publisher fences clear and waits
+for that actor's `drained` status plus all fences before stopping it.
 
 ## Controller Actor
 
 ### Lifecycle
 
-The actor owns all mutable control-plane state: artifact_scanner result, loaded records, committed snapshot, generation, pending plan, publisher status, and restart schedules. It accepts lifecycle messages only from its parent and worker results only from itself with the currently tracked alias.
+The actor owns all mutable control-plane state: artifact_scanner result, loaded records, committed snapshot, generation, pending plan, publisher status, and restart schedules.
+It accepts lifecycle messages only from its parent and worker results only from itself with the currently tracked alias.
 
 ```mermaid
 stateDiagram-v2
@@ -163,13 +173,15 @@ stateDiagram-v2
 
 ### Readiness
 
-The actor reports `ready` only while running when the artifact_scanner is complete and ready and the publisher is loaded and ready. It otherwise reports `degraded` while running, or `unavailable` outside that condition.
+The actor reports `ready` only while running when the artifact_scanner is complete and ready and the publisher is loaded and ready. It otherwise reports `degraded` while running, or
+`unavailable` outside that condition.
 
 ## Artifact Scanner Meta
 
 ### Lifecycle
 
-The artifact_scanner starts with an immediate scan, then observes the directory with `fsnotify`, a 400 ms debounce, and a five-second poll. It rescans directly in its meta-process `Start`, leaving the actor mailbox unblocked.
+The artifact_scanner starts with an immediate scan, then observes the directory with `fsnotify`, a 400 ms debounce, and a five-second poll. It rescans directly in its meta-process `Start`,
+leaving the actor mailbox unblocked.
 
 ```mermaid
 stateDiagram-v2
@@ -198,15 +210,20 @@ stateDiagram-v2
 
 ### Readiness
 
-The actor owns the scanner status. A complete result without an error is `ready`; a complete result with a watch-attachment error is `degraded`; an `os.ReadDir` failure produces an incomplete, `unavailable` result, blocks reconciliation, and continues scanning. A failed spec read or parse retains a previously parsed value while the file is still present.
+The actor owns the scanner status. A complete result without an error is `ready`; a complete result with a watch-attachment error is `degraded`; an `os.ReadDir` failure produces an
+incomplete, `unavailable` result, blocks reconciliation, and continues scanning. A failed spec read or parse retains a previously parsed value while the file is still present.
 
-It reads only direct directory entries. YAML files (`.yaml`, `.yml`) are parsed through the catalog loader; executable files are SHA-256 indexed by filename. For each logical ID it accepts one blue-green baseline and at most one canary/shadow candidate, then emits an effective entry with YAML-marshaled metadata and the matching binary hash. A disabled artifact can be represented without a binary; enabled artifacts require their matching binary hash. Invalid groups produce no new effective entry; reconciliation can retain a previously committed entry for their still-present ID.
+It reads only direct directory entries. YAML files (`.yaml`, `.yml`) are parsed through the catalog loader; executable files are SHA-256 indexed by filename. For each logical ID it accepts one
+blue-green baseline and at most one canary/shadow candidate, then emits an effective entry with YAML-marshaled metadata and the matching binary hash. A disabled artifact can be represented
+without a binary; enabled artifacts require their matching binary hash. Invalid groups produce no new effective entry; reconciliation can retain a previously committed entry for their
+still-present ID.
 
 ## Snapshot Publisher Meta
 
 ### Lifecycle
 
-The publisher reserves the application I/O barrier before it runs. It loads records, generation, and the latest stored snapshot, reports the result, and then handles a single buffered publish job at a time.
+The publisher reserves the application I/O barrier before it runs. It loads records, generation, and the latest stored snapshot, reports the result, and then handles a single buffered
+publish job at a time.
 
 ```mermaid
 stateDiagram-v2
@@ -239,9 +256,12 @@ stateDiagram-v2
 ### Readiness
 
 The actor owns the publisher status. After a successful bootstrap it is `ready` only when there is no pending plan, last error, or exhausted
-publication-failure threshold; failed publication attempts make it `degraded`, and a pending plan, load error, or exhausted threshold makes it `unavailable`. A replacement cannot start until the prior publisher's I/O-stopped completion clears `activeIO`.
+publication-failure threshold; failed publication attempts make it `degraded`, and a pending plan, load error, or exhausted threshold makes it `unavailable`. A replacement cannot start
+until the prior publisher's I/O-stopped completion clears `activeIO`.
 
-Each job has five total publication attempts, using an exponential backoff with the actor's retry minimum and maximum, a multiplier of two, and no elapsed-time limit. Each failed attempt is reported at high priority. A final success commits the actor's pending plan. Failure leaves that plan pending; after the publisher stops and its I/O fence clears, a replacement loads state and retries it.
+Each job has five total publication attempts, using an exponential backoff with the actor's retry minimum and maximum, a multiplier of two, and no elapsed-time limit. Each failed attempt is
+reported at high priority. A final success commits the actor's pending plan. Failure leaves that plan pending; after the publisher stops and its I/O fence clears, a replacement loads state
+and retries it.
 
 ## Reconciliation and Commit
 
@@ -271,15 +291,20 @@ stateDiagram-v2
 
 ### Readiness
 
-Reconciliation waits for both a complete `artifact_scanner` result and `publisher` bootstrap. It has at most one pending plan; artifact_scanner changes while that plan is pending are coalesced into the next reconciliation after completion.
+Reconciliation waits for both a complete `artifact_scanner` result and `publisher` bootstrap. It has at most one pending plan; artifact_scanner changes while that plan is pending are
+coalesced into the next reconciliation after completion.
 
-Planning marks every present parsed ID active and updates `last_seen_at`; an active stored ID no longer present becomes absent. It elects valid artifact_scanner entries, carries forward a prior entry for a still-present ID missing from the new effective set, sorts entries by ID, and increments generation only when entries differ or bootstrap requires full republishing. The first bootstrap uses the greater of stored generation and saved snapshot generation. A missing or mismatched saved snapshot requests a full republish.
+Planning marks every present parsed ID active and updates `last_seen_at`; an active stored ID no longer present becomes absent. It elects valid artifact_scanner entries, carries forward a
+prior entry for a still-present ID missing from the new effective set, sorts entries by ID, and increments generation only when entries differ or bootstrap requires full republishing. The
+first bootstrap uses the greater of stored generation and saved snapshot generation. A missing or mismatched saved snapshot requests a full republish.
 
-For a changed plan the publisher persists records, reserves generation, writes keyed Kafka upserts and tombstones plus the generation marker, then saves the full snapshot. The actor updates its committed snapshot, generation, and records only after the publisher reports final success.
+For a changed plan the publisher persists records, reserves generation, writes keyed Kafka upserts and tombstones plus the generation marker, then saves the full snapshot. The actor
+updates its committed snapshot, generation, and records only after the publisher reports final success.
 
 ## Publisher I/O Barrier and Shutdown
 
-The barrier separates actor lifecycle from blocking publisher I/O. `Acquire` succeeds only before `Seal`; every accepted publisher `Start` reports a supervisor fence and releases its barrier reservation when it returns.
+The barrier separates actor lifecycle from blocking publisher I/O. `Acquire` succeeds only before `Seal`; every accepted publisher `Start` reports a supervisor fence and releases its
+barrier reservation when it returns.
 
 ### Lifecycle
 
@@ -305,7 +330,9 @@ stateDiagram-v2
 
 ### Readiness
 
-`Close` requires the barrier to be sealed and quiesced. Shutdown order is: service seals application; supervisor drains actor; actor cancels worker restart timers and asks artifact_scanner and publisher metas to stop; publisher meta → supervisor → owning actor reports stopped completion only if that actor is still current; supervisor stops the drained actor; service waits for barrier quiescence, closes writer and database, and unloads the application. The service allows 45 seconds for graceful shutdown, then requests an Ergo force-stop.
+`Close` requires the barrier to be sealed and quiesced. Shutdown order is: service seals application; supervisor drains actor; actor cancels worker restart timers and asks artifact_scanner
+and publisher metas to stop; publisher meta → supervisor → owning actor reports stopped completion only if that actor is still current; supervisor stops the drained actor; service waits for
+barrier quiescence, closes writer and database, and unloads the application. The service allows 45 seconds for graceful shutdown, then requests an Ergo force-stop.
 
 ## Retry Domains
 
@@ -318,9 +345,9 @@ stateDiagram-v2
 
 ## Source References
 
-- `internal/runtime/controller/{service.go,controller_application.go,controller_supervisor.go,controller_actor.go}` — lifecycle ownership and message handling.
-- `internal/runtime/controller/{artifact_scanner_meta.go,snapshot_publisher_meta.go,reconcile.go,publisher_io_barrier.go,options.go,defaults.go}` — worker behavior, planning, shutdown barrier,
+- `internal/runtime/controller/{service.go,controller_application.go,controller_supervisor.go,controller_actor.go}` - lifecycle ownership and message handling.
+- `internal/runtime/controller/{artifact_scanner_meta.go,snapshot_publisher_meta.go,reconcile.go,publisher_io_barrier.go,options.go,defaults.go}` - worker behavior, planning, shutdown barrier,
   names, and timing defaults.
-- `internal/runtime/backoff.go` — scheduled worker-restart budget and backoff implementation.
-- `internal/backends/{database.go,sql.go,record.go}` — namespace-scoped persistence and schema.
-- `internal/snapshot/{snapshot.go,convert.go}` — effective entry and Kafka generation-marker wire format.
+- `internal/runtime/backoff.go` - scheduled worker-restart budget and backoff implementation.
+- `internal/backends/{database.go,sql.go,record.go}` - namespace-scoped persistence and schema.
+- `internal/snapshot/{snapshot.go,convert.go}` - effective entry and Kafka generation-marker wire format.
