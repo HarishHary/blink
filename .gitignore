@@ -71,6 +71,8 @@ terraform.rc
 ## Temporary files
 .claude/*
 bin/*
+docs/plan/*
+docs/reviews/*
 .serena/*
 openwiki/*
 .DS_Store
