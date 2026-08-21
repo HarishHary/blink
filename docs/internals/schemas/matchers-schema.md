@@ -1,7 +1,6 @@
 # Matcher sidecar schema
 
-A matcher binary `<name>` ships alongside `<name>.yaml`. Matchers pre-filter events in `event_matcher`, deciding which rules an event is eligible for. It embeds the [common
-fields](README.md#common-fields-every-plugin-type) and adds one field (`pkg/matchers.MatcherMetadata`).
+A matcher binary `<name>` ships alongside `<name>.yaml`. Matchers pre-filter events in `event_matcher`, deciding which rules an event is eligible for. It embeds the [common fields](README.md#common-fields-every-plugin-type) and adds one field (`pkg/matchers.MatcherMetadata`).
 
 ## Matcher-specific fields
 

@@ -1,11 +1,9 @@
 # Plugin YAML sidecar schemas
 
-Every plugin binary `<name>` ships alongside a `<name>.yaml` **sidecar** that declares its identity, rollout mode, and type-specific configuration. The controller's artifact_scanner meta process
-parses these into the snapshot; see [Controller runtime](../controller-runtime.md#artifact-scanner-meta).
+Every plugin binary `<name>` ships alongside a `<name>.yaml` **sidecar** that declares its identity, rollout mode, and type-specific configuration. The controller's artifact_scanner meta process parses these into the snapshot; see [Controller runtime](../controller-runtime.md#artifact-scanner-meta).
 
-> **The plugin `name` is the sidecar filename stem, not a YAML field.** `Name` is derived from the
-> file at load time (`plugin.PluginMetadata.Name` is `yaml:"-"`), so a `name:` (or `file_name:`) key
-> in the YAML is **ignored**. Rename the file to rename the plugin.
+> **The plugin `name` is the sidecar filename stem, not a YAML field.** 
+> `Name` is derived from the file at load time (`plugin.PluginMetadata.Name` is `yaml:"-"`), so a `name:` (or `file_name:`) key in the YAML is **ignored**. Rename the file to rename the plugin.
 
 ## Common fields (every plugin type)
 

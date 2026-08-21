@@ -1,7 +1,6 @@
 # Tuning rule sidecar schema
 
-A tuning-rule binary `<name>` ships alongside `<name>.yaml`. Tuning rules adjust an alert's severity/confidence (or suppress it). The sidecar embeds the [common
-fields](README.md#common-fields-every-plugin-type) and adds the fields below (`pkg/tuning_rules.TuningRuleMetadata`).
+A tuning-rule binary `<name>` ships alongside `<name>.yaml`. Tuning rules adjust an alert's severity/confidence (or suppress it). The sidecar embeds the [common fields](README.md#common-fields-every-plugin-type) and adds the fields below (`pkg/tuning_rules.TuningRuleMetadata`).
 
 ## Tuning-rule-specific fields
 
