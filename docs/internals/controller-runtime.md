@@ -1,10 +1,6 @@
 # Controller Runtime
 
-[Internals index](README.md) · [Controller service](../services/controller.md)
-
-This is the authoritative implementation reference for the Ergo controller runtime in `internal/runtime/controller`. One application manages one catalog namespace;
-`cmd/controller` creates five such applications.
-The design has one supervisor child (the controller actor) and two actor-owned meta processes.
+This is the authoritative implementation reference for the Ergo controller runtime in `internal/runtime/controller`. One application manages one catalog namespace; `cmd/controller` creates five such applications. The design has one supervisor child (the controller actor) and two actor-owned meta processes.
 
 ## Composition
 
@@ -101,17 +97,14 @@ The application has no independent availability enum. It is prepared to start on
 
 ### Lifecycle
 
-The supervisor is one-for-one, transient, has one actor child, preserves that child's mailbox, handles child events, and disables automatic shutdown.
-Its restart intensity is five restarts in ten seconds.
-An abnormal child exit is eligible for restart; a normal or shutdown child exit outside supervisor draining or stopping fails the supervisor. Restart intensity exhaustion terminates the application.
-After `plugin.MessageStop`, it forwards `plugin.MessageDrain` to the actor.
+The supervisor is one-for-one, transient, has one actor child, preserves that child's mailbox, handles child events, and disables automatic shutdown. Its restart intensity is five restarts in ten seconds. An abnormal child exit is eligible for restart; a normal or shutdown child exit outside supervisor draining or stopping fails the supervisor. Restart intensity exhaustion terminates the application. After `plugin.MessageStop`, it forwards `plugin.MessageDrain` to the actor.
 
 ```mermaid
 stateDiagram-v2
   [*] --> Starting
   Starting --> Running: child started, no publisher fence, activate actor
   Running --> Running: abnormal child exit / transient restart
-  Running --> Draining: plugin.MessageStop; forwards plugin.MessageDrain
+  Running --> Draining: plugin.MessageStop && forwards plugin.MessageDrain
   Draining --> Stopping: actor drained and no publisher fences
   Stopping --> Stopped: actor exited and no publisher fences
   Stopped --> [*]
