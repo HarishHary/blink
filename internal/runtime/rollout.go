@@ -42,11 +42,6 @@ func (m *RolloutMode) UnmarshalText(text []byte) error {
 	return nil
 }
 
-type RolloutEntry struct {
-	RolloutMode RolloutMode
-	RolloutPct  float64
-}
-
 type PoolKey struct {
 	Id   string
 	Name string
