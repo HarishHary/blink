@@ -755,6 +755,8 @@ func (s *supervisor[P, M]) completeDesiredStateTransition() {
 }
 
 // desiredStateTransitionReadyToCommit reports whether all transition dependencies converged.
+// The catalog counts a router as settled once it routes or fails for good, so a plugin that
+// can no longer recover does not hold this transition or any later one.
 func (s *supervisor[P, M]) desiredStateTransitionReadyToCommit() bool {
 	return s.transition == SupervisorTransitionPreparing &&
 		s.pendingDesiredState.desiredRevision == 0 &&
@@ -763,30 +765,8 @@ func (s *supervisor[P, M]) desiredStateTransitionReadyToCommit() bool {
 		s.desiredState.desiredRevision != 0 &&
 		s.desiredState.snapshotGeneration == s.transitionGeneration &&
 		s.reconciler.status.revision == s.desiredState.desiredRevision &&
-		s.catalogConverged()
-}
-
-// catalogConverged reports whether every router is done moving toward the desired revision:
-// each one either routes or has failed for good. Failed counts as done because a plugin that
-// has spent its restart budget never recovers on its own, so waiting for it to be healthy
-// would block every later generation behind it. Starting and restarting are not done, so a
-// router that may still recover holds the transition until it routes or fails.
-func (s *supervisor[P, M]) catalogConverged() bool {
-	if s.catalog.status.desiredRevision != s.desiredState.desiredRevision {
-		return false
-	}
-	for _, router := range s.catalog.status.routers {
-		if router.revision != s.desiredState.desiredRevision {
-			return false
-		}
-		if router.availability == runtime.AvailabilityReady {
-			continue
-		}
-		if router.primary.lifecycle != DeploymentPoolFailed && router.candidate.lifecycle != DeploymentPoolFailed {
-			return false
-		}
-	}
-	return true
+		s.catalog.status.desiredRevision == s.desiredState.desiredRevision &&
+		s.catalog.status.settledRouters == s.catalog.status.desiredRouters
 }
 
 // finishDesiredStateTransition reopens admission after every current dependency converges.
