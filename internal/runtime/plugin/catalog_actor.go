@@ -377,15 +377,15 @@ func (a *catalogActor[T]) startRouter(id string) (*routerState, error) {
 		lifecycle:    RouterActorStarting,
 		availability: runtime.AvailabilityUnavailable,
 		lastError:    prevErr,
-		primary: deploymentPoolStatus{
-			lifecycle:    DeploymentPoolStopped,
+		primary: deploymentRouteStatus{
+			lifecycle:    DeploymentRouteStopped,
 			availability: runtime.AvailabilityUnavailable,
-			workers:      make(map[gen.PID]deploymentWorkerStatus),
+			processes:    make(map[gen.PID]pluginProcessStatus),
 		},
-		candidate: deploymentPoolStatus{
-			lifecycle:    DeploymentPoolStopped,
+		candidate: deploymentRouteStatus{
+			lifecycle:    DeploymentRouteStopped,
 			availability: runtime.AvailabilityUnavailable,
-			workers:      make(map[gen.PID]deploymentWorkerStatus),
+			processes:    make(map[gen.PID]pluginProcessStatus),
 		},
 	}
 	a.reconcileStatus()
@@ -447,15 +447,15 @@ func (a *catalogActor[T]) retireRouter(id string, callErr error) {
 		availability: runtime.AvailabilityUnavailable,
 		lastError:    prevErr,
 		revision:     a.desiredRevision,
-		primary: deploymentPoolStatus{
-			lifecycle:    DeploymentPoolStopped,
+		primary: deploymentRouteStatus{
+			lifecycle:    DeploymentRouteStopped,
 			availability: runtime.AvailabilityUnavailable,
-			workers:      make(map[gen.PID]deploymentWorkerStatus),
+			processes:    make(map[gen.PID]pluginProcessStatus),
 		},
-		candidate: deploymentPoolStatus{
-			lifecycle:    DeploymentPoolStopped,
+		candidate: deploymentRouteStatus{
+			lifecycle:    DeploymentRouteStopped,
 			availability: runtime.AvailabilityUnavailable,
-			workers:      make(map[gen.PID]deploymentWorkerStatus),
+			processes:    make(map[gen.PID]pluginProcessStatus),
 		},
 	}
 }
@@ -645,7 +645,7 @@ func (a *catalogActor[T]) reconcileStatus() {
 }
 
 // routerSettled reports whether a router is done moving toward revision: it reached that
-// revision and either routes or has failed for good. Failed counts as done because a pool
+// revision and either routes or has failed for good. Failed counts as done because a route
 // that has spent its restart budget never recovers on its own, so a caller waiting for the
 // whole catalog to be healthy would wait forever on it. Starting and restarting still may
 // go either way, so they are not settled.
@@ -654,8 +654,8 @@ func routerSettled(status routerActorStatus, revision uint64) bool {
 		return false
 	}
 	return status.availability == runtime.AvailabilityReady ||
-		status.primary.lifecycle == DeploymentPoolFailed ||
-		status.candidate.lifecycle == DeploymentPoolFailed
+		status.primary.lifecycle == DeploymentRouteFailed ||
+		status.candidate.lifecycle == DeploymentRouteFailed
 }
 
 // sameCatalogStatus reports whether two catalog statuses are equal.
