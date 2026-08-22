@@ -79,11 +79,14 @@ type deploymentManager[T Artifact] struct {
 	inFlightCalls  map[uint64]*deploymentManagerCall[T]
 	pendingCalls   []uint64
 	circuitOpen    bool
+	circuitToken   uint64
+	circuitStop    gen.CancelFunc
 	reconcileToken uint64
 	reconcileStop  gen.CancelFunc
 	idleSince      time.Time
 	lastScale      time.Time
 	lastError      error
+	growthWorkers  int // workers held from the process budget, above this deployment's reservation
 }
 
 // ---------------------------------------------------------------------------
@@ -104,6 +107,9 @@ type MessageDeploymentManagerReconcile struct{ token uint64 }
 
 // MessageDeploymentManagerDrainDeadline expires graceful manager drain.
 type MessageDeploymentManagerDrainDeadline struct{}
+
+// MessageDeploymentManagerCircuitCooldown re-arms the restart budget of an open circuit.
+type MessageDeploymentManagerCircuitCooldown struct{ token uint64 }
 
 // MessageDeploymentManagerRetry resets an authenticated open circuit.
 type MessageDeploymentManagerRetry struct {
@@ -145,11 +151,20 @@ type MessageDeploymentManagerTerminated struct {
 // Init validates configuration and starts the deployment's minimum Pool capacity.
 func (m *deploymentManager[T]) Init(...any) error {
 	m.options = deploymentManagerOptionsWithDefaults(m.options)
-	if m.deployment.MinProcs < 0 || m.deployment.MaxProcs > 100 || m.deployment.MinProcs > m.deployment.WorkerCount() {
+	if m.deployment.MinProcs < 0 || m.deployment.MaxProcs > MaxDeploymentProcs || m.deployment.MinProcs > m.deployment.WorkerCount() {
 		return fmt.Errorf("deployment manager: invalid worker bounds min=%d max=%d", m.deployment.MinProcs, m.deployment.WorkerCount())
 	}
 	m.inFlightCalls = make(map[uint64]*deploymentManagerCall[T])
 	m.pool.status.workers = make(map[gen.PID]deploymentWorkerStatus)
+	// A route always gets its own workers up to min_procs, or one worker for a MinProcs=0 route
+	// that a call wakes, whatever the process budget holds - desired state is not negotiable, and
+	// a route that could not start a single worker would fail every call it is routed. Those
+	// reservations are only reported against the budget, so an operator learns the process is
+	// already oversubscribed before scaling makes it worse.
+	reservation := max(1, m.deployment.MinProcs)
+	if reserved, limit := m.options.WorkerBudget.reserve(reservation), m.options.WorkerBudget.limit(); reserved > limit && reserved-reservation <= limit {
+		m.Log().Warning("reserved plugin workers exceed the process worker budget: reserved=%d budget=%d route=%s", reserved, limit, m.route)
+	}
 	if m.draining {
 		_, _ = m.SendAfter(m.PID(), MessageDeploymentManagerDrainDeadline{}, m.options.DrainTimeout)
 		m.reconcile()
@@ -167,9 +182,12 @@ func (m *deploymentManager[T]) Terminate(reason error) {
 	if m.pool.restart != nil {
 		m.pool.restart.CancelScheduled(false)
 	}
+	m.cancelCircuitCooldown()
 	if m.reconcileStop != nil {
 		m.reconcileStop()
 	}
+	m.releaseGrowthWorkers()
+	m.options.WorkerBudget.reserve(-max(1, m.deployment.MinProcs))
 	for _, entry := range m.inFlightCalls {
 		m.cancel(entry)
 	}
@@ -266,6 +284,13 @@ func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 		} else {
 			m.lastScale = time.Now()
 		}
+		// The pool keeps its current size when a resize fails, so the budget follows the size it
+		// reports rather than the one this manager asked for: a refused add and a completed
+		// removal both hand their worker back for another deployment to take.
+		if held := max(0, int(msg.size)-max(1, m.deployment.MinProcs)); held < m.growthWorkers {
+			m.options.WorkerBudget.release(m.growthWorkers - held)
+			m.growthWorkers = held
+		}
 		m.reconcile()
 
 	case gen.MessageDownPID:
@@ -274,6 +299,7 @@ func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 		}
 		m.pool.pid, m.pool.resizePending = gen.PID{}, false
 		m.pool.status = deploymentPoolStatus{lifecycle: DeploymentPoolStopped, availability: runtime.AvailabilityUnavailable, workers: make(map[gen.PID]deploymentWorkerStatus)}
+		m.releaseGrowthWorkers()
 		m.lastError = msg.Reason
 		for callID, entry := range m.inFlightCalls {
 			if entry.phase != deploymentManagerPending {
@@ -327,19 +353,24 @@ func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 			if m.pool.restart != nil {
 				m.pool.restart.CancelScheduled(false)
 			}
+			m.cancelCircuitCooldown()
 			m.pool.recovering = false
 			_, _ = m.SendAfter(m.PID(), MessageDeploymentManagerDrainDeadline{}, m.options.DrainTimeout)
 		}
+		m.reconcile()
+
+	case MessageDeploymentManagerCircuitCooldown:
+		if !m.circuitOpen || m.draining || msg.token != m.circuitToken {
+			return nil
+		}
+		m.closeCircuit()
 		m.reconcile()
 
 	case MessageDeploymentManagerRetry:
 		if from != m.Parent() || !m.circuitOpen || msg.route != m.route || msg.manager != m.PID() {
 			return nil
 		}
-		m.circuitOpen, m.pool.recovering, m.lastError = false, false, nil
-		if m.pool.restart != nil {
-			m.pool.restart.CancelScheduled(true)
-		}
+		m.closeCircuit()
 		m.reconcile()
 
 	case MessageDeploymentManagerDrainDeadline:
@@ -475,9 +506,21 @@ func (m *deploymentManager[T]) scale() {
 		return
 	}
 	if len(m.pendingCalls) > 0 && m.pool.status.desiredWorkers < m.deployment.WorkerCount() && m.ready() >= m.pool.status.desiredWorkers && m.active()+m.dispatching() >= min(m.pool.status.desiredWorkers, m.ready()) {
+		// max_procs is this deployment's own ceiling; the budget is the process one, since every
+		// worker past a reservation is a subprocess competing with every other deployment's for
+		// the same cores. Denied growth is not an error: the calls keep waiting in the queue, and
+		// the cooldown paces the next attempt until another deployment shrinks.
+		if !m.options.WorkerBudget.acquire() {
+			m.lastScale = time.Now()
+			m.scheduleScaleReconcile()
+			return
+		}
+		m.growthWorkers++
 		m.pool.resizePending = true
 		if err := m.SendWithPriority(m.pool.pid, MessageDeploymentPoolAddWorker{}, gen.MessagePriorityHigh); err != nil {
 			m.pool.resizePending = false
+			m.growthWorkers--
+			m.options.WorkerBudget.release(1)
 			m.lastError = err
 		}
 		return
@@ -511,6 +554,9 @@ func (m *deploymentManager[T]) startDeploymentPool(initial int) {
 	if m.draining || m.circuitOpen || m.pool.pid != (gen.PID{}) {
 		return
 	}
+	// A fresh incarnation starts at its reservation, so whatever the previous one had grown to is
+	// no longer running and belongs to whichever deployment needs it next.
+	m.releaseGrowthWorkers()
 	// LinkParent only propagates manager termination; MonitorPID below receives pool DOWN.
 	poolOptions := m.options.PoolOptions
 	poolOptions.InitialSize = int64(initial)
@@ -550,6 +596,12 @@ func (m *deploymentManager[T]) startDeploymentPool(initial int) {
 	}
 }
 
+// releaseGrowthWorkers hands every budgeted worker this manager holds back to the process budget.
+func (m *deploymentManager[T]) releaseGrowthWorkers() {
+	m.options.WorkerBudget.release(m.growthWorkers)
+	m.growthWorkers = 0
+}
+
 // scheduleDeploymentPoolRestart consumes the finite manager-level retry budget.
 func (m *deploymentManager[T]) scheduleDeploymentPoolRestart() {
 	m.pool.recovering = true
@@ -573,7 +625,7 @@ func (m *deploymentManager[T]) scheduleDeploymentPoolRestart() {
 	m.pool.restart.Pending, m.pool.restart.Cancel = true, cancel
 }
 
-// openCircuit stops Pool recovery and fails all tracked invocations.
+// openCircuit stops Pool recovery, fails all tracked invocations, and arms the cooldown.
 func (m *deploymentManager[T]) openCircuit(err error) {
 	if m.circuitOpen {
 		return
@@ -586,7 +638,32 @@ func (m *deploymentManager[T]) openCircuit(err error) {
 		m.removeCall(callID, runtime.ErrPluginUnavailable)
 	}
 	m.pendingCalls = nil
+	// Nothing else clears the circuit, so a deployment broken by a transient host problem
+	// would stay dead until an operator noticed. The cooldown re-arms the restart budget
+	// instead; a deployment that is genuinely broken just re-opens the circuit.
+	m.cancelCircuitCooldown()
+	if cancel, sendErr := m.SendAfter(m.PID(), MessageDeploymentManagerCircuitCooldown{token: m.circuitToken}, m.options.CircuitCooldown); sendErr == nil {
+		m.circuitStop = cancel
+	}
 	m.publishStatus()
+}
+
+// closeCircuit reopens admission with a fresh Pool restart budget.
+func (m *deploymentManager[T]) closeCircuit() {
+	m.circuitOpen, m.pool.recovering, m.lastError = false, false, nil
+	m.cancelCircuitCooldown()
+	if m.pool.restart != nil {
+		m.pool.restart.CancelScheduled(true)
+	}
+}
+
+// cancelCircuitCooldown drops any pending cooldown timer and fences its message.
+func (m *deploymentManager[T]) cancelCircuitCooldown() {
+	if m.circuitStop != nil {
+		m.circuitStop()
+		m.circuitStop = nil
+	}
+	m.circuitToken++
 }
 
 // scheduleScaleReconcile replaces the pending autoscaling timer with a fenced one.
