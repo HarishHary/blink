@@ -27,13 +27,13 @@ const (
 // deployment manager's own status, not a separate actor's: the router keeps a route per plugin
 // version, and the catalog and supervisor read process counts and queue depth from here.
 type deploymentRouteStatus struct {
-	lifecycle    DeploymentRouteLifecycle
-	availability runtime.Availability
-	readyProcs   int
-	currentProcs int
-	queueDepth   int
-	activeCalls  int
-	processes    map[gen.PID]pluginProcessStatus
+	lifecycle        DeploymentRouteLifecycle
+	availability     runtime.Availability
+	readyProcs       int
+	desiredProcesses int
+	queueDepth       int
+	activeCalls      int
+	processes        map[gen.PID]pluginProcessStatus
 }
 
 // ---------------------------------------------------------------------------
@@ -53,7 +53,7 @@ func sameDeploymentRouteStatus(left, right deploymentRouteStatus) bool {
 	if left.lifecycle != right.lifecycle ||
 		left.availability != right.availability ||
 		left.readyProcs != right.readyProcs ||
-		left.currentProcs != right.currentProcs ||
+		left.desiredProcesses != right.desiredProcesses ||
 		left.queueDepth != right.queueDepth ||
 		left.activeCalls != right.activeCalls ||
 		len(left.processes) != len(right.processes) {
