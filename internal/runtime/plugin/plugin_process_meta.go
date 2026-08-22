@@ -22,87 +22,96 @@ import (
 // Types & state
 // ---------------------------------------------------------------------------
 
-// WorkerMetaLifecycle describes one worker meta-process incarnation.
-type WorkerMetaLifecycle string
+// PluginMetaLifecycle describes one plugin meta-process incarnation.
+type PluginMetaLifecycle string
 
 const (
-	WorkerMetaStarting   WorkerMetaLifecycle = "starting"
-	WorkerMetaRunning    WorkerMetaLifecycle = "running"
-	WorkerMetaRestarting WorkerMetaLifecycle = "restarting"
-	WorkerMetaFailed     WorkerMetaLifecycle = "failed"
+	PluginMetaStarting   PluginMetaLifecycle = "starting"
+	PluginMetaRunning    PluginMetaLifecycle = "running"
+	PluginMetaRestarting PluginMetaLifecycle = "restarting"
+	PluginMetaFailed     PluginMetaLifecycle = "failed"
 )
 
-// WorkerMetaActivity is deliberately separate from lifecycle.
-type WorkerMetaActivity string
+// PluginMetaActivity is deliberately separate from lifecycle.
+type PluginMetaActivity string
 
 const (
-	PluginWorkerIdle WorkerMetaActivity = "idle"
-	PluginWorkerBusy WorkerMetaActivity = "busy"
+	PluginMetaIdle PluginMetaActivity = "idle"
+	PluginMetaBusy PluginMetaActivity = "busy"
 )
 
-const workerPingTimeout = 3 * time.Second
+const pluginMetaPingTimeout = 3 * time.Second
 
-// workerMetaState tracks one worker's replaceable plugin meta-process.
-type workerMetaState struct {
+// supportedCallsPerProcess is the invocation capacity one plugin process can actually serve today,
+// whatever its deployment declares. HandleCall below blocks its meta-process for the whole
+// invocation and the process actor that owns it takes one message at a time, so a second call reaches this
+// subprocess only after the first returns: capacity is a property of this layer, not of the
+// manager's arithmetic, and the manager clamps to it so a declared capacity never overstates what
+// the runtime will run. Raising it belongs with the asynchronous invocation path that removes the
+// serialization, not with the scheduler that would dispatch into it.
+const supportedCallsPerProcess = 1
+
+// pluginMetaState tracks one plugin process actor's replaceable meta-process.
+type pluginMetaState struct {
 	alias         gen.Alias
 	restart       *runtime.ScheduledBackoff
 	healthRestart *runtime.ScheduledBackoff
-	status        workerMetaStatus
+	status        pluginMetaStatus
 	pingPending   bool
 }
 
-// workerMetaStatus is owned by its deployment worker.
-type workerMetaStatus struct {
-	lifecycle    WorkerMetaLifecycle
+// pluginMetaStatus is owned by its plugin process actor.
+type pluginMetaStatus struct {
+	lifecycle    PluginMetaLifecycle
 	availability runtime.Availability
-	activity     WorkerMetaActivity
+	activity     PluginMetaActivity
 	lastError    error
 }
 
-// workerMetaSession is the atomically published plugin session.
-type workerMetaSession[T Artifact] struct {
+// pluginMetaSession is the atomically published plugin session.
+type pluginMetaSession[T Artifact] struct {
 	instance T
 	client   *goplugin.Client
 	rpc      RPC
 }
 
-// workerMeta owns one plugin subprocess and its RPC session.
-type workerMeta[T Artifact] struct {
+// pluginMeta owns one plugin subprocess and its RPC session.
+type pluginProcessMeta[T Artifact] struct {
 	gen.MetaProcess
 	adapter    *Adapter[T]
 	deployment Deployment
 	runCtx     context.Context
 	cancelRun  context.CancelFunc
-	session    atomic.Pointer[workerMetaSession[T]]
+	session    atomic.Pointer[pluginMetaSession[T]]
 }
 
 // ---------------------------------------------------------------------------
 // Messages
 // ---------------------------------------------------------------------------
 
-// MessageWorkerMetaStartResult reports whether the plugin session started.
-type MessageWorkerMetaStartResult struct {
+// MessagePluginMetaStartResult reports whether the plugin session started.
+type MessagePluginMetaStartResult struct {
 	alias gen.Alias
 	err   error
 }
 
-// MessageWorkerMetaPing requests a plugin health check.
-type MessageWorkerMetaPing struct{}
+// MessagePluginMetaPing requests a plugin health check.
+type MessagePluginMetaPing struct{}
 
-// MessageWorkerMetaPingResult reports a plugin health check result.
-type MessageWorkerMetaPingResult struct {
+// MessagePluginMetaPingResult reports a plugin health check result.
+type MessagePluginMetaPingResult struct {
 	alias gen.Alias
 	err   error
 }
 
-// workerInvokeCall carries a synchronous callback without terminating the meta-process on plugin errors.
-type workerInvokeCall[T Artifact] struct {
+// pluginMetaInvoke carries a synchronous callback without terminating the meta-process on plugin errors.
+type pluginMetaInvoke[T Artifact] struct {
 	context context.Context
 	fn      func(context.Context, T) error
 }
 
-// workerInvokeResponse returns the plugin result and recycle decision.
-type workerInvokeResponse struct {
+// pluginMetaInvokeResult returns the plugin result and recycle decision.
+type pluginMetaInvokeResult struct {
 	err     error
 	recycle bool
 }
@@ -129,23 +138,23 @@ const pluginRetryPolicy = `{
 // ---------------------------------------------------------------------------
 
 // Init initializes the meta process and its lifecycle context.
-func (m *workerMeta[T]) Init(process gen.MetaProcess) error {
+func (m *pluginProcessMeta[T]) Init(process gen.MetaProcess) error {
 	m.MetaProcess = process
 	m.runCtx, m.cancelRun = context.WithCancel(context.Background())
 	return nil
 }
 
 // Start launches the plugin and blocks until shutdown completes.
-func (m *workerMeta[T]) Start() error {
+func (m *pluginProcessMeta[T]) Start() error {
 	instance, client, rpc, err := m.launchPlugin(m.runCtx)
 	if err != nil {
-		_ = m.Send(m.Parent(), MessageWorkerMetaStartResult{alias: m.ID(), err: err})
-		return fmt.Errorf("launch plugin worker: %w", err)
+		_ = m.Send(m.Parent(), MessagePluginMetaStartResult{alias: m.ID(), err: err})
+		return fmt.Errorf("launch plugin process: %w", err)
 	}
 
-	m.session.Store(&workerMetaSession[T]{instance: instance, client: client, rpc: rpc})
+	m.session.Store(&pluginMetaSession[T]{instance: instance, client: client, rpc: rpc})
 
-	if err := m.Send(m.Parent(), MessageWorkerMetaStartResult{alias: m.ID()}); err != nil {
+	if err := m.Send(m.Parent(), MessagePluginMetaStartResult{alias: m.ID()}); err != nil {
 		m.close()
 	}
 
@@ -163,16 +172,16 @@ func (m *workerMeta[T]) Start() error {
 }
 
 // Terminate requests plugin session shutdown.
-func (m *workerMeta[T]) Terminate(error) { m.close() }
+func (m *pluginProcessMeta[T]) Terminate(error) { m.close() }
 
 // ---------------------------------------------------------------------------
 // Message handling
 // ---------------------------------------------------------------------------
 
 // HandleMessage processes parent-issued plugin health checks.
-func (m *workerMeta[T]) HandleMessage(from gen.PID, message any) error {
+func (m *pluginProcessMeta[T]) HandleMessage(from gen.PID, message any) error {
 	switch message.(type) {
-	case MessageWorkerMetaPing:
+	case MessagePluginMetaPing:
 		if from != m.Parent() {
 			return nil
 		}
@@ -181,10 +190,10 @@ func (m *workerMeta[T]) HandleMessage(from gen.PID, message any) error {
 			return nil
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), workerPingTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), pluginMetaPingTimeout)
 		_, err := session.rpc.Ping(ctx, &emptypb.Empty{})
 		cancel()
-		_ = m.Send(m.Parent(), MessageWorkerMetaPingResult{
+		_ = m.Send(m.Parent(), MessagePluginMetaPingResult{
 			alias: m.ID(),
 			err:   err,
 		})
@@ -195,22 +204,22 @@ func (m *workerMeta[T]) HandleMessage(from gen.PID, message any) error {
 	return nil
 }
 
-// HandleCall executes bounded plugin invocations from the parent worker.
-func (m *workerMeta[T]) HandleCall(from gen.PID, _ gen.Ref, request any) (any, error) {
+// HandleCall executes bounded plugin invocations from the parent process actor.
+func (m *pluginProcessMeta[T]) HandleCall(from gen.PID, _ gen.Ref, request any) (any, error) {
 	if from != m.Parent() {
-		return workerInvokeResponse{err: fmt.Errorf("actorruntime: unauthorized plugin worker caller %s", from)}, nil
+		return pluginMetaInvokeResult{err: fmt.Errorf("actorruntime: unauthorized plugin process caller %s", from)}, nil
 	}
 	switch msg := request.(type) {
-	case workerInvokeCall[T]:
+	case pluginMetaInvoke[T]:
 		if msg.context == nil {
-			return workerInvokeResponse{err: fmt.Errorf("actorruntime: invocation context is required")}, nil
+			return pluginMetaInvokeResult{err: fmt.Errorf("actorruntime: invocation context is required")}, nil
 		}
 		if msg.fn == nil {
-			return workerInvokeResponse{err: fmt.Errorf("actorruntime: invocation function is required")}, nil
+			return pluginMetaInvokeResult{err: fmt.Errorf("actorruntime: invocation function is required")}, nil
 		}
 		session := m.session.Load()
 		if session == nil || session.rpc == nil || m.runCtx.Err() != nil {
-			return workerInvokeResponse{err: runtime.ErrPluginUnavailable}, nil
+			return pluginMetaInvokeResult{err: runtime.ErrPluginUnavailable}, nil
 		}
 
 		result := make(chan error, 1)
@@ -229,32 +238,32 @@ func (m *workerMeta[T]) HandleCall(from gen.PID, _ gen.Ref, request any) (any, e
 			if recycle {
 				m.close()
 			}
-			return workerInvokeResponse{err: err, recycle: recycle}, nil
+			return pluginMetaInvokeResult{err: err, recycle: recycle}, nil
 		case <-msg.context.Done():
 			// ponytail: an arbitrary callback can outlive cancellation; Go cannot kill it.
 			m.close()
-			return workerInvokeResponse{err: msg.context.Err(), recycle: true}, nil
+			return pluginMetaInvokeResult{err: msg.context.Err(), recycle: true}, nil
 		}
 	}
-	return fmt.Errorf("actorruntime: unsupported plugin worker call %T", request), nil
+	return fmt.Errorf("actorruntime: unsupported plugin meta call %T", request), nil
 }
 
-// HandleInspect exposes no custom worker metadata.
-func (m *workerMeta[T]) HandleInspect(gen.PID, ...string) map[string]string { return nil }
+// HandleInspect exposes no custom meta-process metadata.
+func (m *pluginProcessMeta[T]) HandleInspect(gen.PID, ...string) map[string]string { return nil }
 
 // ---------------------------------------------------------------------------
 // Plugin session management
 // ---------------------------------------------------------------------------
 
 // close idempotently signals the session to stop.
-func (m *workerMeta[T]) close() {
+func (m *pluginProcessMeta[T]) close() {
 	if m.cancelRun != nil {
 		m.cancelRun()
 	}
 }
 
 // launchPlugin verifies, starts, and handshakes with the plugin subprocess.
-func (m *workerMeta[T]) launchPlugin(ctx context.Context) (T, *goplugin.Client, RPC, error) {
+func (m *pluginProcessMeta[T]) launchPlugin(ctx context.Context) (T, *goplugin.Client, RPC, error) {
 	var zero T
 	digest, err := helpers.BinaryChecksum(m.deployment.Path)
 	if err != nil {
