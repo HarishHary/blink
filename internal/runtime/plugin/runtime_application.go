@@ -328,7 +328,7 @@ func (a *Application[P, M]) Submit(ctx context.Context, pluginID string, rollout
 	if err := a.checkAccepting(); err != nil {
 		return runtime.Invocation{}, err
 	}
-	// Reserve this plugin's share before the shared budget: a plugin whose workers are
+	// Reserve this plugin's share before the shared budget: a plugin whose processes are
 	// stalled must fail its own calls fast instead of blocking every other plugin's
 	// caller on the global semaphore until that caller's own deadline expires.
 	a.mu.Lock()
