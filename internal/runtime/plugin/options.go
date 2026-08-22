@@ -60,24 +60,20 @@ type DeploymentManagerOptions struct {
 	ScaleCooldown   time.Duration
 	IdleTimeout     time.Duration
 	DrainTimeout    time.Duration
-	CircuitCooldown time.Duration // how long an open circuit waits before retrying the pool
+	CircuitCooldown time.Duration // how long an open circuit waits before admitting calls again
+	// RetryMin and RetryMax pace replacing a plugin process the manager lost, and their budget is
+	// what the circuit above opens on: process recovery is the manager's own job now that nothing
+	// sits between it and the processes it owns.
+	RetryMin time.Duration
+	RetryMax time.Duration
 	// WorkerBudget is shared by every manager in the process and bounds their combined
 	// scale-up past min_procs; nil leaves each manager bounded only by its own max_procs.
-	WorkerBudget *WorkerBudget
-	PoolOptions  DeploymentPoolOptions
+	WorkerBudget   *WorkerBudget
+	ProcessOptions PluginProcessOptions // handed to each spawned plugin process
 }
 
-// DeploymentPoolOptions configures one deployment worker pool.
-type DeploymentPoolOptions struct {
-	InitialSize   int64
-	MaxSize       int64
-	RetryMin      time.Duration
-	RetryMax      time.Duration
-	WorkerOptions DeploymentWorkerOptions
-}
-
-// DeploymentWorkerOptions configures one plugin execution worker.
-type DeploymentWorkerOptions struct {
+// PluginProcessOptions configures one plugin process.
+type PluginProcessOptions struct {
 	InvocationTimeout time.Duration
 	HealthInterval    time.Duration
 	RetryMin          time.Duration
