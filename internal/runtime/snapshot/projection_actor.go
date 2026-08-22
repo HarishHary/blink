@@ -66,10 +66,22 @@ type ProjectionState[T any] struct {
 
 // ProjectionData is the independently owned typed data from a snapshot.
 type ProjectionData[T any] struct {
-	Primaries    []T
-	Candidates   []T
-	ByFileName   map[string]T
-	MaxProcsByID map[string]int
+	Primaries   []T
+	Candidates  []T
+	ByFileName  map[string]T
+	RolloutByID map[string]Rollout
+}
+
+// Rollout is what a generation says about one plugin id's rollout. Its zero value
+// describes an id the generation does not carry, so a caller can read a missing key.
+type Rollout struct {
+	MaxProcs int
+	// Shadow reports that the id's candidate runs in shadow mode, so a caller can skip
+	// shadow submissions that have no candidate to route to.
+	Shadow bool
+	// HasCandidate reports that the id has a candidate at all in this generation, so a
+	// caller can skip splitting a batch by rollout side when every event routes alike.
+	HasCandidate bool
 }
 
 // clone returns an independently owned copy of the projection data.
@@ -81,7 +93,7 @@ func (s ProjectionData[T]) clone(loader Loader[T]) ProjectionData[T] {
 	for name, value := range s.ByFileName {
 		clone.ByFileName[name] = loader.Clone(value)
 	}
-	clone.MaxProcsByID = maps.Clone(s.MaxProcsByID)
+	clone.RolloutByID = maps.Clone(s.RolloutByID)
 	return clone
 }
 
@@ -226,8 +238,11 @@ func (a *projectionActor[T]) applyEvent(event gen.MessageEvent) error {
 		a.observedGeneration = snap.Generation
 		a.prepared = nil
 		parsed, err := newParsedProjection(snap, a.loader)
-		if err != nil {
-			a.lastError = err
+		a.lastError = err
+		// A snapshot in which nothing parsed carries no usable projection, so the previous
+		// generation is the safer view; a partial one still serves every plugin that parsed
+		// and stays degraded until a later generation is clean.
+		if err != nil && len(parsed.data.ByFileName) == 0 {
 			return nil
 		}
 		if a.mode == ProjectionCommitExternal {
@@ -235,7 +250,6 @@ func (a *projectionActor[T]) applyEvent(event gen.MessageEvent) error {
 		} else {
 			a.committed = &parsed
 		}
-		a.lastError = nil
 	case a.events.Status:
 		status, ok := event.Message.(ReaderActorStatus)
 		if ok {
@@ -286,12 +300,15 @@ type parsedProjection[T any] struct {
 	data       ProjectionData[T]
 }
 
-// newParsedProjection converts a snapshot into independently owned typed data.
+// newParsedProjection converts a snapshot into independently owned typed data. A spec that
+// fails to parse is skipped and joined into the returned error rather than discarding the
+// generation, so one broken plugin costs only itself.
 func newParsedProjection[T any](snap *snapshot.Snapshot, loader Loader[T]) (parsedProjection[T], error) {
 	data := ProjectionData[T]{
-		ByFileName:   make(map[string]T),
-		MaxProcsByID: make(map[string]int),
+		ByFileName:  make(map[string]T),
+		RolloutByID: make(map[string]Rollout),
 	}
+	var parseErrs []error
 	for _, entry := range snap.Entries {
 		for index, ref := range []*snapshot.ArtifactRef{entry.Primary, entry.Candidate} {
 			if ref == nil || len(ref.Spec) == 0 {
@@ -299,23 +316,24 @@ func newParsedProjection[T any](snap *snapshot.Snapshot, loader Loader[T]) (pars
 			}
 			value, err := loader.ParseSpec(ref.Name, append([]byte(nil), ref.Spec...))
 			if err != nil {
-				return parsedProjection[T]{}, fmt.Errorf("parse snapshot spec %q (id %q): %w", ref.Name, entry.Id, err)
+				parseErrs = append(parseErrs, fmt.Errorf("parse snapshot spec %q (id %q): %w", ref.Name, entry.Id, err))
+				continue
 			}
 			value = loader.Clone(value)
 			data.ByFileName[ref.Name] = loader.Clone(value)
-			maxProcs := loader.MaxProcs(value)
-			maxProcs = max(1, maxProcs)
-			if maxProcs > data.MaxProcsByID[entry.Id] {
-				data.MaxProcsByID[entry.Id] = maxProcs
-			}
+			rollout := data.RolloutByID[entry.Id]
+			rollout.MaxProcs = max(rollout.MaxProcs, 1, loader.MaxProcs(value))
 			if index == 0 {
 				data.Primaries = append(data.Primaries, loader.Clone(value))
 			} else {
 				data.Candidates = append(data.Candidates, loader.Clone(value))
+				rollout.HasCandidate = true
+				rollout.Shadow = rollout.Shadow || ref.RolloutMode == runtime.RolloutModeShadow
 			}
+			data.RolloutByID[entry.Id] = rollout
 		}
 	}
-	return parsedProjection[T]{generation: snap.Generation, data: data}, nil
+	return parsedProjection[T]{generation: snap.Generation, data: data}, errors.Join(parseErrs...)
 }
 
 // ProjectionClient performs bounded reads against the stable projection endpoint.

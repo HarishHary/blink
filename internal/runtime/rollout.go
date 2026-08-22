@@ -62,6 +62,10 @@ func (k PoolKey) String() string {
 
 const MissingTenantRolloutKey = "\x00missing-tenant\x00"
 
+// RolloutBucketCount is how many buckets RolloutBucket hashes into, and so the largest
+// number of rollout groups any batch can be split into however many events it holds.
+const RolloutBucketCount = 100
+
 func NormalizeRolloutKey(value any) string {
 	if key, ok := value.(string); ok && key != "" {
 		return key
@@ -75,5 +79,5 @@ func RolloutBucket(key string) uint32 {
 	}
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(key))
-	return h.Sum32()%100 + 1
+	return h.Sum32()%RolloutBucketCount + 1
 }
