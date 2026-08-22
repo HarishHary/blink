@@ -763,8 +763,30 @@ func (s *supervisor[P, M]) desiredStateTransitionReadyToCommit() bool {
 		s.desiredState.desiredRevision != 0 &&
 		s.desiredState.snapshotGeneration == s.transitionGeneration &&
 		s.reconciler.status.revision == s.desiredState.desiredRevision &&
-		s.catalog.status.desiredRevision == s.desiredState.desiredRevision &&
-		s.catalog.status.availability == runtime.AvailabilityReady
+		s.catalogConverged()
+}
+
+// catalogConverged reports whether every router is done moving toward the desired revision:
+// each one either routes or has failed for good. Failed counts as done because a plugin that
+// has spent its restart budget never recovers on its own, so waiting for it to be healthy
+// would block every later generation behind it. Starting and restarting are not done, so a
+// router that may still recover holds the transition until it routes or fails.
+func (s *supervisor[P, M]) catalogConverged() bool {
+	if s.catalog.status.desiredRevision != s.desiredState.desiredRevision {
+		return false
+	}
+	for _, router := range s.catalog.status.routers {
+		if router.revision != s.desiredState.desiredRevision {
+			return false
+		}
+		if router.availability == runtime.AvailabilityReady {
+			continue
+		}
+		if router.primary.lifecycle != DeploymentPoolFailed && router.candidate.lifecycle != DeploymentPoolFailed {
+			return false
+		}
+	}
+	return true
 }
 
 // finishDesiredStateTransition reopens admission after every current dependency converges.
@@ -780,8 +802,7 @@ func (s *supervisor[P, M]) finishDesiredStateTransition() {
 		s.reconciler.status.snapshotGeneration != s.transitionGeneration ||
 		s.reconciler.status.revision != s.desiredState.desiredRevision ||
 		s.reconciler.status.availability != runtime.AvailabilityReady ||
-		s.catalog.status.desiredRevision != s.desiredState.desiredRevision ||
-		s.catalog.status.availability != runtime.AvailabilityReady {
+		!s.catalogConverged() {
 		return
 	}
 	s.transition = SupervisorTransitionIdle
@@ -1088,7 +1109,11 @@ func (s *supervisor[P, M]) catalogActorName() gen.Atom {
 	return gen.Atom(string(s.opts.Name) + "-catalog")
 }
 
-// supervisorStateReader reports whether the runtime state is ready for callers.
+// supervisorStateReader reports whether the runtime state is ready for callers. A catalog
+// that lost one plugin still serves every other, so the gate is routability rather than
+// full readiness: withholding the state would stop callers from invoking healthy plugins
+// too, and the generation - not the catalog verdict - is what makes a call safe.
+// Invocations against the lost plugin still fail admission with ErrPluginUnavailable.
 func (s *supervisor[P, M]) supervisorStateReader() bool {
 	return s.projection.ReadyGeneration != 0 &&
 		s.projection.ReadyGeneration == s.projection.CommittedGeneration &&
@@ -1096,6 +1121,6 @@ func (s *supervisor[P, M]) supervisorStateReader() bool {
 		s.projection.Status.Availability.Routable() &&
 		s.desiredState.snapshotGeneration == s.projection.ReadyGeneration &&
 		s.catalog.status.desiredRevision == s.desiredState.desiredRevision &&
-		s.catalog.status.availability == runtime.AvailabilityReady &&
+		s.catalog.status.availability.Routable() &&
 		s.transition == SupervisorTransitionIdle && s.lifecycle != SupervisorDraining
 }
