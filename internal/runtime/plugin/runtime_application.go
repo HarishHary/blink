@@ -52,8 +52,14 @@ type Application[P Artifact, M any] struct {
 	productionAdmission *semaphore.Weighted
 	shadowAdmission     *semaphore.Weighted
 	nextCallID          uint64
-	inFlightCalls       map[uint64]*runtime.AsyncResult
+	calls               outstandingCalls
 	supervisorDone      runtimeCompletion
+}
+
+// outstandingCalls indexes the same accepted invocations two ways, under Application.mu.
+type outstandingCalls struct {
+	byID     map[uint64]*runtime.AsyncResult // results to complete on cancel and shutdown
+	byPlugin map[string]int                  // per-plugin depth, for fair admission
 }
 
 // ---------------------------------------------------------------------------
@@ -71,8 +77,11 @@ func NewApplication[P Artifact, M any](opts Options, adapter *Adapter[P], loader
 		logger:              runtimeLogger,
 		productionAdmission: semaphore.NewWeighted(int64(opts.MaxOutstandingInvocations)),
 		shadowAdmission:     semaphore.NewWeighted(int64(opts.ShadowMaxOutstandingInvocations)),
-		inFlightCalls:       make(map[uint64]*runtime.AsyncResult),
-		supervisorDone:      runtimeCompletion{done: make(chan struct{})},
+		calls: outstandingCalls{
+			byID:     make(map[uint64]*runtime.AsyncResult),
+			byPlugin: make(map[string]int),
+		},
+		supervisorDone: runtimeCompletion{done: make(chan struct{})},
 	}
 }
 
@@ -173,7 +182,7 @@ func (a *Application[P, M]) Terminate(reason error) {
 	}
 	a.lifecycle = applicationTerminated
 	a.supervisorDone.err = reason
-	for _, call := range a.inFlightCalls {
+	for _, call := range a.calls.byID {
 		call.Complete(pendingErr)
 	}
 	close(a.supervisorDone.done)
@@ -319,11 +328,30 @@ func (a *Application[P, M]) Submit(ctx context.Context, pluginID string, rollout
 	if err := a.checkAccepting(); err != nil {
 		return runtime.Invocation{}, err
 	}
+	// Reserve this plugin's share before the shared budget: a plugin whose workers are
+	// stalled must fail its own calls fast instead of blocking every other plugin's
+	// caller on the global semaphore until that caller's own deadline expires.
+	a.mu.Lock()
+	if a.calls.byPlugin[pluginID] >= a.opts.MaxOutstandingInvocationsPerPlugin {
+		a.mu.Unlock()
+		return runtime.Invocation{}, runtime.ErrQueueFull
+	}
+	a.calls.byPlugin[pluginID]++
+	a.mu.Unlock()
+	releasePluginSlot := func() {
+		a.mu.Lock()
+		if a.calls.byPlugin[pluginID]--; a.calls.byPlugin[pluginID] <= 0 {
+			delete(a.calls.byPlugin, pluginID)
+		}
+		a.mu.Unlock()
+	}
 	if err := a.productionAdmission.Acquire(ctx, 1); err != nil {
+		releasePluginSlot()
 		return runtime.Invocation{}, err
 	}
 	return a.submit(ctx, pluginID, rolloutKey, expectedGeneration, fn, false, func() {
 		a.productionAdmission.Release(1)
+		releasePluginSlot()
 	})
 }
 
@@ -426,7 +454,7 @@ func (a *Application[P, M]) submit(ctx context.Context, pluginID string, rollout
 		a.mu.Unlock()
 		return fail(applicationAcceptingError(lifecycle))
 	}
-	a.inFlightCalls[callID] = result
+	a.calls.byID[callID] = result
 	a.mu.Unlock()
 
 	request := MessageSubmitInvocation[P]{
@@ -442,7 +470,7 @@ func (a *Application[P, M]) submit(ctx context.Context, pluginID string, rollout
 	}
 	if err := nodeRef.Send(supervisor, request); err != nil {
 		a.mu.Lock()
-		delete(a.inFlightCalls, callID)
+		delete(a.calls.byID, callID)
 		a.mu.Unlock()
 		return fail(fmt.Errorf("submit plugin invocation: %w", err))
 	}
@@ -455,7 +483,7 @@ func (a *Application[P, M]) submit(ctx context.Context, pluginID string, rollout
 		err := <-result.Ch
 		stopContextWatch()
 		a.mu.Lock()
-		delete(a.inFlightCalls, callID)
+		delete(a.calls.byID, callID)
 		a.mu.Unlock()
 		release()
 		state.Complete(err)
