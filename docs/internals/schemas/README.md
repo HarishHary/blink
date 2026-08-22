@@ -9,19 +9,19 @@ Every plugin binary `<name>` ships alongside a `<name>.yaml` **sidecar** that de
 
 These come from `plugin.PluginMetadata`, embedded (`yaml:",inline"`) in every type's metadata:
 
-| Field          | Type          | Notes                                                                   |
-| -------------- | ------------- | ----------------------------------------------------------------------- |
-| `id`           | string (UUID) | Stable logical plugin identity. A canary reuses the same `id`.          |
-| `display_name` | string        | Human-readable name.                                                    |
-| `description`  | string        | Free text.                                                              |
-| `enabled`      | bool          | Whether the plugin runs. `false` stops its subprocesses (no tombstone). |
-| `version`      | string        | Semver, informational.                                                  |
-| `mode`         | string        | Rollout mode: `blue-green` (default), `canary`, or `shadow`.            |
-| `rollout_pct`  | number        | Canary traffic percentage; used only when `mode: canary`.               |
-| `min_procs`    | int           | Minimum worker subprocesses.                                            |
-| `max_procs`    | int           | Maximum worker subprocesses for the actor deployment manager.           |
+| Field          | Type          | Notes                                                                                    |
+| -------------- | ------------- | ---------------------------------------------------------------------------------------- |
+| `id`           | string (UUID) | Stable logical plugin identity. A canary reuses the same `id`.                           |
+| `display_name` | string        | Human-readable name.                                                                     |
+| `description`  | string        | Free text.                                                                               |
+| `enabled`      | bool          | Whether the plugin runs. `false` stops its subprocesses (no tombstone).                  |
+| `version`      | string        | Semver, informational.                                                                   |
+| `mode`         | string        | Rollout mode: `blue-green` (default), `canary`, or `shadow`.                             |
+| `rollout_pct`  | number        | Canary traffic percentage; used only when `mode: canary`.                                |
+| `min_procs`    | int           | Minimum worker subprocesses.                                                             |
+| `max_procs`    | int           | Maximum worker subprocesses for the actor deployment manager, `<= 100`. Defaults to `1`. |
 
-Rollout modes, deployment routes, and worker pools are covered in [Plugin runtime](../plugin-runtime.md#deployment-route).
+`max_procs` should usually stay at its default: sharding a batch across workers splits it into more calls without reducing its work, so extra workers pay only for a plugin whose own per-event CPU dominates per-call overhead, and only when cores are free to run them. Rollout modes, deployment routes, and worker pools are covered in [Plugin runtime](../plugin-runtime.md#deployment-route); [Concurrency knobs](../concurrency-knobs.md) measures what each value costs.
 
 ## Per-type schemas
 

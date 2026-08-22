@@ -135,18 +135,18 @@ The reader actor owns reader-meta creation, restart/backoff, public status, snap
 
 ### Lifecycle
 
-The projection actor monitors buffered snapshot and reader-status events. It parses every artifact spec through its typed loader; a parse error leaves the last committed projection intact and reports degraded. `ProjectionClient` uses the stable projection child name and returns a deep clone.
+The projection actor monitors buffered snapshot and reader-status events. It parses every artifact spec through its typed loader. A spec that fails to parse is skipped rather than discarding the generation: the remaining plugins are prepared or committed as usual, the joined parse errors are retained, and the actor reports degraded until a later generation parses cleanly. A generation in which nothing parsed carries no usable projection, so it leaves the last committed projection intact and reports degraded. `ProjectionClient` uses the stable projection child name and returns a deep clone.
 
 ```mermaid
 stateDiagram-v2
     [*] --> Starting
     Starting --> Observing: activated and events monitored
-    Observing --> Prepared: valid newer snapshot, external mode
-    Observing --> Committed: valid newer snapshot, direct mode
+    Observing --> Prepared: newer snapshot with at least one parsed spec, external mode
+    Observing --> Committed: newer snapshot with at least one parsed spec, direct mode
     Prepared --> Committed: authenticated matching commit
-    Observing --> Degraded: parse failure with prior commit
+    Observing --> Degraded: skipped spec, or fully unparsable snapshot with prior commit
     Committed --> Ready: reader ready at or beyond committed generation
-    Ready --> Degraded: newer parse failure
+    Ready --> Degraded: newer skipped or unparsable spec
     Ready --> Unavailable: reader not ready
     Committed --> Stopped: terminate
     Prepared --> Stopped: terminate

@@ -63,7 +63,9 @@ The runtime and snapshot supervisors are registered; all remaining listed names 
 
 ## Readiness
 
-The runtime admits work only when its expected projection generation is ready and committed, the desired-state barrier is idle, and the application is running. The supervisor is ready only when projection and catalog generations/revisions agree, catalog is ready, projection is routable, and it is not draining. During a transition/drain or when projection/catalog is missing, runtime availability is unavailable; it is degraded when dependencies exist but are not all ready. Component readiness below contributes to this operational/composite state rather than defining extra lifecycle constants.
+The runtime admits work only when its expected projection generation is ready and committed, the desired-state barrier is idle, and the application is running.
+
+The supervisor is ready only when projection and catalog generations/revisions agree, catalog and projection are routable, and it is not draining. Catalog routability rather than catalog readiness is deliberate: one dead plugin must not withhold state from callers invoking the healthy ones, and per-call admission rejects the dead route with `ErrPluginUnavailable` anyway. During a transition/drain or when projection/catalog is missing, runtime availability is unavailable; it is degraded when dependencies exist but are not all ready. Component readiness below contributes to this operational/composite state rather than defining extra lifecycle constants.
 
 ## Plugin Application
 
@@ -92,7 +94,9 @@ stateDiagram-v2
 
 ### Readiness
 
-`Start` marks the application running only after lookup of its registered supervisor succeeds. Production `Submit` acquires the application-wide blocking `MaxOutstandingInvocations` permit, including queue waiters. `SubmitShadow` uses a separate non-blocking budget and returns `ErrShadowDropped` when full.
+`Start` marks the application running only after lookup of its registered supervisor succeeds. Production `Submit` first reserves the plugin's own share of the budget, `MaxOutstandingInvocationsPerPlugin`, rejecting with `ErrQueueFull` when that share is full, and only then acquires the application-wide blocking `MaxOutstandingInvocations` permit, which includes queue waiters. The per-plugin share is what stops one saturated plugin - a stalled deployment holding its whole queue plus workers - from consuming the shared budget and blocking every other plugin's caller until that caller's own deadline expires; it fails its own calls fast instead. `SubmitShadow` uses a separate non-blocking budget and returns `ErrShadowDropped` when full.
+
+Because that share rejects rather than waits, it must cover the widest fan-out one caller batch can legitimately produce, times the batches the caller runs at once, so the budgets are derived from `MaxBatchSize` and `MaxConcurrentCalls` rather than fixed. One call is at most `MaxDeploymentProcs + 1` invocations - a shard per worker, plus the one more an uneven two-way rollout split costs - or the batch's own event count, since a shard needs an event to carry, so the per-plugin share defaults to `min(MaxBatchSize, MaxDeploymentProcs+1) * MaxConcurrentCalls` and a caller that declares no `MaxBatchSize` is sized for the widest `max_procs` a deployment may legally declare rather than for an assumed event count it may exceed. Both bounds are properties of the call rather than of the rollout shape, so the share tracks a fan-out the caller can actually reach at every batch size. The shared budget cannot be derived the same way, because nothing here knows how many plugins a batch touches; it only blocks, so it is a process-wide ceiling of `perPlugin * MaxConcurrentCalls` - a smaller one would serialise batches that the caller has already bounded - and the shadow budget a sixteenth of it. The deployment manager's `QueueSize` default rises with the per-plugin share, since one plugin's whole fan-out lands on one manager and everything past the running workers waits in its queue; a smaller queue would only move the same `ErrQueueFull` one layer down. A service that raises its batch size or concurrency therefore raises these budgets by passing both; explicitly set budgets are always left alone, and a shared budget too small for one fan-out simply gives a single plugin all of it, because the per-plugin share isolates plugins from each other rather than rejecting a caller's own batch. These budgets bound calls, which are cheap to hold; the separate `WorkerBudget` described under Deployment Pool bounds the subprocesses that serve them, which is why it is sized from CPUs instead of from the batch. [concurrency-knobs.md](concurrency-knobs.md) tabulates these budgets against every other knob that moves call counts.
 
 ## Runtime Supervisor
 
@@ -128,7 +132,7 @@ stateDiagram-v2
 
 ### Readiness
 
-The supervisor accepts `SupervisorStatusRequest` and `SupervisorStateRequest`. Its exact state reader requires a nonzero ready generation equal to the committed generation, a routable committed projection, matching desired snapshot generation and catalog revision, catalog readiness, an idle transition, and a non-draining lifecycle. After Catalog reports drained, the supervisor fails remaining calls, answers drain waiters, and terminates. The subtree uses independent finite retry domains; cancelling a scheduled retry invalidates its token.
+The supervisor accepts `SupervisorStatusRequest` and `SupervisorStateRequest`. Its exact state reader requires a nonzero ready generation equal to the committed generation, a routable committed projection, matching desired snapshot generation and catalog revision, a routable catalog, an idle transition, and a non-draining lifecycle. After Catalog reports drained, the supervisor fails remaining calls, answers drain waiters, and terminates. The subtree uses independent finite retry domains; cancelling a scheduled retry invalidates its token.
 
 ## Desired-State Transition
 
@@ -163,6 +167,8 @@ stateDiagram-v2
 ### Readiness
 
 Admission reopens only after projection, reconciler, catalog, generation, and revision agree. This is transition/admission readiness, not an additional lifecycle enum.
+
+The catalog side of that barrier is convergence, not aggregate health: every router must report the desired revision and be either ready or terminally failed (its deployment circuit open). A router still starting or restarting holds the transition until it resolves either way, but a plugin whose restart budget is spent never becomes healthy on its own, so gating on aggregate readiness would let one broken deployment freeze every later generation.
 
 ## Reconciler Actor
 
@@ -304,7 +310,7 @@ Router facts are accepted only from the current PID, generation, and increasing 
 
 ### Lifecycle
 
-Each router dynamically creates primary, canary, and shadow deployment routes from its desired state. A normal production call uses primary unless its rollout bucket selects an active canary; `SubmitShadow` independently makes best-effort fan-out only to an active shadow candidate, so a full shadow budget never consumes production capacity.
+Each router dynamically creates primary, canary, and shadow deployment routes from its desired state. A normal production call uses primary unless its rollout bucket selects an active canary; `SubmitShadow` independently makes best-effort fan-out only to an active shadow candidate, so a full shadow budget never consumes production capacity. Callers gate their own submissions on `ProjectionData.RolloutByID[id].Shadow`, so a plugin with no shadow candidate never clones a batch for a call the router would discard as unroutable. The same entry's `HasCandidate` and `Shadow` gate the rollout split itself for the same reason: a batch only has to be cut where its routing decision changes, so a plugin with no canary candidate takes its whole batch as one group, and one with a canary is cut in two - the buckets the candidate wins and the rest - rather than once per bucket, since the router re-derives the decision from the one rollout key the call carries. A candidate appearing mid-batch moves the committed generation, and calls from a retired generation are rejected so the caller re-resolves against fresh state, which is what makes that collapse safe.
 
 ```mermaid
 stateDiagram-v2
@@ -386,6 +392,7 @@ stateDiagram-v2
     Running --> Starting: pool dies or worker restart exhausts
     Starting --> Running: pool restart provides capacity
     Starting --> Failed: restart budget exhausted => circuit opens
+    Failed --> Starting: circuit cooldown re-arms the restart budget
     Running --> Draining: MessageDrain
     Draining --> Stopped: calls and pool drained
     Draining --> Stopped: drain deadline expires
@@ -401,28 +408,29 @@ stateDiagram-v2
 | `MessageDeploymentManagerDispatchDeadline` | manager → manager                                                                 | Times out an invocation awaiting worker start.                                        |
 | `MessageDeploymentManagerRestart`          | manager → manager                                                                 | Token-fenced pool-creation retry.                                                     |
 | `MessageDeploymentManagerReconcile`        | deployment manager → deployment manager                                           | Token-fenced autoscaling pass.                                                        |
+| `MessageDeploymentManagerCircuitCooldown`  | manager → manager                                                                 | Token-fenced circuit re-arm: restores the pool restart budget after the cooldown.     |
 | `MessageDeploymentManagerDrainDeadline`    | manager → manager                                                                 | Cancels remaining work with `context.DeadlineExceeded`.                               |
 | `MessageDrain`                             | router → deployment manager                                                       | Stops new work, cancels recovery/scale activity, and starts graceful drain.           |
 | `MessageDeploymentPoolStatusChanged`       | deployment pool → deployment manager                                              | Drives capacity, availability, dispatch, and scaling decisions.                       |
 | `MessageDeploymentWorkerRestartExhausted`  | deployment worker → deployment pool → deployment manager                          | Replaces the exhausted pool or opens the manager circuit if recovery cannot proceed.  |
 | `MessageDeploymentWorkerStopped`           | deployment worker → deployment pool → deployment manager                          | Fails calls active on a stopped worker.                                               |
 | `gen.MessageDownPID`                       | Ergo monitor → deployment manager                                                 | Marks the current pool down and starts bounded pool recovery when unexpected.         |
-| `MessageDeploymentManagerStatusChanged`    | deployment manager → router                                                       | Publishes queue, worker, lifecycle, and availability state.                           |
+| `MessageDeploymentManagerStatusChanged`    | deployment manager → router                                                       | Publishes worker, lifecycle, and availability changes; queue counters ride along.     |
 | `MessageDeploymentManagerDrained`          | deployment manager → router                                                       | Reports that calls and pool work are drained.                                         |
 | `MessageRetryDeployment`                   | no production sender                                                              | Defined router control message; no production path emits it.                          |
 | `MessageDeploymentManagerRetry`            | router → deployment manager                                                       | Authenticated circuit reset if a caller sends the otherwise unproduced retry message. |
 
 ### Readiness
 
-`MinProcs=0` creates no initial pool; the first queued call creates one worker. Dispatch requires ready capacity beyond active plus dispatching calls and has `MessageDeploymentManagerDispatchDeadline`; each worker invocation is bounded by its invocation timeout; graceful drain has `MessageDeploymentManagerDrainDeadline`. Pool recovery uses a finite scheduled backoff; exhaustion opens the circuit, and
-`MessageDeploymentManagerRetry` resets it. No production sender currently emits `MessageRetryDeployment`. An existing active route remains
-open-circuited; it changes only when desired state removes or replaces that route. `Recovering` is useful operational/composite-state prose for unavailable pool recovery, but it is not a `DeploymentManagerLifecycle` constant; declared lifecycle/status values remain `starting`, `running`, `draining`, `failed`, and `stopped`.
+`MinProcs=0` creates no initial pool; the first queued call creates one worker. Dispatch requires ready capacity beyond active plus dispatching calls and has `MessageDeploymentManagerDispatchDeadline`; each worker invocation is bounded by its invocation timeout; graceful drain has `MessageDeploymentManagerDrainDeadline`. Pool recovery uses a finite scheduled backoff; exhaustion opens the circuit, which fails every tracked invocation and stops recovery. An open circuit re-arms itself: `openCircuit` schedules a token-fenced `MessageDeploymentManagerCircuitCooldown` after `CircuitCooldown` (default 5 minutes), and handling it restores the full restart budget and reconciles, so a deployment broken by a transient host problem recovers without an operator and one that is genuinely broken simply re-opens the circuit. Drain and terminate cancel the pending cooldown. `MessageDeploymentManagerRetry` resets the circuit immediately, but no production sender currently emits `MessageRetryDeployment`. An existing active route is otherwise unchanged by the circuit; it changes only when desired state removes or replaces that route. `Recovering` is useful operational/composite-state prose for unavailable pool recovery, but it is not a `DeploymentManagerLifecycle` constant; declared lifecycle/status values remain `starting`, `running`, `draining`, `failed`, and `stopped`.
 
 ## Deployment Pool
 
 ### Lifecycle
 
 Queue pressure can scale up only to `max(1, MaxProcs)`, and every reconciliation adds or removes exactly one worker. The default scale cooldown is one second. After 30 seconds idle, scale-down removes one worker; at zero minimum it terminates the final idle pool rather than asking the pool to remove its last worker. Manager pool recovery, worker normal restart, and worker health restart each have independent bounded backoffs.
+
+`MaxProcs` is only this deployment's own ceiling. Because every worker is a subprocess, growth past a deployment's reserved `max(1, MinProcs)` also needs a permit from one `WorkerBudget` shared by every manager in the process, sized `GOMAXPROCS x DefaultRuntimeWorkerGrowthPerProc` (2) so the count follows the container's CPU limit rather than the node's core count. The reservations are outside the budget: desired state always gets its `MinProcs`, and a `MinProcs=0` route always gets the one worker a queued call wakes, because a route that could start no worker at all would fail every call routed to it. Reservations are counted only to warn - a catalog whose reservations already exceed the budget logs `reserved plugin workers exceed the process worker budget` and starts anyway. A denied permit is not an error either: the calls stay queued and the cooldown paces the next attempt, and every permit is returned when the deployment shrinks, when its pool stops or is replaced, or when the manager terminates, so a process at its budget still moves growth to whichever deployment has queued work.
 
 ```mermaid
 stateDiagram-v2
@@ -534,8 +542,8 @@ The meta verifies the artifact checksum before `exec.CommandContext`, requires t
 ```mermaid
 stateDiagram-v2
     [*] --> Submitted
-    Submitted --> Admitted: production permit or shadow TryAcquire
-    Submitted --> Rejected: lifecycle, generation, or admission failure
+    Submitted --> Admitted: plugin share plus production permit, or shadow TryAcquire
+    Submitted --> Rejected: lifecycle, generation, plugin share full, or admission failure
     Admitted --> Routed: supervisor, catalog, router
     Routed --> Accepted: manager acknowledgement
     Routed --> Failed: route acceptance deadline or route failure

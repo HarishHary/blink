@@ -173,8 +173,7 @@ The actor reports `ready` only while running when the artifact_scanner is comple
 
 ### Lifecycle
 
-The artifact_scanner starts with an immediate scan, then observes the directory with `fsnotify`, a 400 ms debounce, and a five-second poll. It rescans directly in its meta-process `Start`,
-leaving the actor mailbox unblocked.
+The artifact_scanner starts with an immediate scan, then observes the directory with `fsnotify`, a 400 ms debounce, and a five-second poll. It rescans directly in its meta-process `Start`, leaving the actor mailbox unblocked. A scan reads a file only when its size or modification time differs from the one the cached spec or digest was taken from, so a poll over an unchanged directory neither re-parses YAML nor re-checksums binaries. A rewrite that preserves both is invisible to the scanner; for binaries the plugin runtime re-checksums against the published digest before launch, so a stale digest stalls that rollout rather than deploying something unverified.
 
 ```mermaid
 stateDiagram-v2
@@ -339,8 +338,7 @@ barrier quiescence, closes writer and database, and unloads the application. The
 ## Source References
 
 - `internal/runtime/controller/{service.go,controller_application.go,controller_supervisor.go,controller_actor.go}` - lifecycle ownership and message handling.
-- `internal/runtime/controller/{artifact_scanner_meta.go,snapshot_publisher_meta.go,reconcile.go,publisher_io_barrier.go,options.go,defaults.go}` - worker behavior, planning, shutdown barrier,
-  names, and timing defaults.
+- `internal/runtime/controller/{artifact_scanner_meta.go,snapshot_publisher_meta.go,reconcile.go,publisher_io_barrier.go,options.go,defaults.go}` - worker behavior, planning, shutdown barrier, names, and timing defaults.
 - `internal/runtime/backoff.go` - scheduled worker-restart budget and backoff implementation.
 - `internal/backends/{database.go,sql.go,record.go}` - namespace-scoped persistence and schema.
 - `internal/snapshot/{snapshot.go,convert.go}` - effective entry and Kafka generation-marker wire format.
