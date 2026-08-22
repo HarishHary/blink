@@ -86,7 +86,7 @@ func (BaseLoader[U, T]) ParseSpec(name string, spec []byte) (T, error) {
 // Clone returns an independently owned metadata value.
 func (BaseLoader[U, T]) Clone(value T) T { return value.Clone() }
 
-// MaxProcs returns the configured worker limit.
+// MaxProcs returns the configured plugin process limit.
 func (BaseLoader[U, T]) MaxProcs(value T) int { return value.Metadata().MaxProcs }
 
 func isNilLoader[T any](loader Loader[T]) bool {
