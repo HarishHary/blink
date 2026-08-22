@@ -33,7 +33,13 @@ func (r *Application) Tune(ctx context.Context, state snapshotruntime.Projection
 		return TuneResult{Items: []TuneItem{}}
 	}
 	generation := state.CommittedGeneration
-	r.shadow(ctx, tuningRuleID, input, max(1, state.MaxProcsByID[tuningRuleID]), generation)
+	rollout := state.RolloutByID[tuningRuleID]
+	workerCount := max(1, rollout.MaxProcs)
+	// Without a shadow candidate in this generation every submission clones the batch only
+	// to be rejected as unroutable, one logged error per shard.
+	if rollout.Shadow {
+		r.shadow(ctx, tuningRuleID, input, workerCount, generation)
+	}
 
 	type routeGroup struct {
 		rolloutKey string
@@ -56,7 +62,6 @@ func (r *Application) Tune(ctx context.Context, state snapshotruntime.Projection
 	}
 
 	parts := make([]TuneResult, len(groups))
-	workerCount := max(1, state.MaxProcsByID[tuningRuleID])
 	var wg sync.WaitGroup
 	for i, group := range groups {
 		wg.Add(1)

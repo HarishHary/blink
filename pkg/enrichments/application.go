@@ -32,7 +32,13 @@ func (r *Application) Enrich(ctx context.Context, state snapshot.ProjectionState
 		return EnrichResult{Errs: []errors.Error{}}
 	}
 	generation := state.CommittedGeneration
-	r.shadow(ctx, enrichmentID, input, max(1, state.MaxProcsByID[enrichmentID]), generation)
+	rollout := state.RolloutByID[enrichmentID]
+	workerCount := max(1, rollout.MaxProcs)
+	// Without a shadow candidate in this generation every submission clones the batch only
+	// to be rejected as unroutable, one logged error per shard.
+	if rollout.Shadow {
+		r.shadow(ctx, enrichmentID, input, workerCount, generation)
+	}
 	owned := alerts.CloneAlerts(input)
 
 	type routeGroup struct {
@@ -56,7 +62,6 @@ func (r *Application) Enrich(ctx context.Context, state snapshot.ProjectionState
 	}
 
 	parts := make([]EnrichResult, len(groups))
-	workerCount := max(1, state.MaxProcsByID[enrichmentID])
 	var wg sync.WaitGroup
 	for i, group := range groups {
 		wg.Add(1)

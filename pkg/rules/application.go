@@ -32,7 +32,13 @@ func (r *Application) Evaluate(ctx context.Context, state snapshotruntime.Projec
 		return EvaluateResult{Items: []EvaluateItem{}}
 	}
 	generation := state.CommittedGeneration
-	r.shadow(ctx, ruleID, input, max(1, state.MaxProcsByID[ruleID]), generation)
+	rollout := state.RolloutByID[ruleID]
+	workerCount := max(1, rollout.MaxProcs)
+	// Without a shadow candidate in this generation every submission clones the batch only
+	// to be rejected as unroutable, one logged error per shard.
+	if rollout.Shadow {
+		r.shadow(ctx, ruleID, input, workerCount, generation)
+	}
 
 	type routeGroup struct {
 		rolloutKey string
@@ -55,7 +61,6 @@ func (r *Application) Evaluate(ctx context.Context, state snapshotruntime.Projec
 	}
 
 	parts := make([]EvaluateResult, len(groups))
-	workerCount := max(1, state.MaxProcsByID[ruleID])
 	var wg sync.WaitGroup
 	for i, group := range groups {
 		wg.Add(1)

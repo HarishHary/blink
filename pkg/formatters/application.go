@@ -33,7 +33,13 @@ func (r *Application) Format(ctx context.Context, state snapshot.ProjectionState
 		return FormatResult{Items: []FormatItem{}}
 	}
 	generation := state.CommittedGeneration
-	r.shadow(ctx, formatterID, input, max(1, state.MaxProcsByID[formatterID]), generation)
+	rollout := state.RolloutByID[formatterID]
+	workerCount := max(1, rollout.MaxProcs)
+	// Without a shadow candidate in this generation every submission clones the batch only
+	// to be rejected as unroutable, one logged error per shard.
+	if rollout.Shadow {
+		r.shadow(ctx, formatterID, input, workerCount, generation)
+	}
 
 	type routeGroup struct {
 		rolloutKey string
@@ -59,7 +65,6 @@ func (r *Application) Format(ctx context.Context, state snapshot.ProjectionState
 	}
 
 	parts := make([]FormatResult, len(groups))
-	workerCount := max(1, state.MaxProcsByID[formatterID])
 	var wg sync.WaitGroup
 	for i, group := range groups {
 		wg.Add(1)
