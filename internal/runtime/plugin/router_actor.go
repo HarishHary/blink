@@ -47,11 +47,11 @@ type routerActorStatus struct {
 	revision       uint64
 	normalRoutable bool
 	shadowRoutable bool
-	primary        deploymentPoolStatus
-	candidate      deploymentPoolStatus
+	primary        deploymentRouteStatus
+	candidate      deploymentRouteStatus
 }
 
-// clone deep-copies the nested pool statuses so a receiver cannot mutate router state.
+// clone deep-copies the nested route statuses so a receiver cannot mutate router state.
 func (s routerActorStatus) clone() routerActorStatus {
 	clone := s
 	clone.primary = s.primary.clone()
@@ -493,7 +493,7 @@ func (a *routerActor[T]) newDeploymentManager(ref *deploymentRouteState) *deploy
 	ref.status = deploymentManagerStatus{
 		lifecycle:    DeploymentManagerStarting,
 		availability: runtime.AvailabilityUnavailable,
-		workers:      make(map[gen.PID]deploymentWorkerStatus),
+		processes:    make(map[gen.PID]pluginProcessStatus),
 	}
 	return &deploymentManager[T]{
 		adapter:    a.adapter,
@@ -770,46 +770,46 @@ func (a *routerActor[T]) removeDrainedRoute(ref *deploymentRouteState) {
 // Status projection
 // ---------------------------------------------------------------------------
 
-// deploymentStatusFor projects a deployment's route into the catalog-facing pool status.
-func (a *routerActor[T]) deploymentStatusFor(deployment *Deployment) deploymentPoolStatus {
+// deploymentStatusFor projects a deployment's route into the catalog-facing route status.
+func (a *routerActor[T]) deploymentStatusFor(deployment *Deployment) deploymentRouteStatus {
 	if deployment == nil {
-		return deploymentPoolStatus{
-			lifecycle:    DeploymentPoolStopped,
+		return deploymentRouteStatus{
+			lifecycle:    DeploymentRouteStopped,
 			availability: runtime.AvailabilityUnavailable,
-			workers:      make(map[gen.PID]deploymentWorkerStatus),
+			processes:    make(map[gen.PID]pluginProcessStatus),
 		}
 	}
 	ref := a.routesByKey[deployment.PoolKey()]
 	if ref == nil {
-		return deploymentPoolStatus{
-			lifecycle:      DeploymentPoolStarting,
-			availability:   runtime.AvailabilityUnavailable,
-			desiredWorkers: deployment.WorkerCount(),
-			workers:        make(map[gen.PID]deploymentWorkerStatus),
+		return deploymentRouteStatus{
+			lifecycle:        DeploymentRouteStarting,
+			availability:     runtime.AvailabilityUnavailable,
+			desiredProcesses: deployment.ProcessCountLimit(),
+			processes:        make(map[gen.PID]pluginProcessStatus),
 		}
 	}
-	lifecycle := DeploymentPoolStarting
+	lifecycle := DeploymentRouteStarting
 	switch ref.status.lifecycle {
 	case DeploymentManagerRunning:
-		lifecycle = DeploymentPoolRunning
+		lifecycle = DeploymentRouteRunning
 	case DeploymentManagerDraining:
-		lifecycle = DeploymentPoolDraining
+		lifecycle = DeploymentRouteDraining
 	case DeploymentManagerStopped:
-		lifecycle = DeploymentPoolStopped
+		lifecycle = DeploymentRouteStopped
 	case DeploymentManagerFailed:
-		lifecycle = DeploymentPoolFailed
+		lifecycle = DeploymentRouteFailed
 	}
 	if ref.restart != nil && ref.restart.Pending {
-		lifecycle = DeploymentPoolRestarting
+		lifecycle = DeploymentRouteRestarting
 	}
-	return deploymentPoolStatus{
-		lifecycle:      lifecycle,
-		availability:   ref.status.availability,
-		healthyWorkers: ref.status.readyWorkers,
-		desiredWorkers: ref.status.currentProcs,
-		queueDepth:     ref.status.queueDepth,
-		activeCalls:    ref.status.active + ref.status.dispatching,
-		workers:        ref.status.workers,
+	return deploymentRouteStatus{
+		lifecycle:        lifecycle,
+		availability:     ref.status.availability,
+		readyProcs:       ref.status.readyProcs,
+		desiredProcesses: ref.status.currentProcs,
+		queueDepth:       ref.status.queueDepth,
+		activeCalls:      ref.status.active + ref.status.dispatching,
+		processes:        ref.status.processes,
 	}
 }
 
@@ -837,8 +837,8 @@ func (a *routerActor[T]) reconcileStatus() {
 	if normalRoutable && a.lifecycle == RouterActorStarting {
 		a.lifecycle = RouterActorRunning
 	}
-	primaryHealthy := a.desiredPrimary == nil || (primaryStatus.lifecycle == DeploymentPoolRunning && primaryStatus.availability == runtime.AvailabilityReady)
-	candidateHealthy := a.desiredCandidate == nil || (candidateStatus.lifecycle == DeploymentPoolRunning && candidateStatus.availability == runtime.AvailabilityReady)
+	primaryHealthy := a.desiredPrimary == nil || (primaryStatus.lifecycle == DeploymentRouteRunning && primaryStatus.availability == runtime.AvailabilityReady)
+	candidateHealthy := a.desiredCandidate == nil || (candidateStatus.lifecycle == DeploymentRouteRunning && candidateStatus.availability == runtime.AvailabilityReady)
 	availability := runtime.AvailabilityUnavailable
 	switch {
 	case fullNormalCoverage && primaryHealthy && candidateHealthy:
@@ -870,8 +870,8 @@ func sameRouterStatus(left, right routerActorStatus) bool {
 		left.revision == right.revision &&
 		left.normalRoutable == right.normalRoutable &&
 		left.shadowRoutable == right.shadowRoutable &&
-		sameDeploymentPoolStatus(left.primary, right.primary) &&
-		sameDeploymentPoolStatus(left.candidate, right.candidate)
+		sameDeploymentRouteStatus(left.primary, right.primary) &&
+		sameDeploymentRouteStatus(left.candidate, right.candidate)
 }
 
 // ---------------------------------------------------------------------------
