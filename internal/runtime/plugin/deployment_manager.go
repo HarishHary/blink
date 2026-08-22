@@ -32,11 +32,15 @@ type deploymentManagerStatus struct {
 	availability runtime.Availability
 	currentProcs int
 	readyWorkers int
-	queueDepth   int
-	dispatching  int
-	active       int
-	lastError    error
-	workers      map[gen.PID]deploymentWorkerStatus
+	// queueDepth, dispatching, and active are sampled whenever one of the fields above changes.
+	// They move with every single invocation, and no layer above this manager decides anything
+	// from them, so they ride along with the next health change rather than publishing one of
+	// their own: see publishStatus for what a publish costs.
+	queueDepth  int
+	dispatching int
+	active      int
+	lastError   error
+	workers     map[gen.PID]deploymentWorkerStatus
 }
 
 // ---------------------------------------------------------------------------
@@ -60,6 +64,60 @@ type deploymentManagerCall[T Artifact] struct {
 	dispatchToken uint64
 	dispatchStop  gen.CancelFunc
 	completed     bool
+	queued        bool                      // linked into the manager's pending queue
+	prev, next    *deploymentManagerCall[T] // pending queue links, valid while queued
+}
+
+// pendingQueue is the manager's FIFO of accepted invocations waiting for worker capacity. It
+// links the call entries themselves, so unlinking one costs the same wherever it sits in the
+// queue: a plugin's queue is sized from its admission budget and runs thousands of entries deep,
+// while callers cancel and expire invocations that are nowhere near the head.
+type pendingQueue[T Artifact] struct {
+	head, tail *deploymentManagerCall[T]
+	length     int
+}
+
+// push appends one invocation to the back of the queue.
+func (q *pendingQueue[T]) push(entry *deploymentManagerCall[T]) {
+	if entry.queued {
+		return
+	}
+	entry.queued, entry.prev, entry.next = true, q.tail, nil
+	if q.tail != nil {
+		q.tail.next = entry
+	} else {
+		q.head = entry
+	}
+	q.tail, q.length = entry, q.length+1
+}
+
+// pop unlinks and returns the oldest queued invocation, or nil when none is queued.
+func (q *pendingQueue[T]) pop() *deploymentManagerCall[T] {
+	entry := q.head
+	if entry != nil {
+		q.remove(entry)
+	}
+	return entry
+}
+
+// remove unlinks one invocation; an entry that is not queued is left alone, so every caller that
+// drops a call can remove it without first knowing which phase the call reached.
+func (q *pendingQueue[T]) remove(entry *deploymentManagerCall[T]) {
+	if !entry.queued {
+		return
+	}
+	if entry.prev != nil {
+		entry.prev.next = entry.next
+	} else {
+		q.head = entry.next
+	}
+	if entry.next != nil {
+		entry.next.prev = entry.prev
+	} else {
+		q.tail = entry.prev
+	}
+	entry.queued, entry.prev, entry.next = false, nil, nil
+	q.length--
 }
 
 // ---------------------------------------------------------------------------
@@ -77,7 +135,9 @@ type deploymentManager[T Artifact] struct {
 	route          gen.Atom
 	pool           deploymentPoolState
 	inFlightCalls  map[uint64]*deploymentManagerCall[T]
-	pendingCalls   []uint64
+	pendingCalls   pendingQueue[T]
+	liveStatus     deploymentManagerStatus
+	statusEpoch    uint64
 	circuitOpen    bool
 	circuitToken   uint64
 	circuitStop    gen.CancelFunc
@@ -335,7 +395,7 @@ func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 			return nil
 		}
 		m.pool.restart.Pending, m.pool.restart.Cancel = false, nil
-		if !m.circuitOpen && m.pool.pid == (gen.PID{}) && (m.pool.recovering || m.deployment.MinProcs > 0 || len(m.pendingCalls) > 0) {
+		if !m.circuitOpen && m.pool.pid == (gen.PID{}) && (m.pool.recovering || m.deployment.MinProcs > 0 || m.pendingCalls.length > 0) {
 			m.startDeploymentPool(max(1, m.deployment.MinProcs))
 		}
 		m.reconcile()
@@ -379,10 +439,8 @@ func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 		}
 		for callID, entry := range m.inFlightCalls {
 			m.cancel(entry)
-			m.completeInvocation(entry, context.DeadlineExceeded)
-			delete(m.inFlightCalls, callID)
+			m.removeCall(callID, context.DeadlineExceeded)
 		}
-		m.pendingCalls = nil
 		m.reportDrained()
 
 	case MessageStop:
@@ -425,12 +483,13 @@ func (m *deploymentManager[T]) acceptInvocation(call MessageInvokePlugin[T]) {
 		m.completeInvocation(&deploymentManagerCall[T]{call: call}, err)
 		return
 	}
-	if len(m.pendingCalls) >= m.options.QueueSize {
+	if m.pendingCalls.length >= m.options.QueueSize {
 		m.completeInvocation(&deploymentManagerCall[T]{call: call}, runtime.ErrQueueFull)
 		return
 	}
-	m.inFlightCalls[call.CallID] = &deploymentManagerCall[T]{call: call, phase: deploymentManagerPending}
-	m.pendingCalls = append(m.pendingCalls, call.CallID)
+	entry := &deploymentManagerCall[T]{call: call, phase: deploymentManagerPending}
+	m.inFlightCalls[call.CallID] = entry
+	m.pendingCalls.push(entry)
 	m.reconcile()
 }
 
@@ -447,14 +506,14 @@ func (m *deploymentManager[T]) reconcile() {
 		}
 		return
 	}
-	if len(m.pendingCalls) == 0 && m.dispatching() == 0 {
+	if m.pendingCalls.length == 0 && m.dispatching() == 0 {
 		if m.idleSince.IsZero() {
 			m.idleSince = time.Now()
 		}
 	} else {
 		m.idleSince = time.Time{}
 	}
-	if m.pool.pid == (gen.PID{}) && !m.pool.recovering && (m.deployment.MinProcs > 0 || len(m.pendingCalls) > 0) && (m.pool.restart == nil || !m.pool.restart.Pending) {
+	if m.pool.pid == (gen.PID{}) && !m.pool.recovering && (m.deployment.MinProcs > 0 || m.pendingCalls.length > 0) && (m.pool.restart == nil || !m.pool.restart.Pending) {
 		m.startDeploymentPool(max(1, m.deployment.MinProcs))
 	}
 	m.dispatchInvocation()
@@ -470,13 +529,9 @@ func (m *deploymentManager[T]) dispatchInvocation() {
 	if m.draining || m.circuitOpen || m.pool.recovering || m.pool.status.lifecycle == DeploymentPoolFailed {
 		return
 	}
-	for len(m.pendingCalls) > 0 && m.pool.pid != (gen.PID{}) && !m.pool.expectedStop && m.active()+m.dispatching() < min(m.pool.status.desiredWorkers, m.ready()) {
-		callID := m.pendingCalls[0]
-		m.pendingCalls = m.pendingCalls[1:]
-		entry := m.inFlightCalls[callID]
-		if entry == nil || entry.phase != deploymentManagerPending {
-			continue
-		}
+	for m.pendingCalls.length > 0 && m.pool.pid != (gen.PID{}) && !m.pool.expectedStop && m.active()+m.dispatching() < min(m.pool.status.desiredWorkers, m.ready()) {
+		entry := m.pendingCalls.pop()
+		callID := entry.call.CallID
 		if err := entry.call.Context.Err(); err != nil {
 			m.removeCall(callID, err)
 			continue
@@ -505,7 +560,7 @@ func (m *deploymentManager[T]) scale() {
 		m.scheduleScaleReconcile()
 		return
 	}
-	if len(m.pendingCalls) > 0 && m.pool.status.desiredWorkers < m.deployment.WorkerCount() && m.ready() >= m.pool.status.desiredWorkers && m.active()+m.dispatching() >= min(m.pool.status.desiredWorkers, m.ready()) {
+	if m.pendingCalls.length > 0 && m.pool.status.desiredWorkers < m.deployment.WorkerCount() && m.ready() >= m.pool.status.desiredWorkers && m.active()+m.dispatching() >= min(m.pool.status.desiredWorkers, m.ready()) {
 		// max_procs is this deployment's own ceiling; the budget is the process one, since every
 		// worker past a reservation is a subprocess competing with every other deployment's for
 		// the same cores. Denied growth is not an error: the calls keep waiting in the queue, and
@@ -525,7 +580,7 @@ func (m *deploymentManager[T]) scale() {
 		}
 		return
 	}
-	if len(m.pendingCalls) == 0 && m.dispatching() == 0 && m.pool.status.desiredWorkers > m.deployment.MinProcs {
+	if m.pendingCalls.length == 0 && m.dispatching() == 0 && m.pool.status.desiredWorkers > m.deployment.MinProcs {
 		if time.Since(m.idleSince) < m.options.IdleTimeout {
 			m.scheduleScaleReconcile()
 			return
@@ -637,7 +692,6 @@ func (m *deploymentManager[T]) openCircuit(err error) {
 	for callID := range m.inFlightCalls {
 		m.removeCall(callID, runtime.ErrPluginUnavailable)
 	}
-	m.pendingCalls = nil
 	// Nothing else clears the circuit, so a deployment broken by a transient host problem
 	// would stay dead until an operator noticed. The cooldown re-arms the restart budget
 	// instead; a deployment that is genuinely broken just re-opens the circuit.
@@ -675,7 +729,7 @@ func (m *deploymentManager[T]) scheduleScaleReconcile() {
 	if remaining := m.options.ScaleCooldown - time.Since(m.lastScale); remaining > delay {
 		delay = remaining
 	}
-	if len(m.pendingCalls) == 0 && m.dispatching() == 0 && m.pool.status.desiredWorkers > m.deployment.MinProcs {
+	if m.pendingCalls.length == 0 && m.dispatching() == 0 && m.pool.status.desiredWorkers > m.deployment.MinProcs {
 		if remaining := m.options.IdleTimeout - time.Since(m.idleSince); remaining > delay {
 			delay = remaining
 		}
@@ -714,12 +768,7 @@ func (m *deploymentManager[T]) removeCall(callID uint64, err error) {
 		entry.dispatchStop()
 		entry.dispatchStop = nil
 	}
-	for i, pending := range m.pendingCalls {
-		if pending == callID {
-			m.pendingCalls = append(m.pendingCalls[:i], m.pendingCalls[i+1:]...)
-			break
-		}
-	}
+	m.pendingCalls.remove(entry)
 	delete(m.inFlightCalls, callID)
 	m.completeInvocation(entry, err)
 }
@@ -815,17 +864,46 @@ func (m *deploymentManager[T]) status() deploymentManagerStatus {
 	status := deploymentManagerStatus{
 		lifecycle: lifecycle, availability: availability,
 		currentProcs: m.pool.status.desiredWorkers, readyWorkers: m.ready(),
-		queueDepth: len(m.pendingCalls), dispatching: m.dispatching(), active: m.active(),
+		queueDepth: m.pendingCalls.length, dispatching: m.dispatching(), active: m.active(),
 		lastError: m.lastError,
 		workers:   m.pool.status.clone().workers,
 	}
 	return status
 }
 
-// publishStatus sends the latest manager snapshot to its Router parent.
+// sameDeploymentManagerStatus reports whether two snapshots describe the same deployment health,
+// for publish deduplication. The per-invocation counters are excluded on purpose; see
+// deploymentManagerStatus.
+func sameDeploymentManagerStatus(left, right deploymentManagerStatus) bool {
+	if left.lifecycle != right.lifecycle ||
+		left.availability != right.availability ||
+		left.currentProcs != right.currentProcs ||
+		left.readyWorkers != right.readyWorkers ||
+		errorText(left.lastError) != errorText(right.lastError) ||
+		len(left.workers) != len(right.workers) {
+		return false
+	}
+	for pid, worker := range left.workers {
+		other, ok := right.workers[pid]
+		if !ok || !sameDeploymentWorkerStatus(worker, other) {
+			return false
+		}
+	}
+	return true
+}
+
+// publishStatus sends the latest manager snapshot to its Router parent, skipping one the Router
+// already has. Every accepted, dispatched, and completed invocation reconciles this manager, and
+// the Router recomputes its own status - and the catalog and supervisor above it - for each fact
+// it receives, so republishing an unchanged status would walk that whole chain twice per call.
 func (m *deploymentManager[T]) publishStatus() {
+	next := m.status()
+	if m.statusEpoch != 0 && sameDeploymentManagerStatus(m.liveStatus, next) {
+		return
+	}
+	m.statusEpoch, m.liveStatus = m.statusEpoch+1, next
 	_ = m.SendWithPriority(m.Parent(), MessageDeploymentManagerStatusChanged{
 		route: m.route, manager: m.PID(),
-		status: m.status(),
+		status: next,
 	}, gen.MessagePriorityHigh)
 }
