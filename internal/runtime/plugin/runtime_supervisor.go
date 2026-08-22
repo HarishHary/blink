@@ -782,7 +782,8 @@ func (s *supervisor[P, M]) finishDesiredStateTransition() {
 		s.reconciler.status.snapshotGeneration != s.transitionGeneration ||
 		s.reconciler.status.revision != s.desiredState.desiredRevision ||
 		s.reconciler.status.availability != runtime.AvailabilityReady ||
-		!s.catalogConverged() {
+		s.catalog.status.desiredRevision != s.desiredState.desiredRevision ||
+		s.catalog.status.settledRouters != s.catalog.status.desiredRouters {
 		return
 	}
 	s.transition = SupervisorTransitionIdle
