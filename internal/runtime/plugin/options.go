@@ -68,7 +68,7 @@ type DeploymentManagerOptions struct {
 	RetryMax time.Duration
 	// ProcessBudget is shared by every manager in the process and bounds their combined
 	// scale-up past min_procs; nil leaves each manager bounded only by its own max_procs.
-	ProcessBudget   *ProcessBudget
+	ProcessBudget  *ProcessBudget
 	ProcessOptions PluginProcessOptions // handed to each spawned plugin process
 }
 
