@@ -79,8 +79,8 @@ flowchart LR
 ## Runtime Foundation
 
 Each service process owns a local, non-networked Ergo node. Applications, supervisors, actors, and meta processes isolate failure domains. Actors serialize mutable
-control state instead of acting as parallel workers. Bounded invocation admission plus the dynamic router → route → manager → pool → worker hierarchy provides
-concurrency. Dynamic routes and pools are not supervisors. Horizontal scale remains at the service, Kafka, and KEDA layers.
+control state instead of acting as parallel workers. Bounded invocation admission plus the dynamic router → route → manager → plugin process hierarchy provides
+concurrency. Dynamic routes are not supervisors. Horizontal scale remains at the service, Kafka, and KEDA layers.
 
 - Plugins run as separate Go subprocesses over gRPC, so a failing capability is isolated from its host service.
 - `controller` publishes desired state as log-compacted Kafka snapshots, including a generation marker; consumers rebuild committed projections from that state.
