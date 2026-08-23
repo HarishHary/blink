@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -14,14 +15,52 @@ import (
 	"github.com/harishhary/blink/internal/snapshot"
 )
 
+// database/sql handles connection-pool waits with context. Disabling SQLite's
+// own cancellation-blind busy sleep makes lock contention return immediately
+// so the controller's bounded retry loop remains in control.
+const sqliteBusyTimeout time.Duration = 0
+
 // OpenSQLite opens a SQLite database at dsn (a file path, or ":memory:" for tests).
 // The mattn/go-sqlite3 driver is registered by this package.
 func OpenSQLite(dsn string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite3", dsn)
+	boundedDSN, err := withBoundedSQLiteBusyTimeout(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: parse %q: %w", dsn, err)
+	}
+	db, err := sql.Open("sqlite3", boundedDSN)
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: open %q: %w", dsn, err)
 	}
 	return db, nil
+}
+
+func withBoundedSQLiteBusyTimeout(dsn string) (string, error) {
+	if dsn == "" {
+		return "", fmt.Errorf("empty DSN")
+	}
+	if dsn == ":memory:" {
+		return dsn, nil
+	}
+	base, rawQuery, _ := strings.Cut(dsn, "?")
+	query, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		return "", err
+	}
+	timeout := sqliteBusyTimeout.Milliseconds()
+	for _, key := range []string{"_busy_timeout", "_timeout"} {
+		if configured := query.Get(key); configured != "" {
+			milliseconds, err := strconv.ParseInt(configured, 10, 64)
+			if err != nil || milliseconds < 0 {
+				return "", fmt.Errorf("invalid %s %q", key, configured)
+			}
+			if milliseconds < timeout {
+				timeout = milliseconds
+			}
+		}
+		query.Del(key)
+	}
+	query.Set("_busy_timeout", strconv.FormatInt(timeout, 10))
+	return base + "?" + query.Encode(), nil
 }
 
 // NewSQLite returns a SQLite-backed Database scoped to namespace.
