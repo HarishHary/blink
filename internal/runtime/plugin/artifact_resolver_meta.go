@@ -179,15 +179,16 @@ func (m *artifactResolverMeta) resolveDeployment(entry snapshot.EffectiveEntry, 
 	}
 
 	return &Deployment{
-		Id:         entry.Id,
-		Name:       ref.Name,
-		Enabled:    spec.Enabled,
-		Mode:       ref.RolloutMode,
-		RolloutPct: spec.RolloutPct,
-		MinProcs:   spec.MinProcs,
-		MaxProcs:   spec.MaxProcs,
-		Path:       path,
-		Hash:       digest,
-		Spec:       append([]byte(nil), ref.Spec...),
+		Id:                           entry.Id,
+		Name:                         ref.Name,
+		Enabled:                      spec.Enabled,
+		Mode:                         ref.RolloutMode,
+		RolloutPct:                   spec.RolloutPct,
+		MinProcs:                     spec.MinProcs,
+		MaxProcs:                     spec.MaxProcs,
+		MaxConcurrentCallsPerProcess: spec.CallsPerProcess,
+		Path:                         path,
+		Hash:                         digest,
+		Spec:                         append([]byte(nil), ref.Spec...),
 	}, false
 }

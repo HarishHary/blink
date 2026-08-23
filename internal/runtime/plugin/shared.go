@@ -29,19 +29,22 @@ type Deployment struct {
 	Spec                         []byte
 }
 
-// DeploymentPoolKey identifies a pool for a plugin deployment.
-type DeploymentPoolKey struct {
-	runtime.PoolKey
+// DeploymentRouteKey identifies one concrete deployment: its artifact together with everything
+// about it that the runtime cannot change underneath running processes. A route serves exactly one
+// of these, so a deployment that alters any of them is a different route whose processes replace the
+// old ones rather than a reconfiguration of the ones already running.
+type DeploymentRouteKey struct {
+	runtime.ArtifactKey
 	MinProcs     int
 	MaxProcs     int
 	CallsPerProc int
 	SpecHash     [sha256.Size]byte
 }
 
-// PoolKey returns the pool key for the deployment.
-func (d *Deployment) PoolKey() DeploymentPoolKey {
-	return DeploymentPoolKey{
-		PoolKey:      runtime.PoolKey{Id: d.Id, Name: d.Name, Hash: d.Hash},
+// RouteKey returns the route identity of the deployment.
+func (d *Deployment) RouteKey() DeploymentRouteKey {
+	return DeploymentRouteKey{
+		ArtifactKey:  runtime.ArtifactKey{Id: d.Id, Name: d.Name, Hash: d.Hash},
 		MinProcs:     d.MinProcs,
 		MaxProcs:     d.ProcessCountLimit(),
 		CallsPerProc: d.CapacityPerProcess(),
