@@ -71,7 +71,7 @@ const (
 
 // deploymentRouteState is one dynamic route: a stable address that outlives many manager PIDs.
 type deploymentRouteState struct {
-	key        DeploymentPoolKey
+	key        DeploymentRouteKey
 	deployment Deployment
 	name       gen.Atom
 	pid        gen.PID
@@ -85,7 +85,7 @@ type deploymentRouteState struct {
 // Router actor
 // ---------------------------------------------------------------------------
 
-// routerActor owns one dynamic Ergo route per concrete DeploymentPoolKey.
+// routerActor owns one dynamic Ergo route per concrete DeploymentRouteKey.
 type routerActor[T Artifact] struct {
 	act.Router
 	opts             RouterOptions
@@ -96,8 +96,8 @@ type routerActor[T Artifact] struct {
 	desiredRevision  uint64
 	statusEpoch      uint64
 	adapter          *Adapter[T]
-	routesByKey      map[DeploymentPoolKey]*deploymentRouteState
-	routesByName     map[gen.Atom]DeploymentPoolKey
+	routesByKey      map[DeploymentRouteKey]*deploymentRouteState
+	routesByName     map[gen.Atom]DeploymentRouteKey
 	inFlightCalls    map[uint64]*routerInvocation
 	desiredPrimary   *Deployment
 	desiredCandidate *Deployment
@@ -129,7 +129,7 @@ type MessageRouterActivate struct{ generation uint64 }
 
 // MessageRetryDeployment asks the router to nudge a specific manager to retry.
 type MessageRetryDeployment struct {
-	key     DeploymentPoolKey
+	key     DeploymentRouteKey
 	manager gen.PID
 }
 
@@ -177,8 +177,8 @@ type MessageRetryRouteStep struct {
 func (a *routerActor[T]) Init(...any) (act.RouterOptions, error) {
 	a.opts = routerOptionsWithDefaults(a.opts)
 	a.lifecycle = RouterActorStarting
-	a.routesByKey = make(map[DeploymentPoolKey]*deploymentRouteState)
-	a.routesByName = make(map[gen.Atom]DeploymentPoolKey)
+	a.routesByKey = make(map[DeploymentRouteKey]*deploymentRouteState)
+	a.routesByName = make(map[gen.Atom]DeploymentRouteKey)
 	a.inFlightCalls = make(map[uint64]*routerInvocation)
 	return act.RouterOptions{}, nil
 }
@@ -364,7 +364,7 @@ func (a *routerActor[T]) applyDeployment(d *Deployment) error {
 	if d == nil || a.isDraining() {
 		return nil
 	}
-	key := d.PoolKey()
+	key := d.RouteKey()
 	name, err := deploymentRouteName(key)
 	if err != nil {
 		return err
@@ -388,10 +388,10 @@ func (a *routerActor[T]) applyDeployment(d *Deployment) error {
 func (a *routerActor[T]) reconcileDeployments() {
 	a.activateDesired(&a.activePrimary, a.desiredPrimary)
 	a.activateDesired(&a.activeCandidate, a.desiredCandidate)
-	keep := make(map[DeploymentPoolKey]bool)
+	keep := make(map[DeploymentRouteKey]bool)
 	for _, deployment := range []*Deployment{a.desiredPrimary, a.desiredCandidate, a.activePrimary, a.activeCandidate} {
 		if deployment != nil {
-			keep[deployment.PoolKey()] = true
+			keep[deployment.RouteKey()] = true
 		}
 	}
 	for key, ref := range a.routesByKey {
@@ -408,7 +408,7 @@ func (a *routerActor[T]) activateDesired(active **Deployment, desired *Deploymen
 		*active = nil
 		return
 	}
-	ref := a.routesByKey[desired.PoolKey()]
+	ref := a.routesByKey[desired.RouteKey()]
 	if ref != nil && ref.phase == deploymentRouteActive &&
 		ref.status.lifecycle == DeploymentManagerRunning && ref.status.availability == runtime.AvailabilityReady {
 		*active = desired
@@ -554,7 +554,7 @@ func (a *routerActor[T]) routeInvocation(call MessageInvokePlugin[T]) gen.Atom {
 	var ref *deploymentRouteState
 	if call.Shadow {
 		if a.activeCandidate != nil && a.activeCandidate.Mode == runtime.RolloutModeShadow {
-			ref = a.routesByKey[a.activeCandidate.PoolKey()]
+			ref = a.routesByKey[a.activeCandidate.RouteKey()]
 		}
 	} else {
 		target := a.activePrimary
@@ -563,7 +563,7 @@ func (a *routerActor[T]) routeInvocation(call MessageInvokePlugin[T]) gen.Atom {
 			target = a.activeCandidate
 		}
 		if target != nil {
-			ref = a.routesByKey[target.PoolKey()]
+			ref = a.routesByKey[target.RouteKey()]
 		}
 	}
 	if ref == nil || ref.phase != deploymentRouteActive || a.refreshRoutePID(ref) == (gen.PID{}) {
@@ -692,10 +692,10 @@ func (a *routerActor[T]) drainRoute(ref *deploymentRouteState) {
 		}
 		delete(a.routesByKey, ref.key)
 		delete(a.routesByName, ref.name)
-		if a.activePrimary != nil && a.activePrimary.PoolKey() == ref.key {
+		if a.activePrimary != nil && a.activePrimary.RouteKey() == ref.key {
 			a.activePrimary = nil
 		}
-		if a.activeCandidate != nil && a.activeCandidate.PoolKey() == ref.key {
+		if a.activeCandidate != nil && a.activeCandidate.RouteKey() == ref.key {
 			a.activeCandidate = nil
 		}
 		return
@@ -758,10 +758,10 @@ func (a *routerActor[T]) removeDrainedRoute(ref *deploymentRouteState) {
 	}
 	delete(a.routesByKey, ref.key)
 	delete(a.routesByName, ref.name)
-	if a.activePrimary != nil && a.activePrimary.PoolKey() == ref.key {
+	if a.activePrimary != nil && a.activePrimary.RouteKey() == ref.key {
 		a.activePrimary = nil
 	}
-	if a.activeCandidate != nil && a.activeCandidate.PoolKey() == ref.key {
+	if a.activeCandidate != nil && a.activeCandidate.RouteKey() == ref.key {
 		a.activeCandidate = nil
 	}
 }
@@ -779,7 +779,7 @@ func (a *routerActor[T]) deploymentStatusFor(deployment *Deployment) deploymentR
 			processes:    make(map[gen.PID]pluginProcessStatus),
 		}
 	}
-	ref := a.routesByKey[deployment.PoolKey()]
+	ref := a.routesByKey[deployment.RouteKey()]
 	if ref == nil {
 		return deploymentRouteStatus{
 			lifecycle:        DeploymentRouteStarting,
@@ -818,7 +818,7 @@ func (a *routerActor[T]) activeRouteAvailable(deployment *Deployment) bool {
 	if deployment == nil {
 		return false
 	}
-	ref := a.routesByKey[deployment.PoolKey()]
+	ref := a.routesByKey[deployment.RouteKey()]
 	return ref != nil && ref.phase == deploymentRouteActive && a.refreshRoutePID(ref) != (gen.PID{})
 }
 
@@ -878,8 +878,8 @@ func sameRouterStatus(left, right routerActorStatus) bool {
 // Helpers
 // ---------------------------------------------------------------------------
 
-// deploymentRouteName derives a stable, collision-resistant route atom from a pool key.
-func deploymentRouteName(key DeploymentPoolKey) (gen.Atom, error) {
+// deploymentRouteName derives a stable, collision-resistant route atom from a route key.
+func deploymentRouteName(key DeploymentRouteKey) (gen.Atom, error) {
 	encoded, err := json.Marshal(key)
 	if err != nil {
 		return "", fmt.Errorf("marshal deployment route key: %w", err)
