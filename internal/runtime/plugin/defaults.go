@@ -8,13 +8,25 @@ import (
 // MaxDeploymentProcs is the most plugin processes one deployment may declare.
 const MaxDeploymentProcs = 100
 
+const (
+	// DefaultDeploymentCallsPerProcess is the invocation capacity of a plugin process whose
+	// deployment declares none. One process serving one call at a time is what an arbitrary plugin
+	// can assume, so extra capacity is opt-in rather than a default a plugin has to survive.
+	DefaultDeploymentCallsPerProcess = 1
+	// MaxDeploymentCallsPerProcess is the most concurrent invocations one plugin process may declare.
+	// Every one of them is a goroutine and a gRPC stream inside a subprocess that Blink cannot size,
+	// so the useful values are the small ones a benchmark justifies; this only stops a deployment
+	// from asking a single process for capacity no process could serve.
+	MaxDeploymentCallsPerProcess = 64
+)
+
 // DefaultDeploymentManagerQueueSize and related constants define default deployment options.
 const (
 	DefaultRetryMin                         = 5 * time.Second
 	DefaultRetryMax                         = 5 * time.Minute
 	DefaultRuntimeMaxConcurrentCalls        = 8  // DefaultRuntimeMaxConcurrentCalls is the number of concurrent caller calls the budgets are sized for, matching the default service concurrency.
 	DefaultRuntimeShadowAdmissionShare      = 16 // DefaultRuntimeShadowAdmissionShare divides the production budget into the independent best-effort shadow budget.
-	DefaultRuntimeWorkerGrowthPerProc       = 2  // DefaultRuntimeWorkerGrowthPerProc is how many workers past their reservations every usable CPU lets the process grow.
+	DefaultRuntimeProcessGrowthPerProc      = 2  // DefaultRuntimeProcessGrowthPerProc is how many plugin processes past their reservations every usable CPU lets the runtime grow.
 	DefaultRuntimeCloseGracePeriod          = 240 * time.Second
 	DefaultDeploymentManagerQueueSize       = 128
 	DefaultDeploymentManagerDispatchTimeout = 30 * time.Second
@@ -22,13 +34,12 @@ const (
 	DefaultDeploymentManagerIdleTimeout     = 30 * time.Second
 	DefaultDeploymentManagerDrainTimeout    = 30 * time.Second
 	DefaultDeploymentManagerCircuitCooldown = 5 * time.Minute
-	DefaultDeploymentPoolSize               = 1
-	DefaultDeploymentPoolRetryMin           = DefaultRetryMin
-	DefaultDeploymentPoolRetryMax           = DefaultRetryMax
-	DefaultWorkerInvocationTimeout          = 120 * time.Second
-	DefaultWorkerHealthInterval             = 10 * time.Second
-	DefaultWorkerRetryMin                   = DefaultRetryMin
-	DefaultWorkerRetryMax                   = DefaultRetryMax
+	DefaultDeploymentManagerRetryMin        = DefaultRetryMin
+	DefaultDeploymentManagerRetryMax        = DefaultRetryMax
+	DefaultPluginProcessInvocationTimeout   = 120 * time.Second
+	DefaultPluginProcessHealthInterval      = 10 * time.Second
+	DefaultPluginProcessRetryMin            = DefaultRetryMin
+	DefaultPluginProcessRetryMax            = DefaultRetryMax
 	DefaultSupervisorRetryMin               = DefaultRetryMin
 	DefaultSupervisorRetryMax               = DefaultRetryMax
 	DefaultSupervisorControlTimeout         = 120 * time.Second
@@ -44,13 +55,17 @@ func runtimeOptionsWithDefaults(opts Options) Options {
 		opts.MaxConcurrentCalls = DefaultRuntimeMaxConcurrentCalls
 	}
 	// One call fans a batch out to (rollout groups x shards per group) concurrent invocations.
-	// Shards fill the deployment's worker count, and the two-way split a partial canary adds
-	// costs one call more when those two groups do not divide that count evenly, so one call is
-	// at most max_procs + 1 invocations - or the batch's own size, since a shard needs an event
-	// to carry. Those are the only two bounds: the batch's tenant spread does not widen a call,
-	// so nothing else here can bound one. The per-plugin share rejects instead of
-	// waiting, and a rejected call is retried and then dead-lettered, so it has to cover every
-	// call the caller runs at once: a share holding one fan-out would fail a legitimate second
+	// Shards fill the deployment's declared invocation capacity, which is its process count times
+	// the calls each process runs at once, and the rollout groups divide that capacity rather than
+	// each taking all of it - so a call is as wide as the capacity it fills, except that a group
+	// too small for a whole shard still costs the one call its own rollout key routes. A call is
+	// therefore at most the larger of that capacity and the rollout bucket count, and at most the
+	// batch's own size, since a shard needs an event to carry. Neither the bucket count nor
+	// MaxDeploymentProcs exceeds this constant, and callers cap their own fan-out here
+	// (Application.CallFanOut), so a deployment declaring capacity beyond it reaches the rest
+	// through further calls: this is the widest one call gets. The per-plugin share rejects
+	// instead of waiting, and a rejected call is retried and then dead-lettered, so it has to cover
+	// every call the caller runs at once: a share holding one fan-out would fail a legitimate second
 	// batch over the same plugin with ErrQueueFull. Nothing here knows how many plugins a batch
 	// touches, so the shared budget cannot be derived from one plugin's width; it only blocks, so
 	// it is a process-wide ceiling held that many per-plugin shares above a single plugin's.
@@ -71,7 +86,7 @@ func runtimeOptionsWithDefaults(opts Options) Options {
 		opts.ShadowMaxOutstandingInvocations = max(1, opts.MaxOutstandingInvocations/DefaultRuntimeShadowAdmissionShare)
 	}
 	// That whole fan-out lands on the plugin's single deployment manager, where everything
-	// past the running workers waits in its pending queue. A queue below the plugin's
+	// past the running processes waits in its pending queue. A queue below the plugin's
 	// admission budget would just move the same rejection one layer down. Only the budget is
 	// applied here, since it is the one input a manager cannot see; a budget under the
 	// manager's own default leaves the queue to it.
@@ -80,12 +95,12 @@ func runtimeOptionsWithDefaults(opts Options) Options {
 		opts.SupervisorOptions.CatalogOptions.RouterOptions.ManagerOptions.QueueSize = opts.MaxOutstandingInvocationsPerPlugin
 	}
 
-	// Every worker is a subprocess, and past a deployment's reserved min_procs it only pays off
-	// while a core is free to run it: many plugins scaling up at once turn extra workers into
+	// Every plugin process is a subprocess, and past a deployment's reserved min_procs one only pays
+	// off while a core is free to run it: many plugins scaling up at once turn extra processes into
 	// contention instead of throughput. One budget therefore bounds that growth across all of
 	// them, sized from GOMAXPROCS because it, unlike NumCPU, respects the container's CPU limit.
-	if opts.SupervisorOptions.CatalogOptions.RouterOptions.ManagerOptions.WorkerBudget == nil {
-		opts.SupervisorOptions.CatalogOptions.RouterOptions.ManagerOptions.WorkerBudget = NewWorkerBudget(goruntime.GOMAXPROCS(0) * DefaultRuntimeWorkerGrowthPerProc)
+	if opts.SupervisorOptions.CatalogOptions.RouterOptions.ManagerOptions.ProcessBudget == nil {
+		opts.SupervisorOptions.CatalogOptions.RouterOptions.ManagerOptions.ProcessBudget = NewProcessBudget(goruntime.GOMAXPROCS(0) * DefaultRuntimeProcessGrowthPerProc)
 	}
 	opts.SupervisorOptions = supervisorOptionsWithDefaults(opts.SupervisorOptions)
 	if opts.CloseTimeout <= 0 {
@@ -142,7 +157,7 @@ func routerOptionsWithDefaults(opts RouterOptions) RouterOptions {
 	return opts
 }
 
-// deploymentManagerOptionsWithDefaults fills manager and pool defaults.
+// deploymentManagerOptionsWithDefaults fills manager and plugin process defaults.
 func deploymentManagerOptionsWithDefaults(opts DeploymentManagerOptions) DeploymentManagerOptions {
 	if opts.QueueSize <= 0 {
 		opts.QueueSize = DefaultDeploymentManagerQueueSize
@@ -162,44 +177,32 @@ func deploymentManagerOptionsWithDefaults(opts DeploymentManagerOptions) Deploym
 	if opts.CircuitCooldown <= 0 {
 		opts.CircuitCooldown = DefaultDeploymentManagerCircuitCooldown
 	}
-	opts.PoolOptions = deploymentPoolOptionsWithDefaults(opts.PoolOptions)
-	return opts
-}
-
-// deploymentPoolOptionsWithDefaults fills pool and worker defaults.
-func deploymentPoolOptionsWithDefaults(opts DeploymentPoolOptions) DeploymentPoolOptions {
-	if opts.InitialSize < 1 {
-		opts.InitialSize = DefaultDeploymentPoolSize
-	}
-	if opts.MaxSize < opts.InitialSize {
-		opts.MaxSize = opts.InitialSize
-	}
 	if opts.RetryMin <= 0 {
-		opts.RetryMin = DefaultDeploymentPoolRetryMin
+		opts.RetryMin = DefaultDeploymentManagerRetryMin
 	}
 	if opts.RetryMax <= 0 {
-		opts.RetryMax = DefaultDeploymentPoolRetryMax
+		opts.RetryMax = DefaultDeploymentManagerRetryMax
 	}
 	if opts.RetryMax < opts.RetryMin {
 		opts.RetryMax = opts.RetryMin
 	}
-	opts.WorkerOptions = deploymentWorkerOptionsWithDefaults(opts.WorkerOptions)
+	opts.ProcessOptions = pluginProcessOptionsWithDefaults(opts.ProcessOptions)
 	return opts
 }
 
-// deploymentWorkerOptionsWithDefaults fills worker timing defaults.
-func deploymentWorkerOptionsWithDefaults(opts DeploymentWorkerOptions) DeploymentWorkerOptions {
+// pluginProcessOptionsWithDefaults fills plugin process timing defaults.
+func pluginProcessOptionsWithDefaults(opts PluginProcessOptions) PluginProcessOptions {
 	if opts.InvocationTimeout <= 0 {
-		opts.InvocationTimeout = DefaultWorkerInvocationTimeout
+		opts.InvocationTimeout = DefaultPluginProcessInvocationTimeout
 	}
 	if opts.HealthInterval <= 0 {
-		opts.HealthInterval = DefaultWorkerHealthInterval
+		opts.HealthInterval = DefaultPluginProcessHealthInterval
 	}
 	if opts.RetryMin <= 0 {
-		opts.RetryMin = DefaultWorkerRetryMin
+		opts.RetryMin = DefaultPluginProcessRetryMin
 	}
 	if opts.RetryMax <= 0 {
-		opts.RetryMax = DefaultWorkerRetryMax
+		opts.RetryMax = DefaultPluginProcessRetryMax
 	}
 	if opts.RetryMax < opts.RetryMin {
 		opts.RetryMax = opts.RetryMin
