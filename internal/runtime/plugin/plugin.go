@@ -14,16 +14,17 @@ import (
 
 // Spec holds the common identity and rollout fields shared by all plugin types.
 type Spec struct {
-	Id          string              `yaml:"id"`
-	Name        string              `yaml:"-"`
-	DisplayName string              `yaml:"display_name"`
-	Description string              `yaml:"description"`
-	Enabled     bool                `yaml:"enabled"`
-	Version     string              `yaml:"version"`
-	RolloutMode runtime.RolloutMode `yaml:"mode"`
-	RolloutPct  float64             `yaml:"rollout_pct"`
-	MinProcs    int                 `yaml:"min_procs"`
-	MaxProcs    int                 `yaml:"max_procs"`
+	Id              string              `yaml:"id"`
+	Name            string              `yaml:"-"`
+	DisplayName     string              `yaml:"display_name"`
+	Description     string              `yaml:"description"`
+	Enabled         bool                `yaml:"enabled"`
+	Version         string              `yaml:"version"`
+	RolloutMode     runtime.RolloutMode `yaml:"mode"`
+	RolloutPct      float64             `yaml:"rollout_pct"`
+	MinProcs        int                 `yaml:"min_procs"`
+	MaxProcs        int                 `yaml:"max_procs"`
+	CallsPerProcess int                 `yaml:"calls_per_process"`
 }
 
 func (s Spec) Spec() Spec { return s }

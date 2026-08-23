@@ -42,13 +42,17 @@ func (m *RolloutMode) UnmarshalText(text []byte) error {
 	return nil
 }
 
-type PoolKey struct {
+// ArtifactKey identifies one artifact incarnation of a plugin: the plugin's id and name together
+// with the content hash that tells one build of it from the next.
+type ArtifactKey struct {
 	Id   string
 	Name string
 	Hash string
 }
 
-func (k PoolKey) String() string {
+// String renders the key for logs and errors, and is what formatting any key that embeds this one
+// prints.
+func (k ArtifactKey) String() string {
 	if k.Hash != "" {
 		return k.Id + "@" + k.Name + "@" + k.Hash
 	}

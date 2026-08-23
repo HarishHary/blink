@@ -13,3 +13,6 @@ global: false
 # mode: "blue-green"  # blue-green | canary | shadow
 # min_procs: 1
 # max_procs: 2  # default 1 - raise only when the matcher's own per-event CPU dominates
+# calls_per_process: 2  # default 1 - one subprocess serving this many calls at once.
+#                       Only for a plugin whose own code is concurrency-safe: one plugin
+#                       object answers every call, each on its own goroutine.

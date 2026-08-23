@@ -76,12 +76,25 @@ type ProjectionData[T any] struct {
 // describes an id the generation does not carry, so a caller can read a missing key.
 type Rollout struct {
 	MaxProcs int
+	// CallsPerProcess is how many invocations one of those processes may run at once. A plugin
+	// process is not one unit of call capacity, so the two numbers together are what a caller can
+	// keep busy: see Capacity.
+	CallsPerProcess int
 	// Shadow reports that the id's candidate runs in shadow mode, so a caller can skip
 	// shadow submissions that have no candidate to route to.
 	Shadow bool
 	// HasCandidate reports that the id has a candidate at all in this generation, so a
 	// caller can skip splitting a batch by rollout side when every event routes alike.
 	HasCandidate bool
+}
+
+// Capacity is how many invocations this id's deployment can execute at once, which is the fan-out a
+// caller can fill: subprocesses isolate a plugin, and each one carries the calls it may run in
+// parallel. It is a ceiling rather than a promise, since the running processes decide the capacity
+// that exists now, and a caller that splits work by it asks for no more concurrency than the
+// deployment was configured to serve.
+func (r Rollout) Capacity() int {
+	return max(1, r.MaxProcs) * max(1, r.CallsPerProcess)
 }
 
 // clone returns an independently owned copy of the projection data.
@@ -322,7 +335,10 @@ func newParsedProjection[T any](snap *snapshot.Snapshot, loader Loader[T]) (pars
 			value = loader.Clone(value)
 			data.ByFileName[ref.Name] = loader.Clone(value)
 			rollout := data.RolloutByID[entry.Id]
+			// A canary and its primary may declare different bounds, and a caller fans out over
+			// whichever route an event lands on, so the id carries the larger of the two.
 			rollout.MaxProcs = max(rollout.MaxProcs, 1, loader.MaxProcs(value))
+			rollout.CallsPerProcess = max(rollout.CallsPerProcess, 1, loader.CallsPerProcess(value))
 			if index == 0 {
 				data.Primaries = append(data.Primaries, loader.Clone(value))
 			} else {

@@ -89,6 +89,9 @@ func (BaseLoader[U, T]) Clone(value T) T { return value.Clone() }
 // MaxProcs returns the configured plugin process limit.
 func (BaseLoader[U, T]) MaxProcs(value T) int { return value.Metadata().MaxProcs }
 
+// CallsPerProcess returns the configured per-process invocation capacity.
+func (BaseLoader[U, T]) CallsPerProcess(value T) int { return value.Metadata().CallsPerProcess }
+
 func isNilLoader[T any](loader Loader[T]) bool {
 	value := reflect.ValueOf(loader)
 	switch value.Kind() {
