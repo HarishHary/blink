@@ -32,4 +32,5 @@ The controller artifact_scanner reads sidecars and binaries, reconciles desired 
 - [Controller service](../services/controller.md)
 - [Event matcher service](../services/event_matcher.md)
 - [Message flow](message-flow.md)
+- [Concurrency knobs](concurrency-knobs.md)
 - [Schema reference](schemas/README.md)

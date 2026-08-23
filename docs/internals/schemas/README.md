@@ -18,10 +18,10 @@ These come from `plugin.PluginMetadata`, embedded (`yaml:",inline"`) in every ty
 | `version`      | string        | Semver, informational.                                                                   |
 | `mode`         | string        | Rollout mode: `blue-green` (default), `canary`, or `shadow`.                             |
 | `rollout_pct`  | number        | Canary traffic percentage; used only when `mode: canary`.                                |
-| `min_procs`    | int           | Minimum worker subprocesses.                                                             |
-| `max_procs`    | int           | Maximum worker subprocesses for the actor deployment manager, `<= 100`. Defaults to `1`. |
+| `min_procs`    | int           | Minimum plugin subprocesses.                                                             |
+| `max_procs`    | int           | Maximum plugin subprocesses for the actor deployment manager, `<= 100`. Defaults to `1`. |
 
-`max_procs` should usually stay at its default: sharding a batch across workers splits it into more calls without reducing its work, so extra workers pay only for a plugin whose own per-event CPU dominates per-call overhead, and only when cores are free to run them. Rollout modes, deployment routes, and worker pools are covered in [Plugin runtime](../plugin-runtime.md#deployment-route); [Concurrency knobs](../concurrency-knobs.md) measures what each value costs.
+`max_procs` should usually stay at its default: sharding a batch across plugin processes splits it into more calls without reducing its work, so extra processes pay only for a plugin whose own per-event CPU dominates per-call overhead, and only when cores are free to run them. Rollout modes, deployment routes, and plugin processes are covered in [Plugin runtime](../plugin-runtime.md#deployment-route); [Concurrency knobs](../concurrency-knobs.md) measures what each value costs.
 
 ## Per-type schemas
 
