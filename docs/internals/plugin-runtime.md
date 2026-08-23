@@ -541,7 +541,9 @@ stateDiagram-v2
 
 ### Readiness
 
-The meta verifies the artifact checksum before `exec.CommandContext`, requires the configured gRPC handshake, and runs `Init`. Only its parent plugin process may call or ping it. It sends `Shutdown` with a three-second bound then kills the client on close. Plugin `Unavailable`, malformed responses, transport failures, invocation cancellation/timeouts, and health failures retire the alias and enter bounded health recovery.
+The meta verifies the artifact checksum before `exec.CommandContext`, requires the configured gRPC handshake, and runs `Init`. Only its parent plugin process may call or ping it. It sends `Shutdown` with a three-second bound then kills the client on close. Plugin `Unavailable`, malformed responses, transport failures, and health failures retire the alias and enter bounded health recovery.
+
+Cancellation and deadlines are classified rather than assumed fatal, because killing the subprocess is the only isolation mechanism this layer has and a shared subprocess would make every sibling call pay for one caller's withdrawal. A cancelled or expired call is local to that call whenever the plugin answers it: `classifyInvocation` recycles on `Unavailable`, and on `Canceled` or `DeadlineExceeded` only when the caller's own context is still live, since that is the transport reporting its own failure rather than a caller withdrawing a request. When the caller's context ends while the callback is still running, the meta waits out `pluginMetaCancelGrace` (one second) before deciding: a plugin that honours its RPC context returns inside that window and keeps its subprocess, while one that ignores cancellation can be stopped no other way, because Go cannot kill the goroutine running an arbitrary callback. The parent process actor adds that grace to its own Ergo call timeout so its timeout never races this decision, and it no longer treats a dead caller context as evidence against the subprocess - it substitutes the caller's reason only when the call itself returned nothing.
 
 ## Invocation
 

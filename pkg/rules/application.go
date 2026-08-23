@@ -33,11 +33,11 @@ func (r *Application) Evaluate(ctx context.Context, state snapshotruntime.Projec
 	}
 	generation := state.CommittedGeneration
 	rollout := state.RolloutByID[ruleID]
-	workerCount := max(1, rollout.MaxProcs)
+	processCount := max(1, rollout.MaxProcs)
 	// Without a shadow candidate in this generation every submission clones the batch only
 	// to be rejected as unroutable, one logged error per shard.
 	if rollout.Shadow {
-		r.shadow(ctx, ruleID, input, workerCount, generation)
+		r.shadow(ctx, ruleID, input, processCount, generation)
 	}
 
 	type routeGroup struct {
@@ -66,7 +66,7 @@ func (r *Application) Evaluate(ctx context.Context, state snapshotruntime.Projec
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			shards := runtime.ShardConcurrent(group.events, workerCount, func(chunk []events.Event) EvaluateResult {
+			shards := runtime.ShardConcurrent(group.events, processCount, func(chunk []events.Event) EvaluateResult {
 				return r.evaluateChunk(ctx, ruleID, group.rolloutKey, generation, chunk)
 			})
 			part := EvaluateResult{Items: make([]EvaluateItem, 0, len(group.events))}
@@ -129,8 +129,8 @@ func (r *Application) evaluateChunk(ctx context.Context, ruleID, rolloutKey stri
 	}
 }
 
-func (r *Application) shadow(ctx context.Context, ruleID string, input []events.Event, workerCount int, generation int64) {
-	for _, chunk := range runtime.ShardSlice(input, workerCount) {
+func (r *Application) shadow(ctx context.Context, ruleID string, input []events.Event, processCount int, generation int64) {
+	for _, chunk := range runtime.ShardSlice(input, processCount) {
 		owned := events.CloneEvents(chunk)
 		_, _ = r.Application.SubmitShadow(ctx, ruleID, generation, func(callCtx context.Context, rule Rule) error {
 			if !rule.RuleMetadata().Enabled {

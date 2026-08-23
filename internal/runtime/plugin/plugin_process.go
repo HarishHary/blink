@@ -239,7 +239,11 @@ func (p *pluginProcess[T]) invoke(manager gen.PID, call MessageInvokePlugin[T]) 
 	alias := p.pluginMeta.alias
 	p.pluginMeta.status.activity = PluginMetaBusy
 	p.publishStatus(PluginProcessRunning)
-	response, err := p.CallWithTimeout(alias, pluginMetaInvoke[T]{context: ctx, fn: call.Fn}, callTimeoutSeconds(ctx, p.options.InvocationTimeout))
+	// The meta answers a cancelled or expired call within its cancellation grace, so wait that long
+	// past the caller's own deadline: a timeout here is what classifies a hung subprocess, and racing
+	// the meta would retire one that honoured cancellation.
+	timeout := callTimeoutSeconds(ctx, p.options.InvocationTimeout) + pluginMetaCancelGraceSeconds
+	response, err := p.CallWithTimeout(alias, pluginMetaInvoke[T]{context: ctx, fn: call.Fn}, timeout)
 	p.pluginMeta.status.activity = PluginMetaIdle
 	p.publishStatus(PluginProcessRunning)
 	recycle := err != nil
@@ -253,9 +257,11 @@ func (p *pluginProcess[T]) invoke(manager gen.PID, call MessageInvokePlugin[T]) 
 			recycle = result.recycle
 		}
 	}
-	if ctx.Err() != nil {
+	if ctx.Err() != nil && err == nil {
+		// The call finished as its caller went away; report the caller's own reason rather than a
+		// success nobody is waiting for. The meta already decided whether the subprocess survives,
+		// and a withdrawn caller is not evidence that it should not.
 		err = ctx.Err()
-		recycle = true
 	}
 	if recycle {
 		p.retirePluginMeta(alias, err, true)

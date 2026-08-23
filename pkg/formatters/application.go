@@ -34,11 +34,11 @@ func (r *Application) Format(ctx context.Context, state snapshot.ProjectionState
 	}
 	generation := state.CommittedGeneration
 	rollout := state.RolloutByID[formatterID]
-	workerCount := max(1, rollout.MaxProcs)
+	processCount := max(1, rollout.MaxProcs)
 	// Without a shadow candidate in this generation every submission clones the batch only
 	// to be rejected as unroutable, one logged error per shard.
 	if rollout.Shadow {
-		r.shadow(ctx, formatterID, input, workerCount, generation)
+		r.shadow(ctx, formatterID, input, processCount, generation)
 	}
 
 	type routeGroup struct {
@@ -70,7 +70,7 @@ func (r *Application) Format(ctx context.Context, state snapshot.ProjectionState
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			shards := runtime.ShardConcurrent(group.alerts, workerCount, func(chunk []*alerts.Alert) FormatResult {
+			shards := runtime.ShardConcurrent(group.alerts, processCount, func(chunk []*alerts.Alert) FormatResult {
 				return r.formatChunk(ctx, formatterID, group.rolloutKey, generation, chunk)
 			})
 			part := FormatResult{Items: make([]FormatItem, 0, len(group.alerts))}
@@ -133,8 +133,8 @@ func (r *Application) formatChunk(ctx context.Context, formatterID, rolloutKey s
 	}
 }
 
-func (r *Application) shadow(ctx context.Context, formatterID string, input []*alerts.Alert, workerCount int, generation int64) {
-	for _, chunk := range runtime.ShardSlice(input, workerCount) {
+func (r *Application) shadow(ctx context.Context, formatterID string, input []*alerts.Alert, processCount int, generation int64) {
+	for _, chunk := range runtime.ShardSlice(input, processCount) {
 		owned := alerts.CloneAlerts(chunk)
 		_, _ = r.Application.SubmitShadow(ctx, formatterID, generation, func(callCtx context.Context, formatter Formatter) error {
 			if !formatter.FormatterMetadata().Enabled {

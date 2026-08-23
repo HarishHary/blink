@@ -42,6 +42,19 @@ const (
 
 const pluginMetaPingTimeout = 3 * time.Second
 
+// pluginMetaCancelGrace is how long a cancelled or expired invocation may take to return before the
+// subprocess is treated as hung. A plugin that honours its RPC context returns within it, which is a
+// call-local failure and must not cost the subprocess; one that ignores cancellation cannot be
+// stopped any other way, because Go cannot kill the goroutine running an arbitrary callback. The
+// grace is what separates those two cases, so it is deliberately far longer than a cancelled gRPC
+// call needs to unwind and far shorter than any caller deadline.
+const pluginMetaCancelGrace = time.Second
+
+// pluginMetaCancelGraceSeconds is the grace rounded up for Ergo's whole-second call timeouts, plus
+// one second for the same rounding in callTimeoutSeconds. The parent process actor waits this much
+// longer than the caller's own deadline, so its own timeout never races the classification below.
+const pluginMetaCancelGraceSeconds = int(pluginMetaCancelGrace/time.Second) + 1
+
 // supportedCallsPerProcess is the invocation capacity one plugin process can actually serve today,
 // whatever its deployment declares. HandleCall below blocks its meta-process for the whole
 // invocation and the process actor that owns it takes one message at a time, so a second call reaches this
@@ -226,26 +239,44 @@ func (m *pluginProcessMeta[T]) HandleCall(from gen.PID, _ gen.Ref, request any) 
 		go func() { result <- msg.fn(msg.context, session.instance) }()
 		select {
 		case err := <-result:
-			recycle := false
-			if err != nil {
-				switch errors.PluginErrorStatus(err).Code() {
-				case codes.Unavailable:
-					recycle = true
-				case codes.Canceled, codes.DeadlineExceeded:
-					recycle = msg.context.Err() == nil
-				}
-			}
-			if recycle {
-				m.close()
-			}
-			return pluginMetaInvokeResult{err: err, recycle: recycle}, nil
+			return m.classifyInvocation(msg.context, err), nil
 		case <-msg.context.Done():
-			// ponytail: an arbitrary callback can outlive cancellation; Go cannot kill it.
-			m.close()
-			return pluginMetaInvokeResult{err: msg.context.Err(), recycle: true}, nil
+			// The caller cancelled or its deadline expired. Neither implies this subprocess is
+			// unhealthy, so give the in-flight call the cancellation grace to unwind and classify
+			// whatever it returns as any other result. Only a callback still running after that
+			// grace is a hang, and killing the subprocess is the sole way to stop it.
+			select {
+			case err := <-result:
+				return m.classifyInvocation(msg.context, err), nil
+			case <-time.After(pluginMetaCancelGrace):
+				m.close()
+				return pluginMetaInvokeResult{err: msg.context.Err(), recycle: true}, nil
+			}
 		}
 	}
 	return fmt.Errorf("actorruntime: unsupported plugin meta call %T", request), nil
+}
+
+// classifyInvocation decides whether one invocation's outcome is local to that call or fatal to the
+// subprocess serving it, and closes the session when it is fatal. A transport that is gone takes the
+// subprocess with it, because nothing else can reach it. A cancellation or a deadline is call-local
+// whenever the caller's own context ended, since the plugin answered a request that was withdrawn;
+// the same code without a finished caller context is the transport reporting its own failure, and
+// only then does the subprocess pay for it.
+func (m *pluginProcessMeta[T]) classifyInvocation(ctx context.Context, err error) pluginMetaInvokeResult {
+	recycle := false
+	if err != nil {
+		switch errors.PluginErrorStatus(err).Code() {
+		case codes.Unavailable:
+			recycle = true
+		case codes.Canceled, codes.DeadlineExceeded:
+			recycle = ctx.Err() == nil
+		}
+	}
+	if recycle {
+		m.close()
+	}
+	return pluginMetaInvokeResult{err: err, recycle: recycle}
 }
 
 // HandleInspect exposes no custom meta-process metadata.

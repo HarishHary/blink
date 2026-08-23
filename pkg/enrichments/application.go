@@ -33,11 +33,11 @@ func (r *Application) Enrich(ctx context.Context, state snapshot.ProjectionState
 	}
 	generation := state.CommittedGeneration
 	rollout := state.RolloutByID[enrichmentID]
-	workerCount := max(1, rollout.MaxProcs)
+	processCount := max(1, rollout.MaxProcs)
 	// Without a shadow candidate in this generation every submission clones the batch only
 	// to be rejected as unroutable, one logged error per shard.
 	if rollout.Shadow {
-		r.shadow(ctx, enrichmentID, input, workerCount, generation)
+		r.shadow(ctx, enrichmentID, input, processCount, generation)
 	}
 	owned := alerts.CloneAlerts(input)
 
@@ -67,7 +67,7 @@ func (r *Application) Enrich(ctx context.Context, state snapshot.ProjectionState
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			shards := runtime.ShardConcurrent(group.alerts, workerCount, func(chunk []*alerts.Alert) EnrichResult {
+			shards := runtime.ShardConcurrent(group.alerts, processCount, func(chunk []*alerts.Alert) EnrichResult {
 				return r.enrichChunk(ctx, enrichmentID, group.rolloutKey, generation, chunk)
 			})
 			part := EnrichResult{Errs: make([]errors.Error, 0, len(group.alerts))}
@@ -132,8 +132,8 @@ func (r *Application) enrichChunk(ctx context.Context, enrichmentID, rolloutKey 
 	return EnrichResult{Errs: errs}
 }
 
-func (r *Application) shadow(ctx context.Context, enrichmentID string, input []*alerts.Alert, workerCount int, generation int64) {
-	for _, chunk := range runtime.ShardSlice(input, workerCount) {
+func (r *Application) shadow(ctx context.Context, enrichmentID string, input []*alerts.Alert, processCount int, generation int64) {
+	for _, chunk := range runtime.ShardSlice(input, processCount) {
 		shadowInput := alerts.CloneAlerts(chunk)
 		_, _ = r.Application.SubmitShadow(ctx, enrichmentID, generation, func(callCtx context.Context, enrichment Enrichment) error {
 			if !enrichment.EnrichmentMetadata().Enabled {

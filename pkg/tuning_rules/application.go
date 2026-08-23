@@ -34,11 +34,11 @@ func (r *Application) Tune(ctx context.Context, state snapshotruntime.Projection
 	}
 	generation := state.CommittedGeneration
 	rollout := state.RolloutByID[tuningRuleID]
-	workerCount := max(1, rollout.MaxProcs)
+	processCount := max(1, rollout.MaxProcs)
 	// Without a shadow candidate in this generation every submission clones the batch only
 	// to be rejected as unroutable, one logged error per shard.
 	if rollout.Shadow {
-		r.shadow(ctx, tuningRuleID, input, workerCount, generation)
+		r.shadow(ctx, tuningRuleID, input, processCount, generation)
 	}
 
 	type routeGroup struct {
@@ -67,7 +67,7 @@ func (r *Application) Tune(ctx context.Context, state snapshotruntime.Projection
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			shards := runtime.ShardConcurrent(group.alerts, workerCount, func(chunk []*alerts.Alert) TuneResult {
+			shards := runtime.ShardConcurrent(group.alerts, processCount, func(chunk []*alerts.Alert) TuneResult {
 				return r.tuneChunk(ctx, tuningRuleID, group.rolloutKey, generation, chunk)
 			})
 			part := TuneResult{Items: make([]TuneItem, 0, len(group.alerts))}
@@ -137,8 +137,8 @@ func (r *Application) tuneChunk(ctx context.Context, tuningRuleID, rolloutKey st
 	}
 }
 
-func (r *Application) shadow(ctx context.Context, tuningRuleID string, input []*alerts.Alert, workerCount int, generation int64) {
-	for _, chunk := range runtime.ShardSlice(input, workerCount) {
+func (r *Application) shadow(ctx context.Context, tuningRuleID string, input []*alerts.Alert, processCount int, generation int64) {
+	for _, chunk := range runtime.ShardSlice(input, processCount) {
 		owned := alerts.CloneAlerts(chunk)
 		_, _ = r.Application.SubmitShadow(ctx, tuningRuleID, generation, func(callCtx context.Context, rule TuningRule) error {
 			if !rule.TuningRuleMetadata().Enabled {
