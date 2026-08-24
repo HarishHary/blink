@@ -878,6 +878,28 @@ func sameRouterStatus(left, right routerActorStatus) bool {
 // Helpers
 // ---------------------------------------------------------------------------
 
+// sameDesiredState reports whether two resolved catalogs ask for the same thing, keyed by plugin id.
+func sameDesiredState(left, right map[string]routerDesiredState) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for id, desired := range left {
+		other, ok := right[id]
+		if !ok || !sameRouterDesiredState(desired, other) {
+			return false
+		}
+	}
+	return true
+}
+
+// sameRouterDesiredState reports whether one router is being asked for the same thing twice.
+func sameRouterDesiredState(left, right routerDesiredState) bool {
+	return left.primaryDeferred == right.primaryDeferred &&
+		left.candidateDeferred == right.candidateDeferred &&
+		sameDeployment(left.primary, right.primary) &&
+		sameDeployment(left.candidate, right.candidate)
+}
+
 // deploymentRouteName derives a stable, collision-resistant route atom from a route key.
 func deploymentRouteName(key DeploymentRouteKey) (gen.Atom, error) {
 	encoded, err := json.Marshal(key)
