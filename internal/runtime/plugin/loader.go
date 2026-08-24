@@ -92,6 +92,9 @@ func (BaseLoader[U, T]) MaxProcs(value T) int { return value.Metadata().MaxProcs
 // CallsPerProcess returns the configured per-process invocation capacity.
 func (BaseLoader[U, T]) CallsPerProcess(value T) int { return value.Metadata().CallsPerProcess }
 
+// RolloutPct returns the configured share of rollout buckets a canary candidate claims.
+func (BaseLoader[U, T]) RolloutPct(value T) float64 { return value.Metadata().RolloutPct }
+
 func isNilLoader[T any](loader Loader[T]) bool {
 	value := reflect.ValueOf(loader)
 	switch value.Kind() {

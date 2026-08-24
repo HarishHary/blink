@@ -77,14 +77,22 @@ type ProjectionData[T any] struct {
 type Rollout struct {
 	MaxProcs        int
 	CallsPerProcess int
+	CanaryPct       float64
 	Shadow          bool
-	HasCandidate    bool
 }
 
 // Capacity is how many invocations this id's deployment can run at once. A process is not one unit
 // of call capacity, so it is the two bounds multiplied - a ceiling, not a promise.
 func (r Rollout) Capacity() int {
 	return max(1, r.MaxProcs) * max(1, r.CallsPerProcess)
+}
+
+// CanarySide reports whether this rollout key routes to a canary candidate rather than the primary.
+// The router decides from the key alone, so a batch only has to be cut where this answer changes:
+// two ways at most, and only under a partial canary, since a whole one is elected primary instead.
+func (r Rollout) CanarySide(rolloutKey string) bool {
+	return r.CanaryPct > 0 && r.CanaryPct < runtime.RolloutBucketCount &&
+		float64(runtime.RolloutBucket(rolloutKey)) <= r.CanaryPct
 }
 
 // clone returns an independently owned copy of the projection data.
@@ -331,8 +339,10 @@ func newParsedProjection[T any](snap *snapshot.Snapshot, loader Loader[T]) (pars
 				data.Primaries = append(data.Primaries, loader.Clone(value))
 			} else {
 				data.Candidates = append(data.Candidates, loader.Clone(value))
-				rollout.HasCandidate = true
 				rollout.Shadow = rollout.Shadow || ref.RolloutMode == runtime.RolloutModeShadow
+				if ref.RolloutMode == runtime.RolloutModeCanary {
+					rollout.CanaryPct = loader.RolloutPct(value)
+				}
 			}
 			data.RolloutByID[entry.Id] = rollout
 		}
