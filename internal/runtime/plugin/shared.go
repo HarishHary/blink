@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 
@@ -70,6 +71,28 @@ func (d *Deployment) CapacityPerProcess() int {
 // the process budget shared by every deployment decides how far this one may grow toward it.
 func (d *Deployment) MaxInvocationCapacity() int {
 	return d.ProcessCountLimit() * d.CapacityPerProcess()
+}
+
+// sameDeployment reports whether two deployments describe the same deployed artifact, for
+// deduplicating a re-resolution that produced the state already being served. It compares every
+// field rather than a route key, because two deployments that share a route may still differ in
+// what they ask the runtime to do with it - rollout mode and percentage among them - and a field
+// added to Deployment must be added here or a real change reads as no change.
+func sameDeployment(left, right *Deployment) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return left.Id == right.Id &&
+		left.Name == right.Name &&
+		left.Enabled == right.Enabled &&
+		left.Mode == right.Mode &&
+		left.RolloutPct == right.RolloutPct &&
+		left.MinProcs == right.MinProcs &&
+		left.MaxProcs == right.MaxProcs &&
+		left.MaxConcurrentCallsPerProcess == right.MaxConcurrentCallsPerProcess &&
+		left.Path == right.Path &&
+		left.Hash == right.Hash &&
+		bytes.Equal(left.Spec, right.Spec)
 }
 
 // MessageDrain requests that an actor drain its work.
