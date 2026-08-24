@@ -75,8 +75,8 @@ func NewApplication[P Artifact, M any](opts Options, adapter *Adapter[P], loader
 		adapter:             adapter,
 		loader:              loader,
 		logger:              runtimeLogger,
-		productionAdmission: semaphore.NewWeighted(int64(opts.MaxOutstandingInvocations)),
-		shadowAdmission:     semaphore.NewWeighted(int64(opts.ShadowMaxOutstandingInvocations)),
+		productionAdmission: semaphore.NewWeighted(int64(opts.maxOutstandingInvocations)),
+		shadowAdmission:     semaphore.NewWeighted(int64(opts.shadowMaxOutstandingInvocations)),
 		calls: outstandingCalls{
 			byID:     make(map[uint64]*runtime.AsyncResult),
 			byPlugin: make(map[string]int),
@@ -313,6 +313,12 @@ func (a *Application[P, M]) State(ctx context.Context) (snapshot.ProjectionState
 // unaffected and the shadow invocation was not sent into the actor tree.
 var ErrShadowDropped = errors.New("shadow invocation dropped")
 
+// CallBudget is how many invocations one caller call may split itself into for this rollout: the
+// capacity the deployment declared, under the width the per-plugin admission share was built to hold.
+func (a *Application[P, M]) CallBudget(rollout snapshot.Rollout) int {
+	return min(rollout.Capacity(), max(1, a.opts.callFanOut))
+}
+
 // ---------------------------------------------------------------------------
 // Invocation submission
 // ---------------------------------------------------------------------------
@@ -332,7 +338,7 @@ func (a *Application[P, M]) Submit(ctx context.Context, pluginID string, rollout
 	// stalled must fail its own calls fast instead of blocking every other plugin's
 	// caller on the global semaphore until that caller's own deadline expires.
 	a.mu.Lock()
-	if a.calls.byPlugin[pluginID] >= a.opts.MaxOutstandingInvocationsPerPlugin {
+	if a.calls.byPlugin[pluginID] >= a.opts.maxOutstandingInvocationsPerPlugin {
 		a.mu.Unlock()
 		return runtime.Invocation{}, runtime.ErrQueueFull
 	}
