@@ -23,7 +23,7 @@ func NewApplication(opts plugin.Options, runtimeLogger *logger.Logger) *Applicat
 	return &Application{Application: plugin.NewApplication(opts, NewAdapter(), Loader{}, runtimeLogger)}
 }
 
-// Evaluate preserves input order while grouping tenant rollout buckets and sharding each route.
+// Evaluate preserves input order while grouping events by rollout side and sharding each group.
 func (r *Application) Evaluate(ctx context.Context, state snapshotruntime.ProjectionState[*RuleMetadata], ruleID string, input []events.Event) EvaluateResult {
 	if r == nil || r.Application == nil {
 		return EvaluateResult{CallErr: errors.NewE(runtime.ErrRuntimeNotStarted)}
@@ -33,11 +33,11 @@ func (r *Application) Evaluate(ctx context.Context, state snapshotruntime.Projec
 	}
 	generation := state.CommittedGeneration
 	rollout := state.RolloutByID[ruleID]
-	processCount := max(1, rollout.MaxProcs)
-	// Without a shadow candidate in this generation every submission clones the batch only
-	// to be rejected as unroutable, one logged error per shard.
+	callBudget := r.CallBudget(rollout)
+	eventBytes := events.SampleWireSize(input)
+
 	if rollout.Shadow {
-		r.shadow(ctx, ruleID, input, processCount, generation)
+		r.shadow(ctx, ruleID, input, callBudget, eventBytes, generation)
 	}
 
 	type routeGroup struct {
@@ -45,28 +45,31 @@ func (r *Application) Evaluate(ctx context.Context, state snapshotruntime.Projec
 		indexes    []int
 		events     []events.Event
 	}
-	groups := make([]routeGroup, 0)
-	groupByBucket := make(map[uint32]int)
+
+	groups := make([]routeGroup, 0, 2)
+	groupBySide := [2]int{-1, -1}
 	for i, event := range input {
 		rolloutKey := runtime.NormalizeRolloutKey(event["tenant_id"])
-		bucket := runtime.RolloutBucket(rolloutKey)
-		groupIndex, ok := groupByBucket[bucket]
-		if !ok {
-			groupIndex = len(groups)
-			groupByBucket[bucket] = groupIndex
+		side := 0
+		if rollout.CanarySide(rolloutKey) {
+			side = 1
+		}
+		if groupBySide[side] < 0 {
+			groupBySide[side] = len(groups)
 			groups = append(groups, routeGroup{rolloutKey: rolloutKey})
 		}
-		groups[groupIndex].indexes = append(groups[groupIndex].indexes, i)
-		groups[groupIndex].events = append(groups[groupIndex].events, event)
+		group := &groups[groupBySide[side]]
+		group.indexes = append(group.indexes, i)
+		group.events = append(group.events, event)
 	}
 
 	parts := make([]EvaluateResult, len(groups))
+	workerBudget := max(1, callBudget/len(groups))
 	var wg sync.WaitGroup
 	for i, group := range groups {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			shards := runtime.ShardConcurrent(group.events, processCount, func(chunk []events.Event) EvaluateResult {
+		wg.Go(func() {
+			chunks := runtime.MaxChunks(len(group.events), workerBudget, eventBytes)
+			shards := runtime.ShardPooled(group.events, chunks, workerBudget, func(chunk []events.Event) EvaluateResult {
 				return r.evaluateChunk(ctx, ruleID, group.rolloutKey, generation, chunk)
 			})
 			part := EvaluateResult{Items: make([]EvaluateItem, 0, len(group.events))}
@@ -78,7 +81,7 @@ func (r *Application) Evaluate(ctx context.Context, state snapshotruntime.Projec
 				part.Items = append(part.Items, shard.Items...)
 			}
 			parts[i] = part
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -129,8 +132,10 @@ func (r *Application) evaluateChunk(ctx context.Context, ruleID, rolloutKey stri
 	}
 }
 
-func (r *Application) shadow(ctx context.Context, ruleID string, input []events.Event, processCount int, generation int64) {
-	for _, chunk := range runtime.ShardSlice(input, processCount) {
+// shadow mirrors the batch onto a shadow candidate, cut the way production cuts it so an oversized
+// payload fails the same way. SubmitShadow does not block; the runtime has its own shadow budget.
+func (r *Application) shadow(ctx context.Context, ruleID string, input []events.Event, callBudget, eventBytes int, generation int64) {
+	for _, chunk := range runtime.ShardSlice(input, runtime.MaxChunks(len(input), callBudget, eventBytes)) {
 		owned := events.CloneEvents(chunk)
 		_, _ = r.Application.SubmitShadow(ctx, ruleID, generation, func(callCtx context.Context, rule Rule) error {
 			if !rule.RuleMetadata().Enabled {

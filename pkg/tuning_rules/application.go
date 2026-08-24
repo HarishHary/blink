@@ -13,8 +13,7 @@ import (
 	"github.com/harishhary/blink/pkg/alerts"
 )
 
-// Application preserves tuning-rule batching semantics while routing calls
-// through the Ergo plugin runtime.
+// Application routes tuning-rule calls through the Ergo plugin runtime.
 type Application struct {
 	*plugin.Application[TuningRule, *TuningRuleMetadata]
 }
@@ -34,11 +33,11 @@ func (r *Application) Tune(ctx context.Context, state snapshotruntime.Projection
 	}
 	generation := state.CommittedGeneration
 	rollout := state.RolloutByID[tuningRuleID]
-	processCount := max(1, rollout.MaxProcs)
-	// Without a shadow candidate in this generation every submission clones the batch only
-	// to be rejected as unroutable, one logged error per shard.
+	callBudget := r.CallBudget(rollout)
+	alertBytes := alerts.SampleWireSize(input)
+
 	if rollout.Shadow {
-		r.shadow(ctx, tuningRuleID, input, processCount, generation)
+		r.shadow(ctx, tuningRuleID, input, callBudget, alertBytes, generation)
 	}
 
 	type routeGroup struct {
@@ -46,28 +45,31 @@ func (r *Application) Tune(ctx context.Context, state snapshotruntime.Projection
 		indexes    []int
 		alerts     []*alerts.Alert
 	}
-	groups := make([]routeGroup, 0)
-	groupByBucket := make(map[uint32]int)
+
+	groups := make([]routeGroup, 0, 2)
+	groupBySide := [2]int{-1, -1}
 	for i, alert := range input {
 		rolloutKey := runtime.NormalizeRolloutKey(alert.Event["tenant_id"])
-		bucket := runtime.RolloutBucket(rolloutKey)
-		groupIndex, ok := groupByBucket[bucket]
-		if !ok {
-			groupIndex = len(groups)
-			groupByBucket[bucket] = groupIndex
+		side := 0
+		if rollout.CanarySide(rolloutKey) {
+			side = 1
+		}
+		if groupBySide[side] < 0 {
+			groupBySide[side] = len(groups)
 			groups = append(groups, routeGroup{rolloutKey: rolloutKey})
 		}
-		groups[groupIndex].indexes = append(groups[groupIndex].indexes, i)
-		groups[groupIndex].alerts = append(groups[groupIndex].alerts, alert)
+		group := &groups[groupBySide[side]]
+		group.indexes = append(group.indexes, i)
+		group.alerts = append(group.alerts, alert)
 	}
 
 	parts := make([]TuneResult, len(groups))
+	workerBudget := max(1, callBudget/len(groups))
 	var wg sync.WaitGroup
 	for i, group := range groups {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			shards := runtime.ShardConcurrent(group.alerts, processCount, func(chunk []*alerts.Alert) TuneResult {
+		wg.Go(func() {
+			chunks := runtime.MaxChunks(len(group.alerts), workerBudget, alertBytes)
+			shards := runtime.ShardPooled(group.alerts, chunks, workerBudget, func(chunk []*alerts.Alert) TuneResult {
 				return r.tuneChunk(ctx, tuningRuleID, group.rolloutKey, generation, chunk)
 			})
 			part := TuneResult{Items: make([]TuneItem, 0, len(group.alerts))}
@@ -79,7 +81,7 @@ func (r *Application) Tune(ctx context.Context, state snapshotruntime.Projection
 				part.Items = append(part.Items, shard.Items...)
 			}
 			parts[i] = part
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -137,8 +139,10 @@ func (r *Application) tuneChunk(ctx context.Context, tuningRuleID, rolloutKey st
 	}
 }
 
-func (r *Application) shadow(ctx context.Context, tuningRuleID string, input []*alerts.Alert, processCount int, generation int64) {
-	for _, chunk := range runtime.ShardSlice(input, processCount) {
+// shadow mirrors the batch onto a shadow candidate, cut the way production cuts it so an oversized
+// payload fails the same way. SubmitShadow does not block; the runtime has its own shadow budget.
+func (r *Application) shadow(ctx context.Context, tuningRuleID string, input []*alerts.Alert, callBudget, alertBytes int, generation int64) {
+	for _, chunk := range runtime.ShardSlice(input, runtime.MaxChunks(len(input), callBudget, alertBytes)) {
 		owned := alerts.CloneAlerts(chunk)
 		_, _ = r.Application.SubmitShadow(ctx, tuningRuleID, generation, func(callCtx context.Context, rule TuningRule) error {
 			if !rule.TuningRuleMetadata().Enabled {

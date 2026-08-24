@@ -87,7 +87,7 @@ func (r Rollout) Capacity() int {
 	return max(1, r.MaxProcs) * max(1, r.CallsPerProcess)
 }
 
-// CanarySide reports whether this rollout key routes to a canary candidate rather than the primary.
+// CanarySide reports whether this rollout key routes to a canary candidate, not the primary.
 // The router decides from the key alone, so a batch only has to be cut where this answer changes:
 // two ways at most, and only under a partial canary, since a whole one is elected primary instead.
 func (r Rollout) CanarySide(rolloutKey string) bool {

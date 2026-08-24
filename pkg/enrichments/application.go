@@ -33,11 +33,11 @@ func (r *Application) Enrich(ctx context.Context, state snapshot.ProjectionState
 	}
 	generation := state.CommittedGeneration
 	rollout := state.RolloutByID[enrichmentID]
-	processCount := max(1, rollout.MaxProcs)
-	// Without a shadow candidate in this generation every submission clones the batch only
-	// to be rejected as unroutable, one logged error per shard.
+	callBudget := r.CallBudget(rollout)
+	alertBytes := alerts.SampleWireSize(input)
+
 	if rollout.Shadow {
-		r.shadow(ctx, enrichmentID, input, processCount, generation)
+		r.shadow(ctx, enrichmentID, input, callBudget, alertBytes, generation)
 	}
 	owned := alerts.CloneAlerts(input)
 
@@ -46,28 +46,31 @@ func (r *Application) Enrich(ctx context.Context, state snapshot.ProjectionState
 		indexes    []int
 		alerts     []*alerts.Alert
 	}
-	groups := make([]routeGroup, 0)
-	groupByBucket := make(map[uint32]int)
+
+	groups := make([]routeGroup, 0, 2)
+	groupBySide := [2]int{-1, -1}
 	for i, alert := range input {
 		rolloutKey := runtime.NormalizeRolloutKey(alert.Event["tenant_id"])
-		bucket := runtime.RolloutBucket(rolloutKey)
-		groupIndex, ok := groupByBucket[bucket]
-		if !ok {
-			groupIndex = len(groups)
-			groupByBucket[bucket] = groupIndex
+		side := 0
+		if rollout.CanarySide(rolloutKey) {
+			side = 1
+		}
+		if groupBySide[side] < 0 {
+			groupBySide[side] = len(groups)
 			groups = append(groups, routeGroup{rolloutKey: rolloutKey})
 		}
-		groups[groupIndex].indexes = append(groups[groupIndex].indexes, i)
-		groups[groupIndex].alerts = append(groups[groupIndex].alerts, owned[i])
+		group := &groups[groupBySide[side]]
+		group.indexes = append(group.indexes, i)
+		group.alerts = append(group.alerts, owned[i])
 	}
 
 	parts := make([]EnrichResult, len(groups))
+	workerBudget := max(1, callBudget/len(groups))
 	var wg sync.WaitGroup
 	for i, group := range groups {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			shards := runtime.ShardConcurrent(group.alerts, processCount, func(chunk []*alerts.Alert) EnrichResult {
+		wg.Go(func() {
+			chunks := runtime.MaxChunks(len(group.alerts), workerBudget, alertBytes)
+			shards := runtime.ShardPooled(group.alerts, chunks, workerBudget, func(chunk []*alerts.Alert) EnrichResult {
 				return r.enrichChunk(ctx, enrichmentID, group.rolloutKey, generation, chunk)
 			})
 			part := EnrichResult{Errs: make([]errors.Error, 0, len(group.alerts))}
@@ -79,7 +82,7 @@ func (r *Application) Enrich(ctx context.Context, state snapshot.ProjectionState
 				part.Errs = append(part.Errs, shard.Errs...)
 			}
 			parts[i] = part
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -132,8 +135,10 @@ func (r *Application) enrichChunk(ctx context.Context, enrichmentID, rolloutKey 
 	return EnrichResult{Errs: errs}
 }
 
-func (r *Application) shadow(ctx context.Context, enrichmentID string, input []*alerts.Alert, processCount int, generation int64) {
-	for _, chunk := range runtime.ShardSlice(input, processCount) {
+// shadow mirrors the batch onto a shadow candidate, cut the way production cuts it so an oversized
+// payload fails the same way. SubmitShadow does not block; the runtime has its own shadow budget.
+func (r *Application) shadow(ctx context.Context, enrichmentID string, input []*alerts.Alert, callBudget, alertBytes int, generation int64) {
+	for _, chunk := range runtime.ShardSlice(input, runtime.MaxChunks(len(input), callBudget, alertBytes)) {
 		shadowInput := alerts.CloneAlerts(chunk)
 		_, _ = r.Application.SubmitShadow(ctx, enrichmentID, generation, func(callCtx context.Context, enrichment Enrichment) error {
 			if !enrichment.EnrichmentMetadata().Enabled {
