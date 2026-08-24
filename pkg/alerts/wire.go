@@ -10,8 +10,8 @@ import (
 // it: pb.Alert embeds its rule's whole metadata, so no arithmetic model of it would stay true.
 const wireSizeSampleCount = 8
 
-// SampleWireSize estimates the bytes the largest alert in a batch costs inside a plugin request, as
-// a framed element of a repeated pb.Alert field. The largest, not the average: an underestimate
+// SampleWireSize estimates the bytes the largest alert in a batch costs inside a plugin request,
+// as a framed element of a repeated pb.Alert field. The largest, not the average: an underestimate
 // costs a call that fails outright. An alert that will not convert is skipped, since the call
 // is about to fail the same conversion with a better error; zero means none of the sample did.
 func SampleWireSize(in []*Alert) int {
