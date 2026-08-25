@@ -16,8 +16,7 @@ import (
 // Types & state
 // ---------------------------------------------------------------------------
 
-// ReconcilerActorLifecycle describes the stable actor that projects
-// control-plane snapshots and local artifacts into runtime desired state.
+// ReconcilerActorLifecycle describes the stable actor that projects control-plane snapshots and local artifacts into runtime desired state.
 type ReconcilerActorLifecycle string
 
 const (
@@ -41,11 +40,7 @@ type reconcilerActorStatus struct {
 	revision           uint64
 }
 
-// reconcilerActor subscribes to the buffered snapshot event and is
-// the stable owner of the current snapshot, desired-state revisions, resolution
-// coalescing, and all retry policies. It independently replaces its resolver and
-// watcher meta-processes so an expected I/O-process failure does not discard the
-// actor's state or event subscription.
+// reconcilerActor subscribes to the buffered snapshot event and owns the snapshot, revisions, coalescing, and retry policy, replacing its resolver and watcher metas independently so an I/O failure discards neither that state nor the subscription.
 type reconcilerActor struct {
 	act.Actor
 	directory        string
@@ -59,12 +54,16 @@ type reconcilerActor struct {
 	resolving        bool
 	dirty            bool
 	deferred         bool
+	// The last state this incarnation proposed and the generation it proposed it at, so a re-resolution reproducing it is a no-op; nil until it proposes, which is why a replacement proposes once on its revision base.
+	proposed           map[string]routerDesiredState
+	proposedGeneration int64
 }
 
-// ---- messages ----
+// ---------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------
 
-// MessageReconcilerActorActivate gives a replacement reconciler a
-// revision base newer than the last state accepted by its supervisor.
+// MessageReconcilerActorActivate gives a replacement reconciler a revision base newer than the last state its supervisor accepted.
 type MessageReconcilerActorActivate struct{ revisionBase uint64 }
 
 // MessageReconcilerActorStatusChanged publishes the reconciler status to its supervisor.
@@ -220,9 +219,7 @@ func (a *reconcilerActor) HandleMessage(from gen.PID, message any) error {
 			return a.requestResolve()
 		}
 
-		// A filesystem or snapshot change arrived while this resolution was in
-		// flight. Discard the potentially stale result and resolve again from the
-		// current snapshot and current filesystem state.
+		// A filesystem or snapshot change arrived mid-resolution, so this result may be stale: resolve again from the current snapshot and filesystem.
 		if a.dirty {
 			return a.requestResolve()
 		}
@@ -230,6 +227,13 @@ func (a *reconcilerActor) HandleMessage(from gen.PID, message any) error {
 		if m.deferred {
 			a.publishStatus()
 			return a.scheduleResolutionRetry()
+		}
+
+		// Re-proposing an unchanged state closes admission for a transition that changes nothing.
+		if a.proposed != nil && a.proposedGeneration == a.snapshot.Generation && sameDesiredState(m.desired, a.proposed) {
+			a.publishStatus()
+			a.resolutionRetry.CancelScheduled(true)
+			return nil
 		}
 
 		a.revision++
@@ -242,6 +246,8 @@ func (a *reconcilerActor) HandleMessage(from gen.PID, message any) error {
 		}); err != nil {
 			return fmt.Errorf("propose resolved desired state: %w", err)
 		}
+		a.proposed = m.desired
+		a.proposedGeneration = a.snapshot.Generation
 		a.publishStatus()
 		a.resolutionRetry.CancelScheduled(true)
 
@@ -253,9 +259,7 @@ func (a *reconcilerActor) HandleMessage(from gen.PID, message any) error {
 			return nil
 		}
 		a.dirty = true
-		// A concrete filesystem change is a useful immediate retry signal. Cancel
-		// the delayed timer but preserve the current backoff progression until a
-		// complete successful resolution resets it.
+		// A concrete filesystem change is a useful immediate retry signal, so cancel the delayed timer but keep the backoff progression until a complete resolution resets it.
 		a.resolutionRetry.CancelScheduled(false)
 		return a.requestResolve()
 
@@ -453,8 +457,7 @@ func (a *reconcilerActor) applyEvent(event gen.MessageEvent) error {
 			return nil
 		}
 		if a.snapshot == nil || snap.Generation > a.snapshot.Generation {
-			// A new desired generation should not inherit the retry penalty of the
-			// previous generation.
+			// A new desired generation should not inherit the previous generation's retry penalty.
 			a.resolutionRetry.CancelScheduled(true)
 		} else {
 			a.resolutionRetry.CancelScheduled(false)
