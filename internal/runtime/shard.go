@@ -2,34 +2,59 @@ package runtime
 
 import "sync"
 
-// MaxCallPayloadBytes is the payload one invocation may carry, a quarter under the 4 MiB gRPC
-// default go-plugin leaves in place: a caller estimates the encoding, and framing sits outside it.
+// MaxCallPayloadBytes is the payload one invocation may carry, a quarter under go-plugin's 4 MiB gRPC default.
 const MaxCallPayloadBytes = 3 << 20
 
-// MaxChunks is how many pieces a batch should be cut into: one per unit of concurrency, or more
-// where the payload budget requires it. Only the budget may exceed workers, so a pool has to run
-// them. itemBytes of zero asks for the concurrency reason alone.
-func MaxChunks(items, workers, itemBytes int) int {
+// ChunkBounds cuts sizes into pieces of at most maxBytes, as pieces+1 offsets; count balances them while the batch fits one call.
+func ChunkBounds(sizes []int, maxBytes, workers int) []int {
+	items := len(sizes)
 	if items <= 1 {
-		return 1
+		return []int{0, items}
 	}
-	forPayload := 1
-	if itemBytes > 0 {
-		perCall := max(1, MaxCallPayloadBytes/itemBytes)
-		forPayload = (items + perCall - 1) / perCall
+	total := 0
+	for _, size := range sizes {
+		total += size
 	}
-	return min(items, max(1, workers, forPayload))
+	workers = max(1, workers)
+	if maxBytes <= 0 || total <= maxBytes {
+		return countBounds(items, min(items, workers))
+	}
+	// Cut before the item that would cross the budget, the one rule no distribution of sizes can overflow.
+	bounds := []int{0}
+	run := 0
+	for i, size := range sizes {
+		if i > bounds[len(bounds)-1] && run+size > maxBytes {
+			bounds = append(bounds, i)
+			run = 0
+		}
+		run += size
+	}
+	bounds = append(bounds, items)
+	pieces := len(bounds) - 1
+	if pieces >= workers {
+		return bounds
+	}
+	// Bytes left fewer calls than workers, so split each piece by count; that only lowers the bytes a call carries.
+	refined := make([]int, 0, workers+1)
+	refined = append(refined, 0)
+	per := (workers + pieces - 1) / pieces
+	for i := 1; i <= pieces; i++ {
+		start, end := bounds[i-1], bounds[i]
+		for _, cut := range countBounds(end-start, min(end-start, per))[1:] {
+			refined = append(refined, start+cut)
+		}
+	}
+	return refined
 }
 
-func ShardSlice[T any](items []T, maxChunks int) [][]T {
-	if maxChunks < 1 {
-		maxChunks = 1
-	}
-	base := len(items) / maxChunks
-	extra := len(items) % maxChunks
-	chunks := make([][]T, 0, maxChunks)
+// countBounds splits items into pieces balanced by count.
+func countBounds(items, pieces int) []int {
+	pieces = max(1, pieces)
+	base := items / pieces
+	extra := items % pieces
+	bounds := make([]int, 1, pieces+1)
 	start := 0
-	for i := 0; i < maxChunks; i++ {
+	for i := range pieces {
 		size := base
 		if i < extra {
 			size++
@@ -37,41 +62,38 @@ func ShardSlice[T any](items []T, maxChunks int) [][]T {
 		if size == 0 {
 			continue
 		}
-		chunks = append(chunks, items[start:start+size])
 		start += size
+		bounds = append(bounds, start)
 	}
-	return chunks
+	if len(bounds) == 1 {
+		bounds = append(bounds, items)
+	}
+	return bounds
 }
 
-// ShardPooled cuts items into maxChunks balanced pieces and runs at most workers of them at a time,
-// returning one result per piece in input order. Fewer workers than pieces costs only wall-clock.
-func ShardPooled[T, R any](items []T, maxChunks, workers int, fn func([]T) R) []R {
-	if maxChunks > len(items) {
-		maxChunks = len(items)
-	}
-	if maxChunks <= 1 {
-		return []R{fn(items)}
-	}
-	pieces := ShardSlice(items, maxChunks)
-	results := make([]R, len(pieces))
-	if workers <= 1 {
+// ShardBytes cuts sizes into calls of at most maxBytes, runs at most workers at a time, and hands fn each piece's bounds.
+func ShardBytes[R any](sizes []int, maxBytes, workers int, fn func(start, end int) R) []R {
+	bounds := ChunkBounds(sizes, maxBytes, workers)
+	pieces := len(bounds) - 1
+	results := make([]R, pieces)
+	if workers <= 1 || pieces == 1 {
 		// A worker running these serially would only add a handoff to the caller's own goroutine.
-		for i, piece := range pieces {
-			results[i] = fn(piece)
+		for i := range results {
+			results[i] = fn(bounds[i], bounds[i+1])
 		}
 		return results
 	}
-	// Every index is buffered before a worker exists, so the close only says when to stop.
-	queue := make(chan int, len(pieces))
+	// Every piece is buffered before a worker exists, so the close only says when to stop.
+	queue := make(chan int, pieces)
 	for i := range pieces {
 		queue <- i
 	}
 	close(queue)
 	var wg sync.WaitGroup
-	for range min(workers, len(pieces)) {
+	for range min(workers, pieces) {
 		wg.Go(func() {
 			for i := range queue {
-				results[i] = fn(pieces[i])
+				results[i] = fn(bounds[i], bounds[i+1])
 			}
 		})
 	}
