@@ -7,6 +7,7 @@ import (
 	"github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/structpb"
 
@@ -93,10 +94,15 @@ func (s *server) Init(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, erro
 
 func (s *server) EvaluateBatch(ctx context.Context, req *rpc_rules.EvaluateBatchRequest) (*rpc_rules.EvaluateBatchResponse, error) {
 	items := make([]*rpc_rules.EvaluateItem, len(req.GetEvents()))
-	for i, ev := range req.GetEvents() {
+	for i, raw := range req.GetEvents() {
 		item := &rpc_rules.EvaluateItem{}
 		items[i] = item
-		event := events.Event(ev.AsMap())
+		var value structpb.Struct
+		if err := proto.Unmarshal(raw, &value); err != nil {
+			item.Error = err.Error()
+			continue
+		}
+		event := events.Event(value.AsMap())
 
 		if !s.rule.AlertReqSubkeys(event) {
 			continue

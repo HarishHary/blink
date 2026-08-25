@@ -6,7 +6,6 @@ import (
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/runtime/plugin"
 	"github.com/harishhary/blink/pkg/alerts"
-	pb "github.com/harishhary/blink/pkg/alerts/pb"
 	"github.com/harishhary/blink/pkg/tuning_rules/rpc_tuning_rules"
 )
 
@@ -39,27 +38,19 @@ func (r *rpcTuningRule) Metadata() plugin.Spec {
 // Checksum returns the binary checksum captured during handshake.
 func (r *rpcTuningRule) Checksum() string { return r.checksum }
 
-// Tune converts alerts to protobufs, invokes the RPC batch method, and returns per-alert apply decisions.
-func (r *rpcTuningRule) TuneBatch(ctx context.Context, batch []*alerts.Alert) TuneResult {
-	pbAlerts := make([]*pb.Alert, 0, len(batch))
-	for i := range batch {
-		pa, err := alerts.AlertToProto(batch[i])
-		if err != nil {
-			return TuneResult{CallErr: errors.NewE(err)}
-		}
-		pbAlerts = append(pbAlerts, pa)
-	}
-	resp, err := r.client.TuneBatch(ctx, &rpc_tuning_rules.TuneBatchRequest{Alerts: pbAlerts})
+// TuneBatch sends the batch's encodings and returns per-alert apply decisions.
+func (r *rpcTuningRule) TuneBatch(ctx context.Context, batch *alerts.Batch) TuneResult {
+	resp, err := r.client.TuneBatch(ctx, &rpc_tuning_rules.TuneBatchRequest{Alerts: batch.Raw()})
 	if err != nil {
 		return TuneResult{CallErr: errors.NewE(err)}
 	}
 	if resp == nil {
 		return TuneResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "tuning rule", PluginID: r.fileName, Field: "response", Expected: 1})}
 	}
-	if len(resp.GetItems()) != len(batch) {
-		return TuneResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "tuning rule", PluginID: r.fileName, Field: "items", Expected: len(batch), Actual: len(resp.GetItems())})}
+	if len(resp.GetItems()) != batch.Len() {
+		return TuneResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "tuning rule", PluginID: r.fileName, Field: "items", Expected: batch.Len(), Actual: len(resp.GetItems())})}
 	}
-	items := make([]TuneItem, len(batch))
+	items := make([]TuneItem, batch.Len())
 	for i, item := range resp.GetItems() {
 		items[i].Applies = item.GetApplies()
 		if item.GetError() != "" {

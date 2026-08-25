@@ -4,8 +4,7 @@ import (
 	"github.com/harishhary/blink/pkg/events"
 )
 
-// Batch is a set of alerts paired with their encodings: encoding an alert converts a pb.Alert that embeds its rule's
-// whole metadata, so an alert evaluated by five tuning rules used to pay for that five times over.
+// Batch is alerts paired with their encodings: an alert carries its whole rule, which five tuning rules used to pay for five times.
 type Batch = events.EncodedBatch[*Alert]
 
 // NewBatch pairs alerts with their encodings, one per alert and in the same order.

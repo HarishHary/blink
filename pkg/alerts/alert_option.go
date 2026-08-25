@@ -1,58 +1,58 @@
 package alerts
 
-// AlertOptions defines the functional option type
+// AlertOptions sets one field on an alert as it is raised.
 type AlertOptions func(*Alert)
 
-// Attempts sets the number of attempts for the alert
+// WithAttempts sets the alert's delivery attempts.
 func WithAttempts(attempts int) AlertOptions {
 	return func(a *Alert) {
 		a.Attempts = attempts
 	}
 }
 
-// Cluster sets the cluster for the alert
+// WithCluster sets the alert's cluster.
 func WithCluster(cluster string) AlertOptions {
 	return func(a *Alert) {
 		a.Cluster = cluster
 	}
 }
 
-// LogSource sets the log source for the alert
+// WithLogSource sets the alert's log source.
 func WithLogSource(logSource string) AlertOptions {
 	return func(a *Alert) {
 		a.LogSource = logSource
 	}
 }
 
-// LogType sets the log type for the alert
+// WithLogType sets the alert's log type.
 func WithLogType(logType string) AlertOptions {
 	return func(a *Alert) {
 		a.LogType = logType
 	}
 }
 
-// OutputsSent sets the outputs sent for the alert
+// WithOutputsSent sets the outputs the alert has already been sent to.
 func WithOutputsSent(outputsSent []string) AlertOptions {
 	return func(a *Alert) {
 		a.OutputsSent = outputsSent
 	}
 }
 
-// SourceEntity sets the source entity for the alert
+// WithSourceEntity sets the alert's source entity.
 func WithSourceEntity(sourceEntity string) AlertOptions {
 	return func(a *Alert) {
 		a.SourceEntity = sourceEntity
 	}
 }
 
-// SourceService sets the source service for the alert
+// WithSourceService sets the alert's source service.
 func WithSourceService(sourceService string) AlertOptions {
 	return func(a *Alert) {
 		a.SourceService = sourceService
 	}
 }
 
-// WithStaged sets whether the alert is staged
+// WithStaged sets whether the alert is staged.
 func WithStaged(staged bool) AlertOptions {
 	return func(a *Alert) {
 		a.Staged = staged

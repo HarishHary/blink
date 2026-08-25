@@ -27,7 +27,7 @@ func (m *EnrichmentMetadata) Clone() *EnrichmentMetadata {
 // Enrichment mutates alert batches and exposes its live sidecar metadata.
 type Enrichment interface {
 	plugin.Artifact
-	EnrichBatch(ctx context.Context, alerts []*alerts.Alert) EnrichResult
+	EnrichBatch(ctx context.Context, batch *alerts.Batch) EnrichResult
 	EnrichmentMetadata() *EnrichmentMetadata
 }
 

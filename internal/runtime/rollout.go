@@ -88,11 +88,9 @@ type RouteGroup struct {
 	Indexes []int
 }
 
-// RouteSides groups a batch's positions by the side a canary at this percentage takes them to, and returns nil when the
-// whole batch takes one side.
+// RouteSides groups a batch's positions by the side a canary at this percentage takes them to, nil when one side takes all.
 func RouteSides(keys []string, canaryPct float64) []RouteGroup {
-	// Only a partial canary can split a batch: without a candidate, or with one at the whole share that is elected
-	// primary instead, every key routes the same way.
+	// Only a partial canary splits a batch: with no candidate, or a whole one that is elected primary, every key routes alike.
 	if canaryPct <= 0 || canaryPct >= RolloutBucketCount {
 		return nil
 	}

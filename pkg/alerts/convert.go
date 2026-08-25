@@ -13,7 +13,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// Serialises an Alert to protobuf bytes for Kafka transport.
+// Marshal encodes an alert as the protobuf bytes every queue and plugin request carries it in.
 func Marshal(a *Alert) ([]byte, error) {
 	p, err := AlertToProto(a)
 	if err != nil {
@@ -22,7 +22,7 @@ func Marshal(a *Alert) ([]byte, error) {
 	return proto.Marshal(p)
 }
 
-// Deserialises protobuf bytes from Kafka into an Alert.
+// Unmarshal decodes protobuf bytes back into an alert.
 func Unmarshal(data []byte) (*Alert, error) {
 	var p pb.Alert
 	if err := proto.Unmarshal(data, &p); err != nil {
@@ -31,7 +31,7 @@ func Unmarshal(data []byte) (*Alert, error) {
 	return ProtoToAlert(&p)
 }
 
-// Converts an in-process Alert to its proto wire representation.
+// AlertToProto converts an in-process alert to its wire representation.
 func AlertToProto(a *Alert) (*pb.Alert, error) {
 	if a == nil {
 		return nil, errors.New("nil alert")
@@ -66,7 +66,7 @@ func AlertToProto(a *Alert) (*pb.Alert, error) {
 	}, nil
 }
 
-// Converts a proto Alert back to an in-process Alert
+// ProtoToAlert converts a wire alert back to an in-process one.
 func ProtoToAlert(p *pb.Alert) (*Alert, error) {
 	if p == nil {
 		return nil, errors.New("nil protobuf alert")
@@ -104,7 +104,7 @@ func ProtoToAlert(p *pb.Alert) (*Alert, error) {
 	}, nil
 }
 
-// Converts a *rules.RuleMetadata to its protobuf representation for embedding in an alert payload.
+// RuleMetadataToProto converts rule metadata to the form an alert embeds.
 func RuleMetadataToProto(r *rules.RuleMetadata) (*pb.RuleMetadata, error) {
 	if r == nil {
 		return nil, errors.New("nil rule metadata")
@@ -136,7 +136,7 @@ func RuleMetadataToProto(r *rules.RuleMetadata) (*pb.RuleMetadata, error) {
 	}, nil
 }
 
-// Reconstructs a *rules.RuleMetadata from the alert's embedded rule metadata.
+// ProtoToRuleMetadata rebuilds rule metadata from what an alert embedded.
 func ProtoToRuleMetadata(m *pb.RuleMetadata) (*rules.RuleMetadata, error) {
 	if m == nil {
 		return nil, errors.New("nil protobuf rule metadata")

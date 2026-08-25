@@ -20,10 +20,9 @@ type Deployment struct {
 	MaxProcs   int
 	// MaxConcurrentCallsPerProcess is how many invocations one plugin process may run at once, which
 	// is what a deployment's process count no longer decides on its own: MinProcs and MaxProcs bound
-	// the subprocesses that isolate a plugin, this bounds the throughput each one carries. One is
-	// the default because it is the contract every plugin was written against - the plugin server
-	// holds a single plugin object, so serialized calls are the only ones an arbitrary plugin can
-	// assume - and raising it is per-deployment opt-in for a plugin whose code is concurrency-safe.
+	// the subprocesses that isolate a plugin, this bounds the throughput each one carries. The
+	// default asks the plugin's own code to be concurrency-safe - the plugin server holds a single
+	// plugin object and gRPC hands every RPC its own goroutine - so a plugin that is not declares 1.
 	MaxConcurrentCallsPerProcess int
 	Path                         string
 	Hash                         string

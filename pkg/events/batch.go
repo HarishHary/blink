@@ -20,8 +20,7 @@ type Batchable[T any] interface {
 	RolloutKey() string
 }
 
-// EncodedBatch is items paired with their encodings, prepared once and shared by every caller that sends them.
-// The encodings are immutable, so a batch is safe to hand to concurrent calls and to calls that outlive the caller.
+// EncodedBatch is items paired with their encodings, immutable enough to hand to concurrent calls and to calls outliving the caller.
 type EncodedBatch[T Batchable[T]] struct {
 	items []T
 	raw   [][]byte
@@ -126,8 +125,7 @@ func (b *EncodedBatch[T]) RolloutKeys() []string {
 	return b.keys
 }
 
-// Batch is a set of events paired with their encodings: one encoding serves every caller, and a batch fanned out to
-// fifty matchers used to convert and marshal each event fifty times over.
+// Batch is events paired with their encodings: a batch fanned out to fifty matchers used to marshal each event fifty times over.
 type Batch = EncodedBatch[Event]
 
 // NewBatch pairs events with their encodings, one per event and in the same order.

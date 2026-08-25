@@ -44,10 +44,10 @@ func (s *server) Init(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, erro
 
 func (s *server) EnrichBatch(ctx context.Context, req *rpc_enrichments.EnrichBatchRequest) (*rpc_enrichments.EnrichBatchResponse, error) {
 	items := make([]*rpc_enrichments.EnrichItem, len(req.GetAlerts()))
-	for i, pa := range req.GetAlerts() {
+	for i, raw := range req.GetAlerts() {
 		item := &rpc_enrichments.EnrichItem{}
 		items[i] = item
-		alert, err := alerts.ProtoToAlert(pa)
+		alert, err := alerts.Unmarshal(raw)
 		if err != nil {
 			item.Error = err.Error()
 			continue

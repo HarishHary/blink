@@ -43,10 +43,10 @@ func (s *server) Init(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, erro
 
 func (s *server) FormatBatch(ctx context.Context, req *rpc_formatters.FormatBatchRequest) (*rpc_formatters.FormatBatchResponse, error) {
 	items := make([]*rpc_formatters.FormatItem, len(req.GetAlerts()))
-	for i, pa := range req.GetAlerts() {
+	for i, raw := range req.GetAlerts() {
 		item := &rpc_formatters.FormatItem{}
 		items[i] = item
-		alert, err := alerts.ProtoToAlert(pa)
+		alert, err := alerts.Unmarshal(raw)
 		if err != nil {
 			item.Error = err.Error()
 			continue

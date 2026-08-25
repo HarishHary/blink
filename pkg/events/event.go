@@ -54,7 +54,7 @@ func cloneValue(value any) any {
 	}
 }
 
-// GetMergedKeys retrieves merge keys from a Event
+// GetMergedKeys is the values behind the merge keys, for building a merge key.
 func (e Event) GetMergedKeys(keys []string) map[string]any {
 	mergeKeys := make(map[string]any)
 	for _, key := range keys {
@@ -63,7 +63,7 @@ func (e Event) GetMergedKeys(keys []string) map[string]any {
 	return mergeKeys
 }
 
-// CleanEvent removes ignored keys from the Event
+// CleanEvent returns the event without the ignored keys.
 func (e Event) CleanEvent(ignoredKeys []string) Event {
 	result := make(Event)
 	for key, val := range e {
@@ -79,7 +79,7 @@ func (e Event) CleanEvent(ignoredKeys []string) Event {
 	return result
 }
 
-// ComputeDiff finds values in the Event that are not in the common subset
+// ComputeDiff is the event's values that are not in the common subset.
 func (e Event) ComputeDiff(common map[string]any) map[string]any {
 	diff := make(map[string]any)
 	for key, val := range e {
@@ -122,8 +122,7 @@ func (e Event) DeepGet(keys []string, defaultValue any) any {
 	return current
 }
 
-// DeepWalk searches the nested structure along keys (descending into lists too) and returns the
-// first/last/all matches per returnVal, or defaultValue if none.
+// DeepWalk searches the nested structure along keys, lists included, for the first/last/all matches per returnVal.
 func (e Event) DeepWalk(keys []string, defaultValue any, returnVal string) any {
 	found := map[any]struct{}{}
 	var walk func(obj any, keys []string) any
@@ -203,7 +202,7 @@ func (e Event) GetFirstKey(key string, defaultValue any) any {
 	return defaultValue
 }
 
-// isContainerType checks if the value is a container type (map or slice)
+// isContainerType reports whether the value is a map or a slice.
 func isContainerType(val any) bool {
 	valueType := reflect.TypeOf(val)
 	return valueType != nil && (valueType.Kind() == reflect.Map || valueType.Kind() == reflect.Slice)
@@ -211,8 +210,7 @@ func isContainerType(val any) bool {
 
 // GetKeys searches for a key anywhere in the nested data structure, returning all associated values.
 func (e Event) GetKeys(key string, maxMatches int) []any {
-	// Recursion is generally inefficient due to stack shuffling for each function call/return.
-	// Instead, we use a slice as a stack to avoid recursion.
+	// A slice as an explicit stack, since recursion pays a call and return per level.
 	type container struct {
 		data any
 	}
@@ -226,11 +224,7 @@ func (e Event) GetKeys(key string, maxMatches int) []any {
 		current := containers[lastIndex]
 		containers = containers[:lastIndex]
 
-		// Event is a named type (type Event map[string]any). A type switch matches the exact
-		// dynamic type, so a value whose dynamic type is Event would NOT match `case
-		// map[string]any` - its keys would be silently skipped (top-level lookups returning the
-		// default). Normalize Event → map[string]any here so both forms are searched identically;
-		// this also covers nested Events (e.g. produced by CleanEvent).
+		// A type switch matches the exact dynamic type, so a nested Event has to be normalized here or its keys go unsearched.
 		data := current.data
 		if ev, ok := data.(Event); ok {
 			data = map[string]any(ev)

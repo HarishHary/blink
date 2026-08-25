@@ -5,7 +5,7 @@ import (
 
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/runtime/plugin"
-	evts "github.com/harishhary/blink/pkg/events"
+	"github.com/harishhary/blink/pkg/events"
 )
 
 // MatcherMetadata is the in-memory representation of a matcher YAML sidecar.
@@ -26,7 +26,7 @@ func (m *MatcherMetadata) Clone() *MatcherMetadata {
 // Matcher matches batches of events and exposes its live sidecar metadata.
 type Matcher interface {
 	plugin.Artifact
-	MatchBatch(ctx context.Context, events []evts.Event) MatchResult
+	MatchBatch(ctx context.Context, batch *events.Batch) MatchResult
 	MatcherMetadata() *MatcherMetadata
 }
 
