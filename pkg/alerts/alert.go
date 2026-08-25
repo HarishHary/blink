@@ -11,7 +11,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/helpers"
-	"github.com/harishhary/blink/internal/runtime"
 	"github.com/harishhary/blink/pkg/events"
 	"github.com/harishhary/blink/pkg/rules"
 	"github.com/harishhary/blink/pkg/scoring"

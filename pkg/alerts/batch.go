@@ -13,4 +13,3 @@ func NewBatch(in []*Alert, raw [][]byte) *Batch { return events.NewEncodedBatch(
 
 // PrepareBatch encodes every alert once; a caller that can dead-letter a single alert encodes where it decodes instead.
 func PrepareBatch(in []*Alert) (*Batch, error) { return events.PrepareEncodedBatch(in, Marshal) }
-
