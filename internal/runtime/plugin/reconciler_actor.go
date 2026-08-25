@@ -327,7 +327,7 @@ func (a *reconcilerActor) HandleEvent(event gen.MessageEvent) error {
 
 // HandleCall rejects synchronous calls because the reconciler has no call API.
 func (a *reconcilerActor) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
-	return fmt.Errorf("actorruntime: unsupported desired-state reconciler call %T", request), nil
+	return fmt.Errorf("unsupported desired-state reconciler call %T", request), nil
 }
 
 // ---------------------------------------------------------------------------

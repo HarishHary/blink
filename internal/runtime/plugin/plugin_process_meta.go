@@ -217,17 +217,17 @@ func (m *pluginProcessMeta[T]) HandleMessage(from gen.PID, message any) error {
 
 // HandleCall rejects unsupported synchronous meta-process calls; invocations arrive as messages so that running one never blocks this meta-process.
 func (m *pluginProcessMeta[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
-	return fmt.Errorf("actorruntime: unsupported plugin meta call %T", request), nil
+	return fmt.Errorf("unsupported plugin meta call %T", request), nil
 }
 
 // invoke validates one invocation and hands it to a goroutine so this meta-process returns to its mailbox while the plugin works, everything the answer needs travelling with that goroutine.
 func (m *pluginProcessMeta[T]) invoke(msg pluginMetaInvoke[T]) {
 	if msg.context == nil {
-		m.answerInvocation(msg, pluginMetaInvokeResult{err: fmt.Errorf("actorruntime: invocation context is required")})
+		m.answerInvocation(msg, pluginMetaInvokeResult{err: fmt.Errorf("invocation context is required")})
 		return
 	}
 	if msg.fn == nil {
-		m.answerInvocation(msg, pluginMetaInvokeResult{err: fmt.Errorf("actorruntime: invocation function is required")})
+		m.answerInvocation(msg, pluginMetaInvokeResult{err: fmt.Errorf("invocation function is required")})
 		return
 	}
 	session := m.session.Load()
