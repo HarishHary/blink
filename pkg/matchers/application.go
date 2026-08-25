@@ -9,7 +9,7 @@ import (
 	"github.com/harishhary/blink/internal/logger"
 	"github.com/harishhary/blink/internal/runtime"
 	"github.com/harishhary/blink/internal/runtime/plugin"
-	snapshotruntime "github.com/harishhary/blink/internal/runtime/snapshot"
+	"github.com/harishhary/blink/internal/runtime/snapshot"
 	"github.com/harishhary/blink/pkg/events"
 )
 
@@ -23,44 +23,28 @@ func NewApplication(opts plugin.Options, runtimeLogger *logger.Logger) *Applicat
 	return &Application{Application: plugin.NewApplication(opts, NewAdapter(), Loader{}, runtimeLogger)}
 }
 
-// Match runs one matcher against every event and preserves input order.
-func (r *Application) Match(ctx context.Context, state snapshotruntime.ProjectionState[*MatcherMetadata], matcherID string, input []events.Event) MatchResult {
+// Match runs one matcher against every event in a prepared batch and preserves input order.
+func (r *Application) Match(ctx context.Context, state snapshot.ProjectionState[*MatcherMetadata], matcherID string, input *events.Batch) MatchResult {
 	if r == nil || r.Application == nil {
 		return MatchResult{CallErr: errors.NewE(runtime.ErrRuntimeNotStarted)}
 	}
-	if len(input) == 0 {
+	if input.Len() == 0 {
 		return MatchResult{Items: []MatchItem{}}
 	}
 	generation := state.CommittedGeneration
 	rollout := state.RolloutByID[matcherID]
 	callBudget := r.CallBudget(rollout)
-	eventBytes := events.SampleWireSize(input)
 
 	if rollout.Shadow {
-		r.shadow(ctx, matcherID, input, callBudget, eventBytes, generation)
+		r.shadow(ctx, matcherID, input, callBudget, generation)
 	}
 
-	type routeGroup struct {
-		rolloutKey string
-		indexes    []int
-		events     []events.Event
-	}
-
-	groups := make([]routeGroup, 0, 2)
-	groupBySide := [2]int{-1, -1}
-	for i, event := range input {
-		rolloutKey := runtime.NormalizeRolloutKey(event["tenant_id"])
-		side := 0
-		if rollout.CanarySide(rolloutKey) {
-			side = 1
-		}
-		if groupBySide[side] < 0 {
-			groupBySide[side] = len(groups)
-			groups = append(groups, routeGroup{rolloutKey: rolloutKey})
-		}
-		group := &groups[groupBySide[side]]
-		group.indexes = append(group.indexes, i)
-		group.events = append(group.events, event)
+	keys := input.RolloutKeys()
+	groups := runtime.RouteSides(keys, rollout.CanaryPct)
+	// One side takes the whole batch, so it goes as it stands: gathering it would copy the batch to
+	// reproduce it and the items come back already in order.
+	if groups == nil {
+		return r.matchRoute(ctx, matcherID, keys[0], generation, input, callBudget)
 	}
 
 	parts := make([]MatchResult, len(groups))
@@ -68,41 +52,44 @@ func (r *Application) Match(ctx context.Context, state snapshotruntime.Projectio
 	var wg sync.WaitGroup
 	for i, group := range groups {
 		wg.Go(func() {
-			chunks := runtime.MaxChunks(len(group.events), workerBudget, eventBytes)
-			shards := runtime.ShardPooled(group.events, chunks, workerBudget, func(chunk []events.Event) MatchResult {
-				return r.matchChunk(ctx, matcherID, group.rolloutKey, generation, chunk)
-			})
-			part := MatchResult{Items: make([]MatchItem, 0, len(group.events))}
-			for _, shard := range shards {
-				if shard.CallErr != nil {
-					parts[i] = MatchResult{CallErr: shard.CallErr}
-					return
-				}
-				part.Items = append(part.Items, shard.Items...)
-			}
-			parts[i] = part
+			parts[i] = r.matchRoute(ctx, matcherID, group.Key, generation, input.Gather(group.Indexes), workerBudget)
 		})
 	}
 	wg.Wait()
 
-	result := MatchResult{Items: make([]MatchItem, len(input))}
+	result := MatchResult{Items: make([]MatchItem, input.Len())}
 	for i, part := range parts {
 		if part.CallErr != nil {
 			return MatchResult{CallErr: part.CallErr}
 		}
-		if len(part.Items) != len(groups[i].indexes) {
-			return MatchResult{CallErr: errors.NewF("matcher %s returned invalid routed result shape", matcherID)}
-		}
-		for j, inputIndex := range groups[i].indexes {
+		for j, inputIndex := range groups[i].Indexes {
 			result.Items[inputIndex] = part.Items[j]
 		}
 	}
 	return result
 }
 
-func (r *Application) matchChunk(ctx context.Context, matcherID, rolloutKey string, generation int64, input []events.Event) MatchResult {
-	owned := events.CloneEvents(input)
-	items := make([]MatchItem, len(owned))
+// matchRoute runs one side's batch, cut by bytes across the calls it is allowed, and concatenates the
+// items in batch order.
+func (r *Application) matchRoute(ctx context.Context, matcherID, rolloutKey string, generation int64, batch *events.Batch, workers int) MatchResult {
+	shards := runtime.ShardBytes(batch.WireSizes(), runtime.MaxCallPayloadBytes, workers, func(start, end int) MatchResult {
+		return r.matchChunk(ctx, matcherID, rolloutKey, generation, batch.Slice(start, end))
+	})
+	result := MatchResult{Items: make([]MatchItem, 0, batch.Len())}
+	for _, shard := range shards {
+		if shard.CallErr != nil {
+			return MatchResult{CallErr: shard.CallErr}
+		}
+		result.Items = append(result.Items, shard.Items...)
+	}
+	if len(result.Items) != batch.Len() {
+		return MatchResult{CallErr: errors.NewF("matcher %s returned invalid routed result shape", matcherID)}
+	}
+	return result
+}
+
+func (r *Application) matchChunk(ctx context.Context, matcherID, rolloutKey string, generation int64, chunk *events.Batch) MatchResult {
+	items := make([]MatchItem, chunk.Len())
 	invocation, err := r.Application.Submit(ctx, matcherID, rolloutKey, generation, func(callCtx context.Context, matcher Matcher) error {
 		if !matcher.MatcherMetadata().Enabled {
 			for i := range items {
@@ -110,12 +97,12 @@ func (r *Application) matchChunk(ctx context.Context, matcherID, rolloutKey stri
 			}
 			return nil
 		}
-		result := matcher.MatchBatch(callCtx, owned)
+		result := matcher.MatchBatch(callCtx, chunk)
 		if result.CallErr != nil {
 			return result.CallErr
 		}
-		if len(result.Items) != len(owned) {
-			return &errors.ResultCardinalityError{PluginKind: "matcher", PluginID: matcherID, Field: "items", Expected: len(owned), Actual: len(result.Items)}
+		if len(result.Items) != chunk.Len() {
+			return &errors.ResultCardinalityError{PluginKind: "matcher", PluginID: matcherID, Field: "items", Expected: chunk.Len(), Actual: len(result.Items)}
 		}
 		copy(items, result.Items)
 		return nil
@@ -137,19 +124,20 @@ func (r *Application) matchChunk(ctx context.Context, matcherID, rolloutKey stri
 
 // shadow mirrors the batch onto a shadow candidate, cut the way production cuts it so an oversized
 // payload fails the same way. SubmitShadow does not block; the runtime has its own shadow budget.
-func (r *Application) shadow(ctx context.Context, matcherID string, input []events.Event, callBudget, eventBytes int, generation int64) {
-	for _, chunk := range runtime.ShardSlice(input, runtime.MaxChunks(len(input), callBudget, eventBytes)) {
-		owned := events.CloneEvents(chunk)
+func (r *Application) shadow(ctx context.Context, matcherID string, input *events.Batch, callBudget int, generation int64) {
+	bounds := runtime.ChunkBounds(input.WireSizes(), runtime.MaxCallPayloadBytes, callBudget)
+	for i := range len(bounds) - 1 {
+		chunk := input.Slice(bounds[i], bounds[i+1])
 		_, _ = r.Application.SubmitShadow(ctx, matcherID, generation, func(callCtx context.Context, matcher Matcher) error {
 			if !matcher.MatcherMetadata().Enabled {
 				return nil
 			}
-			result := matcher.MatchBatch(callCtx, owned)
+			result := matcher.MatchBatch(callCtx, chunk)
 			if result.CallErr != nil {
 				return result.CallErr
 			}
-			if len(result.Items) != len(owned) {
-				return fmt.Errorf("matcher %s returned %d items for %d shadow events", matcherID, len(result.Items), len(owned))
+			if len(result.Items) != chunk.Len() {
+				return fmt.Errorf("matcher %s returned %d items for %d shadow events", matcherID, len(result.Items), chunk.Len())
 			}
 			for _, item := range result.Items {
 				if item.Err != nil {

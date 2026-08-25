@@ -24,44 +24,39 @@ func NewApplication(opts plugin.Options, runtimeLogger *logger.Logger) *Applicat
 }
 
 // Enrich applies one enrichment to every alert, preserving input order and cardinality.
-func (r *Application) Enrich(ctx context.Context, state snapshot.ProjectionState[*EnrichmentMetadata], enrichmentID string, input []*alerts.Alert) EnrichResult {
+func (r *Application) Enrich(ctx context.Context, state snapshot.ProjectionState[*EnrichmentMetadata], enrichmentID string, input *alerts.Batch) EnrichResult {
 	if r == nil || r.Application == nil {
 		return EnrichResult{CallErr: errors.NewE(runtime.ErrRuntimeNotStarted)}
 	}
-	if len(input) == 0 {
+	if input.Len() == 0 {
 		return EnrichResult{Errs: []errors.Error{}}
 	}
 	generation := state.CommittedGeneration
 	rollout := state.RolloutByID[enrichmentID]
 	callBudget := r.CallBudget(rollout)
-	alertBytes := alerts.SampleWireSize(input)
 
 	if rollout.Shadow {
-		r.shadow(ctx, enrichmentID, input, callBudget, alertBytes, generation)
+		r.shadow(ctx, enrichmentID, input, callBudget, generation)
 	}
-	owned := alerts.CloneAlerts(input)
+	// The plugin's enrichment lands on the alerts the call carried, so it lands on copies until the
+	// error beside each one says to keep it. Copying the batch does not re-encode it.
+	owned := input.Clone()
 
-	type routeGroup struct {
-		rolloutKey string
-		indexes    []int
-		alerts     []*alerts.Alert
-	}
-
-	groups := make([]routeGroup, 0, 2)
-	groupBySide := [2]int{-1, -1}
-	for i, alert := range input {
-		rolloutKey := runtime.NormalizeRolloutKey(alert.Event["tenant_id"])
-		side := 0
-		if rollout.CanarySide(rolloutKey) {
-			side = 1
+	keys := input.RolloutKeys()
+	groups := runtime.RouteSides(keys, rollout.CanaryPct)
+	// One side takes the whole batch, so it goes as it stands: gathering it would copy the batch to
+	// reproduce it and the errors come back already in order.
+	if groups == nil {
+		result := r.enrichRoute(ctx, enrichmentID, keys[0], generation, owned, callBudget)
+		if result.CallErr != nil {
+			return result
 		}
-		if groupBySide[side] < 0 {
-			groupBySide[side] = len(groups)
-			groups = append(groups, routeGroup{rolloutKey: rolloutKey})
+		for i, err := range result.Errs {
+			if err == nil {
+				*input.At(i) = *owned.At(i)
+			}
 		}
-		group := &groups[groupBySide[side]]
-		group.indexes = append(group.indexes, i)
-		group.alerts = append(group.alerts, owned[i])
+		return result
 	}
 
 	parts := make([]EnrichResult, len(groups))
@@ -69,43 +64,48 @@ func (r *Application) Enrich(ctx context.Context, state snapshot.ProjectionState
 	var wg sync.WaitGroup
 	for i, group := range groups {
 		wg.Go(func() {
-			chunks := runtime.MaxChunks(len(group.alerts), workerBudget, alertBytes)
-			shards := runtime.ShardPooled(group.alerts, chunks, workerBudget, func(chunk []*alerts.Alert) EnrichResult {
-				return r.enrichChunk(ctx, enrichmentID, group.rolloutKey, generation, chunk)
-			})
-			part := EnrichResult{Errs: make([]errors.Error, 0, len(group.alerts))}
-			for _, shard := range shards {
-				if shard.CallErr != nil {
-					parts[i] = EnrichResult{CallErr: shard.CallErr}
-					return
-				}
-				part.Errs = append(part.Errs, shard.Errs...)
-			}
-			parts[i] = part
+			parts[i] = r.enrichRoute(ctx, enrichmentID, group.Key, generation, owned.Gather(group.Indexes), workerBudget)
 		})
 	}
 	wg.Wait()
 
-	result := EnrichResult{Errs: make([]errors.Error, len(input))}
+	result := EnrichResult{Errs: make([]errors.Error, input.Len())}
 	for i, part := range parts {
 		if part.CallErr != nil {
 			return EnrichResult{CallErr: part.CallErr}
 		}
-		if len(part.Errs) != len(groups[i].indexes) {
-			return EnrichResult{CallErr: errors.NewF("enrichment %s returned invalid routed result shape", enrichmentID)}
-		}
-		for j, inputIndex := range groups[i].indexes {
+		for j, inputIndex := range groups[i].Indexes {
 			result.Errs[inputIndex] = part.Errs[j]
 			if part.Errs[j] == nil {
-				*input[inputIndex] = *groups[i].alerts[j]
+				*input.At(inputIndex) = *owned.At(inputIndex)
 			}
 		}
 	}
 	return result
 }
 
-func (r *Application) enrichChunk(ctx context.Context, enrichmentID, rolloutKey string, generation int64, input []*alerts.Alert) EnrichResult {
-	errs := make([]errors.Error, len(input))
+// enrichRoute runs one side's alerts, cut by bytes across the calls it is allowed, and concatenates
+// the errors in input order. The caller commits the alerts whose error is nil; the rest are not its
+// copies to keep.
+func (r *Application) enrichRoute(ctx context.Context, enrichmentID, rolloutKey string, generation int64, input *alerts.Batch, workers int) EnrichResult {
+	shards := runtime.ShardBytes(input.WireSizes(), runtime.MaxCallPayloadBytes, workers, func(start, end int) EnrichResult {
+		return r.enrichChunk(ctx, enrichmentID, rolloutKey, generation, input.Slice(start, end))
+	})
+	result := EnrichResult{Errs: make([]errors.Error, 0, input.Len())}
+	for _, shard := range shards {
+		if shard.CallErr != nil {
+			return EnrichResult{CallErr: shard.CallErr}
+		}
+		result.Errs = append(result.Errs, shard.Errs...)
+	}
+	if len(result.Errs) != input.Len() {
+		return EnrichResult{CallErr: errors.NewF("enrichment %s returned invalid routed result shape", enrichmentID)}
+	}
+	return result
+}
+
+func (r *Application) enrichChunk(ctx context.Context, enrichmentID, rolloutKey string, generation int64, input *alerts.Batch) EnrichResult {
+	errs := make([]errors.Error, input.Len())
 	invocation, err := r.Application.Submit(ctx, enrichmentID, rolloutKey, generation, func(callCtx context.Context, enrichment Enrichment) error {
 		if !enrichment.EnrichmentMetadata().Enabled {
 			return nil
@@ -114,8 +114,8 @@ func (r *Application) enrichChunk(ctx context.Context, enrichmentID, rolloutKey 
 		if result.CallErr != nil {
 			return result.CallErr
 		}
-		if len(result.Errs) != len(input) {
-			return &errors.ResultCardinalityError{PluginKind: "enrichment", PluginID: enrichmentID, Field: "errors", Expected: len(input), Actual: len(result.Errs)}
+		if len(result.Errs) != input.Len() {
+			return &errors.ResultCardinalityError{PluginKind: "enrichment", PluginID: enrichmentID, Field: "errors", Expected: input.Len(), Actual: len(result.Errs)}
 		}
 		copy(errs, result.Errs)
 		return nil
@@ -137,9 +137,10 @@ func (r *Application) enrichChunk(ctx context.Context, enrichmentID, rolloutKey 
 
 // shadow mirrors the batch onto a shadow candidate, cut the way production cuts it so an oversized
 // payload fails the same way. SubmitShadow does not block; the runtime has its own shadow budget.
-func (r *Application) shadow(ctx context.Context, enrichmentID string, input []*alerts.Alert, callBudget, alertBytes int, generation int64) {
-	for _, chunk := range runtime.ShardSlice(input, runtime.MaxChunks(len(input), callBudget, alertBytes)) {
-		shadowInput := alerts.CloneAlerts(chunk)
+func (r *Application) shadow(ctx context.Context, enrichmentID string, input *alerts.Batch, callBudget int, generation int64) {
+	bounds := runtime.ChunkBounds(input.WireSizes(), runtime.MaxCallPayloadBytes, callBudget)
+	for i := range len(bounds) - 1 {
+		shadowInput := input.Slice(bounds[i], bounds[i+1]).Clone()
 		_, _ = r.Application.SubmitShadow(ctx, enrichmentID, generation, func(callCtx context.Context, enrichment Enrichment) error {
 			if !enrichment.EnrichmentMetadata().Enabled {
 				return nil
@@ -148,8 +149,8 @@ func (r *Application) shadow(ctx context.Context, enrichmentID string, input []*
 			if result.CallErr != nil {
 				return result.CallErr
 			}
-			if len(result.Errs) != len(shadowInput) {
-				return fmt.Errorf("enrichment %s returned %d errors for %d shadow alerts", enrichmentID, len(result.Errs), len(shadowInput))
+			if len(result.Errs) != shadowInput.Len() {
+				return fmt.Errorf("enrichment %s returned %d errors for %d shadow alerts", enrichmentID, len(result.Errs), shadowInput.Len())
 			}
 			for _, err := range result.Errs {
 				if err != nil {
