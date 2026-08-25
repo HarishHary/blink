@@ -87,10 +87,21 @@ func (BaseLoader[U, T]) ParseSpec(name string, spec []byte) (T, error) {
 func (BaseLoader[U, T]) Clone(value T) T { return value.Clone() }
 
 // MaxProcs returns the configured plugin process limit.
-func (BaseLoader[U, T]) MaxProcs(value T) int { return value.Metadata().MaxProcs }
+func (BaseLoader[U, T]) MaxProcs(value T) int {
+	if max := value.Metadata().MaxProcs; max > 0 {
+		return max
+	}
+	return DefaultMaxDeploymentProcs
+}
 
-// CallsPerProcess returns the configured per-process invocation capacity.
-func (BaseLoader[U, T]) CallsPerProcess(value T) int { return value.Metadata().CallsPerProcess }
+// CallsPerProcess returns the per-process invocation capacity, defaulted the way the deployment
+// defaults it, so the capacity a caller shards against is the one its plugin processes will serve.
+func (BaseLoader[U, T]) CallsPerProcess(value T) int {
+	if calls := value.Metadata().CallsPerProcess; calls > 0 {
+		return calls
+	}
+	return DefaultDeploymentCallsPerProcess
+}
 
 // RolloutPct returns the configured share of rollout buckets a canary candidate claims.
 func (BaseLoader[U, T]) RolloutPct(value T) float64 { return value.Metadata().RolloutPct }

@@ -7,7 +7,6 @@
 package rpc_formatters
 
 import (
-	pb "github.com/harishhary/blink/pkg/alerts/pb"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
@@ -23,9 +22,14 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// FormatBatchRequest carries one encoded alerts.Alert per alert, not the Alert itself. A bytes
+// field and a submessage field share proto's length-delimited encoding, so this is the same wire
+// format the field had when it was declared as repeated alerts.Alert and either side of the
+// handshake may predate the change. Bytes are what let the host encode each alert once for a batch
+// and reuse it for every formatter it is handed to, instead of once per call.
 type FormatBatchRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Alerts        []*pb.Alert            `protobuf:"bytes,1,rep,name=alerts,proto3" json:"alerts,omitempty"`
+	Alerts        [][]byte               `protobuf:"bytes,1,rep,name=alerts,proto3" json:"alerts,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -60,7 +64,7 @@ func (*FormatBatchRequest) Descriptor() ([]byte, []int) {
 	return file_pkg_formatters_rpc_formatters_formatter_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *FormatBatchRequest) GetAlerts() []*pb.Alert {
+func (x *FormatBatchRequest) GetAlerts() [][]byte {
 	if x != nil {
 		return x.Alerts
 	}
@@ -168,9 +172,9 @@ var File_pkg_formatters_rpc_formatters_formatter_proto protoreflect.FileDescript
 const file_pkg_formatters_rpc_formatters_formatter_proto_rawDesc = "" +
 	"\n" +
 	"-pkg/formatters/rpc_formatters/formatter.proto\x12\n" +
-	"formatters\x1a\x1bgoogle/protobuf/empty.proto\x1a\x19pkg/alerts/pb/alert.proto\";\n" +
-	"\x12FormatBatchRequest\x12%\n" +
-	"\x06alerts\x18\x01 \x03(\v2\r.alerts.AlertR\x06alerts\"C\n" +
+	"formatters\x1a\x1bgoogle/protobuf/empty.proto\",\n" +
+	"\x12FormatBatchRequest\x12\x16\n" +
+	"\x06alerts\x18\x01 \x03(\fR\x06alerts\"C\n" +
 	"\n" +
 	"FormatItem\x12\x1f\n" +
 	"\vresult_json\x18\x01 \x01(\fR\n" +
@@ -201,25 +205,23 @@ var file_pkg_formatters_rpc_formatters_formatter_proto_goTypes = []any{
 	(*FormatBatchRequest)(nil),  // 0: formatters.FormatBatchRequest
 	(*FormatItem)(nil),          // 1: formatters.FormatItem
 	(*FormatBatchResponse)(nil), // 2: formatters.FormatBatchResponse
-	(*pb.Alert)(nil),            // 3: alerts.Alert
-	(*emptypb.Empty)(nil),       // 4: google.protobuf.Empty
+	(*emptypb.Empty)(nil),       // 3: google.protobuf.Empty
 }
 var file_pkg_formatters_rpc_formatters_formatter_proto_depIdxs = []int32{
-	3, // 0: formatters.FormatBatchRequest.alerts:type_name -> alerts.Alert
-	1, // 1: formatters.FormatBatchResponse.items:type_name -> formatters.FormatItem
-	0, // 2: formatters.Formatter.FormatBatch:input_type -> formatters.FormatBatchRequest
-	4, // 3: formatters.Formatter.Init:input_type -> google.protobuf.Empty
-	4, // 4: formatters.Formatter.Shutdown:input_type -> google.protobuf.Empty
-	4, // 5: formatters.Formatter.Ping:input_type -> google.protobuf.Empty
-	2, // 6: formatters.Formatter.FormatBatch:output_type -> formatters.FormatBatchResponse
-	4, // 7: formatters.Formatter.Init:output_type -> google.protobuf.Empty
-	4, // 8: formatters.Formatter.Shutdown:output_type -> google.protobuf.Empty
-	4, // 9: formatters.Formatter.Ping:output_type -> google.protobuf.Empty
-	6, // [6:10] is the sub-list for method output_type
-	2, // [2:6] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	1, // 0: formatters.FormatBatchResponse.items:type_name -> formatters.FormatItem
+	0, // 1: formatters.Formatter.FormatBatch:input_type -> formatters.FormatBatchRequest
+	3, // 2: formatters.Formatter.Init:input_type -> google.protobuf.Empty
+	3, // 3: formatters.Formatter.Shutdown:input_type -> google.protobuf.Empty
+	3, // 4: formatters.Formatter.Ping:input_type -> google.protobuf.Empty
+	2, // 5: formatters.Formatter.FormatBatch:output_type -> formatters.FormatBatchResponse
+	3, // 6: formatters.Formatter.Init:output_type -> google.protobuf.Empty
+	3, // 7: formatters.Formatter.Shutdown:output_type -> google.protobuf.Empty
+	3, // 8: formatters.Formatter.Ping:output_type -> google.protobuf.Empty
+	5, // [5:9] is the sub-list for method output_type
+	1, // [1:5] is the sub-list for method input_type
+	1, // [1:1] is the sub-list for extension type_name
+	1, // [1:1] is the sub-list for extension extendee
+	0, // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_pkg_formatters_rpc_formatters_formatter_proto_init() }

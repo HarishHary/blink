@@ -23,9 +23,14 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// EvaluateBatchRequest carries one encoded google.protobuf.Struct per event, not the Struct itself. A
+// bytes field and a submessage field share proto's length-delimited encoding, so this is the same wire
+// format the field had when it was declared as repeated google.protobuf.Struct and either side of the
+// handshake may predate the change. Bytes are what let the executor reuse the encoding the exec record
+// already carried for every rule that evaluates the event, instead of encoding once per rule.
 type EvaluateBatchRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Events        []*structpb.Struct     `protobuf:"bytes,1,rep,name=events,proto3" json:"events,omitempty"`
+	Events        [][]byte               `protobuf:"bytes,1,rep,name=events,proto3" json:"events,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -60,7 +65,7 @@ func (*EvaluateBatchRequest) Descriptor() ([]byte, []int) {
 	return file_pkg_rules_rpc_rules_rule_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *EvaluateBatchRequest) GetEvents() []*structpb.Struct {
+func (x *EvaluateBatchRequest) GetEvents() [][]byte {
 	if x != nil {
 		return x.Events
 	}
@@ -209,9 +214,9 @@ var File_pkg_rules_rpc_rules_rule_proto protoreflect.FileDescriptor
 
 const file_pkg_rules_rpc_rules_rule_proto_rawDesc = "" +
 	"\n" +
-	"\x1epkg/rules/rpc_rules/rule.proto\x12\x05rules\x1a\x1bgoogle/protobuf/empty.proto\x1a\x1cgoogle/protobuf/struct.proto\"G\n" +
-	"\x14EvaluateBatchRequest\x12/\n" +
-	"\x06events\x18\x01 \x03(\v2\x17.google.protobuf.StructR\x06events\"\xe9\x01\n" +
+	"\x1epkg/rules/rpc_rules/rule.proto\x12\x05rules\x1a\x1bgoogle/protobuf/empty.proto\x1a\x1cgoogle/protobuf/struct.proto\".\n" +
+	"\x14EvaluateBatchRequest\x12\x16\n" +
+	"\x06events\x18\x01 \x03(\fR\x06events\"\xe9\x01\n" +
 	"\fEvaluateItem\x12\x18\n" +
 	"\amatched\x18\x01 \x01(\bR\amatched\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12 \n" +
@@ -249,22 +254,21 @@ var file_pkg_rules_rpc_rules_rule_proto_goTypes = []any{
 	(*emptypb.Empty)(nil),         // 4: google.protobuf.Empty
 }
 var file_pkg_rules_rpc_rules_rule_proto_depIdxs = []int32{
-	3, // 0: rules.EvaluateBatchRequest.events:type_name -> google.protobuf.Struct
-	3, // 1: rules.EvaluateItem.context:type_name -> google.protobuf.Struct
-	1, // 2: rules.EvaluateBatchResponse.items:type_name -> rules.EvaluateItem
-	0, // 3: rules.Rule.EvaluateBatch:input_type -> rules.EvaluateBatchRequest
-	4, // 4: rules.Rule.Init:input_type -> google.protobuf.Empty
-	4, // 5: rules.Rule.Shutdown:input_type -> google.protobuf.Empty
-	4, // 6: rules.Rule.Ping:input_type -> google.protobuf.Empty
-	2, // 7: rules.Rule.EvaluateBatch:output_type -> rules.EvaluateBatchResponse
-	4, // 8: rules.Rule.Init:output_type -> google.protobuf.Empty
-	4, // 9: rules.Rule.Shutdown:output_type -> google.protobuf.Empty
-	4, // 10: rules.Rule.Ping:output_type -> google.protobuf.Empty
-	7, // [7:11] is the sub-list for method output_type
-	3, // [3:7] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	3, // 0: rules.EvaluateItem.context:type_name -> google.protobuf.Struct
+	1, // 1: rules.EvaluateBatchResponse.items:type_name -> rules.EvaluateItem
+	0, // 2: rules.Rule.EvaluateBatch:input_type -> rules.EvaluateBatchRequest
+	4, // 3: rules.Rule.Init:input_type -> google.protobuf.Empty
+	4, // 4: rules.Rule.Shutdown:input_type -> google.protobuf.Empty
+	4, // 5: rules.Rule.Ping:input_type -> google.protobuf.Empty
+	2, // 6: rules.Rule.EvaluateBatch:output_type -> rules.EvaluateBatchResponse
+	4, // 7: rules.Rule.Init:output_type -> google.protobuf.Empty
+	4, // 8: rules.Rule.Shutdown:output_type -> google.protobuf.Empty
+	4, // 9: rules.Rule.Ping:output_type -> google.protobuf.Empty
+	6, // [6:10] is the sub-list for method output_type
+	2, // [2:6] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_pkg_rules_rpc_rules_rule_proto_init() }

@@ -6,12 +6,12 @@ import (
 )
 
 const (
-	// DefaultDeploymentCallsPerProcess is what a process serves when its deployment declares nothing:
-	// one call at a time, all an arbitrary plugin can be assumed to survive.
-	DefaultDeploymentCallsPerProcess = 1
-	// MaxDeploymentCallsPerProcess is the most one process may declare. Each is a goroutine and a gRPC
-	// stream inside a subprocess Blink cannot size, so only a benchmark justifies raising it.
+	// DefaultDeploymentCallsPerProcess is what a process serves undeclared; above 1 the plugin has to be concurrency-safe.
+	DefaultDeploymentCallsPerProcess = 32
+	// MaxDeploymentCallsPerProcess is the most one process may declare, each a goroutine and a stream in a subprocess Blink cannot size.
 	MaxDeploymentCallsPerProcess = 64
+	// DefaultMaxDeploymentProcs is what a deployment scales to when it declares nothing.
+	DefaultMaxDeploymentProcs = 1
 	// MaxDeploymentProcs is the most plugin processes one deployment may declare.
 	MaxDeploymentProcs = 100
 )
@@ -50,26 +50,23 @@ func runtimeOptionsWithDefaults(opts Options) Options {
 	if opts.MaxConcurrentCalls <= 0 {
 		opts.MaxConcurrentCalls = DefaultRuntimeMaxConcurrentCalls
 	}
-	// One call is at most as wide as the deployment capacity it fills, the rollout bucket count, or
-	// the batch itself, and this bounds all three. Capacity declared past it arrives as further calls.
+	// One call is at most this wide, and never wider than the batch; capacity past it arrives as further calls.
 	opts.callFanOut = MaxDeploymentProcs + 1
 	if opts.MaxBatchSize > 0 {
 		opts.callFanOut = min(opts.MaxBatchSize, opts.callFanOut)
 	}
-	// The per-plugin share rejects rather than waits, so it holds one whole fan-out for every call the
-	// caller runs at once. The shared budget only blocks, so it sits that many shares above one share.
+	// The per-plugin share rejects rather than waits, so it holds a whole fan-out per concurrent call.
 	opts.maxOutstandingInvocationsPerPlugin = opts.callFanOut * opts.MaxConcurrentCalls
+	// The shared budget only blocks, so it sits that many shares above one plugin's share.
 	opts.maxOutstandingInvocations = opts.maxOutstandingInvocationsPerPlugin * opts.MaxConcurrentCalls
 	opts.shadowMaxOutstandingInvocations = max(1, opts.maxOutstandingInvocations/DefaultRuntimeShadowAdmissionShare)
-	// One plugin's whole fan-out lands on one manager, so a queue under its budget would move the same
-	// rejection a layer down. Under the manager's own default the queue is left to it.
+	// One plugin's whole fan-out lands on one manager, so a queue under its share would move the same rejection a layer down.
 	if opts.SupervisorOptions.CatalogOptions.RouterOptions.ManagerOptions.QueueSize <= 0 &&
 		opts.maxOutstandingInvocationsPerPlugin > DefaultDeploymentManagerQueueSize {
 		opts.SupervisorOptions.CatalogOptions.RouterOptions.ManagerOptions.QueueSize = opts.maxOutstandingInvocationsPerPlugin
 	}
 
-	// A subprocess past a deployment's min_procs only pays off while a core is free to run it, so one
-	// budget bounds that growth, from GOMAXPROCS because it respects the container's CPU limit.
+	// Growth past a deployment's min_procs only pays off while a core is free, so GOMAXPROCS bounds it.
 	if opts.SupervisorOptions.CatalogOptions.RouterOptions.ManagerOptions.ProcessBudget == nil {
 		opts.SupervisorOptions.CatalogOptions.RouterOptions.ManagerOptions.ProcessBudget = NewProcessBudget(goruntime.GOMAXPROCS(0) * DefaultRuntimeProcessGrowthPerProc)
 	}

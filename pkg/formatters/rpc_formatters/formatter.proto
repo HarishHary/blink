@@ -3,9 +3,13 @@ package formatters;
 option go_package = "rpc_formatters/;rpc_formatters";
 
 import "google/protobuf/empty.proto";
-import "pkg/alerts/pb/alert.proto";
 
-message FormatBatchRequest  { repeated alerts.Alert alerts = 1; } // structured alerts.Alert per alert
+// FormatBatchRequest carries one encoded alerts.Alert per alert, not the Alert itself. A bytes
+// field and a submessage field share proto's length-delimited encoding, so this is the same wire
+// format the field had when it was declared as repeated alerts.Alert and either side of the
+// handshake may predate the change. Bytes are what let the host encode each alert once for a batch
+// and reuse it for every formatter it is handed to, instead of once per call.
+message FormatBatchRequest { repeated bytes alerts = 1; }
 
 message FormatItem {
   bytes result_json = 1;

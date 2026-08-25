@@ -5,7 +5,12 @@ option go_package = "rpc_rules/;rpc_rules";
 import "google/protobuf/empty.proto";
 import "google/protobuf/struct.proto";
 
-message EvaluateBatchRequest { repeated google.protobuf.Struct events = 1; }
+// EvaluateBatchRequest carries one encoded google.protobuf.Struct per event, not the Struct itself. A
+// bytes field and a submessage field share proto's length-delimited encoding, so this is the same wire
+// format the field had when it was declared as repeated google.protobuf.Struct and either side of the
+// handshake may predate the change. Bytes are what let the executor reuse the encoding the exec record
+// already carried for every rule that evaluates the event, instead of encoding once per rule.
+message EvaluateBatchRequest { repeated bytes events = 1; }
 
 // EvaluateItem carries the match outcome, optional per-event overrides, and item error.
 // Empty string / nil fields mean "use YAML default".
