@@ -3,6 +3,7 @@ package plugin
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"ergo.services/ergo/act"
@@ -28,19 +29,18 @@ const (
 
 // deploymentManagerStatus is the manager-owned deployment availability snapshot.
 type deploymentManagerStatus struct {
-	lifecycle    DeploymentManagerLifecycle
-	availability runtime.Availability
-	currentProcs int
-	readyWorkers int
-	// queueDepth, dispatching, and active are sampled whenever one of the fields above changes.
-	// They move with every single invocation, and no layer above this manager decides anything
-	// from them, so they ride along with the next health change rather than publishing one of
-	// their own: see publishStatus for what a publish costs.
-	queueDepth  int
-	dispatching int
-	active      int
-	lastError   error
-	workers     map[gen.PID]deploymentWorkerStatus
+	lifecycle         DeploymentManagerLifecycle
+	availability      runtime.Availability
+	currentProcs      int
+	readyProcs        int
+	callsPerProcess   int
+	totalCapacity     int
+	queueDepth        int
+	dispatching       int
+	active            int
+	availableCapacity int
+	lastError         error
+	processes         map[gen.PID]pluginProcessStatus
 }
 
 // ---------------------------------------------------------------------------
@@ -60,7 +60,7 @@ const (
 type deploymentManagerCall[T Artifact] struct {
 	call          MessageInvokePlugin[T]
 	phase         deploymentManagerCallPhase
-	worker        gen.PID
+	process       gen.PID
 	dispatchToken uint64
 	dispatchStop  gen.CancelFunc
 	completed     bool
@@ -68,10 +68,7 @@ type deploymentManagerCall[T Artifact] struct {
 	prev, next    *deploymentManagerCall[T] // pending queue links, valid while queued
 }
 
-// pendingQueue is the manager's FIFO of accepted invocations waiting for worker capacity. It
-// links the call entries themselves, so unlinking one costs the same wherever it sits in the
-// queue: a plugin's queue is sized from its admission budget and runs thousands of entries deep,
-// while callers cancel and expire invocations that are nowhere near the head.
+// pendingQueue is the manager's FIFO of accepted invocations waiting for process capacity, linking the call entries themselves so unlinking one costs the same wherever it sits: the queue runs thousands of entries deep and callers cancel invocations nowhere near the head.
 type pendingQueue[T Artifact] struct {
 	head, tail *deploymentManagerCall[T]
 	length     int
@@ -100,8 +97,7 @@ func (q *pendingQueue[T]) pop() *deploymentManagerCall[T] {
 	return entry
 }
 
-// remove unlinks one invocation; an entry that is not queued is left alone, so every caller that
-// drops a call can remove it without first knowing which phase the call reached.
+// remove unlinks one invocation, leaving an unqueued entry alone so every caller that drops a call can remove it without knowing which phase the call reached.
 func (q *pendingQueue[T]) remove(entry *deploymentManagerCall[T]) {
 	if !entry.queued {
 		return
@@ -121,19 +117,43 @@ func (q *pendingQueue[T]) remove(entry *deploymentManagerCall[T]) {
 }
 
 // ---------------------------------------------------------------------------
+// Process State
+// ---------------------------------------------------------------------------
+
+// pluginProcessState is one process slot of this deployment: a stable identity that outlives the PIDs filling it, holding what the current process reported, what the manager decided about it, and the backoff that owns its next start.
+type pluginProcessState struct {
+	// pid is the process filling this slot, zero while the slot waits on its own backoff to start one.
+	pid     gen.PID
+	restart *runtime.ScheduledBackoff
+	status  pluginProcessStatus
+	// assigned counts the invocations handed to this process and not yet completed, which is the number the manager schedules from since only it knows which process is free.
+	assigned int
+	// retiring marks a process the manager has decided to stop: it is offered no further invocations and stops once the ones it holds finish, so shrinking a deployment and replacing a broken process never cancel running work.
+	retiring bool
+	// replace records that the slot is to be refilled once this process is gone, separating a slot the deployment shrank away from one whose process failed underneath it.
+	replace bool
+}
+
+// ---------------------------------------------------------------------------
 // Deployment Manager
 // ---------------------------------------------------------------------------
 
-// deploymentManager owns invocation, scaling, and Pool lifecycle for one concrete deployment.
+// deploymentManager owns invocation, scaling, and process lifecycle for one concrete deployment.
 type deploymentManager[T Artifact] struct {
 	act.Actor
-	adapter        *Adapter[T]
-	options        DeploymentManagerOptions
-	draining       bool
-	drained        bool
-	deployment     Deployment
-	route          gen.Atom
-	pool           deploymentPoolState
+	adapter    *Adapter[T]
+	options    DeploymentManagerOptions
+	draining   bool
+	drained    bool
+	deployment Deployment
+	route      gen.Atom
+	// processes are this deployment's slots by id, order records the ids in the sequence they were opened so shrinking retires the newest rather than whichever one a map iteration reached first, and byPID resolves a child's own facts back to the slot it fills.
+	processes map[int]*pluginProcessState
+	order     []int
+	byPID     map[gen.PID]int
+	nextSlot  int
+	// desiredProcs is how many processes the manager wants running: min_procs at rest, one more per scale-up, and none for an idle deployment that reserves none.
+	desiredProcs   int
 	inFlightCalls  map[uint64]*deploymentManagerCall[T]
 	pendingCalls   pendingQueue[T]
 	liveStatus     deploymentManagerStatus
@@ -146,21 +166,24 @@ type deploymentManager[T Artifact] struct {
 	idleSince      time.Time
 	lastScale      time.Time
 	lastError      error
-	growthWorkers  int // workers held from the process budget, above this deployment's reservation
+	growthProcs    int // processes held from the process budget, above this deployment's reservation
 }
 
 // ---------------------------------------------------------------------------
 // Messages
 // ---------------------------------------------------------------------------
 
-// MessageDeploymentManagerDispatchDeadline expires an invocation awaiting worker acceptance.
+// MessageDeploymentManagerDispatchDeadline expires an invocation awaiting process acceptance.
 type MessageDeploymentManagerDispatchDeadline struct {
 	callID uint64
 	token  uint64
 }
 
-// MessageDeploymentManagerRestart retries Pool creation after backoff.
-type MessageDeploymentManagerRestart struct{ token uint64 }
+// MessageDeploymentManagerRestart refills one slot after its own backoff.
+type MessageDeploymentManagerRestart struct {
+	slot  int
+	token uint64
+}
 
 // MessageDeploymentManagerReconcile runs a token-fenced autoscaling pass.
 type MessageDeploymentManagerReconcile struct{ token uint64 }
@@ -191,7 +214,7 @@ type MessageInvocationAccepted struct {
 	callID  uint64
 }
 
-// MessageDeploymentManagerDrained reports that no invocation or Pool remains.
+// MessageDeploymentManagerDrained reports that no invocation or process remains.
 type MessageDeploymentManagerDrained struct {
 	route   gen.Atom
 	manager gen.PID
@@ -208,48 +231,46 @@ type MessageDeploymentManagerTerminated struct {
 // Actor lifecycle
 // ---------------------------------------------------------------------------
 
-// Init validates configuration and starts the deployment's minimum Pool capacity.
+// Init validates configuration and starts the deployment's minimum process count.
 func (m *deploymentManager[T]) Init(...any) error {
 	m.options = deploymentManagerOptionsWithDefaults(m.options)
-	if m.deployment.MinProcs < 0 || m.deployment.MaxProcs > MaxDeploymentProcs || m.deployment.MinProcs > m.deployment.WorkerCount() {
-		return fmt.Errorf("deployment manager: invalid worker bounds min=%d max=%d", m.deployment.MinProcs, m.deployment.WorkerCount())
+	if m.deployment.MinProcs < 0 || m.deployment.MaxProcs > MaxDeploymentProcs || m.deployment.MinProcs > m.deployment.ProcessCountLimit() {
+		return fmt.Errorf("deployment manager: invalid process bounds min=%d max=%d", m.deployment.MinProcs, m.deployment.ProcessCountLimit())
+	}
+	if m.deployment.MaxConcurrentCallsPerProcess > MaxDeploymentCallsPerProcess {
+		return fmt.Errorf("deployment manager: invalid process capacity calls=%d max=%d", m.deployment.MaxConcurrentCallsPerProcess, MaxDeploymentCallsPerProcess)
 	}
 	m.inFlightCalls = make(map[uint64]*deploymentManagerCall[T])
-	m.pool.status.workers = make(map[gen.PID]deploymentWorkerStatus)
-	// A route always gets its own workers up to min_procs, or one worker for a MinProcs=0 route
-	// that a call wakes, whatever the process budget holds - desired state is not negotiable, and
-	// a route that could not start a single worker would fail every call it is routed. Those
-	// reservations are only reported against the budget, so an operator learns the process is
-	// already oversubscribed before scaling makes it worse.
+	m.processes = make(map[int]*pluginProcessState)
+	m.byPID = make(map[gen.PID]int)
+	// A route always gets its own processes up to min_procs, or one for a MinProcs=0 route that a call wakes, whatever the process budget holds - desired state is not negotiable, and those reservations are only reported against the budget so an operator learns of oversubscription before scaling makes it worse.
 	reservation := max(1, m.deployment.MinProcs)
-	if reserved, limit := m.options.WorkerBudget.reserve(reservation), m.options.WorkerBudget.limit(); reserved > limit && reserved-reservation <= limit {
-		m.Log().Warning("reserved plugin workers exceed the process worker budget: reserved=%d budget=%d route=%s", reserved, limit, m.route)
+	if reserved, limit := m.options.ProcessBudget.reserve(reservation), m.options.ProcessBudget.limit(); reserved > limit && reserved-reservation <= limit {
+		m.Log().Warning("reserved plugin processes exceed the process budget: reserved=%d budget=%d route=%s", reserved, limit, m.route)
 	}
 	if m.draining {
 		_, _ = m.SendAfter(m.PID(), MessageDeploymentManagerDrainDeadline{}, m.options.DrainTimeout)
 		m.reconcile()
 		return nil
 	}
-	if m.deployment.MinProcs > 0 {
-		m.startDeploymentPool(m.deployment.MinProcs)
-	}
+	m.desiredProcs = m.deployment.MinProcs
 	m.reconcile()
 	return nil
 }
 
 // Terminate cancels local work and reports manager termination to the Router.
 func (m *deploymentManager[T]) Terminate(reason error) {
-	if m.pool.restart != nil {
-		m.pool.restart.CancelScheduled(false)
-	}
+	m.cancelProcessRestarts(false)
 	m.cancelCircuitCooldown()
 	if m.reconcileStop != nil {
 		m.reconcileStop()
 	}
-	m.releaseGrowthWorkers()
-	m.options.WorkerBudget.reserve(-max(1, m.deployment.MinProcs))
+	m.releaseGrowthProcs()
+	m.options.ProcessBudget.reserve(-max(1, m.deployment.MinProcs))
 	for _, entry := range m.inFlightCalls {
-		m.cancel(entry)
+		if entry.call.Cancel != nil {
+			entry.call.Cancel()
+		}
 	}
 	_ = m.SendWithPriority(m.Parent(), MessageDeploymentManagerTerminated{
 		route: m.route, manager: m.PID(), reason: reason,
@@ -275,7 +296,9 @@ func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 		if err == nil {
 			err = context.Canceled
 		}
-		m.cancel(entry)
+		if entry.call.Cancel != nil {
+			entry.call.Cancel()
+		}
 		if entry.phase == deploymentManagerPending {
 			m.removeCall(msg.CallID, err)
 		} else {
@@ -283,101 +306,83 @@ func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 		}
 		m.reconcile()
 
-	case MessageDeploymentPoolStatusChanged:
-		if from != m.pool.pid || msg.pool != m.pool.pid || m.pool.pid == (gen.PID{}) {
+	case MessagePluginProcessStatusChanged:
+		_, process := m.slotFor(msg.process)
+		if process == nil || from != msg.process {
 			return nil
 		}
-		m.pool.status = msg.status.clone()
+		wasReady := process.status.availability == runtime.AvailabilityReady
+		process.status = msg.status
+		// A process that came up is the only evidence recovery works: without this its slot's budget only ever shrinks, and a deployment losing one process a day eventually opens its circuit for a fault it recovered from every time.
+		if !wasReady && process.status.availability == runtime.AvailabilityReady {
+			process.restart.Strategy.Reset()
+		}
 		m.reconcile()
 
-	case MessageDeploymentWorkerRestartExhausted:
-		if from != m.pool.pid || m.pool.pid == (gen.PID{}) || m.pool.recovering || m.circuitOpen {
+	case MessagePluginProcessRestartExhausted:
+		slot, process := m.slotFor(from)
+		if process == nil || m.circuitOpen {
 			return nil
 		}
+		// The process gave up on its own subprocess, so this incarnation is spent and only its slot is refilled: the deployment's other processes keep serving the calls they hold.
 		m.lastError = msg.err
-		m.pool.recovering = true
-		if err := m.Node().SendExit(m.pool.pid, fmt.Errorf("worker restart exhausted: %w", msg.err)); err != nil {
-			m.openCircuit(fmt.Errorf("terminate exhausted deployment pool: %w", err))
-			return nil
-		}
-		m.publishStatus()
+		m.retireSlot(slot, true, fmt.Errorf("plugin process restart exhausted: %w", msg.err))
+		m.reconcile()
 
 	case MessageInvocationStarted:
 		entry := m.inFlightCalls[msg.callID]
-		if entry == nil || entry.phase != deploymentManagerDispatching {
+		if entry == nil || entry.phase != deploymentManagerDispatching || entry.process != from {
 			return nil
 		}
 		if entry.dispatchStop != nil {
 			entry.dispatchStop()
 			entry.dispatchStop = nil
 		}
-		entry.phase, entry.worker = deploymentManagerActive, from
+		entry.phase = deploymentManagerActive
 		m.reconcile()
 
 	case MessageInvocationFinished:
 		entry := m.inFlightCalls[msg.callID]
-		if entry == nil || entry.phase != deploymentManagerActive || entry.worker != from {
+		if entry == nil || entry.phase != deploymentManagerActive || entry.process != from {
 			return nil
 		}
 		m.removeCall(msg.callID, msg.err)
 		m.reconcile()
 
-	case MessageDeploymentWorkerStopped:
-		if from != m.pool.pid || msg.pool != m.pool.pid || m.pool.pid == (gen.PID{}) {
+	case MessagePluginProcessStopped:
+		if _, process := m.slotFor(msg.process); process == nil || from != msg.process {
 			return nil
 		}
-		for callID, entry := range m.inFlightCalls {
-			if entry.phase == deploymentManagerActive && entry.worker == msg.worker {
-				m.cancel(entry)
-				m.removeCall(callID, runtime.ErrPluginUnavailable)
-			}
-		}
-		m.reconcile()
-
-	case MessageDeploymentPoolResized:
-		if from != m.pool.pid || msg.pool != m.pool.pid || !m.pool.resizePending {
-			return nil
-		}
-		m.pool.resizePending = false
-		if msg.err != nil {
-			m.lastError = msg.err
-		} else {
-			m.lastScale = time.Now()
-		}
-		// The pool keeps its current size when a resize fails, so the budget follows the size it
-		// reports rather than the one this manager asked for: a refused add and a completed
-		// removal both hand their worker back for another deployment to take.
-		if held := max(0, int(msg.size)-max(1, m.deployment.MinProcs)); held < m.growthWorkers {
-			m.options.WorkerBudget.release(m.growthWorkers - held)
-			m.growthWorkers = held
-		}
+		// The process is on its way out and its DOWN will follow, so failing its calls here rather than waiting means a caller learns as soon as the process itself knows.
+		m.failProcessCalls(msg.process, runtime.ErrPluginUnavailable)
 		m.reconcile()
 
 	case gen.MessageDownPID:
-		if msg.PID != m.pool.pid {
+		slot, process := m.slotFor(msg.PID)
+		if process == nil {
 			return nil
 		}
-		m.pool.pid, m.pool.resizePending = gen.PID{}, false
-		m.pool.status = deploymentPoolStatus{lifecycle: DeploymentPoolStopped, availability: runtime.AvailabilityUnavailable, workers: make(map[gen.PID]deploymentWorkerStatus)}
-		m.releaseGrowthWorkers()
-		m.lastError = msg.Reason
-		for callID, entry := range m.inFlightCalls {
-			if entry.phase != deploymentManagerPending {
-				m.cancel(entry)
-				m.removeCall(callID, runtime.ErrPluginUnavailable)
+		// The slot outlives the PID that filled it, so it is emptied rather than dropped: nothing it reported is true of anything now, and a retirement ends with the process it retired, leaving a slot the deployment either refills or is done with. Only its retry budget carries over, since a slot whose processes keep dying is what that budget is counting.
+		retiring, replace := process.retiring, process.replace
+		delete(m.byPID, msg.PID)
+		*process = pluginProcessState{
+			restart: process.restart,
+			status:  pluginProcessStatus{lifecycle: PluginProcessRestarting, availability: runtime.AvailabilityUnavailable},
+		}
+		m.failProcessCalls(msg.PID, runtime.ErrPluginUnavailable)
+		switch {
+		case retiring && !replace:
+			m.releaseSlot(slot)
+			// A deployment that shrank to nothing on purpose is healthy, and a stale error would otherwise keep it reporting unavailable for as long as it stays idle.
+			if len(m.processes) == 0 && m.desiredProcs == 0 {
+				m.lastError = nil
 			}
-		}
-		expected := m.pool.expectedStop
-		m.pool.expectedStop = false
-		if expected {
-			m.pool.recovering = false
-			m.lastError = nil
-		}
-		if !expected && !m.draining {
-			// Every unexpected pool incarnation consumes the finite pool budget,
-			// including an idle MinProcs=0 pool whose committed calls just failed.
-			m.pool.recovering = true
-			m.scheduleDeploymentPoolRestart()
+		case !m.draining:
+			// Every unexpected process incarnation consumes its own slot's finite budget, including an idle MinProcs=0 one whose committed calls just failed.
+			m.lastError = msg.Reason
+			m.scheduleProcessRestart(slot)
+		default:
+			m.releaseSlot(slot)
 		}
 		m.reconcile()
 
@@ -386,18 +391,18 @@ func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 		if entry == nil || entry.phase != deploymentManagerDispatching || entry.dispatchToken != msg.token {
 			return nil
 		}
-		m.cancel(entry)
+		if entry.call.Cancel != nil {
+			entry.call.Cancel()
+		}
 		m.removeCall(msg.callID, runtime.ErrPluginUnavailable)
 		m.reconcile()
 
 	case MessageDeploymentManagerRestart:
-		if m.pool.restart == nil || !m.pool.restart.Pending || msg.token != m.pool.restart.Token {
+		process := m.processes[msg.slot]
+		if process == nil || !process.restart.Pending || msg.token != process.restart.Token {
 			return nil
 		}
-		m.pool.restart.Pending, m.pool.restart.Cancel = false, nil
-		if !m.circuitOpen && m.pool.pid == (gen.PID{}) && (m.pool.recovering || m.deployment.MinProcs > 0 || m.pendingCalls.length > 0) {
-			m.startDeploymentPool(max(1, m.deployment.MinProcs))
-		}
+		process.restart.Pending, process.restart.Cancel = false, nil
 		m.reconcile()
 
 	case MessageDeploymentManagerReconcile:
@@ -410,11 +415,8 @@ func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 	case MessageDrain:
 		if !m.draining {
 			m.draining = true
-			if m.pool.restart != nil {
-				m.pool.restart.CancelScheduled(false)
-			}
+			m.cancelProcessRestarts(false)
 			m.cancelCircuitCooldown()
-			m.pool.recovering = false
 			_, _ = m.SendAfter(m.PID(), MessageDeploymentManagerDrainDeadline{}, m.options.DrainTimeout)
 		}
 		m.reconcile()
@@ -438,7 +440,9 @@ func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 			return nil
 		}
 		for callID, entry := range m.inFlightCalls {
-			m.cancel(entry)
+			if entry.call.Cancel != nil {
+				entry.call.Cancel()
+			}
 			m.removeCall(callID, context.DeadlineExceeded)
 		}
 		m.reportDrained()
@@ -452,11 +456,16 @@ func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 // HandleInspect exposes concise operational manager metrics.
 func (m *deploymentManager[T]) HandleInspect(_ gen.PID, _ ...string) map[string]string {
 	status := m.status()
+	// Processes and calls are reported apart because one no longer implies the other: an operator reading a saturated deployment needs to know whether it is short of processes or of the capacity each one was given, and which its own configuration allows it to raise.
 	return map[string]string{
-		"deployment:availability": string(status.availability),
-		"deployment:current":      fmt.Sprintf("%d", status.currentProcs),
-		"deployment:ready":        fmt.Sprintf("%d", status.readyWorkers),
-		"deployment:queue":        fmt.Sprintf("%d", status.queueDepth),
+		"deployment:availability":      string(status.availability),
+		"deployment:current":           fmt.Sprintf("%d", status.currentProcs),
+		"deployment:ready":             fmt.Sprintf("%d", status.readyProcs),
+		"deployment:calls_per_process": fmt.Sprintf("%d", status.callsPerProcess),
+		"deployment:capacity":          fmt.Sprintf("%d/%d", status.totalCapacity, m.deployment.MaxInvocationCapacity()),
+		"deployment:available":         fmt.Sprintf("%d", status.availableCapacity),
+		"deployment:active":            fmt.Sprintf("%d", status.active),
+		"deployment:queue":             fmt.Sprintf("%d", status.queueDepth),
 	}
 }
 
@@ -493,13 +502,62 @@ func (m *deploymentManager[T]) acceptInvocation(call MessageInvokePlugin[T]) {
 	m.reconcile()
 }
 
+// dispatchInvocation forwards queued invocations while ready process capacity is available.
+func (m *deploymentManager[T]) dispatchInvocation() {
+	if m.draining || m.circuitOpen {
+		return
+	}
+	for m.pendingCalls.length > 0 {
+		slot, process := m.selectProcess()
+		if process == nil {
+			return
+		}
+		pid := process.pid
+		entry := m.pendingCalls.pop()
+		callID := entry.call.CallID
+		if err := entry.call.Context.Err(); err != nil {
+			m.removeCall(callID, err)
+			continue
+		}
+		entry.phase, entry.process = deploymentManagerDispatching, pid
+		entry.dispatchToken++
+		cancel, err := m.SendAfter(m.PID(), MessageDeploymentManagerDispatchDeadline{callID: callID, token: entry.dispatchToken}, m.options.DispatchTimeout)
+		if err != nil {
+			m.removeCall(callID, runtime.ErrPluginUnavailable)
+			continue
+		}
+		entry.dispatchStop = cancel
+		process.assigned++
+		if err := m.Send(pid, entry.call); err != nil {
+			m.removeCall(callID, runtime.ErrPluginUnavailable)
+			m.retireSlot(slot, true, fmt.Errorf("dispatch invocation: %w", err))
+		}
+	}
+}
+
+// selectProcess returns the slot whose ready process holds the fewest invocations, or nil when none has spare capacity; least-loaded rather than round-robin, since a process serving several calls finishes them at different times and stacking the next call behind a busy one while a quiet process waits is latency the deployment already paid for.
+func (m *deploymentManager[T]) selectProcess() (int, *pluginProcessState) {
+	selected, best := 0, (*pluginProcessState)(nil)
+	for _, slot := range m.order {
+		process := m.processes[slot]
+		if process == nil || process.retiring || process.assigned >= m.deployment.CapacityPerProcess() ||
+			process.status.availability != runtime.AvailabilityReady {
+			continue
+		}
+		if best == nil || process.assigned < best.assigned {
+			selected, best = slot, process
+		}
+	}
+	return selected, best
+}
+
 // ---------------------------------------------------------------------------
 // Reconciliation and Scaling
 // ---------------------------------------------------------------------------
 
-// reconcile advances drain, Pool lifecycle, dispatch, scaling, and status publication.
+// reconcile advances drain, process lifecycle, dispatch, scaling, and status publication.
 func (m *deploymentManager[T]) reconcile() {
-	if m.draining || m.circuitOpen || m.pool.recovering {
+	if m.draining || m.circuitOpen {
 		m.publishStatus()
 		if m.draining && !m.drained && len(m.inFlightCalls) == 0 {
 			m.reportDrained()
@@ -513,223 +571,137 @@ func (m *deploymentManager[T]) reconcile() {
 	} else {
 		m.idleSince = time.Time{}
 	}
-	if m.pool.pid == (gen.PID{}) && !m.pool.recovering && (m.deployment.MinProcs > 0 || m.pendingCalls.length > 0) && (m.pool.restart == nil || !m.pool.restart.Pending) {
-		m.startDeploymentPool(max(1, m.deployment.MinProcs))
-	}
+	m.reconcileProcesses()
 	m.dispatchInvocation()
 	m.scale()
 	m.publishStatus()
-	if m.draining && !m.drained && len(m.inFlightCalls) == 0 {
-		m.reportDrained()
-	}
 }
 
-// dispatchInvocation forwards queued invocations while ready Pool capacity is available.
-func (m *deploymentManager[T]) dispatchInvocation() {
-	if m.draining || m.circuitOpen || m.pool.recovering || m.pool.status.lifecycle == DeploymentPoolFailed {
+// reconcileProcesses moves the deployment's slots toward the desired count and fills the empty ones, one pass at a time.
+func (m *deploymentManager[T]) reconcileProcesses() {
+	if m.draining || m.circuitOpen {
 		return
 	}
-	for m.pendingCalls.length > 0 && m.pool.pid != (gen.PID{}) && !m.pool.expectedStop && m.active()+m.dispatching() < min(m.pool.status.desiredWorkers, m.ready()) {
-		entry := m.pendingCalls.pop()
-		callID := entry.call.CallID
-		if err := entry.call.Context.Err(); err != nil {
-			m.removeCall(callID, err)
+	// A deployment that reserves no process still has to answer the call that just arrived, so the first queued invocation is what wakes one.
+	if m.desiredProcs < 1 && m.pendingCalls.length > 0 {
+		m.desiredProcs = 1
+	}
+	running := m.runningProcs()
+	for i := len(m.order) - 1; i >= 0 && running > m.desiredProcs; i-- {
+		// The newest slot holding nothing, rather than simply the newest: a process serves several invocations at once, so retiring one that still holds calls would stop offering it work while those calls run, and one left above the desired count is retired by the reconciliation its next completion triggers.
+		if process := m.processes[m.order[i]]; process != nil && !process.retiring && process.assigned == 0 {
+			m.retireSlot(m.order[i], false, nil)
+			running--
+		}
+	}
+	for _, slot := range slices.Clone(m.order) {
+		process := m.processes[slot]
+		if process == nil || process.pid != (gen.PID{}) || process.retiring {
 			continue
 		}
-		entry.phase = deploymentManagerDispatching
-		entry.dispatchToken++
-		cancel, err := m.SendAfter(m.PID(), MessageDeploymentManagerDispatchDeadline{callID: callID, token: entry.dispatchToken}, m.options.DispatchTimeout)
-		if err != nil {
-			m.removeCall(callID, runtime.ErrPluginUnavailable)
+		// An empty slot waiting on its own backoff is left there: filling it now would skip the delay that budget exists to impose, and only this slot is held back by it.
+		if process.restart.Pending {
 			continue
 		}
-		entry.dispatchStop = cancel
-		if err := m.Send(m.pool.pid, entry.call); err != nil {
-			m.removeCall(callID, runtime.ErrPluginUnavailable)
-			_ = m.Node().SendExit(m.pool.pid, fmt.Errorf("dispatch invocation: %w", err))
+		if !m.startPluginProcess(slot) {
+			return
+		}
+	}
+	for m.runningProcs() < m.desiredProcs {
+		if !m.openSlot() {
+			return
 		}
 	}
 }
 
-// scale changes Pool capacity by at most one worker per reconciliation.
+// scale moves the desired process count toward the one this deployment's demand needs, at most one scaling decision per cooldown.
 func (m *deploymentManager[T]) scale() {
-	if m.draining || m.circuitOpen || m.pool.recovering || m.pool.status.lifecycle == DeploymentPoolFailed {
+	if m.draining || m.circuitOpen {
 		return
 	}
-	if m.pool.resizePending || m.pool.pid == (gen.PID{}) || time.Since(m.lastScale) < m.options.ScaleCooldown {
+	if m.restarting() || time.Since(m.lastScale) < m.options.ScaleCooldown {
 		m.scheduleScaleReconcile()
 		return
 	}
-	if m.pendingCalls.length > 0 && m.pool.status.desiredWorkers < m.deployment.WorkerCount() && m.ready() >= m.pool.status.desiredWorkers && m.active()+m.dispatching() >= min(m.pool.status.desiredWorkers, m.ready()) {
-		// max_procs is this deployment's own ceiling; the budget is the process one, since every
-		// worker past a reservation is a subprocess competing with every other deployment's for
-		// the same cores. Denied growth is not an error: the calls keep waiting in the queue, and
-		// the cooldown paces the next attempt until another deployment shrinks.
-		if !m.options.WorkerBudget.acquire() {
-			m.lastScale = time.Now()
+	required := m.requiredProcs()
+	if required > m.desiredProcs && m.pendingCalls.length > 0 &&
+		m.ready() >= m.desiredProcs && m.active()+m.dispatching() >= m.committedCapacity() {
+		// Growth starts only once every ready process is at capacity and a call is still waiting, and then goes to what the queue needs rather than one process per cooldown, since a wide capacity per process would otherwise ramp toward a count it could size in one pass; max_procs is this deployment's own ceiling, already applied by requiredProcs, while the budget applied here is the process one, and denied growth is not an error - the calls keep waiting and the cooldown paces the next attempt.
+		grown := false
+		for m.desiredProcs < required && m.options.ProcessBudget.acquire() {
+			m.growthProcs++
+			m.desiredProcs++
+			grown = true
+		}
+		m.lastScale = time.Now()
+		if !grown {
 			m.scheduleScaleReconcile()
 			return
 		}
-		m.growthWorkers++
-		m.pool.resizePending = true
-		if err := m.SendWithPriority(m.pool.pid, MessageDeploymentPoolAddWorker{}, gen.MessagePriorityHigh); err != nil {
-			m.pool.resizePending = false
-			m.growthWorkers--
-			m.options.WorkerBudget.release(1)
-			m.lastError = err
-		}
+		m.reconcileProcesses()
 		return
 	}
-	if m.pendingCalls.length == 0 && m.dispatching() == 0 && m.pool.status.desiredWorkers > m.deployment.MinProcs {
+	if required < m.desiredProcs && m.pendingCalls.length == 0 && m.dispatching() == 0 {
 		if time.Since(m.idleSince) < m.options.IdleTimeout {
 			m.scheduleScaleReconcile()
 			return
 		}
-		if m.pool.status.desiredWorkers == 1 && m.deployment.MinProcs == 0 {
-			if m.active() == 0 {
-				m.pool.expectedStop = true
-				_ = m.Node().SendExit(m.pool.pid, gen.TerminateReasonNormal)
-			}
+		// A process still running invocations is not surplus whatever the aggregate capacity says, so a deployment only gives back one that holds nothing: its completion reconciles this manager again, so waiting costs one more idle period rather than the call.
+		if !m.hasIdleProcess() {
+			m.scheduleScaleReconcile()
 			return
 		}
-		m.pool.resizePending = true
-		if err := m.SendWithPriority(m.pool.pid, MessageDeploymentPoolRemoveWorker{}, gen.MessagePriorityHigh); err != nil {
-			m.pool.resizePending = false
-			m.lastError = err
+		m.desiredProcs--
+		m.lastScale = time.Now()
+		m.syncGrowthProcs()
+		m.reconcileProcesses()
+		// One process per cooldown on the way down, and nothing else will reconcile a deployment that has gone quiet, so the next step is armed here or a shrunk deployment stops halfway.
+		m.scheduleScaleReconcile()
+	}
+}
+
+// requiredProcs converts the invocations this deployment owes - executing, handed to a process and not yet started, and still queued - into the process count that would serve them, a process carrying its whole declared capacity of them rather than one invocation, never below the reservation the deployment keeps running anyway nor above its own ceiling.
+func (m *deploymentManager[T]) requiredProcs() int {
+	capacity := m.deployment.CapacityPerProcess()
+	demand := m.active() + m.dispatching() + m.pendingCalls.length
+	required := (demand + capacity - 1) / capacity
+	return min(max(required, m.deployment.MinProcs), m.deployment.ProcessCountLimit())
+}
+
+// hasIdleProcess reports whether the manager holds a process it could give back right now: one it has not already retired and that is running no invocation.
+func (m *deploymentManager[T]) hasIdleProcess() bool {
+	for _, process := range m.processes {
+		if !process.retiring && process.assigned == 0 {
+			return true
 		}
 	}
+	return false
 }
 
-// ---------------------------------------------------------------------------
-// Pool Lifecycle
-// ---------------------------------------------------------------------------
-
-// startDeploymentPool spawns and monitors a fresh Pool incarnation.
-func (m *deploymentManager[T]) startDeploymentPool(initial int) {
-	if m.draining || m.circuitOpen || m.pool.pid != (gen.PID{}) {
-		return
-	}
-	// A fresh incarnation starts at its reservation, so whatever the previous one had grown to is
-	// no longer running and belongs to whichever deployment needs it next.
-	m.releaseGrowthWorkers()
-	// LinkParent only propagates manager termination; MonitorPID below receives pool DOWN.
-	poolOptions := m.options.PoolOptions
-	poolOptions.InitialSize = int64(initial)
-	poolOptions.MaxSize = int64(m.deployment.WorkerCount())
-	pid, err := m.Spawn(func() gen.ProcessBehavior {
-		return &deploymentPool[T]{
-			adapter:    m.adapter,
-			options:    poolOptions,
-			deployment: m.deployment,
-		}
-	}, gen.ProcessOptions{LinkParent: true})
-	if err != nil {
-		m.lastError = fmt.Errorf("spawn deployment pool: %w", err)
-		m.scheduleDeploymentPoolRestart()
-		return
-	}
-	m.pool.pid = pid
-	m.pool.expectedStop = false
-	m.pool.recovering = false
-	m.pool.status = deploymentPoolStatus{
-		lifecycle:      DeploymentPoolStarting,
-		availability:   runtime.AvailabilityUnavailable,
-		desiredWorkers: initial,
-		workers:        make(map[gen.PID]deploymentWorkerStatus),
-	}
-	if err := m.MonitorPID(pid); err != nil {
-		m.lastError = fmt.Errorf("monitor deployment pool: %w", err)
-		_ = m.Node().SendExit(pid, gen.TerminateReasonShutdown)
-		m.pool.pid = gen.PID{}
-		m.pool.status = deploymentPoolStatus{
-			lifecycle:    DeploymentPoolStopped,
-			availability: runtime.AvailabilityUnavailable,
-			workers:      make(map[gen.PID]deploymentWorkerStatus),
-		}
-		m.scheduleDeploymentPoolRestart()
-		return
+// syncGrowthProcs follows the budget down to the process count this deployment now wants, so a process it gave up is available to whichever deployment needs it next.
+func (m *deploymentManager[T]) syncGrowthProcs() {
+	if held := max(0, m.desiredProcs-max(1, m.deployment.MinProcs)); held < m.growthProcs {
+		m.options.ProcessBudget.release(m.growthProcs - held)
+		m.growthProcs = held
 	}
 }
 
-// releaseGrowthWorkers hands every budgeted worker this manager holds back to the process budget.
-func (m *deploymentManager[T]) releaseGrowthWorkers() {
-	m.options.WorkerBudget.release(m.growthWorkers)
-	m.growthWorkers = 0
-}
-
-// scheduleDeploymentPoolRestart consumes the finite manager-level retry budget.
-func (m *deploymentManager[T]) scheduleDeploymentPoolRestart() {
-	m.pool.recovering = true
-	if m.pool.restart == nil {
-		m.pool.restart = runtime.NewScheduledBackoff(m.options.PoolOptions.RetryMin, m.options.PoolOptions.RetryMax)
-	}
-	if m.pool.restart.Pending {
-		return
-	}
-	delay := m.pool.restart.Strategy.NextBackOff()
-	if delay == backoff.Stop {
-		m.openCircuit(fmt.Errorf("deployment pool restart budget: %w", runtime.ErrBackoffStopped))
-		return
-	}
-	m.pool.restart.Token++
-	cancel, err := m.SendAfter(m.PID(), MessageDeploymentManagerRestart{token: m.pool.restart.Token}, delay)
-	if err != nil {
-		m.openCircuit(fmt.Errorf("schedule deployment pool restart: %w", err))
-		return
-	}
-	m.pool.restart.Pending, m.pool.restart.Cancel = true, cancel
-}
-
-// openCircuit stops Pool recovery, fails all tracked invocations, and arms the cooldown.
-func (m *deploymentManager[T]) openCircuit(err error) {
-	if m.circuitOpen {
-		return
-	}
-	m.circuitOpen, m.pool.recovering, m.lastError = true, false, err
-	if m.pool.restart != nil {
-		m.pool.restart.CancelScheduled(false)
-	}
-	for callID := range m.inFlightCalls {
-		m.removeCall(callID, runtime.ErrPluginUnavailable)
-	}
-	// Nothing else clears the circuit, so a deployment broken by a transient host problem
-	// would stay dead until an operator noticed. The cooldown re-arms the restart budget
-	// instead; a deployment that is genuinely broken just re-opens the circuit.
-	m.cancelCircuitCooldown()
-	if cancel, sendErr := m.SendAfter(m.PID(), MessageDeploymentManagerCircuitCooldown{token: m.circuitToken}, m.options.CircuitCooldown); sendErr == nil {
-		m.circuitStop = cancel
-	}
-	m.publishStatus()
-}
-
-// closeCircuit reopens admission with a fresh Pool restart budget.
-func (m *deploymentManager[T]) closeCircuit() {
-	m.circuitOpen, m.pool.recovering, m.lastError = false, false, nil
-	m.cancelCircuitCooldown()
-	if m.pool.restart != nil {
-		m.pool.restart.CancelScheduled(true)
-	}
-}
-
-// cancelCircuitCooldown drops any pending cooldown timer and fences its message.
-func (m *deploymentManager[T]) cancelCircuitCooldown() {
-	if m.circuitStop != nil {
-		m.circuitStop()
-		m.circuitStop = nil
-	}
-	m.circuitToken++
+// releaseGrowthProcs hands every budgeted process this manager holds back to the process budget.
+func (m *deploymentManager[T]) releaseGrowthProcs() {
+	m.options.ProcessBudget.release(m.growthProcs)
+	m.growthProcs = 0
 }
 
 // scheduleScaleReconcile replaces the pending autoscaling timer with a fenced one.
 func (m *deploymentManager[T]) scheduleScaleReconcile() {
-	if m.circuitOpen || m.pool.recovering || m.pool.pid == (gen.PID{}) || m.pool.resizePending {
+	if m.circuitOpen || m.draining || m.restarting() {
 		return
 	}
 	delay := time.Duration(0)
 	if remaining := m.options.ScaleCooldown - time.Since(m.lastScale); remaining > delay {
 		delay = remaining
 	}
-	if m.pendingCalls.length == 0 && m.dispatching() == 0 && m.pool.status.desiredWorkers > m.deployment.MinProcs {
+	if m.pendingCalls.length == 0 && m.dispatching() == 0 && m.desiredProcs > m.deployment.MinProcs {
 		if remaining := m.options.IdleTimeout - time.Since(m.idleSince); remaining > delay {
 			delay = remaining
 		}
@@ -748,13 +720,213 @@ func (m *deploymentManager[T]) scheduleScaleReconcile() {
 }
 
 // ---------------------------------------------------------------------------
+// Process Lifecycle
+// ---------------------------------------------------------------------------
+
+// slotFor resolves one plugin process to the slot it fills, and nil for a PID this manager does not own.
+func (m *deploymentManager[T]) slotFor(pid gen.PID) (int, *pluginProcessState) {
+	slot, ok := m.byPID[pid]
+	if !ok {
+		return 0, nil
+	}
+	return slot, m.processes[slot]
+}
+
+// openSlot opens one slot and starts the process to fill it, reporting whether the deployment gained one.
+func (m *deploymentManager[T]) openSlot() bool {
+	slot := m.nextSlot
+	m.nextSlot++
+	m.processes[slot] = &pluginProcessState{
+		restart: runtime.NewScheduledBackoff(m.options.RetryMin, m.options.RetryMax),
+		status: pluginProcessStatus{
+			lifecycle:    PluginProcessStarting,
+			availability: runtime.AvailabilityUnavailable,
+		},
+	}
+	// Slot ids come from a counter rather than a position, since a restart message carries the id it is for and positions shift as slots are released; they also grow, so the newest slot is still the highest id after one in the middle goes.
+	m.order = append(m.order, slot)
+	return m.startPluginProcess(slot)
+}
+
+// startPluginProcess spawns and monitors the process for one empty slot, reporting whether the slot was filled.
+func (m *deploymentManager[T]) startPluginProcess(slot int) bool {
+	process := m.processes[slot]
+	if process == nil {
+		return false
+	}
+	// LinkParent only propagates manager termination downward, so a process that dies on its own never takes the manager with it; the monitor below is what reports that death back.
+	pid, err := m.Spawn(func() gen.ProcessBehavior {
+		return &pluginProcess[T]{
+			adapter:    m.adapter,
+			options:    m.options.ProcessOptions,
+			deployment: m.deployment,
+		}
+	}, gen.ProcessOptions{LinkParent: true})
+	if err != nil {
+		m.lastError = fmt.Errorf("spawn plugin process: %w", err)
+		m.scheduleProcessRestart(slot)
+		return false
+	}
+	if err := m.MonitorPID(pid); err != nil {
+		m.lastError = fmt.Errorf("monitor plugin process: %w", err)
+		_ = m.Node().SendExit(pid, gen.TerminateReasonShutdown)
+		m.scheduleProcessRestart(slot)
+		return false
+	}
+	process.pid = pid
+	process.status = pluginProcessStatus{
+		lifecycle:    PluginProcessStarting,
+		availability: runtime.AvailabilityUnavailable,
+	}
+	m.byPID[pid] = slot
+	return true
+}
+
+// retireSlot takes one slot's process out of service, with reason set when it must stop at once rather than after the invocations it still holds, and replace set when the slot is to be refilled.
+func (m *deploymentManager[T]) retireSlot(slot int, replace bool, reason error) {
+	process := m.processes[slot]
+	if process == nil || process.retiring {
+		return
+	}
+	// An empty slot has no process to retire and no DOWN coming for one, so it is decided here: refilled by its pending restart, or dropped outright.
+	if process.pid == (gen.PID{}) {
+		if !replace {
+			m.releaseSlot(slot)
+		}
+		return
+	}
+	process.retiring, process.replace = true, replace
+	if reason != nil {
+		_ = m.Node().SendExit(process.pid, reason)
+		return
+	}
+	// MessageStop lets a process holding nothing finish on its own terms, and a send that fails means it cannot be asked, so the signal it cannot refuse is the fallback.
+	if process.assigned == 0 {
+		if err := m.Send(process.pid, MessageStop{}); err != nil {
+			_ = m.Node().SendExit(process.pid, gen.TerminateReasonShutdown)
+		}
+	}
+}
+
+// releaseSlot drops one slot and the retry budget it owned, for a deployment that is not refilling it.
+func (m *deploymentManager[T]) releaseSlot(slot int) {
+	process := m.processes[slot]
+	if process == nil {
+		return
+	}
+	process.restart.CancelScheduled(false)
+	if process.pid != (gen.PID{}) {
+		delete(m.byPID, process.pid)
+	}
+	delete(m.processes, slot)
+	m.order = slices.DeleteFunc(m.order, func(id int) bool { return id == slot })
+}
+
+// scheduleProcessRestart consumes one slot's finite retry budget, opening the deployment's circuit when that slot has spent it.
+func (m *deploymentManager[T]) scheduleProcessRestart(slot int) {
+	process := m.processes[slot]
+	if process == nil || process.restart.Pending {
+		return
+	}
+	delay := process.restart.Strategy.NextBackOff()
+	if delay == backoff.Stop {
+		m.openCircuit(fmt.Errorf("plugin process restart budget: %w", runtime.ErrBackoffStopped))
+		return
+	}
+	process.restart.Token++
+	cancel, err := m.SendAfter(m.PID(), MessageDeploymentManagerRestart{slot: slot, token: process.restart.Token}, delay)
+	if err != nil {
+		m.openCircuit(fmt.Errorf("schedule plugin process restart: %w", err))
+		return
+	}
+	process.restart.Pending, process.restart.Cancel = true, cancel
+}
+
+// cancelProcessRestarts drops every slot's pending start, resetting the budgets when the deployment is being given a clean one.
+func (m *deploymentManager[T]) cancelProcessRestarts(reset bool) {
+	for _, process := range m.processes {
+		process.restart.CancelScheduled(reset)
+	}
+}
+
+// runningProcs counts the slots the manager still means to keep, an empty one waiting on its own restart included: its next process is what that backoff owes, so a slot whose process failed is not immediately joined by another opened for the same shortfall.
+func (m *deploymentManager[T]) runningProcs() int {
+	count := 0
+	for _, process := range m.processes {
+		if !process.retiring || process.replace {
+			count++
+		}
+	}
+	return count
+}
+
+// restarting reports whether any slot is waiting on its own backoff, which is what paces the next scaling decision.
+func (m *deploymentManager[T]) restarting() bool {
+	for _, process := range m.processes {
+		if process.restart.Pending {
+			return true
+		}
+	}
+	return false
+}
+
+// ---------------------------------------------------------------------------
+// Circuit Breaker
+// ---------------------------------------------------------------------------
+
+// openCircuit stops process recovery, fails all tracked invocations, and arms the cooldown.
+func (m *deploymentManager[T]) openCircuit(err error) {
+	if m.circuitOpen {
+		return
+	}
+	m.circuitOpen, m.lastError = true, err
+	m.cancelProcessRestarts(false)
+	for callID := range m.inFlightCalls {
+		m.removeCall(callID, runtime.ErrPluginUnavailable)
+	}
+	// The deployment answers nothing while its circuit is open, so the slots it kept are only cost: they go, whatever it had grown to is not running any more either, and the cooldown below opens a fresh set if the deployment can run at all.
+	m.desiredProcs = m.deployment.MinProcs
+	m.releaseGrowthProcs()
+	for _, slot := range slices.Clone(m.order) {
+		m.retireSlot(slot, false, gen.TerminateReasonShutdown)
+	}
+	// Nothing else clears the circuit, so a deployment broken by a transient host problem would stay dead until an operator noticed; the cooldown gives the deployment fresh slots with fresh budgets instead, and a genuinely broken deployment just re-opens the circuit.
+	m.cancelCircuitCooldown()
+	if cancel, sendErr := m.SendAfter(m.PID(), MessageDeploymentManagerCircuitCooldown{token: m.circuitToken}, m.options.CircuitCooldown); sendErr == nil {
+		m.circuitStop = cancel
+	}
+	m.publishStatus()
+}
+
+// closeCircuit reopens admission, resetting the retry budget of any slot that outlived the circuit opening.
+func (m *deploymentManager[T]) closeCircuit() {
+	m.circuitOpen, m.lastError = false, nil
+	m.cancelCircuitCooldown()
+	m.cancelProcessRestarts(true)
+}
+
+// cancelCircuitCooldown drops any pending cooldown timer and fences its message.
+func (m *deploymentManager[T]) cancelCircuitCooldown() {
+	if m.circuitStop != nil {
+		m.circuitStop()
+		m.circuitStop = nil
+	}
+	m.circuitToken++
+}
+
+// ---------------------------------------------------------------------------
 // Invocation Bookkeeping
 // ---------------------------------------------------------------------------
 
-// cancel signals the invocation context when a cancellation callback exists.
-func (m *deploymentManager[T]) cancel(entry *deploymentManagerCall[T]) {
-	if entry.call.Cancel != nil {
-		entry.call.Cancel()
+// failProcessCalls completes every invocation dispatched to one process.
+func (m *deploymentManager[T]) failProcessCalls(pid gen.PID, err error) {
+	for callID, entry := range m.inFlightCalls {
+		if entry.phase != deploymentManagerPending && entry.process == pid {
+			if entry.call.Cancel != nil {
+				entry.call.Cancel()
+			}
+			m.removeCall(callID, err)
+		}
 	}
 }
 
@@ -770,6 +942,17 @@ func (m *deploymentManager[T]) removeCall(callID uint64, err error) {
 	}
 	m.pendingCalls.remove(entry)
 	delete(m.inFlightCalls, callID)
+	if _, process := m.slotFor(entry.process); process != nil && entry.phase != deploymentManagerPending {
+		// The capacity this call held returns to the process that held it, and a retiring one that just finished its last call is free to stop.
+		if process.assigned > 0 {
+			process.assigned--
+		}
+		if process.retiring && process.assigned == 0 {
+			if err := m.Send(entry.process, MessageStop{}); err != nil {
+				_ = m.Node().SendExit(entry.process, gen.TerminateReasonShutdown)
+			}
+		}
+	}
 	m.completeInvocation(entry, err)
 }
 
@@ -801,12 +984,23 @@ func (m *deploymentManager[T]) reportDrained() {
 // Status Reporting
 // ---------------------------------------------------------------------------
 
-// ready returns the Pool's currently healthy worker count.
+// ready counts the processes serving invocations right now.
 func (m *deploymentManager[T]) ready() int {
-	return m.pool.status.healthyWorkers
+	count := 0
+	for _, process := range m.processes {
+		if !process.retiring && process.status.availability == runtime.AvailabilityReady {
+			count++
+		}
+	}
+	return count
 }
 
-// dispatching counts invocations sent to the Pool but not yet started.
+// committedCapacity returns the invocations this deployment can execute at once, counting only ready processes so the manager never dispatches into capacity that does not exist yet, and each of them for the calls it can serve rather than the single call a process used to mean; the figure per process is the one the deployment declared, which is also the one each process enforces, so nothing between the spec and the dispatcher quietly reduces it.
+func (m *deploymentManager[T]) committedCapacity() int {
+	return m.ready() * m.deployment.CapacityPerProcess()
+}
+
+// dispatching counts invocations sent to a process but not yet started.
 func (m *deploymentManager[T]) dispatching() int {
 	count := 0
 	for _, entry := range m.inFlightCalls {
@@ -817,7 +1011,7 @@ func (m *deploymentManager[T]) dispatching() int {
 	return count
 }
 
-// active counts invocations currently executing in workers.
+// active counts invocations currently executing in a process.
 func (m *deploymentManager[T]) active() int {
 	count := 0
 	for _, entry := range m.inFlightCalls {
@@ -828,74 +1022,79 @@ func (m *deploymentManager[T]) active() int {
 	return count
 }
 
+// processStatuses snapshots what each owned process last reported, keyed by PID since that is what an operator sees, and skipping a slot standing empty between two of them.
+func (m *deploymentManager[T]) processStatuses() map[gen.PID]pluginProcessStatus {
+	statuses := make(map[gen.PID]pluginProcessStatus, len(m.processes))
+	for _, process := range m.processes {
+		if process.pid != (gen.PID{}) {
+			statuses[process.pid] = process.status
+		}
+	}
+	return statuses
+}
+
 // status derives the manager's public snapshot from owned state.
 func (m *deploymentManager[T]) status() deploymentManagerStatus {
-	zeroPoolIdle := m.pool.pid == (gen.PID{}) && m.deployment.MinProcs == 0 && len(m.inFlightCalls) == 0 &&
-		(m.pool.restart == nil || !m.pool.restart.Pending) && m.lastError == nil
-	noCommittedCapacity := m.pool.recovering || m.pool.status.lifecycle == DeploymentPoolFailed ||
-		(m.ready() == 0 && (m.pool.status.lifecycle == DeploymentPoolRestarting ||
-			m.pool.status.lifecycle == DeploymentPoolStarting))
+	// A deployment that reserves nothing and is doing nothing is not broken, it is asleep: it holds no slot, owes no call, and is waiting on neither a retry nor an error.
+	idleAtZero := m.desiredProcs == 0 && len(m.processes) == 0 && len(m.inFlightCalls) == 0 &&
+		!m.restarting() && m.lastError == nil
 	availability := runtime.AvailabilityUnavailable
-	if m.circuitOpen {
+	switch {
+	case m.circuitOpen:
 		availability = runtime.AvailabilityUnavailable
-	} else if m.draining {
+	case m.draining:
 		availability = runtime.AvailabilityDegraded
-	} else if noCommittedCapacity {
-		availability = runtime.AvailabilityUnavailable
-	} else if m.pool.pid == (gen.PID{}) {
-		if zeroPoolIdle {
+	case m.ready() == 0:
+		if idleAtZero {
 			availability = runtime.AvailabilityReady
 		}
-	} else if m.ready() >= m.deployment.MinProcs && m.deployment.MinProcs > 0 {
+	case m.ready() >= m.deployment.MinProcs && m.deployment.MinProcs > 0:
 		availability = runtime.AvailabilityReady
-	} else if m.ready() > 0 {
+	default:
 		availability = runtime.AvailabilityDegraded
 	}
 	lifecycle := DeploymentManagerRunning
-	if m.circuitOpen {
+	switch {
+	case m.circuitOpen:
 		lifecycle = DeploymentManagerFailed
-	} else if m.draining {
+	case m.draining:
 		lifecycle = DeploymentManagerDraining
-	} else if noCommittedCapacity {
-		lifecycle = DeploymentManagerStarting
-	} else if m.pool.pid == (gen.PID{}) && !zeroPoolIdle {
+	case m.ready() == 0 && !idleAtZero:
 		lifecycle = DeploymentManagerStarting
 	}
-	status := deploymentManagerStatus{
+	return deploymentManagerStatus{
 		lifecycle: lifecycle, availability: availability,
-		currentProcs: m.pool.status.desiredWorkers, readyWorkers: m.ready(),
+		currentProcs: m.desiredProcs, readyProcs: m.ready(),
+		callsPerProcess: m.deployment.CapacityPerProcess(), totalCapacity: m.committedCapacity(),
 		queueDepth: m.pendingCalls.length, dispatching: m.dispatching(), active: m.active(),
-		lastError: m.lastError,
-		workers:   m.pool.status.clone().workers,
+		availableCapacity: max(0, m.committedCapacity()-m.active()-m.dispatching()),
+		lastError:         m.lastError,
+		processes:         m.processStatuses(),
 	}
-	return status
 }
 
-// sameDeploymentManagerStatus reports whether two snapshots describe the same deployment health,
-// for publish deduplication. The per-invocation counters are excluded on purpose; see
-// deploymentManagerStatus.
+// sameDeploymentManagerStatus reports whether two snapshots describe the same deployment health, for publish deduplication, excluding the per-invocation counters on purpose (see deploymentManagerStatus).
 func sameDeploymentManagerStatus(left, right deploymentManagerStatus) bool {
 	if left.lifecycle != right.lifecycle ||
 		left.availability != right.availability ||
 		left.currentProcs != right.currentProcs ||
-		left.readyWorkers != right.readyWorkers ||
+		left.readyProcs != right.readyProcs ||
+		left.callsPerProcess != right.callsPerProcess ||
+		left.totalCapacity != right.totalCapacity ||
 		errorText(left.lastError) != errorText(right.lastError) ||
-		len(left.workers) != len(right.workers) {
+		len(left.processes) != len(right.processes) {
 		return false
 	}
-	for pid, worker := range left.workers {
-		other, ok := right.workers[pid]
-		if !ok || !sameDeploymentWorkerStatus(worker, other) {
+	for pid, process := range left.processes {
+		other, ok := right.processes[pid]
+		if !ok || !samePluginProcessStatus(process, other) {
 			return false
 		}
 	}
 	return true
 }
 
-// publishStatus sends the latest manager snapshot to its Router parent, skipping one the Router
-// already has. Every accepted, dispatched, and completed invocation reconciles this manager, and
-// the Router recomputes its own status - and the catalog and supervisor above it - for each fact
-// it receives, so republishing an unchanged status would walk that whole chain twice per call.
+// publishStatus sends the latest manager snapshot to its Router parent, skipping one the Router already has: every accepted, dispatched, and completed invocation reconciles this manager, and the Router recomputes its own status - and the catalog and supervisor above it - for each fact it receives, so republishing an unchanged status would walk that whole chain twice per call.
 func (m *deploymentManager[T]) publishStatus() {
 	next := m.status()
 	if m.statusEpoch != 0 && sameDeploymentManagerStatus(m.liveStatus, next) {
