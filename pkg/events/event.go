@@ -3,10 +3,15 @@ package events
 import (
 	"reflect"
 	"slices"
+
+	"github.com/harishhary/blink/internal/runtime"
 )
 
 // Event is a dynamic detection record: a nested map of arbitrary fields with lookup/merge helpers.
 type Event map[string]any
+
+// RolloutKey is the side this event routes to, its tenant normalized so an event without one still routes somewhere.
+func (e Event) RolloutKey() string { return runtime.NormalizeRolloutKey(e["tenant_id"]) }
 
 // Clone returns a deep copy of the event's JSON-like maps and slices.
 func (e Event) Clone() Event {

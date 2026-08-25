@@ -48,6 +48,9 @@ func (a *Alert) Clone() *Alert {
 	return &clone
 }
 
+// RolloutKey is the side this alert routes to, taken from the event it was raised on.
+func (a *Alert) RolloutKey() string { return a.Event.RolloutKey() }
+
 // CloneAlerts returns alert copies with deeply cloned Events, preserving input order.
 func CloneAlerts(in []*Alert) []*Alert {
 	out := make([]*Alert, len(in))
@@ -272,10 +275,7 @@ func (a *Alert) MergePartitionKey() string {
 		ruleID = ruleIdentity(a.Rule)
 		version = a.Rule.Version
 	}
-	tenant := runtime.NormalizeRolloutKey(nil)
-	if a.Event != nil {
-		tenant = runtime.NormalizeRolloutKey(a.Event["tenant_id"])
-	}
+	tenant := a.RolloutKey()
 	parts := []string{
 		"tenant=" + mergeKeyValue(tenant, true),
 		"rule=" + mergeKeyValue(ruleID, true),
