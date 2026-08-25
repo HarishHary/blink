@@ -32,41 +32,25 @@ const (
 	PluginMetaFailed     PluginMetaLifecycle = "failed"
 )
 
-// PluginMetaActivity is deliberately separate from lifecycle.
+// PluginMetaActivity labels how loaded one subprocess is rather than counting it: a process serves several invocations at once, so the label is what its owner publishes and the count rides along with it.
 type PluginMetaActivity string
 
 const (
 	PluginMetaIdle PluginMetaActivity = "idle"
 	PluginMetaBusy PluginMetaActivity = "busy"
+	// PluginMetaSaturated means every declared slot is taken, so the next invocation dispatched there is refused; a subprocess serving one call at a time is saturated whenever it works at all, busy is the state only a larger capacity has, and neither is pressure - queue depth is where waiting shows up.
+	PluginMetaSaturated PluginMetaActivity = "saturated"
 )
 
 const pluginMetaPingTimeout = 3 * time.Second
 
-// pluginMetaCancelGrace is how long a cancelled or expired invocation may take to return before the
-// subprocess is treated as hung. A plugin that honours its RPC context returns within it, which is a
-// call-local failure and must not cost the subprocess; one that ignores cancellation cannot be
-// stopped any other way, because Go cannot kill the goroutine running an arbitrary callback. The
-// grace is what separates those two cases, so it is deliberately far longer than a cancelled gRPC
-// call needs to unwind and far shorter than any caller deadline.
+// pluginMetaCancelGrace is how long a cancelled or expired invocation may take to return before the subprocess is treated as hung, far longer than a cancelled gRPC call needs to unwind and far shorter than any caller deadline: a plugin honouring its RPC context returns within it and the failure stays call-local, while one that ignores cancellation can only be stopped by a kill that also ends the siblings running beside it (see failGenerationCalls).
 const pluginMetaCancelGrace = time.Second
-
-// pluginMetaCancelGraceSeconds is the grace rounded up for Ergo's whole-second call timeouts, plus
-// one second for the same rounding in callTimeoutSeconds. The parent process actor waits this much
-// longer than the caller's own deadline, so its own timeout never races the classification below.
-const pluginMetaCancelGraceSeconds = int(pluginMetaCancelGrace/time.Second) + 1
-
-// supportedCallsPerProcess is the invocation capacity one plugin process can actually serve today,
-// whatever its deployment declares. HandleCall below blocks its meta-process for the whole
-// invocation and the process actor that owns it takes one message at a time, so a second call reaches this
-// subprocess only after the first returns: capacity is a property of this layer, not of the
-// manager's arithmetic, and the manager clamps to it so a declared capacity never overstates what
-// the runtime will run. Raising it belongs with the asynchronous invocation path that removes the
-// serialization, not with the scheduler that would dispatch into it.
-const supportedCallsPerProcess = 1
 
 // pluginMetaState tracks one plugin process actor's replaceable meta-process.
 type pluginMetaState struct {
 	alias         gen.Alias
+	generation    uint64
 	restart       *runtime.ScheduledBackoff
 	healthRestart *runtime.ScheduledBackoff
 	status        pluginMetaStatus
@@ -78,7 +62,10 @@ type pluginMetaStatus struct {
 	lifecycle    PluginMetaLifecycle
 	availability runtime.Availability
 	activity     PluginMetaActivity
-	lastError    error
+	// inFlight and capacity are sampled whenever the activity label changes rather than published on their own: inFlight moves with every invocation and the manager schedules from the assignments it made itself, so a publish per call would walk the status chain for a number nothing reads.
+	inFlight  int
+	capacity  int
+	lastError error
 }
 
 // pluginMetaSession is the atomically published plugin session.
@@ -88,7 +75,7 @@ type pluginMetaSession[T Artifact] struct {
 	rpc      RPC
 }
 
-// pluginMeta owns one plugin subprocess and its RPC session.
+// pluginProcessMeta owns one plugin subprocess and its RPC session.
 type pluginProcessMeta[T Artifact] struct {
 	gen.MetaProcess
 	adapter    *Adapter[T]
@@ -117,16 +104,21 @@ type MessagePluginMetaPingResult struct {
 	err   error
 }
 
-// pluginMetaInvoke carries a synchronous callback without terminating the meta-process on plugin errors.
+// pluginMetaInvoke asks the meta-process to run one callback against its plugin session, as a message rather than a call so neither side blocks; the identifiers travel with it because the answer comes back as another message to be matched to the call that asked and the incarnation that served it.
 type pluginMetaInvoke[T Artifact] struct {
-	context context.Context
-	fn      func(context.Context, T) error
+	callID     uint64
+	generation uint64
+	context    context.Context
+	fn         func(context.Context, T) error
 }
 
-// pluginMetaInvokeResult returns the plugin result and recycle decision.
+// pluginMetaInvokeResult reports one invocation's outcome and recycle decision to the owning process actor, echoing the call and the incarnation that ran it.
 type pluginMetaInvokeResult struct {
-	err     error
-	recycle bool
+	alias      gen.Alias
+	callID     uint64
+	generation uint64
+	err        error
+	recycle    bool
 }
 
 // ---------------------------------------------------------------------------
@@ -191,9 +183,15 @@ func (m *pluginProcessMeta[T]) Terminate(error) { m.close() }
 // Message handling
 // ---------------------------------------------------------------------------
 
-// HandleMessage processes parent-issued plugin health checks.
+// HandleMessage processes parent-issued plugin invocations and health checks.
 func (m *pluginProcessMeta[T]) HandleMessage(from gen.PID, message any) error {
-	switch message.(type) {
+	switch msg := message.(type) {
+	case pluginMetaInvoke[T]:
+		if from != m.Parent() {
+			return nil
+		}
+		m.invoke(msg)
+
 	case MessagePluginMetaPing:
 		if from != m.Parent() {
 			return nil
@@ -217,52 +215,55 @@ func (m *pluginProcessMeta[T]) HandleMessage(from gen.PID, message any) error {
 	return nil
 }
 
-// HandleCall executes bounded plugin invocations from the parent process actor.
-func (m *pluginProcessMeta[T]) HandleCall(from gen.PID, _ gen.Ref, request any) (any, error) {
-	if from != m.Parent() {
-		return pluginMetaInvokeResult{err: fmt.Errorf("actorruntime: unauthorized plugin process caller %s", from)}, nil
-	}
-	switch msg := request.(type) {
-	case pluginMetaInvoke[T]:
-		if msg.context == nil {
-			return pluginMetaInvokeResult{err: fmt.Errorf("actorruntime: invocation context is required")}, nil
-		}
-		if msg.fn == nil {
-			return pluginMetaInvokeResult{err: fmt.Errorf("actorruntime: invocation function is required")}, nil
-		}
-		session := m.session.Load()
-		if session == nil || session.rpc == nil || m.runCtx.Err() != nil {
-			return pluginMetaInvokeResult{err: runtime.ErrPluginUnavailable}, nil
-		}
+// HandleCall rejects unsupported synchronous meta-process calls; invocations arrive as messages so that running one never blocks this meta-process.
+func (m *pluginProcessMeta[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
+	return fmt.Errorf("actorruntime: unsupported plugin meta call %T", request), nil
+}
 
+// invoke validates one invocation and hands it to a goroutine so this meta-process returns to its mailbox while the plugin works, everything the answer needs travelling with that goroutine.
+func (m *pluginProcessMeta[T]) invoke(msg pluginMetaInvoke[T]) {
+	if msg.context == nil {
+		m.answerInvocation(msg, pluginMetaInvokeResult{err: fmt.Errorf("actorruntime: invocation context is required")})
+		return
+	}
+	if msg.fn == nil {
+		m.answerInvocation(msg, pluginMetaInvokeResult{err: fmt.Errorf("actorruntime: invocation function is required")})
+		return
+	}
+	session := m.session.Load()
+	if session == nil || session.rpc == nil || m.runCtx.Err() != nil {
+		m.answerInvocation(msg, pluginMetaInvokeResult{err: runtime.ErrPluginUnavailable})
+		return
+	}
+
+	go func() {
 		result := make(chan error, 1)
 		go func() { result <- msg.fn(msg.context, session.instance) }()
 		select {
 		case err := <-result:
-			return m.classifyInvocation(msg.context, err), nil
+			m.answerInvocation(msg, m.classifyInvocation(msg.context, err))
 		case <-msg.context.Done():
-			// The caller cancelled or its deadline expired. Neither implies this subprocess is
-			// unhealthy, so give the in-flight call the cancellation grace to unwind and classify
-			// whatever it returns as any other result. Only a callback still running after that
-			// grace is a hang, and killing the subprocess is the sole way to stop it.
+			// The caller cancelled or its deadline expired, neither of which implies an unhealthy subprocess: give the in-flight call the cancellation grace and classify what it returns as any other result, since only a callback still running after that grace is a hang.
 			select {
 			case err := <-result:
-				return m.classifyInvocation(msg.context, err), nil
+				m.answerInvocation(msg, m.classifyInvocation(msg.context, err))
 			case <-time.After(pluginMetaCancelGrace):
-				m.close()
-				return pluginMetaInvokeResult{err: msg.context.Err(), recycle: true}, nil
+				m.answerInvocation(msg, pluginMetaInvokeResult{err: msg.context.Err(), recycle: true})
 			}
 		}
-	}
-	return fmt.Errorf("actorruntime: unsupported plugin meta call %T", request), nil
+	}()
 }
 
-// classifyInvocation decides whether one invocation's outcome is local to that call or fatal to the
-// subprocess serving it, and closes the session when it is fatal. A transport that is gone takes the
-// subprocess with it, because nothing else can reach it. A cancellation or a deadline is call-local
-// whenever the caller's own context ended, since the plugin answered a request that was withdrawn;
-// the same code without a finished caller context is the transport reporting its own failure, and
-// only then does the subprocess pay for it.
+// answerInvocation reports one outcome to the owning process actor and only then acts on a fatal one, since closing first would race this message against the meta-process's own DOWN and the owner would report a generic recycle instead of the failure that caused it.
+func (m *pluginProcessMeta[T]) answerInvocation(msg pluginMetaInvoke[T], result pluginMetaInvokeResult) {
+	result.alias, result.callID, result.generation = m.ID(), msg.callID, msg.generation
+	_ = m.Send(m.Parent(), result)
+	if result.recycle {
+		m.close()
+	}
+}
+
+// classifyInvocation decides whether one invocation's outcome is local to that call or fatal to the subprocess serving it: a transport that is gone takes the subprocess with it, and a cancellation or deadline is call-local whenever the caller's own context ended, since the same code without a finished caller context is the transport reporting its own failure.
 func (m *pluginProcessMeta[T]) classifyInvocation(ctx context.Context, err error) pluginMetaInvokeResult {
 	recycle := false
 	if err != nil {
@@ -272,9 +273,6 @@ func (m *pluginProcessMeta[T]) classifyInvocation(ctx context.Context, err error
 		case codes.Canceled, codes.DeadlineExceeded:
 			recycle = ctx.Err() == nil
 		}
-	}
-	if recycle {
-		m.close()
 	}
 	return pluginMetaInvokeResult{err: err, recycle: recycle}
 }
