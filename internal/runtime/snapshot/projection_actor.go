@@ -72,8 +72,7 @@ type ProjectionData[T any] struct {
 	RolloutByID map[string]Rollout
 }
 
-// Rollout is what a generation says about one plugin id's rollout. Its zero value describes an id
-// the generation does not carry, so a caller can read a missing key.
+// Rollout is what a generation says about one plugin id's rollout; its zero value describes an id it does not carry.
 type Rollout struct {
 	MaxProcs        int
 	CallsPerProcess int
@@ -81,18 +80,19 @@ type Rollout struct {
 	Shadow          bool
 }
 
-// Capacity is how many invocations this id's deployment can run at once. A process is not one unit
-// of call capacity, so it is the two bounds multiplied - a ceiling, not a promise.
+// Capacity is the invocations this id's deployment can run at once: the two bounds multiplied, a ceiling not a promise.
 func (r Rollout) Capacity() int {
 	return max(1, r.MaxProcs) * max(1, r.CallsPerProcess)
 }
 
-// CanarySide reports whether this rollout key routes to a canary candidate, not the primary.
-// The router decides from the key alone, so a batch only has to be cut where this answer changes:
-// two ways at most, and only under a partial canary, since a whole one is elected primary instead.
+// Splits reports whether keys here can route two ways, which only a partial canary does; grouping a batch pays only then.
+func (r Rollout) Splits() bool {
+	return r.CanaryPct > 0 && r.CanaryPct < runtime.RolloutBucketCount
+}
+
+// CanarySide reports whether this rollout key routes to a canary candidate rather than the primary, from the key alone.
 func (r Rollout) CanarySide(rolloutKey string) bool {
-	return r.CanaryPct > 0 && r.CanaryPct < runtime.RolloutBucketCount &&
-		float64(runtime.RolloutBucket(rolloutKey)) <= r.CanaryPct
+	return r.Splits() && float64(runtime.RolloutBucket(rolloutKey)) <= r.CanaryPct
 }
 
 // clone returns an independently owned copy of the projection data.
@@ -135,8 +135,7 @@ type projectionActor[T any] struct {
 // ProjectionStateRequest reads the current immutable projection state.
 type ProjectionStateRequest struct{}
 
-// MessageProjectionActorStatusChanged reports projection status. The child sends it
-// to its parent with a zero PID; Supervisor stamps external reports.
+// MessageProjectionActorStatusChanged reports projection status, with a zero PID from the child and stamped by Supervisor.
 type MessageProjectionActorStatusChanged struct {
 	Status        ProjectionActorStatus
 	ProjectionPID gen.PID
@@ -155,8 +154,7 @@ type MessageProjectionCommitResult struct {
 	Err           error
 }
 
-// MessageProjectionActorActivate tells a projection child that its parent has recorded
-// the child's PID and it may begin monitoring snapshot events.
+// MessageProjectionActorActivate tells a projection child its parent recorded its PID and it may monitor snapshot events.
 type MessageProjectionActorActivate struct{}
 
 // --- messages ---
@@ -250,8 +248,7 @@ func (a *projectionActor[T]) applyEvent(event gen.MessageEvent) error {
 		a.prepared = nil
 		parsed, err := newParsedProjection(snap, a.loader)
 		a.lastError = err
-		// Nothing parsed means no usable projection, so the previous generation stands; a partial
-		// one serves what parsed and stays degraded.
+		// Nothing parsed leaves the previous generation standing; a partial one serves what parsed and stays degraded.
 		if err != nil && len(parsed.data.ByFileName) == 0 {
 			return nil
 		}
@@ -310,8 +307,7 @@ type parsedProjection[T any] struct {
 	data       ProjectionData[T]
 }
 
-// newParsedProjection converts a snapshot into independently owned typed data. A spec that fails
-// to parse is skipped and joined into the returned error, so one broken plugin costs only itself.
+// newParsedProjection converts a snapshot into owned typed data, skipping and joining specs that fail so one break costs itself.
 func newParsedProjection[T any](snap *snapshot.Snapshot, loader Loader[T]) (parsedProjection[T], error) {
 	data := ProjectionData[T]{
 		ByFileName:  make(map[string]T),
@@ -331,8 +327,7 @@ func newParsedProjection[T any](snap *snapshot.Snapshot, loader Loader[T]) (pars
 			value = loader.Clone(value)
 			data.ByFileName[ref.Name] = loader.Clone(value)
 			rollout := data.RolloutByID[entry.Id]
-			// Primary and candidate may declare different bounds; a call routes to either, so the
-			// id carries the larger.
+			// Primary and candidate may declare different bounds and a call routes to either, so the id carries the larger.
 			rollout.MaxProcs = max(rollout.MaxProcs, 1, loader.MaxProcs(value))
 			rollout.CallsPerProcess = max(rollout.CallsPerProcess, 1, loader.CallsPerProcess(value))
 			if index == 0 {
