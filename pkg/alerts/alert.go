@@ -19,25 +19,21 @@ import (
 
 // Alert wraps a detection Event with its rule reference, scoring, and pipeline metadata as it flows through the stages.
 type Alert struct {
-	Id                 string
-	Attempts           int
-	Cluster            string
-	Created            time.Time
-	Dispatched         time.Time
-	Event              events.Event
-	Staged             bool
-	OutputsSent        []string
-	EnrichmentsApplied []string
-
-	LogSource string
-	LogType   string
-
-	SourceEntity  string
-	SourceService string
-
-	Confidence scoring.Confidence
-	Severity   scoring.Severity
-
+	Id                  string
+	Attempts            int
+	Cluster             string
+	Created             time.Time
+	Dispatched          time.Time
+	Event               events.Event
+	Staged              bool
+	OutputsSent         []string
+	EnrichmentsApplied  []string
+	LogSource           string
+	LogType             string
+	SourceEntity        string
+	SourceService       string
+	Confidence          scoring.Confidence
+	Severity            scoring.Severity
 	Rule                *rules.RuleMetadata
 	OverrideMergeByKeys []string
 }
