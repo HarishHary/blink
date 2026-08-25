@@ -82,28 +82,25 @@ func RolloutBucket(key string) uint32 {
 	return h.Sum32()%RolloutBucketCount + 1
 }
 
-// SideRouter is the rollout decision RouteSides needs, a constraint so a caller's concrete rollout stays unboxed.
-type SideRouter interface {
-	Splits() bool
-	CanarySide(rolloutKey string) bool
-}
-
 // RouteGroup is the positions routing to one side, named by the first key seen there since all of them route alike.
 type RouteGroup struct {
 	Key     string
 	Indexes []int
 }
 
-// RouteSides groups a batch's positions by routed side, two at most, and returns nil when the whole batch takes one side.
-func RouteSides[R SideRouter](keys []string, router R) []RouteGroup {
-	if !router.Splits() {
+// RouteSides groups a batch's positions by the side a canary at this percentage takes them to, and returns nil when the
+// whole batch takes one side.
+func RouteSides(keys []string, canaryPct float64) []RouteGroup {
+	// Only a partial canary can split a batch: without a candidate, or with one at the whole share that is elected
+	// primary instead, every key routes the same way.
+	if canaryPct <= 0 || canaryPct >= RolloutBucketCount {
 		return nil
 	}
 	groups := make([]RouteGroup, 0, 2)
 	groupBySide := [2]int{-1, -1}
 	for i, key := range keys {
 		side := 0
-		if router.CanarySide(key) {
+		if float64(RolloutBucket(key)) <= canaryPct {
 			side = 1
 		}
 		if groupBySide[side] < 0 {

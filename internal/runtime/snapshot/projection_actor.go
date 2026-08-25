@@ -85,16 +85,6 @@ func (r Rollout) Capacity() int {
 	return max(1, r.MaxProcs) * max(1, r.CallsPerProcess)
 }
 
-// Splits reports whether keys here can route two ways, which only a partial canary does; grouping a batch pays only then.
-func (r Rollout) Splits() bool {
-	return r.CanaryPct > 0 && r.CanaryPct < runtime.RolloutBucketCount
-}
-
-// CanarySide reports whether this rollout key routes to a canary candidate rather than the primary, from the key alone.
-func (r Rollout) CanarySide(rolloutKey string) bool {
-	return r.Splits() && float64(runtime.RolloutBucket(rolloutKey)) <= r.CanaryPct
-}
-
 // clone returns an independently owned copy of the projection data.
 func (s ProjectionData[T]) clone(loader Loader[T]) ProjectionData[T] {
 	clone := s
