@@ -200,7 +200,7 @@ func (s *supervisor[P, M]) Init(...any) (act.SupervisorSpec, error) {
 		s.opts.Directory == "" ||
 		s.opts.SnapshotReader.ReaderFactory == nil || s.loader == nil {
 		return act.SupervisorSpec{}, fmt.Errorf(
-			"actorruntime: name, adapter, reader options, projection, and directory are required",
+			"name, adapter, reader options, projection, and directory are required",
 		)
 	}
 	if err := s.RegisterName(s.opts.Name); err != nil {
@@ -307,7 +307,7 @@ func (s *supervisor[P, M]) HandleCall(from gen.PID, ref gen.Ref, request any) (a
 		return SupervisorStateResponse{Generation: s.projection.ReadyGeneration}, nil
 
 	default:
-		return nil, fmt.Errorf("actorruntime: unsupported supervisor call %T", request)
+		return nil, fmt.Errorf("unsupported supervisor call %T", request)
 	}
 }
 

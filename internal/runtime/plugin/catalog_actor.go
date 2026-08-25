@@ -322,7 +322,7 @@ func (a *catalogActor[T]) HandleMessage(from gen.PID, message any) error {
 
 // HandleCall rejects synchronous calls because the catalog exposes no call API.
 func (a *catalogActor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
-	return fmt.Errorf("actorruntime: unsupported catalog call %T", request), nil
+	return fmt.Errorf("unsupported catalog call %T", request), nil
 }
 
 // ---------------------------------------------------------------------------

@@ -130,7 +130,7 @@ func (m *artifactResolverMeta) HandleMessage(_ gen.PID, message any) error {
 
 // HandleCall rejects synchronous artifact resolver calls.
 func (m *artifactResolverMeta) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
-	return fmt.Errorf("actorruntime: unsupported artifact resolver call %T", request), nil
+	return fmt.Errorf("unsupported artifact resolver call %T", request), nil
 }
 
 // HandleInspect exposes no inspect fields for the artifact resolver.

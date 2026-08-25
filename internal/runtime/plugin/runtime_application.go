@@ -97,7 +97,7 @@ func (a *Application[P, M]) SupervisorName() gen.Atom { return a.opts.Supervisor
 func (a *Application[P, M]) Load(...any) (gen.ApplicationSpec, error) {
 	supervisorOpts := a.opts.SupervisorOptions
 	if supervisorOpts.Name == "" || a.adapter == nil || a.logger == nil || supervisorOpts.Directory == "" || supervisorOpts.SnapshotReader.ReaderFactory == nil || a.loader == nil || isNilLoader(a.loader) {
-		return gen.ApplicationSpec{}, fmt.Errorf("actorruntime: name, directory, reader options, loader, adapter, and logger are required")
+		return gen.ApplicationSpec{}, fmt.Errorf("name, directory, reader options, loader, adapter, and logger are required")
 	}
 	a.logger = a.logger.With("component", "plugin_runtime")
 	return gen.ApplicationSpec{
@@ -119,7 +119,7 @@ func (a *Application[P, M]) Init(gen.Ref, gen.ApplicationMode) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.lifecycle != applicationNew {
-		return fmt.Errorf("actorruntime: application %s cannot be restarted", a.Name())
+		return fmt.Errorf("application %s cannot be restarted", a.Name())
 	}
 	return nil
 }
@@ -159,7 +159,7 @@ func (a *Application[P, M]) Stop(ref gen.Ref, _ error) {
 	response, err := callPIDWithContext(ctx, a.Node(), pid, DrainRequest{}, 0)
 	if err == nil {
 		if reply, ok := response.(DrainResponse); !ok {
-			err = fmt.Errorf("actorruntime: unexpected drain response %T", response)
+			err = fmt.Errorf("unexpected drain response %T", response)
 		} else {
 			err = reply.Err
 		}
@@ -253,7 +253,7 @@ func (a *Application[P, M]) Status(ctx context.Context) (SupervisorStatus, error
 	status, ok := response.(SupervisorStatusResponse)
 	if !ok {
 		return SupervisorStatus{}, fmt.Errorf(
-			"actorruntime: unexpected status response %T",
+			"unexpected status response %T",
 			response,
 		)
 	}
@@ -288,7 +288,7 @@ func (a *Application[P, M]) State(ctx context.Context) (snapshot.ProjectionState
 	}
 	metadata, ok := response.(SupervisorStateResponse)
 	if !ok {
-		return snapshot.ProjectionState[M]{}, fmt.Errorf("actorruntime: unexpected state response %T", response)
+		return snapshot.ProjectionState[M]{}, fmt.Errorf("unexpected state response %T", response)
 	}
 	state, err := snapshot.NewProjectionClient[M](n, gen.Atom(string(a.opts.SupervisorOptions.Name)+"-snapshot")).State(ctx)
 	if err != nil {
@@ -329,7 +329,7 @@ func (a *Application[P, M]) Submit(ctx context.Context, pluginID string, rollout
 		return runtime.Invocation{}, err
 	}
 	if fn == nil {
-		return runtime.Invocation{}, fmt.Errorf("actorruntime: invocation function is required")
+		return runtime.Invocation{}, fmt.Errorf("invocation function is required")
 	}
 	if err := a.checkAccepting(); err != nil {
 		return runtime.Invocation{}, err
@@ -370,7 +370,7 @@ func (a *Application[P, M]) SubmitShadow(ctx context.Context, pluginID string, e
 		return runtime.Invocation{}, err
 	}
 	if fn == nil {
-		return runtime.Invocation{}, fmt.Errorf("actorruntime: invocation function is required")
+		return runtime.Invocation{}, fmt.Errorf("invocation function is required")
 	}
 	if err := a.checkAccepting(); err != nil {
 		return runtime.Invocation{}, err

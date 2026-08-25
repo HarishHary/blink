@@ -218,7 +218,7 @@ func (m *artifactWatcherMeta) HandleMessage(gen.PID, any) error { return nil }
 
 // HandleCall rejects synchronous calls because the watcher exposes no call API.
 func (m *artifactWatcherMeta) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
-	return fmt.Errorf("actorruntime: unsupported artifact watcher call %T", request), nil
+	return fmt.Errorf("unsupported artifact watcher call %T", request), nil
 }
 
 // HandleInspect exposes no watcher inspection fields.

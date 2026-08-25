@@ -352,7 +352,7 @@ func (a *routerActor[T]) HandleMessage(from gen.PID, message any) error {
 
 // HandleCall rejects synchronous calls; the router exposes no request/response API.
 func (a *routerActor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
-	return fmt.Errorf("actorruntime: unsupported router call %T", request), nil
+	return fmt.Errorf("unsupported router call %T", request), nil
 }
 
 // ---------------------------------------------------------------------------
