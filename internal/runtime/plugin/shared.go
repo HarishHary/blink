@@ -18,21 +18,14 @@ type Deployment struct {
 	RolloutPct float64
 	MinProcs   int
 	MaxProcs   int
-	// MaxConcurrentCallsPerProcess is how many invocations one plugin process may run at once, which
-	// is what a deployment's process count no longer decides on its own: MinProcs and MaxProcs bound
-	// the subprocesses that isolate a plugin, this bounds the throughput each one carries. The
-	// default asks the plugin's own code to be concurrency-safe - the plugin server holds a single
-	// plugin object and gRPC hands every RPC its own goroutine - so a plugin that is not declares 1.
+	// MaxConcurrentCallsPerProcess is one process's throughput, where MinProcs and MaxProcs bound the subprocesses; above 1 the plugin has to be concurrency-safe.
 	MaxConcurrentCallsPerProcess int
 	Path                         string
 	Hash                         string
 	Spec                         []byte
 }
 
-// DeploymentRouteKey identifies one concrete deployment: its artifact together with everything
-// about it that the runtime cannot change underneath running processes. A route serves exactly one
-// of these, so a deployment that alters any of them is a different route whose processes replace the
-// old ones rather than a reconfiguration of the ones already running.
+// DeploymentRouteKey identifies one concrete deployment: its artifact plus what the runtime cannot change under running processes, so altering any of it replaces them.
 type DeploymentRouteKey struct {
 	runtime.ArtifactKey
 	MinProcs     int
@@ -65,15 +58,12 @@ func (d *Deployment) CapacityPerProcess() int {
 	return d.MaxConcurrentCallsPerProcess
 }
 
-// MaxInvocationCapacity returns the deployment's own ceiling on concurrently executing invocations.
-// It is a ceiling and not a promise: the running processes decide the capacity that exists now, and
-// the process budget shared by every deployment decides how far this one may grow toward it.
+// MaxInvocationCapacity is the deployment's own ceiling on concurrent invocations, not a promise: running processes and the shared budget decide what exists.
 func (d *Deployment) MaxInvocationCapacity() int {
 	return d.ProcessCountLimit() * d.CapacityPerProcess()
 }
 
-// sameDeployment reports whether two deployments are field-for-field equal. A field added above
-// belongs here too, or a real change reads as no change.
+// sameDeployment reports whether two deployments are field-for-field equal; a field added above belongs here too, or a real change reads as no change.
 func sameDeployment(left, right *Deployment) bool {
 	if left == nil || right == nil {
 		return left == right

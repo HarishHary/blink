@@ -25,6 +25,7 @@ func (e Event) Clone() Event {
 	return clone
 }
 
+// CloneEvents returns event copies in the same order, each independently owned.
 func CloneEvents(in []Event) []Event {
 	out := make([]Event, len(in))
 	for i, event := range in {
@@ -33,6 +34,7 @@ func CloneEvents(in []Event) []Event {
 	return out
 }
 
+// cloneValue deep-copies the maps and slices inside a value, leaving scalars as they are.
 func cloneValue(value any) any {
 	switch value := value.(type) {
 	case Event:
