@@ -1,6 +1,6 @@
 # Formatter sidecar schema
 
-A formatter binary `<name>` ships alongside `<name>.yaml`. Formatters shape an alert for delivery. They add **no** type-specific fields - the sidecar is just the [common fields](README.md#common-fields-every-plugin-type) (`pkg/formatters.FormatterMetadata` embeds only `plugin.PluginMetadata`).
+A formatter binary `<name>` ships alongside `<name>.yaml`. Formatters shape an alert for delivery. They add **no** type-specific fields - the sidecar is just the [common fields](README.md#common-fields-every-plugin-type) (`pkg/formatters.FormatterMetadata` embeds only `plugin.Spec`).
 
 ## Example
 

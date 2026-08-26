@@ -1,7 +1,6 @@
 # Enrichment sidecar schema
 
-An enrichment binary `<name>` ships alongside `<name>.yaml`. Enrichments add external context to alerts. The sidecar embeds the
-[common fields](README.md#common-fields-every-plugin-type) and adds one field (`pkg/enrichments.EnrichmentMetadata`).
+An enrichment binary `<name>` ships alongside `<name>.yaml`. Enrichments add external context to alerts. The sidecar embeds the [common fields](README.md#common-fields-every-plugin-type) and adds one field (`pkg/enrichments.EnrichmentMetadata`).
 
 ## Enrichment-specific fields
 
