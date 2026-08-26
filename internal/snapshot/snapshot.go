@@ -31,6 +31,17 @@ func (r *ArtifactRef) Clone() *ArtifactRef {
 	return &clone
 }
 
+// ArtifactRefEqual reports whether two artifact references match.
+func ArtifactRefEqual(left, right *ArtifactRef) bool {
+	if (left == nil) != (right == nil) {
+		return false
+	}
+	if left == nil {
+		return true
+	}
+	return left.Name == right.Name && left.RolloutMode == right.RolloutMode && left.Hash == right.Hash && string(left.Spec) == string(right.Spec)
+}
+
 // EffectiveEntry is the computed desired state for one logical plugin ID.
 // Primary is the BG (active) artifact; Candidate is the CN/SH artifact if present.
 type EffectiveEntry struct {
@@ -54,6 +65,12 @@ func CloneEntries(entries []EffectiveEntry) []EffectiveEntry {
 		cloned[i] = cloned[i].Clone()
 	}
 	return cloned
+}
+
+// EffectiveEntryEqual reports whether two entries have identical routing data.
+func EffectiveEntryEqual(left, right EffectiveEntry) bool {
+	return left.Id == right.Id && left.Enabled == right.Enabled &&
+		ArtifactRefEqual(left.Primary, right.Primary) && ArtifactRefEqual(left.Candidate, right.Candidate)
 }
 
 // ChangeKind classifies why an upserted entry differs from what was previously committed. Computed
