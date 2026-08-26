@@ -42,7 +42,10 @@ const (
 	PluginMetaSaturated PluginMetaActivity = "saturated"
 )
 
-const pluginMetaPingTimeout = 3 * time.Second
+// pluginMetaPingTimeout is generous past a healthy subprocess's response time because the ping shares
+// the subprocess's single gRPC server with real invocations: under load a busy-but-healthy plugin can
+// be scheduled behind them, and a timeout too close to that scheduling delay kills healthy subprocesses.
+const pluginMetaPingTimeout = 10 * time.Second
 
 // pluginMetaCancelGrace is how long a cancelled or expired invocation may take to return before the subprocess is treated as hung, far longer than a cancelled gRPC call needs to unwind and far shorter than any caller deadline: a plugin honouring its RPC context returns within it and the failure stays call-local, while one that ignores cancellation can only be stopped by a kill that also ends the siblings running beside it (see failGenerationCalls).
 const pluginMetaCancelGrace = time.Second

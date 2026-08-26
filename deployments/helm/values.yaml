@@ -62,12 +62,12 @@ global:
           kafka_topic_executor: rule-executor-topic
           kafka_topic_matcher_dlq: event-matcher-dlq-topic
           matcher_plugin_dir: /plugins/matchers
-          matcher_concurrency: "8"
+          max_concurrent_calls: "10"
           matcher_timeout_sec: "10"
           matcher_max_attempts: "3"
           matcher_retry_base_ms: "100"
           matcher_retry_cap_ms: "5000"
-          matcher_batch_size: "50"
+          max_batch_size: "10000"
       scaler: {}
       topic:
         dlq: {}

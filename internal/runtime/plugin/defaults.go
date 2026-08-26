@@ -30,7 +30,7 @@ const (
 	DefaultDeploymentManagerRetryMin        = DefaultRetryMin
 	DefaultDeploymentManagerRetryMax        = DefaultRetryMax
 	DefaultPluginProcessInvocationTimeout   = 120 * time.Second
-	DefaultPluginProcessHealthInterval      = 10 * time.Second
+	DefaultPluginProcessHealthInterval      = 20 * time.Second
 	DefaultPluginProcessRetryMin            = DefaultRetryMin
 	DefaultPluginProcessRetryMax            = DefaultRetryMax
 	DefaultSupervisorRetryMin               = DefaultRetryMin
