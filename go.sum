@@ -8,8 +8,8 @@ ergo.services/application/observer v0.1.1-0.20260807132520-3b2d3707a392 h1:lO6Te
 ergo.services/application/observer v0.1.1-0.20260807132520-3b2d3707a392/go.mod h1:uAoWJ5Y/7j9EEhmCxV+pJ+YLPyEOEsFCqcdC0fC0FdA=
 ergo.services/application/radar v0.0.0-20260807132520-3b2d3707a392 h1:y8+bK5AThXIeOK+V4KCDXSEbI4G26bGJM+s20Fro6I0=
 ergo.services/application/radar v0.0.0-20260807132520-3b2d3707a392/go.mod h1:YufpJwkx79QHJSurFH5XRuAealcHDxSYr7g9OUPJHDQ=
-ergo.services/ergo v1.999.321-0.20260813122550-5102d48bf215 h1:OUxrev5N4gt5x1hIHCISIYPSIq8ca2LyR4BMH4z8aMs=
-ergo.services/ergo v1.999.321-0.20260813122550-5102d48bf215/go.mod h1:2WcCdXUIZvCfy9Kkac3Sx6V/tB23Mx3yK6xz77hRfbM=
+ergo.services/ergo v1.999.321-0.20260825105833-826d0a2686ec h1:8gvCZMuqRxrnj8YbH/n8Op0JswFL4SQd8SWAG8M/fBc=
+ergo.services/ergo v1.999.321-0.20260825105833-826d0a2686ec/go.mod h1:2WcCdXUIZvCfy9Kkac3Sx6V/tB23Mx3yK6xz77hRfbM=
 ergo.services/meta/sse v0.2.1-0.20260807132248-3e4748b06924 h1:tENdZTlsvwT/PHPcrXY3z2Ix+cx0U8OcIDWf+VaKf4k=
 ergo.services/meta/sse v0.2.1-0.20260807132248-3e4748b06924/go.mod h1:bFEH9A/lqzbAYas8drrgPIq92uHadKnH8TqtPB51CQY=
 ergo.services/registrar/etcd v0.3.0 h1:taZbg7bav8I/3W3pVzJsg94MIis8vUdeZhISnVGXMzs=

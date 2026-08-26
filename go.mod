@@ -6,7 +6,7 @@ require (
 	ergo.services/application/mcp v0.0.0-20260807132520-3b2d3707a392
 	ergo.services/application/observer v0.1.1-0.20260807132520-3b2d3707a392
 	ergo.services/application/radar v0.0.0-20260807132520-3b2d3707a392
-	ergo.services/ergo v1.999.321-0.20260813122550-5102d48bf215
+	ergo.services/ergo v1.999.321-0.20260825105833-826d0a2686ec
 	github.com/Azure/azure-sdk-for-go/sdk/messaging/azeventhubs/v2 v2.0.2
 	github.com/cenkalti/backoff/v4 v4.3.0
 	github.com/fsnotify/fsnotify v1.10.1
