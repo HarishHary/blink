@@ -12,6 +12,8 @@ import (
 	"github.com/harishhary/blink/internal/snapshot"
 )
 
+const subscribeTimeoutSeconds = 5
+
 // ReaderActorLifecycle describes the stable snapshot-reader actor subtree.
 type ReaderActorLifecycle string
 
@@ -56,16 +58,78 @@ type MessageReaderActorActivate struct {
 
 type MessageReaderActorStatusChanged struct{ status ReaderActorStatus }
 
+// SubscribeRequest asks for the current committed snapshot and registers the caller (its own PID, delivered as HandleCall's "from", not a field here) for future pushed SnapshotUpdate commits.
+type SubscribeRequest struct {
+	ExecutorID      string
+	KnownGeneration int64
+	Role            string
+}
+
+// SubscribeResponse answers SubscribeRequest; ControllerPID lets the caller Monitor it without a second lookup, and future commits arrive as pushed SnapshotUpdate messages since a channel can't cross the cluster.
+type SubscribeResponse struct {
+	Current       *snapshot.Snapshot
+	Changes       []snapshot.EntryChange
+	ControllerPID gen.PID
+}
+
+// SnapshotUpdate is one commit's full state, pushed to every subscriber; Changes/Tombstones are for observability only - applying it just needs Snapshot (see readerActor).
+type SnapshotUpdate struct {
+	Snapshot   *snapshot.Snapshot
+	Changes    []snapshot.EntryChange
+	Tombstones []string
+}
+
+// UnsubscribeRequest stops future pushes to ExecutorID; best-effort only - MonitorPID on the executor's PID is the authoritative removal path.
+type UnsubscribeRequest struct{ ExecutorID string }
+
+// ExecutorHeartbeat is this reader's periodic liveness/generation report to the controller.
+type ExecutorHeartbeat struct {
+	CommittedGeneration int64
+	ReadyGeneration     int64
+	Availability        string
+}
+
+// ExecutorAppliedGeneration reports that this reader's owning plugin runtime reached a generation.
+type ExecutorAppliedGeneration struct {
+	Generation int64
+	Admitted   bool
+}
+
+// MessageExecutorReport carries this reader's convergence report (Heartbeat and/or AppliedGeneration, either may be nil), sent fire-and-forget to the controller actor.
+type MessageExecutorReport struct {
+	ExecutorID string
+	Heartbeat  *ExecutorHeartbeat
+	Applied    *ExecutorAppliedGeneration
+	LastError  string
+}
+
+type MessageSubscribeRestart struct{ token uint64 }
+
 // --- messages ---
 
-// Init initializes reader state and its restart backoff.
+// readerActor issues one bounded Call to subscribe, then passively receives pushed SnapshotUpdate messages - Ergo remote delivery is push-based, so there's no read loop or meta process to supervise.
+type readerActor struct {
+	act.Actor
+	opts ReaderActorOptions
+
+	snapshotEventName  gen.Atom
+	snapshotEventToken gen.Ref
+
+	controllerPID  gen.PID
+	subscribed     bool
+	lastGeneration int64
+	lastError      error
+	restart        *runtime.ScheduledBackoff
+}
+
+// newReaderActor constructs the reader actor for one subscription.
+func newReaderActor(opts ReaderActorOptions) gen.ProcessBehavior {
+	return &readerActor{opts: opts}
+}
+
+// Init initializes the resubscribe backoff.
 func (a *readerActor) Init(...any) error {
-	a.entries = make(map[string]snapshot.EffectiveEntry)
-	a.readerMeta.status = readerMetaStatus{
-		Lifecycle:    ReaderMetaStarting,
-		Availability: runtime.AvailabilityUnavailable,
-	}
-	a.readerMeta.restart = runtime.NewScheduledBackoff(a.opts.RestartMin, a.opts.RestartMax)
+	a.restart = runtime.NewScheduledBackoff(a.opts.RestartMin, a.opts.RestartMax)
 	return nil
 }
 
@@ -101,35 +165,27 @@ func (a *readerActor) HandleMessage(from gen.PID, message any) error {
 		if m.source != a.readerMeta.alias || a.readerMeta.alias == (gen.Alias{}) || a.readerMeta.status.CaughtUp {
 			return nil
 		}
-		a.readerMeta.status.Lifecycle = ReaderMetaRunning
-		a.readerMeta.status.Availability = runtime.AvailabilityReady
-		a.readerMeta.status.CaughtUp = true
-		a.readerMeta.restart.CancelScheduled(true)
-		if a.committed == nil {
-			a.readerMeta.status.Availability = runtime.AvailabilityUnavailable
-			a.readerMeta.status.LastError = fmt.Errorf("%w: generation marker not found", runtime.ErrSnapshotRead)
+		a.restart.Pending = false
+		a.restart.Cancel = nil
+		return a.subscribe()
+	case gen.MessageDownPID:
+		if !a.subscribed || m.PID != a.controllerPID {
 			return nil
 		}
-		a.readerMeta.status.LastError = nil
-		a.publishSnapshot()
-	case MessageReaderMetaRestart:
-		if !a.readerMeta.restart.Pending || a.readerMeta.restart.Token != m.token || a.readerMeta.alias != (gen.Alias{}) {
+		a.controllerPID = gen.PID{}
+		a.subscribed = false
+		a.lastError = m.Reason
+		a.Log().Error("snapshot reader actor: controller %s stopped: %v", m.PID, m.Reason)
+		return a.scheduleSubscribeRestart()
+	case gen.MessageDownNode:
+		if !a.subscribed || m.Name != a.opts.Endpoint.Node {
 			return nil
 		}
-		a.readerMeta.restart.Pending = false
-		a.readerMeta.restart.Cancel = nil
-		return a.startReaderMeta()
-	case gen.MessageDownAlias:
-		if m.Alias != a.readerMeta.alias {
-			return nil
-		}
-		a.readerMeta.alias = gen.Alias{}
-		a.readerMeta.status.Lifecycle = ReaderMetaRestarting
-		a.readerMeta.status.Availability = runtime.AvailabilityUnavailable
-		a.readerMeta.status.CaughtUp = false
-		a.readerMeta.status.LastError = m.Reason
-		a.Log().Error("snapshot reader actor: reader %s stopped: %v", m.Alias, m.Reason)
-		return a.scheduleReaderMetaRestart()
+		a.controllerPID = gen.PID{}
+		a.subscribed = false
+		a.lastError = fmt.Errorf("controller node %s down", m.Name)
+		a.Log().Error("snapshot reader actor: controller node %s down", m.Name)
+		return a.scheduleSubscribeRestart()
 	}
 	return nil
 }
@@ -142,139 +198,75 @@ func (a *readerActor) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error)
 // Terminate stops the reader meta-process and marks it unavailable.
 func (a *readerActor) Terminate(error) {
 	defer a.reportStatus()
-	a.readerMeta.restart.CancelScheduled(false)
-	a.stopReaderMeta(gen.TerminateReasonShutdown)
-	a.readerMeta.status.Lifecycle = ReaderMetaStopped
-	a.readerMeta.status.Availability = runtime.AvailabilityUnavailable
-	a.readerMeta.status.CaughtUp = false
+	a.restart.CancelScheduled(false)
+	if a.subscribed {
+		_ = a.SendProcessID(a.opts.Endpoint, UnsubscribeRequest{ExecutorID: a.opts.ExecutorID})
+	}
+	a.controllerPID = gen.PID{}
+	a.subscribed = false
 }
 
-// startReaderMeta starts compacted-topic reconstruction while retaining the prior published snapshot.
-func (a *readerActor) startReaderMeta() error {
-	a.stopReaderMeta(gen.TerminateReasonShutdown)
-	a.readerMeta.status = readerMetaStatus{
-		Lifecycle:    ReaderMetaStarting,
-		Availability: runtime.AvailabilityUnavailable,
+// subscribe issues a bounded Call to the controller, then monitors it for loss detection.
+func (a *readerActor) subscribe() error {
+	request := SubscribeRequest{
+		ExecutorID:      a.opts.ExecutorID,
+		KnownGeneration: a.lastGeneration,
+		Role:            a.opts.Role,
 	}
-	a.entries = make(map[string]snapshot.EffectiveEntry)
-	a.committed = nil
-
-	reader := a.opts.ReaderFactory()
-	if reader == nil {
-		a.readerMeta.status.Lifecycle = ReaderMetaRestarting
-		a.readerMeta.status.LastError = fmt.Errorf("start snapshot reader meta: reader factory returned nil")
-		return a.scheduleReaderMetaRestart()
-	}
-
-	alias, err := a.SpawnMeta(&readerMeta{reader: reader}, gen.MetaOptions{})
+	response, err := a.CallProcessID(a.opts.Endpoint, request, subscribeTimeoutSeconds)
 	if err != nil {
-		_ = reader.Close()
-		a.readerMeta.status.Lifecycle = ReaderMetaRestarting
-		a.readerMeta.status.LastError = fmt.Errorf("spawn snapshot reader meta: %w", err)
-		return a.scheduleReaderMetaRestart()
+		a.lastError = fmt.Errorf("%w: subscribe: %w", runtime.ErrSnapshotSubscribe, err)
+		return a.scheduleSubscribeRestart()
 	}
-	if err := a.MonitorAlias(alias); err != nil {
-		_ = a.SendExitMeta(alias, gen.TerminateReasonShutdown)
-		a.readerMeta.status.Lifecycle = ReaderMetaRestarting
-		a.readerMeta.status.LastError = fmt.Errorf("monitor snapshot reader meta: %w", err)
-		return a.scheduleReaderMetaRestart()
+	sub, ok := response.(SubscribeResponse)
+	if !ok {
+		a.lastError = fmt.Errorf("%w: subscribe: unexpected response %T", runtime.ErrSnapshotSubscribe, response)
+		return a.scheduleSubscribeRestart()
+	}
+	if err := a.MonitorPID(sub.ControllerPID); err != nil {
+		a.lastError = fmt.Errorf("%w: monitor controller: %w", runtime.ErrSnapshotSubscribe, err)
+		return a.scheduleSubscribeRestart()
+	}
+	_ = a.MonitorNode(a.opts.Endpoint.Node)
+
+	a.restart.CancelScheduled(true)
+	a.controllerPID = sub.ControllerPID
+	a.subscribed = true
+	a.lastError = nil
+	if sub.Current != nil && sub.Current.Generation > a.lastGeneration {
+		a.lastGeneration = sub.Current.Generation
+		a.publishSnapshot(sub.Current)
 	}
 	a.readerMeta.alias = alias
 	return nil
 }
 
-// stopReaderMeta stops the active reader meta-process.
-func (a *readerActor) stopReaderMeta(reason error) {
-	if a.readerMeta.alias == (gen.Alias{}) {
-		return
-	}
-	alias := a.readerMeta.alias
-	a.readerMeta.alias = gen.Alias{}
-	_ = a.DemonitorAlias(alias)
-	_ = a.SendExitMeta(alias, reason)
-}
-
-// scheduleReaderMetaRestart schedules a backoff-delayed reader restart.
-func (a *readerActor) scheduleReaderMetaRestart() error {
-	if a.readerMeta.restart.Pending {
+// scheduleSubscribeRestart schedules a backoff-delayed resubscribe.
+func (a *readerActor) scheduleSubscribeRestart() error {
+	if a.restart.Pending {
 		return nil
 	}
-	delay := a.readerMeta.restart.Strategy.NextBackOff()
+	delay := a.restart.Strategy.NextBackOff()
 	if delay == backoff.Stop {
-		return fmt.Errorf("snapshot reader meta restart: %w", runtime.ErrBackoffStopped)
+		return fmt.Errorf("snapshot reader restart: %w", runtime.ErrBackoffStopped)
 	}
-	a.readerMeta.restart.Token++
-	token := a.readerMeta.restart.Token
-	cancel, err := a.SendAfter(a.PID(), MessageReaderMetaRestart{token: token}, delay)
+	a.restart.Token++
+	token := a.restart.Token
+	cancel, err := a.SendAfter(a.PID(), MessageSubscribeRestart{token: token}, delay)
 	if err != nil {
-		return fmt.Errorf("schedule snapshot reader meta restart: %w", err)
+		return fmt.Errorf("schedule snapshot reader restart: %w", err)
 	}
-	a.readerMeta.restart.Pending = true
-	a.readerMeta.restart.Cancel = cancel
-	a.readerMeta.status.Lifecycle = ReaderMetaRestarting
-	a.readerMeta.status.Availability = runtime.AvailabilityUnavailable
+	a.restart.Pending = true
+	a.restart.Cancel = cancel
 	return nil
 }
 
-// apply incorporates a compacted-topic record and reports a new committed generation.
-func (a *readerActor) apply(message brokers.Message) bool {
-	key := string(message.Key)
-	if key == snapshot.GenerationMarkerKey {
-		generation, err := snapshot.DecodeGeneration(message.Value)
-		if err != nil {
-			a.Log().Error("snapshot reader actor: decode generation marker: %v", err)
-			return false
-		}
-		if a.committed != nil && generation <= a.committed.Generation {
-			if generation == a.committed.Generation {
-				return false
-			}
-			a.Log().Error(
-				"snapshot reader actor: generation went backwards %d -> %d",
-				a.committed.Generation,
-				generation,
-			)
-			return false
-		}
-		a.committed = &snapshot.Snapshot{
-			Generation: generation,
-			Entries:    a.sortedEntries(),
-		}
-		return true
-	}
-
-	if len(message.Value) == 0 {
-		delete(a.entries, key)
-		return false
-	}
-
-	entry, err := snapshot.Unmarshal(message.Value)
-	if err != nil {
-		a.Log().Error("snapshot reader actor: unmarshal entry %q: %v", key, err)
-		return false
-	}
-	a.entries[entry.Id] = entry
-	return false
-}
-
-// publishSnapshot sends the committed snapshot to subscribers.
-func (a *readerActor) publishSnapshot() {
-	if a.committed == nil {
+// publishSnapshot sends the received snapshot to subscribers.
+func (a *readerActor) publishSnapshot(snap *snapshot.Snapshot) {
+	if a.snapshotEventToken == (gen.Ref{}) {
 		return
 	}
-	if a.snapshotEventToken != (gen.Ref{}) {
-		_ = a.SendEvent(a.snapshotEventName, a.snapshotEventToken, a.committed.Clone())
-	}
-}
-
-// sortedEntries returns cloned entries ordered by identifier.
-func (a *readerActor) sortedEntries() []snapshot.EffectiveEntry {
-	entries := make([]snapshot.EffectiveEntry, 0, len(a.entries))
-	for _, entry := range a.entries {
-		entries = append(entries, entry.Clone())
-	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Id < entries[j].Id })
-	return entries
+	_ = a.SendEvent(a.snapshotEventName, a.snapshotEventToken, snap.Clone())
 }
 
 // reportStatus sends current reader status to the supervisor.
@@ -284,19 +276,14 @@ func (a *readerActor) reportStatus() {
 	}
 
 	availability := runtime.AvailabilityUnavailable
-	switch a.readerMeta.status.Availability {
-	case runtime.AvailabilityReady:
+	if a.subscribed {
 		availability = runtime.AvailabilityReady
 	case runtime.AvailabilityDegraded:
 		availability = runtime.AvailabilityDegraded
 	}
-
-	status := ReaderActorStatus{
+	_ = a.Send(a.Parent(), MessageReaderActorStatusChanged{status: ReaderActorStatus{
 		Lifecycle:    ReaderActorRunning,
 		Availability: availability,
-	}
-	if a.committed != nil {
-		status.Generation = a.committed.Generation
-	}
-	_ = a.Send(a.Parent(), MessageReaderActorStatusChanged{status: status})
+		Generation:   a.lastGeneration,
+	}})
 }
