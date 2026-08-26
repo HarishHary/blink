@@ -3,14 +3,13 @@ package controller
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 
 	"ergo.services/ergo/app"
 	"ergo.services/ergo/gen"
 	"github.com/harishhary/blink/internal/backends"
-	"github.com/harishhary/blink/internal/brokers"
 	"github.com/harishhary/blink/internal/runtime/plugin"
+	"github.com/harishhary/blink/internal/runtime/snapshot"
 )
 
 // Application owns the resources for one plugin-type controller application.
@@ -18,8 +17,7 @@ type Application[T plugin.Artifact] struct {
 	app.Application
 	opts     Options[T]
 	database *sql.DB
-	writer   brokers.Writer
-	barrier  *publisherIOBarrier
+	barrier  *writerIOBarrier
 	stopped  chan error
 }
 
@@ -27,7 +25,7 @@ type Application[T plugin.Artifact] struct {
 func NewApplication[T plugin.Artifact](opts Options[T]) *Application[T] {
 	return &Application[T]{
 		opts:    optionsWithDefaults(opts),
-		barrier: newPublisherIOBarrier(),
+		barrier: newWriterIOBarrier(),
 		stopped: make(chan error, 1),
 	}
 }
@@ -41,19 +39,19 @@ func (a *Application[T]) SupervisorName() gen.Atom { return a.opts.SupervisorOpt
 // Stopped reports the application callback without blocking the Ergo runtime.
 func (a *Application[T]) Stopped() <-chan error { return a.stopped }
 
-// Seal prevents new publisher I/O from starting for this application attempt.
+// Seal prevents new writer I/O from starting for this application attempt.
 func (a *Application[T]) Seal() { a.barrier.Seal() }
 
-// WaitQuiesced waits for publisher I/O accepted before Seal to finish.
+// WaitQuiesced waits for writer I/O accepted before Seal to finish.
 func (a *Application[T]) WaitQuiesced(ctx context.Context) error {
 	return a.barrier.WaitQuiesced(ctx)
 }
 
 // Load opens the application-owned resources and describes its one supervisor.
 func (a *Application[T]) Load(_ ...any) (gen.ApplicationSpec, error) {
-	a.Log().Debug("controller application loading: name=%s namespace=%q topic=%q", a.opts.Name, a.opts.Namespace, a.opts.Topic)
-	if a.opts.Name == "" || a.opts.SupervisorOptions.Name == "" || a.opts.Namespace == "" || a.opts.Topic == "" || a.opts.Broker == nil {
-		err := fmt.Errorf("controller application: name, supervisor name, namespace, topic, and broker are required")
+	a.Log().Debug("controller application loading: name=%s namespace=%q", a.opts.Name, a.opts.Namespace)
+	if a.opts.Name == "" || a.opts.SupervisorOptions.Name == "" || a.opts.Namespace == "" {
+		err := fmt.Errorf("controller application: name, supervisor name, and namespace are required")
 		a.Log().Error("controller application configuration invalid: name=%s namespace=%q error=%v", a.opts.Name, a.opts.Namespace, err)
 		return gen.ApplicationSpec{}, err
 	}
@@ -70,20 +68,19 @@ func (a *Application[T]) Load(_ ...any) (gen.ApplicationSpec, error) {
 		return gen.ApplicationSpec{}, fmt.Errorf("initialize %s controller database: %w", a.opts.Namespace, err)
 	}
 
-	writer := a.opts.Broker.NewWriter(a.opts.Topic)
 	a.database = database
-	a.writer = writer
 	supervisorOpts := a.opts.SupervisorOptions
-	a.Log().Info("controller application loaded: name=%s namespace=%q supervisor=%s topic=%q", a.opts.Name, a.opts.Namespace, a.opts.SupervisorOptions.Name, a.opts.Topic)
+	a.Log().Info("controller application loaded: name=%s namespace=%q supervisor=%s", a.opts.Name, a.opts.Namespace, a.opts.SupervisorOptions.Name)
 
 	return gen.ApplicationSpec{
 		Name:        a.opts.Name,
 		Description: fmt.Sprintf("Blink %s controller", a.opts.Namespace),
 		Mode:        gen.ApplicationModePermanent,
+		Network:     gen.ApplicationNetwork{RegisterTypes: snapshot.NetworkTypes()},
 		Group: []gen.ApplicationMemberSpec{{
 			Name: a.opts.SupervisorOptions.Name,
 			Factory: func() gen.ProcessBehavior {
-				return newSupervisor(supervisorOpts, store, writer, a.barrier)
+				return newSupervisor(supervisorOpts, store, a.barrier)
 			},
 		}},
 		Map: map[string]gen.Atom{"supervisor": a.opts.SupervisorOptions.Name},
@@ -103,37 +100,19 @@ func (a *Application[T]) Terminate(reason error) {
 // Close closes the application-owned resources after Seal and quiescence are proven.
 func (a *Application[T]) Close(ctx context.Context) error {
 	if !a.barrier.Quiesced() {
-		err := fmt.Errorf("controller application publisher I/O has not quiesced")
+		err := fmt.Errorf("controller application writer I/O has not quiesced")
 		a.Log().Error("controller application close rejected: name=%s namespace=%q error=%v", a.opts.Name, a.opts.Namespace, err)
 		return err
 	}
-	writer, database := a.writer, a.database
-	a.writer, a.database = nil, nil
-	a.Log().Debug("controller application resources closing: name=%s namespace=%q writer=%t database=%t", a.opts.Name, a.opts.Namespace, writer != nil, database != nil)
+	database := a.database
+	a.database = nil
+	a.Log().Debug("controller application resources closing: name=%s namespace=%q database=%t", a.opts.Name, a.opts.Namespace, database != nil)
 	done := make(chan error, 1)
 	go func() {
-		type closeResult struct {
-			resource string
-			err      error
-		}
-		results := make(chan closeResult, 2)
-		pending := 0
-		if writer != nil {
-			pending++
-			go func() { results <- closeResult{"writer", writer.Close()} }()
-		}
+		var err error
 		if database != nil {
-			pending++
-			go func() { results <- closeResult{"database", database.Close()} }()
+			err = database.Close()
 		}
-		var errs []error
-		for range pending {
-			result := <-results
-			if result.err != nil {
-				errs = append(errs, fmt.Errorf("close %s: %w", result.resource, result.err))
-			}
-		}
-		err := errors.Join(errs...)
 		if err != nil {
 			a.Log().Error("controller application resource close failed: name=%s namespace=%q error=%v", a.opts.Name, a.opts.Namespace, err)
 		} else {
