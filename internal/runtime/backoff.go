@@ -16,7 +16,7 @@ var (
 	ErrArtifactWatch     = errors.New("plugin artifact watch failed")
 	ErrArtifactResolve   = errors.New("plugin artifact resolution failed")
 	ErrSnapshotLoad      = errors.New("snapshot state load failed")
-	ErrSnapshotPublish   = errors.New("snapshot publication failed")
+	ErrSnapshotWrite     = errors.New("snapshot write failed")
 	ErrSnapshotRead      = errors.New("snapshot read failed")
 	ErrSnapshotSubscribe = errors.New("snapshot event subscription failed")
 	ErrBackoffStopped    = errors.New("scheduled backoff stopped")
