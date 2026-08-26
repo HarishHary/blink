@@ -3,7 +3,9 @@
 // internal/controller would form an import cycle.
 package snapshot
 
-import "github.com/harishhary/blink/internal/runtime"
+import (
+	"github.com/harishhary/blink/internal/runtime"
+)
 
 // ArtifactRef is one binary artifact for a logical plugin ID.
 type ArtifactRef struct {
@@ -43,6 +45,34 @@ func (e EffectiveEntry) Clone() EffectiveEntry {
 	e.Primary = e.Primary.Clone()
 	e.Candidate = e.Candidate.Clone()
 	return e
+}
+
+// CloneEntries returns independent copies of catalog entries.
+func CloneEntries(entries []EffectiveEntry) []EffectiveEntry {
+	cloned := append([]EffectiveEntry(nil), entries...)
+	for i := range cloned {
+		cloned[i] = cloned[i].Clone()
+	}
+	return cloned
+}
+
+// ChangeKind classifies why an upserted entry differs from what was previously committed. Computed
+// by internal/runtime/controller.ClassifyChanges (which needs the namespace's plugin.Loader[T] to
+// isolate a rollout-percentage-only change), but the value type itself lives here so it can travel
+// on SnapshotUpdate without controller depending back on this package's dependents.
+type ChangeKind uint8
+
+const (
+	ChangeAdded ChangeKind = iota
+	ChangeUpdated
+	ChangeRolloutMode
+	ChangeTrafficSplit
+)
+
+// EntryChange pairs one upserted entry with why it changed from the prior commit.
+type EntryChange struct {
+	Kind  ChangeKind
+	Entry EffectiveEntry
 }
 
 // Snapshot is a computed desired state (a sorted set of EffectiveEntry) consumed by executors.
