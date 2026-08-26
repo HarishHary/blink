@@ -25,10 +25,14 @@ const runtimeShutdownTimeout = 45 * time.Second
 // config is everything event_matcher needs. See docs/services/event_matcher.md.
 type config struct {
 	services.Common
-	Config
-	MatcherSnapshotTopic  string `env:"KAFKA_TOPIC_MATCHER_SNAPSHOT"`
-	ExecutorSnapshotTopic string `env:"KAFKA_TOPIC_EXECUTOR_SNAPSHOT"`
-	MatcherPluginDir      string `env:"MATCHER_PLUGIN_DIR"`
+	event_matcher_config
+	plugin.EtcdClusterConfig
+	// ControllerNodeHost names the controller node this executor subscribes to over the
+	// cluster. Must match cmd/controller's CONTROLLER_NODE_HOST.
+	ControllerNodeHost string `env:"CONTROLLER_NODE_HOST,optional"`
+	PodName            string `env:"POD_NAME,optional"`
+	PodIP              string `env:"POD_IP,optional"`
+	MatcherPluginDir   string `env:"MATCHER_PLUGIN_DIR"`
 }
 
 // application is the matcher plugin runtime plus the rule snapshot supervisor, so both start and stop with the node.
@@ -48,7 +52,7 @@ func (a *application) Load(...any) (gen.ApplicationSpec, error) {
 			return snapshot.NewSupervisor(a.ruleOpts)
 		},
 	})
-	spec.Map["rule_snapshot"] = a.ruleOpts.Name
+	spec.Map["rule_snapshot"] = a.ruleOpts.ReaderActorOptions.Name
 	return spec, nil
 }
 
@@ -68,33 +72,49 @@ func main() {
 
 	runCtx, cancelRun := context.WithCancel(ctx)
 
-	broker := cfg.Broker
+	controllerHost := cfg.ControllerNodeHost
+	if controllerHost == "" {
+		controllerHost = "controller"
+	}
+	nodeName := gen.Atom(fmt.Sprintf("event-matcher-%s@%s", cfg.PodName, cfg.PodIP))
+	registrar, err := plugin.NewEtcdRegistrar(cfg.EtcdClusterConfig, cfg.Env)
+	if err != nil {
+		cancelRun()
+		rootLogger.FatalF("create etcd registrar: %v", err)
+	}
+
+	// snapshotReaderFor subscribes to the given namespace's controller actor over the cluster.
+	snapshotReaderFor := func(name gen.Atom, namespace string) snapshot.ReaderActorOptions {
+		return snapshot.ReaderActorOptions{
+			Name:       name,
+			Endpoint:   gen.ProcessID{Name: gen.Atom("controller-" + namespace + "-actor"), Node: gen.Atom("controller@" + controllerHost)},
+			ExecutorID: cfg.PodName,
+			Role:       namespace,
+		}
+	}
+
 	app := &application{
 		// Admission budgets come from the reader's batch size and the service's concurrency limit.
 		// ManagerOptions.ProcessBudget defaults to available CPUs when left unset.
 		Application: matchers.NewApplication(plugin.Options{MaxBatchSize: cfg.BatchSize, MaxConcurrentCalls: cfg.Concurrency,
 			SupervisorOptions: plugin.SupervisorOptions{
-				Name:      gen.Atom("event-matcher-runtime"),
-				Directory: cfg.MatcherPluginDir,
-				SnapshotReader: snapshot.ReaderActorOptions{
-					Name:          gen.Atom("matcher-snapshot-reader"),
-					ReaderFactory: func() brokers.Reader { return broker.NewBroadcastReader(cfg.MatcherSnapshotTopic) },
-				},
+				Name:           gen.Atom("event-matcher-runtime"),
+				Directory:      cfg.MatcherPluginDir,
+				SnapshotReader: snapshotReaderFor("matcher-snapshot-reader", "matcher"),
 			}}, rootLogger),
 		ruleOpts: snapshot.SupervisorOptions[*rules.RuleMetadata]{
-			ReaderActorOptions: snapshot.ReaderActorOptions{
-				Name:          gen.Atom("rule-snapshot-reader"),
-				ReaderFactory: func() brokers.Reader { return broker.NewBroadcastReader(cfg.ExecutorSnapshotTopic) },
-			},
-			Loader: rules.Loader{}, ProjectionMode: snapshot.ProjectionCommitDirect,
+			ReaderActorOptions: snapshotReaderFor("rule-snapshot-reader", "rule"),
+			Loader:             rules.Loader{}, ProjectionMode: snapshot.ProjectionCommitDirect,
 		},
 	}
 
+	cluster := &plugin.ClusterOptions{Cookie: cfg.Cookie, Registrar: registrar, Flags: plugin.DefaultClusterFlags()}
 	host, err := plugin.Start(plugin.NodeOptions{
-		Name:            "event-matcher@localhost",
+		Name:            nodeName,
 		Env:             cfg.Env,
 		ShutdownTimeout: runtimeShutdownTimeout,
 		Applications:    []gen.ApplicationBehavior{app},
+		Cluster:         cluster,
 	})
 	if err != nil {
 		cancelRun()
@@ -110,8 +130,8 @@ func main() {
 		}
 	}()
 
-	matcherSvc := NewService(rootLogger.With("component", "service"), cfg.Config, app, snapshot.NewProjectionClient[*rules.RuleMetadata](host.Node(), gen.Atom("rule-snapshot-reader")))
-	healthSvc := services.NewHealthService(":8080", matcherSvc.Ready)
+	matcherSvc := NewService(rootLogger.With("component", "service"), cfg.event_matcher_config, app, snapshot.NewProjectionClient[*rules.RuleMetadata](host.Node(), gen.Atom("rule-snapshot-reader")))
+	healthSvc := services.NewHealthService(":8080", matcherSvc.Ready, nil)
 	runner := services.New(rootLogger.With("component", "runner"))
 	runner.Register(matcherSvc, healthSvc)
 	runner.Run(runCtx)
