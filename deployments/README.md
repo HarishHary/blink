@@ -1,6 +1,9 @@
 # Blink Kubernetes Deployment
 
-## Prerequisites
+This runbook documents the deployed `controller` and `event-matcher` runtime. The Helm templates are generic: `deployments/helm/blink/templates/workloads.yaml` renders the controller and every key in
+`global.stages`. This page makes no runtime claim for stage entries outside the controller and matcher configuration.
+
+## Local prerequisites
 
 ### Podman
 
@@ -24,25 +27,15 @@ minikube config set driver podman
 minikube start
 ```
 
-Build the controller and event-matcher images directly in Minikube before installing
-the Blink chart. Their tags match the chart's local defaults:
-
-```bash
-minikube image build --tag localhost/blink-controller:latest --file cmd/controller/Dockerfile .
-minikube image build --tag localhost/blink-event-matcher:latest --file cmd/event_matcher/Dockerfile .
-```
-
-### Required operators
-
-Install the Strimzi operator before the Kafka chart and the KEDA operator before the
-KEDA chart. The three Blink charts are independent; the operators are not packaged by
-this repository.
+### Kafka
 
 ```bash
 kubectl create namespace kafka
 kubectl create -f 'https://strimzi.io/install/latest?namespace=kafka' -n kafka
 kubectl get pods -n kafka --watch # wait for them to be ready
 ```
+
+### KEDA
 
 ```bash
 helm repo add kedacore https://kedacore.github.io/charts
@@ -51,10 +44,32 @@ helm install keda kedacore/keda --namespace keda --create-namespace
 kubectl get pods -n keda --watch # wait for them to be ready
 ```
 
-The Blink KEDA chart creates Kafka-lag `ScaledObject`s. The controller deliberately
-has no scaler because it publishes snapshots and has no consumer lag to scale on.
+### etcd
 
-## Canonical Helm deployment
+Unlike Kafka and KEDA, etcd is not an external operator to install first - `deployments/helm/blink/templates/etcd.yaml` deploys a dedicated 3-member etcd cluster as part of the Blink chart itself, for Blink's exclusive use as its Ergo cluster registrar (every workload, including the controller, requires it; see `docs/internals/controller-runtime.md`). The only prerequisite here is setting the values that authenticate against it before installing the Blink chart:
+
+```bash
+# cluster.cookie authenticates node-to-node connections; etcd.username/etcd.password authenticate
+# against etcd itself. All three default to "" and must be overridden for any shared environment.
+helm upgrade --install blink deployments/helm/blink --namespace blink --create-namespace \
+  -f deployments/helm/values.yaml \
+  --set cluster.cookie="$CLUSTER_COOKIE" \
+  --set etcd.username="$ETCD_USERNAME" \
+  --set etcd.password="$ETCD_PASSWORD"
+```
+
+### Build images
+
+For Minikube, build the two documented images into its image store:
+
+```bash
+minikube image build --tag localhost/blink-controller:latest --file cmd/controller/Dockerfile .
+minikube image build --tag localhost/blink-event-matcher:latest --file cmd/event_matcher/Dockerfile .
+```
+
+## Helm validation and install
+
+Every chart must receive the same topology file:
 
 ```bash
 # Validate and render every chart from the repository root.
@@ -73,201 +88,128 @@ helm upgrade --install blink deployments/helm/blink --namespace blink --create-n
 helm upgrade --install blink-keda deployments/helm/keda --namespace blink -f deployments/helm/values.yaml
 ```
 
-Build and publish or load the Blink service images before installing the Blink chart;
-its defaults reference `localhost` images with `image.pullPolicy=Never` for Minikube.
-For a registry-based cluster, override `image.registry`, `image.tag`, and
-`image.pullPolicy`.
+The Blink chart defaults to `localhost`, `latest`, and `image.pullPolicy: Never`. Override image settings for a registry-backed cluster.
 
-After rebuilding an image under the same local tag, restart its deployment so new
-pods load the replacement image:
+## Controller and matcher topology
 
-```bash
-minikube image build --tag localhost/blink-event-matcher:latest --file cmd/event_matcher/Dockerfile .
-kubectl rollout restart deployment/event-matcher --namespace blink
-kubectl rollout status deployment/event-matcher --namespace blink --timeout=120s
-```
+`global.controller.workload` configures `blink-controller`; it is constrained by the template to exactly one replica and mounts controller state at `/var/lib/blink/controller`. Its environment
+supplies five plugin directories.
 
-The Kafka chart creates the controller prerequisites declared as `topic.snapshot`
-on each plugin stage. Each name comes from that workload's
-`kafka_topic_<stage>_snapshot` environment entry; the checked-in values follow the
-`<workload>-snapshot-topic` convention. Shared capacity defaults provide the
-replication factor and `cleanup.policy: compact`. Snapshot topics are always
-rendered with one partition.
+Every workload joins a native Ergo cluster to reach the controller - `deployments/helm/blink/templates/etcd.yaml` deploys a dedicated 3-member etcd cluster for node discovery, and `cluster.cookie` (in `deployments/helm/blink/values.yaml`, sensitive - override per environment) authenticates connections between nodes. This is the only path for snapshot distribution; the Kafka snapshot topics and compacted-topic reader/publisher this replaced are gone (see `docs/internals/controller-runtime.md`).
 
-### Shared-stage topology and names
-
-`global.stages` in `deployments/helm/values.yaml` is the canonical topology
-for the shared alert pipeline. Every chart must receive that same values file. Its
-`workload.name` supplies the Deployment and Service name. Each workload declares its
-own Kafka bindings under `workload.environment` using matching
-`kafka_topic_<stage>` and `kafka_group_<stage>` keys. Their checked-in values follow
-the `<workload>-topic` and `<workload>-group` naming convention; these are explicit
-values, not names inferred by the templates.
-
-Put all service-specific environment variables, including only the Kafka topics,
-groups, snapshots, DLQs, and plugin directories that service consumes, under
-`workload.environment` using `snake_case` keys; the Blink chart uppercases each key
-(`kafka_topic_matcher` becomes `KAFKA_TOPIC_MATCHER`). The non-stage controller is configured separately under
-`global.controller.workload`, which supports the same capacity, resource, and
-environment overrides as stage workloads.
-
-The shared ConfigMap contains only the common Kafka broker address. Kafka and KEDA
-resolve a stage's primary topic and consumer group from that stage's workload
-environment, keeping the runtime and infrastructure values identical.
-
-| Stage        | Deployment         | Topic / group                                       | DLQ                         | ScaledObject              |
-| ------------ | ------------------ | --------------------------------------------------- | --------------------------- | ------------------------- |
-| `merger`     | `alert-merger`     | `alert-merger-topic` / `alert-merger-group`         | `alert-merger-dlq-topic`    | disabled                  |
-| `tuner`      | `rule-tuner`       | `rule-tuner-topic` / `rule-tuner-group`             | `rule-tuner-dlq-topic`      | `rule-tuner-scaler`       |
-| `enricher`   | `alert-enricher`   | `alert-enricher-topic` / `alert-enricher-group`     | `alert-enricher-dlq-topic`  | `alert-enricher-scaler`   |
-| `formatter`  | `alert-formatter`  | `alert-formatter-topic` / `alert-formatter-group`   | `alert-formatter-dlq-topic` | `alert-formatter-scaler`  |
-| `dispatcher` | `alert-dispatcher` | `alert-dispatcher-topic` / `alert-dispatcher-group` | disabled                    | `alert-dispatcher-scaler` |
-
-The presence of `topic.dlq` creates the DLQ named by the matching `kafka_topic_<stage>_dlq` workload environment entry. The presence of `scaler` conditionally creates `<workload>-scaler` for the stage's environment-defined topic and group. Scaler settings inherit the KEDA chart defaults, including `offsetResetPolicy: earliest`. The dispatcher has no DLQ runtime path; do not enable one merely by
-creating a topic. Per-stage `topic` values override the Kafka chart's shared primary and DLQ capacity defaults.
-
-### Event pipeline topology
-
-All log sources use one shared matcher/executor lane. Producers publish events to
-`event-matcher-topic`; `event-matcher` selects matchers and rules from each event's
-`log_type`, publishes eligible events to `rule-executor-topic`, and sends terminal input,
-configuration, and exhausted matcher failures to `event-matcher-dlq-topic`. `rule-executor`
-evaluates the routed rules and publishes alerts to the shared `alert-merger-topic`; terminal
-input, routing, and exhausted rule failures go to `rule-executor-dlq-topic`.
-
-| Stage          | Deployment / group                      | Topic                     |
-| -------------- | --------------------------------------- | ------------------------- |
-| Event matching | `event-matcher` / `event-matcher-group` | `event-matcher-topic`     |
-| Rule execution | `rule-executor` / `rule-executor-group` | `rule-executor-topic`     |
-| Matcher DLQ    | -                                       | `event-matcher-dlq-topic` |
-| Executor DLQ   | -                                       | `rule-executor-dlq-topic` |
-
-Matcher and executor pods do not use a deployment-level `LOG_TYPE`. The event's
-`log_type` selects the relevant rules from the shared snapshots, so adding a log source
-does not create another Kafka topic, consumer group, Deployment, or ScaledObject.
-
-### Event key
-
-Producers construct the event key once at ingress and set those exact bytes as the Kafka key:
-
-```text
-blink.event.pk|<tenant-bytes>:<tenant_id>,<log-type-bytes>:<log_type>,<kind-bytes>:<kind>,<origin-bytes>:<origin>,
-```
-
-Each length is a UTF-8 byte count, not a character count. `tenant_id` and `log_type` are required
-non-empty UTF-8 strings. Use literal `stream_id` and its value when `stream_id` is present; only
-when it is absent use literal `source_id` and its value. A present but invalid `stream_id` is an
-error, not a fallback to `source_id`. Test vector:
-
-```text
-{tenant_id: "acme", log_type: "cloud", stream_id: "stream-7"}
-blink.event.pk|4:acme,5:cloud,9:stream_id,8:stream-7,
-```
-
-The UTF-8 test vector with `tenant_id` bytes `74c3a9`, `log_type` bytes `e697a5e5bf97`, and
-`stream_id` bytes `e6ba90` produces hex
-`626c696e6b2e6576656e742e706b7c333a74c3a92c363ae697a5e5bf972c393a73747265616d5f69642c333ae6ba902c`.
-Producers reject or quarantine missing, empty, non-string, or invalid-UTF-8 required components;
-they never emit a partial or sentinel key. The matcher preserves the supplied key byte-for-byte
-on executor and matcher-DLQ writes.
-
-Blink's current Kafka writer uses the FNV-1a `kafka.Hash` balancer. Equal non-nil key bytes retain
-ordering and select the same partition only within one topic. Do not claim equal numeric partitions
-across topics: topics are independently partitioned and may have different partition counts.
-Increasing a topic's partition count remaps some existing keys, breaking their prior partition
-ordering; resize an active topic only when that remapping is acceptable. Keep each stage's replica
-and KEDA maximum at or below its topic partition count.
-
-### Add a log type
-
-Adding a log type does not change the deployment topology:
-
-1. Ensure producers set the event's `log_type` and the standard Kafka key.
-2. Add or update the matcher and rule sidecars that support that `log_type`.
-3. Deploy the plugin artifacts and let the controller publish the updated snapshots.
-
-## Pipeline flow
+`global.stages.matcher.workload` configures `event-matcher`. Its input, consumer group, executor output, DLQ, plugin directory, and matcher retry settings are all in
+its `environment` map. Snake-case keys in that map render as uppercase environment variables.
 
 ```mermaid
 flowchart LR
-    producers[All log sources] --> eventTopic([event-matcher-topic<br/>Kafka topic])
-    eventTopic --> matcher[event-matcher<br/>Deployment]
-    matcher --> execTopic([rule-executor-topic<br/>Kafka topic]) --> executor[rule-executor<br/>Deployment]
-    matcher -. failed record .-> matcherDLQ([event-matcher-dlq-topic<br/>Kafka topic])
-    executor --> mergerTopic([alert-merger-topic<br/>Kafka topic])
-    executor -. failed record .-> executorDLQ([rule-executor-dlq-topic<br/>Kafka topic])
-    mergerTopic --> merger[alert-merger<br/>Deployment] --> tunerTopic([rule-tuner-topic<br/>Kafka topic])
-    merger -. malformed record .-> mergerDLQ([alert-merger-dlq-topic<br/>Kafka topic])
-    tunerTopic --> tuner[rule-tuner<br/>Deployment] --> enricherTopic([alert-enricher-topic<br/>Kafka topic])
-    tuner -. failed record .-> tunerDLQ([rule-tuner-dlq-topic<br/>Kafka topic])
-    enricherTopic --> enricher[alert-enricher<br/>Deployment] --> formatterTopic([alert-formatter-topic<br/>Kafka topic])
-    enricher -. failed record .-> enricherDLQ([alert-enricher-dlq-topic<br/>Kafka topic])
-    formatterTopic --> formatter[alert-formatter<br/>Deployment] --> dispatcherTopic([alert-dispatcher-topic<br/>Kafka topic])
-    formatter -. failed record .-> formatterDLQ([alert-formatter-dlq-topic<br/>Kafka topic])
-    dispatcherTopic --> dispatcher[alert-dispatcher<br/>Deployment]
-
-    classDef topic fill:#e8f1ff,stroke:#1a73e8,color:#000
-    classDef deployment fill:#e6f4ea,stroke:#188038,color:#000
-    class eventTopic,execTopic,matcherDLQ,executorDLQ,mergerTopic,mergerDLQ,tunerTopic,tunerDLQ,enricherTopic,enricherDLQ,formatterTopic,formatterDLQ,dispatcherTopic topic
-    class matcher,executor,merger,tuner,enricher,formatter,dispatcher deployment
+    files[Mounted plugin directories] --> controller[blink-controller]
+    controller -->|SnapshotUpdate, Ergo cluster| runtime[event-matcher plugin runtime]
+    controller -->|SnapshotUpdate, Ergo cluster| catalog[event-matcher rule projection]
+    raw[event-matcher topic] --> matcher[event-matcher]
+    runtime --> matcher
+    catalog --> matcher
+    matcher --> output[rule-executor topic]
+    matcher -. terminal failure .-> dlq[event-matcher DLQ topic]
 ```
 
-The shared matcher and executor deployments handle every log source. Stateful alert
-processing remains in the shared downstream stages.
+| Message                         | Direction                                                                  | Meaning                                                                     |
+| -------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| Mounted plugin directories       | Plugin volume → `blink-controller`                                         | The controller's `artifact_scanner` reads catalog artifacts.                |
+| `SubscribeRequest`/`SnapshotUpdate` | `blink-controller` ↔ event-matcher plugin runtime and rule projection (Ergo cluster) | Pushes committed catalog entries directly to every subscriber - no Kafka topic in this path. |
+| Raw JSON events                  | `event-matcher` topic → `event-matcher`                                    | Supplies events for matching.                                               |
+| Committed matcher and rule projections | Plugin runtime and rule projection → `event-matcher`                 | Supplies the current matching state.                                        |
+| Protobuf `execpb.ExecMessage` records | `event-matcher` → `rule-executor` topic                               | Emits eligible rule executions.                                             |
+| DLQ envelope                     | `event-matcher` → `event-matcher` DLQ topic                                | Records a terminal failure.                                                 |
 
-The matcher, executor, tuner, enricher, and formatter prepare every output in a fetched batch before starting synchronous Kafka
-writes (`RequireAll`), then commit input offsets only after all writes succeed. This yields
-at-least-once delivery: an output acknowledged before cancellation, a later write failure, or an
-offset-commit failure can be written again after replay. These stages use the protobuf
-`dlq.DLQEnvelope` for malformed records, deterministic routing or configuration failures, and
-exhausted item failures; it retains source topic/partition/offset, original payload, stage, reason,
-attempts, and timestamp, while the original key remains Kafka message metadata. A non-DLQ
-output-preparation failure leaves the batch uncommitted without partially publishing that batch.
-The merger is stateful: it retains source records while merge windows are open, stops reading at
-`MERGER_MAX_PENDING_RECORDS`, and commits only the contiguous resolved prefix of each partition
-after pass-through, merged, or protobuf DLQ output is acknowledged. This prevents a later resolved
-offset from committing an earlier buffered alert. Forced group limits flush the oldest group rather
-than evicting it, and the merge partition key is preserved downstream. Its 40-second pod termination
-grace period exceeds the default 30-second bounded drain.
-The matcher readiness probe succeeds after both snapshot readers drain, including when both
-catalogs are empty. Before opening its grouped reader, the matcher additionally waits for
-non-empty parsed primary matcher and rule catalogs; disabled
-primaries count, but candidate-only catalogs do not. This startup gate does not prove a controller
-heartbeat/freshness or stop an already-running reader if either catalog later becomes empty. The
-executor likewise waits for a drained rule snapshot and a non-empty parsed primary rule catalog
-before opening its grouped reader. The tuner, enricher, and formatter apply the same gate to their own snapshot
-and primary catalog. Enricher dependencies execute before their dependents, while formatter entries
-execute in declared order; neither stage overlaps plugin work for one alert. None of these gates waits
-for initial plugin subprocess reconciliation.
-`MATCHER_CONCURRENCY`, `EXECUTOR_CONCURRENCY`, `TUNER_CONCURRENCY`, `ENRICHER_CONCURRENCY`, and `FORMATTER_CONCURRENCY` limit active outer pool calls, not the child RPCs
-created when a pool fans out by rollout bucket and serving process.
-Kafka readers wait on the caller context for a first record, use `MinBytes=1`, then give a partial
-batch one absolute 100 ms linger window; this avoids low-volume batch stalls without extending the
-deadline for each later record.
+The controller and matcher mount the configured plugin volume. Local values use the host path `/blink/plugins`; a production deployment can use `plugins.volume.persistentVolumeClaim`. The controller
+needs the rules, matchers, tuning-rules, formatters, and enrichments directories; the matcher needs the matchers directory.
 
-## Plugin binaries
-
-The controller watches the YAML configuration in the plugin directories and publishes
-the effective snapshots; pipeline pods consume those snapshots and use the same
-directories as their binary artifact store. Therefore the controller and every
-pipeline pod must mount the same plugin tree at `/plugins`. The chart defaults to a
-`hostPath` of `/blink/plugins`; for production, configure a shared ReadWriteMany PVC
-through `plugins.volume.persistentVolumeClaim` instead. This shared, flat `/plugins`
-mount is intentional for now; it is not split per log type.
-
-- Mount the plugin local folder in minikube
+## Verify
 
 ```bash
-mkdir -p ~/.blink/plugins/{rules,matchers,tuning_rules,formatters,enrichments,dispatchers}
-minikube mount ~/.blink/plugins:/blink/plugins
+kubectl get deployments,pods,services -n blink
+kubectl get kafka,kafkatopic -n kafka
+kubectl get scaledobjects -n blink
+kubectl rollout status deployment/event-matcher --namespace blink --timeout=120s
 ```
 
-Keep the `minikube mount` process running while Blink is deployed.
+Both workloads serve `/health/live`, `/health/ready`, and `/metrics` on port 8080. Event matcher becomes ready after its matcher runtime and rule projection are ready; startup additionally waits
+for non-empty primary matcher and rule catalogs before it begins consuming events.
 
-- The chart mounts this HostPath into every pod, including the controller.
+## Operational commands
 
-- Compile and write the plugin in that local folder
+These assume the `blink` (workloads) and `kafka` (broker) namespaces from this runbook. Substitute
+your own namespaces if you installed elsewhere.
+
+### Restart one service
+
+Picks up a new image tag or an env var change without touching anything else:
 
 ```bash
-GOOS=linux GOARCH=arm64 go build -o ~/.blink/plugins/matchers/allow-all ./examples/matchers/allow-all/
+kubectl rollout restart deployment/event-matcher --namespace blink
+kubectl rollout status deployment/event-matcher --namespace blink --timeout=60s
 ```
+
+### Rebuild and redeploy one service
+
+`imagePullPolicy: Never` plus reusing the `:latest` tag means Kubernetes can skip pulling your
+rebuilt image - tag every rebuild uniquely so the Deployment is guaranteed to pick it up:
+
+```bash
+TAG="dev-$(date +%s)"
+minikube image build -t "localhost/blink-event-matcher:$TAG" -f cmd/event_matcher/Dockerfile .
+kubectl set image deployment/event-matcher -n blink event-matcher="localhost/blink-event-matcher:$TAG"
+kubectl rollout status deployment/event-matcher -n blink --timeout=60s
+```
+
+### Send test events
+
+Produce newline-delimited JSON directly into a topic. `kafka-console-producer.sh` runs inside the
+broker pod, so copy the file in first if it's larger than the broker's `/tmp` (often a few MB tmpfs
+- copy to `/home/kafka` instead for anything sizable):
+
+```bash
+BROKER=$(kubectl get pods -n kafka -l app.kubernetes.io/name=kafka -o jsonpath='{.items[0].metadata.name}')
+kubectl cp events.jsonl kafka/"$BROKER":/home/kafka/events.jsonl
+kubectl exec -n kafka "$BROKER" -- bash -c \
+  "bin/kafka-console-producer.sh --bootstrap-server localhost:9092 --topic event-matcher-topic < /home/kafka/events.jsonl"
+```
+
+### Restart one topic (empty it)
+
+Strimzi has no "truncate" operation - delete and let the Topic Operator recreate it from its
+`KafkaTopic` CR. A client that queries the topic name before the operator finishes recreating it
+can trigger Kafka's own topic auto-create with the wrong (default 1) partition count, which the
+operator then silently adopts as correct; wait a few seconds and confirm the partition count before
+sending anything:
+
+```bash
+BROKER=$(kubectl get pods -n kafka -l app.kubernetes.io/name=kafka -o jsonpath='{.items[0].metadata.name}')
+kubectl exec -n kafka "$BROKER" -- bin/kafka-topics.sh --bootstrap-server localhost:9092 \
+  --delete --topic event-matcher-topic
+sleep 15
+kubectl exec -n kafka "$BROKER" -- bin/kafka-topics.sh --bootstrap-server localhost:9092 \
+  --describe --topic event-matcher-topic | head -1   # confirm PartitionCount matches the KafkaTopic CR
+```
+
+### Clean up (empty every pipeline topic)
+
+For a clean load-test slate. Restart every consuming service afterward so it rejoins each
+topic's consumer group with a fresh assignment - a consumer that was mid-session during the delete
+can otherwise get stuck holding a stale partition assignment:
+
+```bash
+BROKER=$(kubectl get pods -n kafka -l app.kubernetes.io/name=kafka -o jsonpath='{.items[0].metadata.name}')
+kubectl exec -n kafka "$BROKER" -- bin/kafka-topics.sh --bootstrap-server localhost:9092 --delete --topic \
+  'event-matcher-topic,event-matcher-dlq-topic,rule-executor-topic,alert-merger-topic,alert-merger-dlq-topic,rule-tuner-topic,rule-tuner-dlq-topic,alert-enricher-topic,alert-enricher-dlq-topic,alert-formatter-topic,alert-formatter-dlq-topic,alert-dispatcher-topic'
+sleep 15
+kubectl rollout restart deployment/event-matcher --namespace blink
+kubectl rollout status deployment/event-matcher --namespace blink --timeout=60s
+```
+
+## References
+
+- [Service index](../docs/services/README.md)
+- [Controller](../docs/services/controller.md)
+- [Event matcher](../docs/services/event_matcher.md)
+- [Runtime overview](../docs/internals/README.md)
