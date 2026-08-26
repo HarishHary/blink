@@ -110,7 +110,7 @@ func Start(opts NodeOptions) (*NodeHost, error) {
 			Cookie:    opts.Cluster.Cookie,
 			Registrar: opts.Cluster.Registrar,
 			Flags:     opts.Cluster.Flags,
-			Acceptors: []gen.AcceptorOptions{{}},
+			Acceptors: []gen.AcceptorOptions{{Host: "0.0.0.0"}},
 		}
 	}
 

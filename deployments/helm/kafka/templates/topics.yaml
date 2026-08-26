@@ -32,19 +32,4 @@ spec:
   config:
     {{- toYaml $config.dlq.config | nindent 4 }}
 {{- end }}
-{{- if $stage.withSnapshot }}
----
-apiVersion: kafka.strimzi.io/v1
-kind: KafkaTopic
-metadata:
-  name: {{ $stage.snapshotTopicName }}
-  namespace: {{ $.Release.Namespace }}
-  labels:
-    strimzi.io/cluster: {{ $.Values.kafka.clusterName }}
-spec:
-  partitions: 1
-  replicas: {{ $config.snapshot.replicas }}
-  config:
-    {{- toYaml $config.snapshot.config | nindent 4 }}
-{{- end }}
 {{- end }}

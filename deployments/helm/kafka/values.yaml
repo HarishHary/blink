@@ -20,7 +20,3 @@ topicDefaults:
     replicas: 1
     config:
       retention.ms: "86400000"
-  snapshot:
-    replicas: 1
-    config:
-      cleanup.policy: compact
