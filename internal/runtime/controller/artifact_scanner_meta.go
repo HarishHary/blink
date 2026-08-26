@@ -205,7 +205,7 @@ func (m *artifactScannerMeta[T]) sendScan(watcher *fsnotify.Watcher) error {
 	if err != nil {
 		m.Log().Warning("artifact scan incomplete: directory=%q alias=%s error=%v", m.directory, m.ID(), err)
 	}
-	entries = cloneEntries(entries)
+	entries = snapshot.CloneEntries(entries)
 	if sendErr := m.Send(m.Parent(), MessageArtifactScanResult{
 		source:     m.ID(),
 		complete:   complete,

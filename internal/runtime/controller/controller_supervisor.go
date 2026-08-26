@@ -33,16 +33,16 @@ type actorState struct {
 
 type supervisor[T plugin.Artifact] struct {
 	act.Supervisor
-	opts            SupervisorOptions[T]
-	database        backends.Database
-	barrier         *publisherIOBarrier
-	lifecycle       SupervisorLifecycle
-	actor           actorState
-	publisherFences map[gen.Alias]gen.PID
+	opts         SupervisorOptions[T]
+	database     backends.Database
+	barrier      *writerIOBarrier
+	lifecycle    SupervisorLifecycle
+	actor        actorState
+	writerFences map[gen.Alias]gen.PID
 }
 
 // newSupervisor constructs the controller supervisor with normalized options.
-func newSupervisor[T plugin.Artifact](opts SupervisorOptions[T], database backends.Database, barrier *publisherIOBarrier) gen.ProcessBehavior {
+func newSupervisor[T plugin.Artifact](opts SupervisorOptions[T], database backends.Database, barrier *writerIOBarrier) gen.ProcessBehavior {
 	return &supervisor[T]{opts: supervisorOptionsWithDefaults("", opts), database: database, barrier: barrier}
 }
 
@@ -64,7 +64,7 @@ func (s *supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 		Availability: runtime.AvailabilityUnavailable,
 	}
 	s.lifecycle = SupervisorStarting
-	s.publisherFences = make(map[gen.Alias]gen.PID)
+	s.writerFences = make(map[gen.Alias]gen.PID)
 	return act.SupervisorSpec{
 		Type:                act.SupervisorTypeOneForOne,
 		EnableHandleChild:   true,
@@ -86,7 +86,7 @@ func (s *supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 	}, nil
 }
 
-// HandleMessage coordinates controller lifecycle and publisher I/O fences.
+// HandleMessage coordinates controller lifecycle and writer I/O fences.
 func (s *supervisor[T]) HandleMessage(from gen.PID, message any) error {
 	switch m := message.(type) {
 	case plugin.MessageStop:
@@ -94,7 +94,7 @@ func (s *supervisor[T]) HandleMessage(from gen.PID, message any) error {
 			return nil
 		}
 		s.lifecycle = SupervisorDraining
-		s.Log().Info("controller supervisor draining: name=%s child=%s publisher_fences=%d", s.opts.Name, s.actor.pid, len(s.publisherFences))
+		s.Log().Info("controller supervisor draining: name=%s child=%s writer_fences=%d", s.opts.Name, s.actor.pid, len(s.writerFences))
 		if err := s.sendDrain(); err != nil {
 			return err
 		}
@@ -111,26 +111,26 @@ func (s *supervisor[T]) HandleMessage(from gen.PID, message any) error {
 		if s.lifecycle == SupervisorDraining {
 			return s.advanceShutdown()
 		}
-	case MessageSnapshotPublisherIOStarted:
+	case MessageSnapshotWriterIOStarted:
 		if s.actor.pid != from {
 			return nil
 		}
-		if s.publisherFences == nil {
-			s.publisherFences = make(map[gen.Alias]gen.PID)
+		if s.writerFences == nil {
+			s.writerFences = make(map[gen.Alias]gen.PID)
 		}
-		s.publisherFences[m.Alias] = from
-		s.Log().Debug("snapshot publisher I/O fence registered: name=%s child=%s alias=%s active=%d", s.opts.Name, from, m.Alias, len(s.publisherFences))
-	case MessageSnapshotPublisherIOStopped:
-		owner, ok := s.publisherFences[m.Alias]
+		s.writerFences[m.Alias] = from
+		s.Log().Debug("snapshot writer I/O fence registered: name=%s child=%s alias=%s active=%d", s.opts.Name, from, m.Alias, len(s.writerFences))
+	case MessageSnapshotWriterIOStopped:
+		owner, ok := s.writerFences[m.Alias]
 		if !ok || owner != from {
 			return nil
 		}
-		delete(s.publisherFences, m.Alias)
-		s.Log().Debug("snapshot publisher I/O fence released: name=%s child=%s alias=%s active=%d", s.opts.Name, from, m.Alias, len(s.publisherFences))
+		delete(s.writerFences, m.Alias)
+		s.Log().Debug("snapshot writer I/O fence released: name=%s child=%s alias=%s active=%d", s.opts.Name, from, m.Alias, len(s.writerFences))
 		if s.actor.pid == from {
 			if err := s.Send(from, m); err != nil && !stalePIDSendFailure(err) {
-				s.Log().Error("snapshot publisher I/O completion forwarding failed: name=%s child=%s alias=%s error=%v", s.opts.Name, from, m.Alias, err)
-				return fmt.Errorf("forward snapshot publisher I/O completion to %s: %w", from, err)
+				s.Log().Error("snapshot writer I/O completion forwarding failed: name=%s child=%s alias=%s error=%v", s.opts.Name, from, m.Alias, err)
+				return fmt.Errorf("forward snapshot writer I/O completion to %s: %w", from, err)
 			}
 		}
 		return s.reconcileActor()
@@ -174,13 +174,13 @@ func (s *supervisor[T]) HandleChildTerminate(name gen.Atom, pid gen.PID, reason 
 	return nil
 }
 
-// advanceShutdown stops the actor after draining publisher I/O.
+// advanceShutdown stops the actor after draining writer I/O.
 func (s *supervisor[T]) advanceShutdown() error {
 	if s.lifecycle == SupervisorDraining {
 		if s.actor.pid != (gen.PID{}) && s.actor.status.Lifecycle != ActorDrained {
 			return nil
 		}
-		if len(s.publisherFences) != 0 {
+		if len(s.writerFences) != 0 {
 			return nil
 		}
 		s.lifecycle = SupervisorStopping
@@ -189,7 +189,7 @@ func (s *supervisor[T]) advanceShutdown() error {
 			return err
 		}
 	}
-	if s.lifecycle == SupervisorStopping && s.actor.pid == (gen.PID{}) && len(s.publisherFences) == 0 {
+	if s.lifecycle == SupervisorStopping && s.actor.pid == (gen.PID{}) && len(s.writerFences) == 0 {
 		s.Log().Info("controller supervisor stopped: name=%s", s.opts.Name)
 		return gen.TerminateReasonNormal
 	}
@@ -205,15 +205,15 @@ func (s *supervisor[T]) reconcileActor() error {
 		return s.sendStop()
 	}
 	if s.lifecycle == SupervisorDraining {
-		if len(s.publisherFences) != 0 {
+		if len(s.writerFences) != 0 {
 			return nil
 		}
 		s.lifecycle = SupervisorStopping
 		return s.sendStop()
 	}
-	if len(s.publisherFences) != 0 || s.actor.activationSent {
-		if len(s.publisherFences) != 0 {
-			s.Log().Debug("controller activation waiting for publisher I/O: name=%s child=%s active=%d", s.opts.Name, s.actor.pid, len(s.publisherFences))
+	if len(s.writerFences) != 0 || s.actor.activationSent {
+		if len(s.writerFences) != 0 {
+			s.Log().Debug("controller activation waiting for writer I/O: name=%s child=%s active=%d", s.opts.Name, s.actor.pid, len(s.writerFences))
 		}
 		return nil
 	}
