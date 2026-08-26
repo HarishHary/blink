@@ -8,7 +8,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/harishhary/blink/internal/brokers"
+	"ergo.services/ergo/gen"
 	"github.com/harishhary/blink/internal/logger"
 	"github.com/harishhary/blink/internal/runtime/controller"
 	"github.com/harishhary/blink/internal/runtime/plugin"
@@ -24,17 +24,34 @@ const runtimeShutdownTimeout = 45 * time.Second
 
 type config struct {
 	services.Common
-	ControllerDatabaseDSN  string `env:"CONTROLLER_DATABASE_DSN"`
-	ExecutorSnapshotTopic  string `env:"KAFKA_TOPIC_EXECUTOR_SNAPSHOT"`
-	MatcherSnapshotTopic   string `env:"KAFKA_TOPIC_MATCHER_SNAPSHOT"`
-	TunerSnapshotTopic     string `env:"KAFKA_TOPIC_TUNER_SNAPSHOT"`
-	FormatterSnapshotTopic string `env:"KAFKA_TOPIC_FORMATTER_SNAPSHOT"`
-	EnricherSnapshotTopic  string `env:"KAFKA_TOPIC_ENRICHER_SNAPSHOT"`
-	RulePluginDir          string `env:"RULE_PLUGIN_DIR"`
-	MatcherPluginDir       string `env:"MATCHER_PLUGIN_DIR"`
-	TuningPluginDir        string `env:"TUNER_PLUGIN_DIR"`
-	FormatterPluginDir     string `env:"FORMATTER_PLUGIN_DIR"`
-	EnrichmentPluginDir    string `env:"ENRICHER_PLUGIN_DIR"`
+	plugin.EtcdClusterConfig
+	// ControllerNodeHost is this node's cluster-reachable name (its stable Service DNS name in
+	// k8s). Empty keeps the "controller" default.
+	ControllerNodeHost    string `env:"CONTROLLER_NODE_HOST,optional"`
+	ControllerDatabaseDSN string `env:"CONTROLLER_DATABASE_DSN"`
+	RulePluginDir         string `env:"RULE_PLUGIN_DIR"`
+	MatcherPluginDir      string `env:"MATCHER_PLUGIN_DIR"`
+	TuningPluginDir       string `env:"TUNER_PLUGIN_DIR"`
+	FormatterPluginDir    string `env:"FORMATTER_PLUGIN_DIR"`
+	EnrichmentPluginDir   string `env:"ENRICHER_PLUGIN_DIR"`
+}
+
+// controllerStatus returns a /status callback that queries every namespace's controller actor for
+// its tracked executors, tolerating a namespace that has not bootstrapped yet.
+func controllerStatus(node gen.Node, namespaces []string) func() any {
+	return func() any {
+		status := make(map[string]any, len(namespaces))
+		for _, namespace := range namespaces {
+			endpoint := gen.ProcessID{Name: gen.Atom("controller-" + namespace + "-actor"), Node: node.Name()}
+			response, err := node.CallProcessID(endpoint, controller.StatusRequest{}, 1)
+			if err != nil {
+				status[namespace] = map[string]string{"error": err.Error()}
+				continue
+			}
+			status[namespace] = response
+		}
+		return status
+	}
 }
 
 func main() {
@@ -46,12 +63,23 @@ func main() {
 		slog.Error("load controller config", "error", err)
 		os.Exit(1)
 	}
-	broker := brokers.NewKafkaBroker(cfg.Kafka)
 	rootLogger := logger.New("controller", cfg.Env)
+
+	nodeHost := cfg.ControllerNodeHost
+	if nodeHost == "" {
+		nodeHost = "controller"
+	}
+	nodeName := gen.Atom("controller@" + nodeHost)
+	registrar, err := plugin.NewEtcdRegistrar(cfg.EtcdClusterConfig, cfg.Env)
+	if err != nil {
+		rootLogger.FatalF("create etcd registrar: %v", err)
+	}
+	cluster := &plugin.ClusterOptions{Cookie: cfg.Cookie, Registrar: registrar, Flags: plugin.DefaultClusterFlags()}
 	host, err := plugin.Start(plugin.NodeOptions{
-		Name:            "controller@localhost",
+		Name:            nodeName,
 		Env:             cfg.Env,
 		ShutdownTimeout: runtimeShutdownTimeout,
+		Cluster:         cluster,
 	})
 	if err != nil {
 		rootLogger.FatalF("start controller node: %v", err)
@@ -62,8 +90,6 @@ func main() {
 	ruleControllerSvc := controller.NewService(node, "controller-rule", controller.Options[*rules.RuleMetadata]{
 		DatabaseDSN: cfg.ControllerDatabaseDSN,
 		Namespace:   "rule",
-		Topic:       cfg.ExecutorSnapshotTopic,
-		Broker:      broker,
 		SupervisorOptions: controller.SupervisorOptions[*rules.RuleMetadata]{
 			ActorOptions: controller.ActorOptions[*rules.RuleMetadata]{
 				Directory: cfg.RulePluginDir,
@@ -76,8 +102,6 @@ func main() {
 		controller.NewService(node, "controller-matcher", controller.Options[*matchers.MatcherMetadata]{
 			DatabaseDSN: cfg.ControllerDatabaseDSN,
 			Namespace:   "matcher",
-			Topic:       cfg.MatcherSnapshotTopic,
-			Broker:      broker,
 			SupervisorOptions: controller.SupervisorOptions[*matchers.MatcherMetadata]{
 				ActorOptions: controller.ActorOptions[*matchers.MatcherMetadata]{
 					Directory: cfg.MatcherPluginDir,
@@ -88,8 +112,6 @@ func main() {
 		controller.NewService(node, "controller-tuning", controller.Options[*tuning_rules.TuningRuleMetadata]{
 			DatabaseDSN: cfg.ControllerDatabaseDSN,
 			Namespace:   "tuning",
-			Topic:       cfg.TunerSnapshotTopic,
-			Broker:      broker,
 			SupervisorOptions: controller.SupervisorOptions[*tuning_rules.TuningRuleMetadata]{
 				ActorOptions: controller.ActorOptions[*tuning_rules.TuningRuleMetadata]{
 					Directory: cfg.TuningPluginDir,
@@ -100,8 +122,6 @@ func main() {
 		controller.NewService(node, "controller-formatter", controller.Options[*formatters.FormatterMetadata]{
 			DatabaseDSN: cfg.ControllerDatabaseDSN,
 			Namespace:   "formatter",
-			Topic:       cfg.FormatterSnapshotTopic,
-			Broker:      broker,
 			SupervisorOptions: controller.SupervisorOptions[*formatters.FormatterMetadata]{
 				ActorOptions: controller.ActorOptions[*formatters.FormatterMetadata]{
 					Directory: cfg.FormatterPluginDir,
@@ -112,8 +132,6 @@ func main() {
 		controller.NewService(node, "controller-enrichment", controller.Options[*enrichments.EnrichmentMetadata]{
 			DatabaseDSN: cfg.ControllerDatabaseDSN,
 			Namespace:   "enrichment",
-			Topic:       cfg.EnricherSnapshotTopic,
-			Broker:      broker,
 			SupervisorOptions: controller.SupervisorOptions[*enrichments.EnrichmentMetadata]{
 				ActorOptions: controller.ActorOptions[*enrichments.EnrichmentMetadata]{
 					Directory: cfg.EnrichmentPluginDir,
@@ -122,7 +140,8 @@ func main() {
 			},
 		}),
 	)
-	runner.Register(services.NewHealthService(":8080", nil))
+	healthSvc := services.NewHealthService(":8080", nil, controllerStatus(node, []string{"rule", "matcher", "tuning", "formatter", "enrichment"}))
+	runner.Register(healthSvc)
 	runner.Run(ctx)
 
 	closeCtx, cancel := context.WithTimeout(context.Background(), runtimeShutdownTimeout)
