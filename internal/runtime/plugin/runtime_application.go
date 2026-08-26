@@ -96,7 +96,8 @@ func (a *Application[P, M]) SupervisorName() gen.Atom { return a.opts.Supervisor
 // Load describes the root runtime supervisor managed by Ergo.
 func (a *Application[P, M]) Load(...any) (gen.ApplicationSpec, error) {
 	supervisorOpts := a.opts.SupervisorOptions
-	if supervisorOpts.Name == "" || a.adapter == nil || a.logger == nil || supervisorOpts.Directory == "" || supervisorOpts.SnapshotReader.ReaderFactory == nil || a.loader == nil || isNilLoader(a.loader) {
+	readerSet := supervisorOpts.SnapshotReader.Endpoint.Name != "" && supervisorOpts.SnapshotReader.ExecutorID != ""
+	if supervisorOpts.Name == "" || a.adapter == nil || a.logger == nil || supervisorOpts.Directory == "" || !readerSet || a.loader == nil || isNilLoader(a.loader) {
 		return gen.ApplicationSpec{}, fmt.Errorf("name, directory, reader options, loader, adapter, and logger are required")
 	}
 	a.logger = a.logger.With("component", "plugin_runtime")
@@ -105,6 +106,7 @@ func (a *Application[P, M]) Load(...any) (gen.ApplicationSpec, error) {
 		Description: fmt.Sprintf("Blink plugin runtime %s", supervisorOpts.Name),
 		Mode:        gen.ApplicationModePermanent,
 		StopTimeout: a.opts.CloseTimeout,
+		Network:     gen.ApplicationNetwork{RegisterTypes: snapshot.NetworkTypes()},
 		Group: []gen.ApplicationMemberSpec{{
 			Factory: func() gen.ProcessBehavior {
 				return newRuntimeSupervisor(supervisorOpts, a.adapter, a.loader)

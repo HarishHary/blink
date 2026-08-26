@@ -198,7 +198,7 @@ func (s *supervisor[P, M]) Init(...any) (act.SupervisorSpec, error) {
 	if s.opts.Name == "" ||
 		s.adapter == nil ||
 		s.opts.Directory == "" ||
-		s.opts.SnapshotReader.ReaderFactory == nil || s.loader == nil {
+		s.opts.SnapshotReader.Endpoint.Name == "" || s.opts.SnapshotReader.ExecutorID == "" || s.loader == nil {
 		return act.SupervisorSpec{}, fmt.Errorf(
 			"name, adapter, reader options, projection, and directory are required",
 		)
