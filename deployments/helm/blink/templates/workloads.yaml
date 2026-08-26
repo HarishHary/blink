@@ -85,6 +85,10 @@ spec:
           ports:
             - name: http
               containerPort: 8080
+{{ if $item.controllerState }}
+            - name: cluster
+              containerPort: {{ $.Values.cluster.port }}
+{{ end }}
           {{- include "blink.probes" $ | nindent 10 }}
 {{ if or $item.plugins $item.controllerState }}
           volumeMounts:
@@ -125,4 +129,9 @@ spec:
     - name: http
       port: 8080
       targetPort: 8080
+{{ if $item.controllerState }}
+    - name: cluster
+      port: {{ $.Values.cluster.port }}
+      targetPort: {{ $.Values.cluster.port }}
+{{ end }}
 {{- end }}

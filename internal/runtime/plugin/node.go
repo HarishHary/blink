@@ -16,6 +16,9 @@ import (
 	"ergo.services/registrar/etcd"
 )
 
+// FIXME should be dynamic and coming from env ?
+const clusterAcceptorPort = 11144
+
 // Host owns the single Ergo node for one Blink process.
 //
 // Actor runtimes attach supervisor subtrees to this node. They must never stop
@@ -110,7 +113,7 @@ func Start(opts NodeOptions) (*NodeHost, error) {
 			Cookie:    opts.Cluster.Cookie,
 			Registrar: opts.Cluster.Registrar,
 			Flags:     opts.Cluster.Flags,
-			Acceptors: []gen.AcceptorOptions{{Host: "0.0.0.0"}},
+			Acceptors: []gen.AcceptorOptions{{Host: "0.0.0.0", Port: clusterAcceptorPort, PortRange: 1}},
 		}
 	}
 

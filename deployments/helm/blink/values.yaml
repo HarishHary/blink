@@ -60,6 +60,10 @@ cluster:
   cookie: ""
   # controllerNodeHost is the controller's cluster-reachable node host - its own Service name.
   controllerNodeHost: "blink-controller"
+  # port is the Ergo cluster acceptor port (internal/runtime/plugin.Start pins this exact port,
+  # not a range). Only the controller's Service needs it: it's the only workload other nodes
+  # reach by a stable name rather than dialing a pod IP directly.
+  port: 11144
 
 # etcd is the production registrar for cluster node discovery - a dedicated 3-member cluster
 # for Blink's exclusive use, not a shared etcd. username/password are sensitive - override in

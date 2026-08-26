@@ -25,7 +25,7 @@ const runtimeShutdownTimeout = 45 * time.Second
 // config is everything event_matcher needs. See docs/services/event_matcher.md.
 type config struct {
 	services.Common
-	event_matcher_config
+	Config
 	plugin.EtcdClusterConfig
 	// ControllerNodeHost names the controller node this executor subscribes to over the
 	// cluster. Must match cmd/controller's CONTROLLER_NODE_HOST.
@@ -130,7 +130,7 @@ func main() {
 		}
 	}()
 
-	matcherSvc := NewService(rootLogger.With("component", "service"), cfg.event_matcher_config, app, snapshot.NewProjectionClient[*rules.RuleMetadata](host.Node(), gen.Atom("rule-snapshot-reader")))
+	matcherSvc := NewService(rootLogger.With("component", "service"), cfg.Config, app, snapshot.NewProjectionClient[*rules.RuleMetadata](host.Node(), gen.Atom("rule-snapshot-reader")))
 	healthSvc := services.NewHealthService(":8080", matcherSvc.Ready, nil)
 	runner := services.New(rootLogger.With("component", "runner"))
 	runner.Register(matcherSvc, healthSvc)

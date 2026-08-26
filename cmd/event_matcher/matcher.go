@@ -60,8 +60,8 @@ type RuleStateSource interface {
 	State(context.Context) (snapshot.ProjectionState[*rules.RuleMetadata], error)
 }
 
-// event_matcher_config is the set of dependencies NewService needs, injected by main. See docs/services/event_matcher.md.
-type event_matcher_config struct {
+// Config is the set of dependencies NewService needs, injected by main. See docs/services/event_matcher.md.
+type Config struct {
 	Broker        brokers.Broker
 	MatcherTopic  string `env:"KAFKA_TOPIC_MATCHER"`
 	MatcherGroup  string `env:"KAFKA_GROUP_MATCHER"`
@@ -85,7 +85,7 @@ type event_matcher_config struct {
 // Service resolves each fetched event to a drop, executor record, or DLQ record before publishing in input order.
 type Service struct {
 	logger         *logger.Logger
-	config         event_matcher_config
+	config         Config
 	matcherRuntime MatcherRuntime
 	ruleState      RuleStateSource
 	executorWriter brokers.Writer
@@ -162,7 +162,7 @@ type matcherEntry struct {
 }
 
 // NewService returns a matcher service, defaulting every unset tuning knob.
-func NewService(logger *logger.Logger, cfg event_matcher_config, matcherRuntime MatcherRuntime, ruleState RuleStateSource) *Service {
+func NewService(logger *logger.Logger, cfg Config, matcherRuntime MatcherRuntime, ruleState RuleStateSource) *Service {
 	if cfg.BatchSize <= 0 {
 		cfg.BatchSize = 50
 	}
