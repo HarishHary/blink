@@ -12,8 +12,8 @@ ergo.services/ergo v1.999.321-0.20260813122550-5102d48bf215 h1:OUxrev5N4gt5x1hIH
 ergo.services/ergo v1.999.321-0.20260813122550-5102d48bf215/go.mod h1:2WcCdXUIZvCfy9Kkac3Sx6V/tB23Mx3yK6xz77hRfbM=
 ergo.services/meta/sse v0.2.1-0.20260807132248-3e4748b06924 h1:tENdZTlsvwT/PHPcrXY3z2Ix+cx0U8OcIDWf+VaKf4k=
 ergo.services/meta/sse v0.2.1-0.20260807132248-3e4748b06924/go.mod h1:bFEH9A/lqzbAYas8drrgPIq92uHadKnH8TqtPB51CQY=
-ergo.services/registrar/etcd v0.3.0 h1:taZbg7bav8I/3W3pVzJsg94MIis8vUdeZhISnVGXMzs=
-ergo.services/registrar/etcd v0.3.0/go.mod h1:pUIWYgOUc45QxmM6t424y/bRitLvB8P7cz6bdMBheKY=
+ergo.services/registrar/etcd v0.3.1-0.20260806082553-384fc6fb1b2f h1:Xo2Y3ET+O6AMsrvGy1L+fe3EAJpSPXMTHM8RYup0PX4=
+ergo.services/registrar/etcd v0.3.1-0.20260806082553-384fc6fb1b2f/go.mod h1:5EVvQ6uXVhj8prOyR2r0P82z0a1WvIH6oTakPt5XbOg=
 github.com/Azure/azure-sdk-for-go/sdk/azcore v1.21.1 h1:jHb/wfvRikGdxMXYV3QG/SzUOPYN9KEUUuC0Yd0/vC0=
 github.com/Azure/azure-sdk-for-go/sdk/azcore v1.21.1/go.mod h1:pzBXCYn05zvYIrwLgtK8Ap8QcjRg+0i76tMQdWN6wOk=
 github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.13.1 h1:Hk5QBxZQC1jb2Fwj6mpzme37xbCDdNTxU7O9eb5+LB4=

@@ -25,7 +25,7 @@ require (
 	ergo.services/actor/health v0.0.0-20260807131927-95b2e1ebf6fe // indirect
 	ergo.services/actor/metrics v0.2.2-0.20260807131927-95b2e1ebf6fe // indirect
 	ergo.services/meta/sse v0.2.1-0.20260807132248-3e4748b06924 // indirect
-	ergo.services/registrar/etcd v0.3.0 // indirect
+	ergo.services/registrar/etcd v0.3.1-0.20260806082553-384fc6fb1b2f // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.21.1 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/internal v1.12.0 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.6.4 // indirect
