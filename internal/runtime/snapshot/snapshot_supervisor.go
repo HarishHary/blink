@@ -67,8 +67,8 @@ func NewSupervisor[T any](opts SupervisorOptions[T]) *Supervisor[T] {
 func (s *Supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 	defer s.reportStatus()
 
-	if s.opts.Name == "" || s.opts.ReaderFactory == nil {
-		return act.SupervisorSpec{}, fmt.Errorf("actor snapshot: name and reader factory are required")
+	if s.opts.ReaderActorOptions.Name == "" || s.opts.ReaderActorOptions.Endpoint.Name == "" || s.opts.ReaderActorOptions.ExecutorID == "" {
+		return act.SupervisorSpec{}, fmt.Errorf("actor snapshot: name, endpoint, and executor ID are required")
 	}
 	if s.opts.Loader == nil {
 		return act.SupervisorSpec{}, fmt.Errorf("snapshot projection: loader is required")
@@ -77,14 +77,14 @@ func (s *Supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 		return act.SupervisorSpec{}, fmt.Errorf("snapshot projection: invalid commit mode")
 	}
 	if s.Name() == "" {
-		if err := s.RegisterName(s.opts.Name); err != nil {
-			return act.SupervisorSpec{}, fmt.Errorf("register snapshot supervisor %q: %w", s.opts.Name, err)
+		if err := s.RegisterName(s.opts.ReaderActorOptions.Name); err != nil {
+			return act.SupervisorSpec{}, fmt.Errorf("register snapshot supervisor %q: %w", s.opts.ReaderActorOptions.Name, err)
 		}
-	} else if s.Name() != s.opts.Name {
-		return act.SupervisorSpec{}, fmt.Errorf("snapshot supervisor registered as %q, want %q", s.Name(), s.opts.Name)
+	} else if s.Name() != s.opts.ReaderActorOptions.Name {
+		return act.SupervisorSpec{}, fmt.Errorf("snapshot supervisor registered as %q, want %q", s.Name(), s.opts.ReaderActorOptions.Name)
 	}
 
-	s.events = EventsFor(s.Node(), s.opts.Name)
+	s.events = EventsFor(s.Node(), s.opts.ReaderActorOptions.Name)
 	// Keep only the latest snapshot available to a restarted projection.
 	snapshotToken, err := s.RegisterEvent(s.events.Snapshot.Name, gen.EventOptions{Buffer: 1})
 	if err != nil {
@@ -110,13 +110,13 @@ func (s *Supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 		},
 		Children: []act.SupervisorChildSpec{
 			{
-				Name: readerActorName(s.opts.Name),
+				Name: readerActorName(s.opts.ReaderActorOptions.Name),
 				Factory: func() gen.ProcessBehavior {
-					return &readerActor{opts: s.opts.ReaderActorOptions}
+					return newReaderActor(s.opts.ReaderActorOptions)
 				},
 			},
 			{
-				Name: projectionActorName(s.opts.Name),
+				Name: projectionActorName(s.opts.ReaderActorOptions.Name),
 				Factory: func() gen.ProcessBehavior {
 					return &projectionActor[T]{events: s.events, loader: s.opts.Loader, mode: s.opts.ProjectionMode}
 				},
@@ -128,7 +128,7 @@ func (s *Supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 // HandleChildStart tracks and activates a started reader or projection child.
 func (s *Supervisor[T]) HandleChildStart(name gen.Atom, pid gen.PID) error {
 	switch name {
-	case projectionActorName(s.opts.Name):
+	case projectionActorName(s.opts.ReaderActorOptions.Name):
 		if s.projectionActor.pid != (gen.PID{}) {
 			return nil
 		}
@@ -138,7 +138,7 @@ func (s *Supervisor[T]) HandleChildStart(name gen.Atom, pid gen.PID) error {
 		// Stale child-start callbacks may race a replacement and fail to send.
 		_ = s.Send(pid, MessageProjectionActorActivate{})
 		return nil
-	case readerActorName(s.opts.Name):
+	case readerActorName(s.opts.ReaderActorOptions.Name):
 		if s.readerActor.pid != (gen.PID{}) {
 			return nil
 		}
