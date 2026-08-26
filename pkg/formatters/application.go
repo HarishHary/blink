@@ -19,8 +19,8 @@ type Application struct {
 }
 
 // NewApplication creates a formatter plugin application.
-func NewApplication(opts plugin.Options, runtimeLogger *logger.Logger) *Application {
-	return &Application{Application: plugin.NewApplication(opts, NewAdapter(), Loader{}, runtimeLogger)}
+func NewApplication(opts plugin.Options, logger *logger.Logger) *Application {
+	return &Application{Application: plugin.NewApplication(opts, NewAdapter(), Loader{}, logger)}
 }
 
 // Format preserves input order while grouping alerts by rollout side and sharding each group.

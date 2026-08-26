@@ -19,8 +19,8 @@ type Application struct {
 }
 
 // NewApplication creates a rule plugin application.
-func NewApplication(opts plugin.Options, runtimeLogger *logger.Logger) *Application {
-	return &Application{Application: plugin.NewApplication(opts, NewAdapter(), Loader{}, runtimeLogger)}
+func NewApplication(opts plugin.Options, logger *logger.Logger) *Application {
+	return &Application{Application: plugin.NewApplication(opts, NewAdapter(), Loader{}, logger)}
 }
 
 // Evaluate preserves input order while grouping events by rollout side and sharding each group.

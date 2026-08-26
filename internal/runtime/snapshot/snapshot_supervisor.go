@@ -67,8 +67,8 @@ func NewSupervisor[T any](opts SupervisorOptions[T]) *Supervisor[T] {
 func (s *Supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 	defer s.reportStatus()
 
-	if s.opts.Name == "" || s.opts.Logger == nil || s.opts.ReaderFactory == nil {
-		return act.SupervisorSpec{}, fmt.Errorf("actor snapshot: name, logger, and reader factory are required")
+	if s.opts.Name == "" || s.opts.ReaderFactory == nil {
+		return act.SupervisorSpec{}, fmt.Errorf("actor snapshot: name and reader factory are required")
 	}
 	if s.opts.Loader == nil {
 		return act.SupervisorSpec{}, fmt.Errorf("snapshot projection: loader is required")

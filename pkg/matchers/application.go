@@ -19,8 +19,8 @@ type Application struct {
 }
 
 // NewApplication creates a matcher plugin application.
-func NewApplication(opts plugin.Options, runtimeLogger *logger.Logger) *Application {
-	return &Application{Application: plugin.NewApplication(opts, NewAdapter(), Loader{}, runtimeLogger)}
+func NewApplication(opts plugin.Options, logger *logger.Logger) *Application {
+	return &Application{Application: plugin.NewApplication(opts, NewAdapter(), Loader{}, logger)}
 }
 
 // Match runs one matcher against every event in a prepared batch and preserves input order.

@@ -67,14 +67,14 @@ type outstandingCalls struct {
 // ---------------------------------------------------------------------------
 
 // NewApplication creates an unloaded plugin application.
-func NewApplication[P Artifact, M any](opts Options, adapter *Adapter[P], loader Loader[M], runtimeLogger *logger.Logger) *Application[P, M] {
+func NewApplication[P Artifact, M any](opts Options, adapter *Adapter[P], loader Loader[M], logger *logger.Logger) *Application[P, M] {
 	opts = runtimeOptionsWithDefaults(opts)
 	return &Application[P, M]{
 		opts:                opts,
 		lifecycle:           applicationNew,
 		adapter:             adapter,
 		loader:              loader,
-		logger:              runtimeLogger,
+		logger:              logger,
 		productionAdmission: semaphore.NewWeighted(int64(opts.maxOutstandingInvocations)),
 		shadowAdmission:     semaphore.NewWeighted(int64(opts.shadowMaxOutstandingInvocations)),
 		calls: outstandingCalls{

@@ -9,7 +9,7 @@ import (
 	"github.com/harishhary/blink/internal/logger"
 	"github.com/harishhary/blink/internal/runtime"
 	"github.com/harishhary/blink/internal/runtime/plugin"
-	snapshotruntime "github.com/harishhary/blink/internal/runtime/snapshot"
+	"github.com/harishhary/blink/internal/runtime/snapshot"
 	"github.com/harishhary/blink/pkg/alerts"
 )
 
@@ -19,12 +19,12 @@ type Application struct {
 }
 
 // NewApplication creates a tuning-rule plugin application.
-func NewApplication(opts plugin.Options, runtimeLogger *logger.Logger) *Application {
-	return &Application{Application: plugin.NewApplication(opts, NewAdapter(), Loader{}, runtimeLogger)}
+func NewApplication(opts plugin.Options, logger *logger.Logger) *Application {
+	return &Application{Application: plugin.NewApplication(opts, NewAdapter(), Loader{}, logger)}
 }
 
 // Tune runs one tuning rule across every alert and preserves input order.
-func (r *Application) Tune(ctx context.Context, state snapshotruntime.ProjectionState[*TuningRuleMetadata], tuningRuleID string, input *alerts.Batch) TuneResult {
+func (r *Application) Tune(ctx context.Context, state snapshot.ProjectionState[*TuningRuleMetadata], tuningRuleID string, input *alerts.Batch) TuneResult {
 	if r == nil || r.Application == nil {
 		return TuneResult{CallErr: errors.NewE(runtime.ErrRuntimeNotStarted)}
 	}

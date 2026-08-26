@@ -86,7 +86,7 @@ sequenceDiagram
 
 Before creating its event consumer, `event_matcher` requires both projections to be ready and to contain a primary. A degraded committed rule projection can remain routable but makes readiness false; an unavailable rule projection fails the service attempt. The matcher runtime waits briefly through plugin unavailability, while other runtime-state errors fail the attempt.
 
-Candidates come from the committed rule projection by `log_type`. Candidates sharing a matcher use one invocation; a rule with multiple matchers requires all of them to pass. Runtime routing, admission, workers, rollout, invocation fencing, and cancellation are owned by the current actor runtime, documented in [plugin runtime](plugin-runtime.md). The compacted reader, generation fencing, typed projection, direct/external commit modes, and cancellation behavior are documented in [snapshot runtime](snapshot-runtime.md).
+Candidates come from the committed rule projection by `log_type`. Candidates sharing a matcher use one invocation; a rule with multiple matchers requires all of them to pass. Runtime routing, admission, plugin processes, rollout, invocation fencing, and cancellation are owned by the current actor runtime, documented in [plugin runtime](plugin-runtime.md). The compacted reader, generation fencing, typed projection, direct/external commit modes, and cancellation behavior are documented in [snapshot runtime](snapshot-runtime.md).
 
 ### Terminals, retries, and commits
 

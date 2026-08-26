@@ -19,8 +19,8 @@ type Application struct {
 }
 
 // NewApplication creates an enrichment plugin application.
-func NewApplication(opts plugin.Options, runtimeLogger *logger.Logger) *Application {
-	return &Application{Application: plugin.NewApplication(opts, NewAdapter(), Loader{}, runtimeLogger)}
+func NewApplication(opts plugin.Options, logger *logger.Logger) *Application {
+	return &Application{Application: plugin.NewApplication(opts, NewAdapter(), Loader{}, logger)}
 }
 
 // Enrich applies one enrichment to every alert, preserving input order and cardinality.
