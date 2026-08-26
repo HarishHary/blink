@@ -9,7 +9,6 @@ import (
 	"ergo.services/ergo/act"
 	"ergo.services/ergo/gen"
 	"github.com/harishhary/blink/internal/runtime"
-	"github.com/harishhary/blink/internal/snapshot"
 )
 
 var (
@@ -64,7 +63,7 @@ type ProjectionState[T any] struct {
 	ProjectionData[T]
 }
 
-// ProjectionData is the independently owned typed data from a snapshot.
+// ProjectionData is the independently owned typed data from a 
 type ProjectionData[T any] struct {
 	Primaries   []T
 	Candidates  []T
@@ -230,7 +229,7 @@ func (a *projectionActor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any,
 func (a *projectionActor[T]) applyEvent(event gen.MessageEvent) error {
 	switch event.Event {
 	case a.events.Snapshot:
-		snap, ok := event.Message.(*snapshot.Snapshot)
+		snap, ok := event.Message.(*Snapshot)
 		if !ok || snap == nil || snap.Generation <= a.observedGeneration {
 			return nil
 		}
@@ -298,14 +297,14 @@ type parsedProjection[T any] struct {
 }
 
 // newParsedProjection converts a snapshot into owned typed data, skipping and joining specs that fail so one break costs itself.
-func newParsedProjection[T any](snap *snapshot.Snapshot, loader Loader[T]) (parsedProjection[T], error) {
+func newParsedProjection[T any](snap *Snapshot, loader Loader[T]) (parsedProjection[T], error) {
 	data := ProjectionData[T]{
 		ByFileName:  make(map[string]T),
 		RolloutByID: make(map[string]Rollout),
 	}
 	var parseErrs []error
 	for _, entry := range snap.Entries {
-		for index, ref := range []*snapshot.ArtifactRef{entry.Primary, entry.Candidate} {
+		for index, ref := range []*ArtifactRef{entry.Primary, entry.Candidate} {
 			if ref == nil || len(ref.Spec) == 0 {
 				continue
 			}

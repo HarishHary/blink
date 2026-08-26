@@ -12,8 +12,7 @@ import (
 	"github.com/harishhary/blink/internal/backends"
 	"github.com/harishhary/blink/internal/runtime"
 	"github.com/harishhary/blink/internal/runtime/plugin"
-	snapshotruntime "github.com/harishhary/blink/internal/runtime/snapshot"
-	"github.com/harishhary/blink/internal/snapshot"
+	"github.com/harishhary/blink/internal/runtime/snapshot"
 )
 
 type ActorLifecycle string
@@ -115,7 +114,7 @@ type ExecutorStatus struct {
 }
 
 // Apply folds one convergence report into status for its executor.
-func (status ExecutorStatus) Apply(report snapshotruntime.MessageExecutorReport) ExecutorStatus {
+func (status ExecutorStatus) Apply(report snapshot.MessageExecutorReport) ExecutorStatus {
 	status.ExecutorID = report.ExecutorID
 	status.LastSeen = time.Now()
 	if report.Heartbeat != nil {
@@ -193,7 +192,7 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 	}
 	if a.lifecycle == ActorDraining || a.lifecycle == ActorDrained {
 		switch message.(type) {
-		case gen.MessageDownAlias, gen.MessageDownPID, MessageSnapshotWriterIOStopped, snapshotruntime.UnsubscribeRequest:
+		case gen.MessageDownAlias, gen.MessageDownPID, MessageSnapshotWriterIOStopped, snapshot.UnsubscribeRequest:
 		default:
 			return nil
 		}
@@ -212,7 +211,7 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 		}
 		a.Log().Info("controller activated: name=%s scanner_alias=%s writer_alias=%s", a.opts.Name, a.scanner.alias, a.writer.alias)
 		return nil
-	case snapshotruntime.MessageExecutorReport:
+	case snapshot.MessageExecutorReport:
 		a.executors[m.ExecutorID] = a.executors[m.ExecutorID].Apply(m)
 		return nil
 	case MessageExecutorDriftCheck:
@@ -299,7 +298,7 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 		a.fullRewriteRequired = false
 		if changed {
 			a.Log().Info("snapshot committed: name=%s generation=%d upserts=%d tombstones=%d", a.opts.Name, a.pending.next.Generation, len(a.pending.entryUpserts), len(a.pending.tombstones))
-			a.notifySubscribers(snapshotruntime.SnapshotUpdate{
+			a.notifySubscribers(snapshot.SnapshotUpdate{
 				Snapshot:   a.committed.Clone(),
 				Changes:    ClassifyChanges(a.opts.Loader, priorCommitted, a.pending.entryUpserts),
 				Tombstones: append([]string(nil), a.pending.tombstones...),
@@ -314,7 +313,7 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 		a.writer.status.LastError = nil
 		a.writer.restart.CancelScheduled(true)
 		return a.reconcile()
-	case snapshotruntime.UnsubscribeRequest:
+	case snapshot.UnsubscribeRequest:
 		if pid, ok := a.subscribers[m.ExecutorID]; ok {
 			delete(a.subscribers, m.ExecutorID)
 			_ = a.DemonitorPID(pid)
@@ -688,10 +687,10 @@ func makePlan(prior *snapshot.Snapshot, generation int64, records map[string]bac
 // HandleCall answers a subscribing executor's request; everything else is rejected.
 func (a *actor[T]) HandleCall(from gen.PID, _ gen.Ref, request any) (any, error) {
 	switch m := request.(type) {
-	case snapshotruntime.SubscribeRequest:
+	case snapshot.SubscribeRequest:
 		a.subscribers[m.ExecutorID] = from
 		_ = a.MonitorPID(from)
-		return snapshotruntime.SubscribeResponse{
+		return snapshot.SubscribeResponse{
 			Current:       a.committed.Clone(),
 			Changes:       ClassifyChanges(a.opts.Loader, nil, a.committedUpserts()),
 			ControllerPID: a.PID(),
@@ -716,7 +715,7 @@ func (a *actor[T]) committedUpserts() []snapshot.EffectiveEntry {
 }
 
 // notifySubscribers pushes a new commit to every subscriber PID; a failed SendImportant is logged but doesn't unregister it - MonitorPID's MessageDownPID is the actual removal path.
-func (a *actor[T]) notifySubscribers(update snapshotruntime.SnapshotUpdate) {
+func (a *actor[T]) notifySubscribers(update snapshot.SnapshotUpdate) {
 	for id, pid := range a.subscribers {
 		if err := a.SendImportant(pid, update); err != nil {
 			a.Log().Error("snapshot push failed: name=%s executor_id=%s pid=%s error=%v", a.opts.Name, id, pid, err)

@@ -2,7 +2,6 @@ package snapshot
 
 import (
 	"github.com/harishhary/blink/internal/runtime"
-	"github.com/harishhary/blink/internal/snapshot"
 )
 
 // NetworkTypes registers the wire vocabulary defined in snapshot_reader_actor.go - the messages a
@@ -20,11 +19,11 @@ func NetworkTypes() []any {
 		MessageExecutorReport{},
 		ExecutorHeartbeat{},
 		ExecutorAppliedGeneration{},
-		snapshot.EntryChange{},
-		snapshot.ChangeKind(0),
-		snapshot.Snapshot{},
-		snapshot.EffectiveEntry{},
-		snapshot.ArtifactRef{},
+		EntryChange{},
+		ChangeKind(0),
+		Snapshot{},
+		EffectiveEntry{},
+		ArtifactRef{},
 		runtime.RolloutMode(0),
 	}
 }

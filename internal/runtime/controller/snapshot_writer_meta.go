@@ -9,7 +9,7 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/harishhary/blink/internal/backends"
 	"github.com/harishhary/blink/internal/runtime"
-	"github.com/harishhary/blink/internal/snapshot"
+	"github.com/harishhary/blink/internal/runtime/snapshot"
 )
 
 // SnapshotWriterMetaLifecycle describes the controller-owned writer meta lifecycle.

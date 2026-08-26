@@ -7,7 +7,6 @@ import (
 	"ergo.services/ergo/gen"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/harishhary/blink/internal/runtime"
-	"github.com/harishhary/blink/internal/snapshot"
 )
 
 const subscribeTimeoutSeconds = 5
@@ -47,15 +46,15 @@ type SubscribeRequest struct {
 
 // SubscribeResponse answers SubscribeRequest; ControllerPID lets the caller Monitor it without a second lookup, and future commits arrive as pushed SnapshotUpdate messages since a channel can't cross the cluster.
 type SubscribeResponse struct {
-	Current       *snapshot.Snapshot
-	Changes       []snapshot.EntryChange
+	Current       *Snapshot
+	Changes       []EntryChange
 	ControllerPID gen.PID
 }
 
 // SnapshotUpdate is one commit's full state, pushed to every subscriber; Changes/Tombstones are for observability only - applying it just needs Snapshot (see readerActor).
 type SnapshotUpdate struct {
-	Snapshot   *snapshot.Snapshot
-	Changes    []snapshot.EntryChange
+	Snapshot   *Snapshot
+	Changes    []EntryChange
 	Tombstones []string
 }
 
@@ -232,7 +231,7 @@ func (a *readerActor) scheduleSubscribeRestart() error {
 }
 
 // publishSnapshot sends the received snapshot to subscribers.
-func (a *readerActor) publishSnapshot(snap *snapshot.Snapshot) {
+func (a *readerActor) publishSnapshot(snap *Snapshot) {
 	if a.snapshotEventToken == (gen.Ref{}) {
 		return
 	}

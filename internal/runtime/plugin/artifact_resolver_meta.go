@@ -8,7 +8,7 @@ import (
 	"ergo.services/ergo/gen"
 	"github.com/harishhary/blink/internal/helpers"
 	"github.com/harishhary/blink/internal/runtime"
-	"github.com/harishhary/blink/internal/snapshot"
+	"github.com/harishhary/blink/internal/runtime/snapshot"
 	"go.yaml.in/yaml/v4"
 )
 

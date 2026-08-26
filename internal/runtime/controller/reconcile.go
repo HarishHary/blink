@@ -4,7 +4,7 @@ import (
 	"github.com/harishhary/blink/internal/backends"
 	"github.com/harishhary/blink/internal/runtime"
 	"github.com/harishhary/blink/internal/runtime/plugin"
-	"github.com/harishhary/blink/internal/snapshot"
+	"github.com/harishhary/blink/internal/runtime/snapshot"
 	"go.yaml.in/yaml/v4"
 )
 

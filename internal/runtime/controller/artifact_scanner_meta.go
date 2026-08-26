@@ -15,7 +15,7 @@ import (
 	"github.com/harishhary/blink/internal/helpers"
 	"github.com/harishhary/blink/internal/runtime"
 	"github.com/harishhary/blink/internal/runtime/plugin"
-	"github.com/harishhary/blink/internal/snapshot"
+	"github.com/harishhary/blink/internal/runtime/snapshot"
 )
 
 const (

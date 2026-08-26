@@ -6,7 +6,7 @@ package backends
 import (
 	"context"
 
-	"github.com/harishhary/blink/internal/snapshot"
+	"github.com/harishhary/blink/internal/runtime/snapshot"
 )
 
 // Database is the persistence interface PluginController uses for bootstrap and

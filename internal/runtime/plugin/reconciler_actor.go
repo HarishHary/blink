@@ -8,8 +8,7 @@ import (
 	"ergo.services/ergo/gen"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/harishhary/blink/internal/runtime"
-	snapshotruntime "github.com/harishhary/blink/internal/runtime/snapshot"
-	"github.com/harishhary/blink/internal/snapshot"
+	"github.com/harishhary/blink/internal/runtime/snapshot"
 )
 
 // ---------------------------------------------------------------------------
@@ -45,7 +44,7 @@ type reconcilerActor struct {
 	act.Actor
 	directory        string
 	revision         uint64
-	events           snapshotruntime.Events
+	events           snapshot.Events
 	snapshot         *snapshot.Snapshot
 	readerActorReady bool
 	resolutionRetry  *runtime.ScheduledBackoff
@@ -89,7 +88,7 @@ type MessageDesiredStateFreshness struct {
 // ---------------------------------------------------------------------------
 
 // newReconcilerActor constructs a reconciler actor with independent retry policies.
-func newReconcilerActor(events snapshotruntime.Events, directory string, retryMin, retryMax time.Duration) gen.ProcessBehavior {
+func newReconcilerActor(events snapshot.Events, directory string, retryMin, retryMax time.Duration) gen.ProcessBehavior {
 	return &reconcilerActor{
 		events:          events,
 		directory:       directory,
@@ -440,7 +439,7 @@ func (a *reconcilerActor) stopArtifactWatcherMeta(reason error) {
 func (a *reconcilerActor) applyEvent(event gen.MessageEvent) error {
 	switch event.Event {
 	case a.events.Status:
-		status, ok := event.Message.(snapshotruntime.ReaderActorStatus)
+		status, ok := event.Message.(snapshot.ReaderActorStatus)
 		if !ok {
 			return nil
 		}
