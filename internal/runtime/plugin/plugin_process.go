@@ -208,8 +208,10 @@ func (p *pluginProcess[T]) HandleMessage(from gen.PID, message any) error {
 			restart = p.pluginMeta.healthRestart
 		}
 		if !restart.Pending || msg.token != restart.Token {
+			p.Log().Warning("plugin meta restart dropped: health=%v pending=%v msgToken=%d currentToken=%d", msg.health, restart.Pending, msg.token, restart.Token)
 			return nil
 		}
+		p.Log().Info("plugin meta restart firing: health=%v token=%d", msg.health, msg.token)
 		restart.Pending = false
 		restart.Cancel = nil
 		return p.startPluginMeta()
@@ -459,17 +461,21 @@ func (p *pluginProcess[T]) schedulePluginMetaRestart(health bool) error {
 		restart = p.pluginMeta.healthRestart
 	}
 	if restart.Pending {
+		p.Log().Warning("plugin meta restart already pending: health=%v token=%d", health, restart.Token)
 		return nil
 	}
 	delay := restart.Strategy.NextBackOff()
 	if delay == backoff.Stop {
+		p.Log().Warning("plugin meta restart budget exhausted: health=%v", health)
 		p.failPluginMeta(fmt.Errorf("plugin process restart budget: %w", runtime.ErrBackoffStopped))
 		return nil
 	}
 	restart.Token++
 	token := restart.Token
+	p.Log().Info("scheduling plugin meta restart: health=%v delay=%s token=%d", health, delay, token)
 	cancel, err := p.SendAfter(p.PID(), MessagePluginMetaRestart{token: token, health: health}, delay)
 	if err != nil {
+		p.Log().Error("schedule plugin meta restart failed: health=%v err=%v", health, err)
 		p.failPluginMeta(fmt.Errorf("schedule plugin process restart: %w", err))
 		return nil
 	}
@@ -503,6 +509,7 @@ func (p *pluginProcess[T]) retirePluginMeta(alias gen.Alias, err error, health b
 	if alias != p.pluginMeta.alias {
 		return
 	}
+	p.Log().Info("retiring plugin meta: health=%v generation=%d err=%v", health, p.pluginMeta.generation, err)
 	p.cancelHealthCheck()
 	p.reportUnavailable(err)
 	p.pluginMeta.alias = gen.Alias{}

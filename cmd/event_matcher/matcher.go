@@ -630,34 +630,53 @@ func (s *Service) prepare(b *batch) {
 	}
 }
 
-// publish writes prepared records serially in fetched order.
+// publish writes prepared records in fetched order, one write per run of consecutive records bound for the same writer
 func (s *Service) publish(ctx context.Context, b *batch) errors.Error {
+	var (
+		pending     []brokers.Message
+		pendingKind terminalKind
+	)
+	flush := func() errors.Error {
+		if len(pending) == 0 {
+			return nil
+		}
+		writer := s.executorWriter
+		if pendingKind == terminalDLQ {
+			writer = s.dlqWriter
+		}
+		if err := s.writeWithRetries(ctx, writer, pending...); err != nil {
+			return err
+		}
+		if pendingKind == terminalNormal {
+			eventsForwarded.Add(float64(len(pending)))
+		}
+		pending = nil
+		return nil
+	}
 	for _, state := range b.states {
 		if state.prepared == nil {
 			return errors.NewF("event matcher left an input without a terminal state")
 		}
-		if state.prepared.kind == terminalDrop {
+		kind := state.prepared.kind
+		if kind == terminalDrop {
 			continue
 		}
-		writer := s.executorWriter
-		if state.prepared.kind == terminalDLQ {
-			writer = s.dlqWriter
+		if len(pending) > 0 && kind != pendingKind {
+			if err := flush(); err != nil {
+				return err
+			}
 		}
-		if err := s.writeWithRetries(ctx, writer, state.prepared.message); err != nil {
-			return err
-		}
-		if state.prepared.kind == terminalNormal {
-			eventsForwarded.Inc()
-		}
+		pendingKind = kind
+		pending = append(pending, state.prepared.message)
 	}
-	return nil
+	return flush()
 }
 
 // writeWithRetries bounds each publish so Runner can restart a failed service attempt.
-func (s *Service) writeWithRetries(ctx context.Context, w brokers.Writer, msg brokers.Message) errors.Error {
+func (s *Service) writeWithRetries(ctx context.Context, w brokers.Writer, msgs ...brokers.Message) errors.Error {
 	policy := s.newBackoff(ctx)
 	for attempt := 1; ; attempt++ {
-		err := w.WriteMessages(ctx, msg)
+		err := w.WriteMessages(ctx, msgs...)
 		if err == nil {
 			return nil
 		}

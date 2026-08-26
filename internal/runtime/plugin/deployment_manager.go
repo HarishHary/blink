@@ -370,6 +370,7 @@ func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 			status:  pluginProcessStatus{lifecycle: PluginProcessRestarting, availability: runtime.AvailabilityUnavailable},
 		}
 		m.failProcessCalls(msg.PID, runtime.ErrPluginUnavailable)
+		m.Log().Warning("plugin process down: slot=%d route=%s retiring=%v replace=%v reason=%v", slot, m.route, retiring, replace, msg.Reason)
 		switch {
 		case retiring && !replace:
 			m.releaseSlot(slot)
@@ -380,6 +381,7 @@ func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 		case !m.draining:
 			// Every unexpected process incarnation consumes its own slot's finite budget, including an idle MinProcs=0 one whose committed calls just failed.
 			m.lastError = msg.Reason
+			m.Log().Info("scheduling plugin process restart: slot=%d route=%s", slot, m.route)
 			m.schedulePluginProcessRestart(slot)
 		default:
 			m.releaseSlot(slot)
@@ -400,8 +402,10 @@ func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 	case MessageDeploymentManagerRestart:
 		process := m.processes[msg.slot]
 		if process == nil || !process.restart.Pending || msg.token != process.restart.Token {
+			m.Log().Warning("plugin process restart message dropped: slot=%d route=%s nilProcess=%v msgToken=%d", msg.slot, m.route, process == nil, msg.token)
 			return nil
 		}
+		m.Log().Info("plugin process restart firing: slot=%d route=%s token=%d", msg.slot, m.route, msg.token)
 		process.restart.Pending, process.restart.Cancel = false, nil
 		m.reconcile()
 
@@ -753,12 +757,14 @@ func (m *deploymentManager[T]) retireSlot(slot int, replace bool, reason error) 
 	}
 	process.retiring, process.replace = true, replace
 	if reason != nil {
+		m.Log().Warning("retiring plugin process slot: slot=%d replace=%v reason=%v route=%s", slot, replace, reason, m.route)
 		_ = m.Node().SendExit(process.pid, reason)
 		return
 	}
 	// MessageStop lets a process holding nothing finish on its own terms, and a send that fails means it cannot be asked, so the signal it cannot refuse is the fallback.
 	if process.assigned == 0 {
 		if err := m.Send(process.pid, MessageStop{}); err != nil {
+			m.Log().Warning("retiring plugin process slot via forced exit: slot=%d route=%s sendErr=%v", slot, m.route, err)
 			_ = m.Node().SendExit(process.pid, gen.TerminateReasonShutdown)
 		}
 	}
@@ -816,16 +822,20 @@ func (m *deploymentManager[T]) startPluginProcess(slot int) bool {
 func (m *deploymentManager[T]) schedulePluginProcessRestart(slot int) {
 	process := m.processes[slot]
 	if process == nil || process.restart.Pending {
+		m.Log().Warning("plugin process restart already pending or slot missing: slot=%d route=%s nilProcess=%v", slot, m.route, process == nil)
 		return
 	}
 	delay := process.restart.Strategy.NextBackOff()
 	if delay == backoff.Stop {
+		m.Log().Warning("plugin process restart budget exhausted, opening circuit: slot=%d route=%s", slot, m.route)
 		m.openCircuit(fmt.Errorf("plugin process restart budget: %w", runtime.ErrBackoffStopped))
 		return
 	}
 	process.restart.Token++
+	m.Log().Info("plugin process restart scheduled: slot=%d route=%s delay=%s token=%d", slot, m.route, delay, process.restart.Token)
 	cancel, err := m.SendAfter(m.PID(), MessageDeploymentManagerRestart{slot: slot, token: process.restart.Token}, delay)
 	if err != nil {
+		m.Log().Error("plugin process restart schedule failed: slot=%d route=%s err=%v", slot, m.route, err)
 		m.openCircuit(fmt.Errorf("schedule plugin process restart: %w", err))
 		return
 	}
