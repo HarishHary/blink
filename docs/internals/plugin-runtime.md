@@ -1,8 +1,10 @@
 # Plugin Runtime
 
-`internal/runtime/plugin` owns local plugin deployment, not an executor or a process pool. One `plugin.Application[P,M]` bridges callers to one runtime supervisor on the process-owned Ergo node. Dynamic deployment routes are a router mechanism, **not supervisors**. Snapshot, reconciler, and catalog are supervisor children; routers, routes, and managers are dynamically created; plugin processes are manager-spawned and manager-monitored; metas are actor-spawned. Only the declared runtime and snapshot supervisor trees have supervisor semantics.
+`internal/runtime/plugin` owns local plugin deployment. One `plugin.Application[P,M]` bridges callers to one runtime supervisor on the process-owned Ergo node.
 
-There is no actor pool between a manager and its plugin processes. A pool is the right abstraction only while one pooled process is one unit of work capacity, and a plugin process advertises its own `calls_per_process` instead, so the manager schedules against advertised capacity rather than against a count of interchangeable slots.
+Only the runtime supervisor and the snapshot subtree have supervisor semantics. Snapshot, reconciler, and catalog are supervisor children. Routers, deployment routes, and managers are dynamic router mechanisms, not supervisors. Plugin processes are manager-spawned and manager-monitored. Metas are actor-spawned.
+
+There is no actor pool between a manager and its processes. A plugin process advertises `calls_per_process`, so the manager schedules against advertised capacity rather than a worker count.
 
 ## Composition
 
@@ -16,7 +18,7 @@ flowchart TB
   watcher["1 artifact watcher meta\nactor-spawned"]
   catalog["1 catalog actor\nstatic supervisor child"]
   routers["N router actors\none per logical plugin; dynamic actors"]
-  routes["N deployment routes per router\none per DeploymentPoolKey; dynamic routes, not supervisors"]
+  routes["N deployment routes per router\none per DeploymentRouteKey; dynamic routes, not supervisors"]
   managers["N deployment manager actors\none per deployment route; dynamic route processes, not supervisors"]
   procs["0..N plugin process actors per manager\nmin_procs..max_procs; manager-spawned and monitored, not supervised"]
   metas["N plugin metas / plugin subprocess sessions\none per plugin process; actor-spawned"]
@@ -29,7 +31,7 @@ flowchart TB
   catalog --> routers --> routes --> managers --> procs --> metas
 ```
 
-The runtime supervisor's RestForOne child order is snapshot, reconciler, catalog. A prior child restart restarts later children. It is transient, has intensity 5 in 5 seconds, handles child lifecycle itself, and does not auto-shutdown. The snapshot subtree's policy is documented in [snapshot-runtime.md](snapshot-runtime.md).
+The runtime supervisor's RestForOne child order is snapshot, reconciler, catalog, so a prior child's restart restarts the later ones. It is transient, has intensity 5 in 5 seconds, handles child lifecycle itself, and does not auto-shutdown. The snapshot subtree's policy is in [snapshot-runtime.md](snapshot-runtime.md).
 
 ## Messages
 
@@ -39,7 +41,7 @@ The runtime supervisor's RestForOne child order is snapshot, reconciler, catalog
 | Desired-state promotion     | reconciler → runtime supervisor → catalog → router                                      | Moves a resolved desired revision through the drain, freshness, and projection-commit barrier. |
 | Status and readiness        | child/meta/plugin process → parent owner                                                | Aggregates fenced lifecycle, activity, and availability facts upward.                          |
 | Drain                       | application → runtime supervisor → catalog → router → manager                           | Stops admission and drains dynamically owned work from the top down.                           |
-| Completion and cancellation | plugin process → manager → runtime supervisor; application → runtime supervisor         | Completes one result idempotently or follows the fenced accepted/pending path to cancel it.    |
+| Completion and cancellation | plugin process → manager → router → catalog → runtime supervisor; application → runtime supervisor → catalog → router → manager | Completes one result idempotently or follows the fenced accepted/pending path to cancel it.    |
 
 ## Roles
 
@@ -53,26 +55,27 @@ The runtime supervisor's RestForOne child order is snapshot, reconciler, catalog
 | Artifact Watcher Meta  | dynamic `gen.Alias`                                  | Reconciler Actor       | Reports artifact-directory watch/poll drift.                                          |
 | Catalog Actor          | `<runtime-name>-catalog` child name                  | Runtime Supervisor     | Owns router incarnations and aggregates router status.                                |
 | Router Actor           | dynamic PID/generation/epoch per plugin              | Catalog Actor          | Selects rollout routes and owns dynamic deployment routes.                            |
-| Deployment Route       | stable SHA-256-derived atom per `DeploymentPoolKey`  | Router Actor           | Creates, respawns, drains, and removes one manager route.                             |
+| Deployment Route       | stable SHA-256-derived atom per `DeploymentRouteKey` | Router Actor           | Creates, respawns, drains, and removes one manager route.                             |
 | Deployment Manager     | dynamic route process PID                            | Deployment Route       | Owns bounded queueing, capacity-aware dispatch, scaling, process recovery, and drain. |
 | Plugin Process         | dynamic linked-and-monitored actor PID               | Deployment Manager     | Serves up to `calls_per_process` invocations and recovers its plugin session.         |
 | Plugin Meta            | dynamic `gen.Alias`                                  | Plugin Process         | Owns one plugin subprocess and RPC session.                                           |
 | Invocation             | `callID` and one `runtime.Invocation` handle         | caller                 | Its `AsyncResult` remains owned by the application/runtime tree.                      |
 
-The runtime and snapshot supervisors are registered; all remaining listed names are child or dynamic identities.
+The runtime and snapshot supervisors are registered. Every other name above is a child or dynamic identity.
 
 ## Readiness
 
 The runtime admits work only when its expected projection generation is ready and committed, the desired-state barrier is idle, and the application is running.
 
-The supervisor is ready only when projection and catalog generations/revisions agree, catalog and projection are routable, and it is not draining. Catalog routability rather than catalog readiness is deliberate: one dead plugin must not withhold state from callers invoking the healthy ones, and per-call admission rejects the dead route with `ErrPluginUnavailable` anyway. During a transition/drain or when projection/catalog is missing, runtime availability is unavailable; it is degraded when dependencies exist but are not all ready. Component readiness below contributes to this operational/composite state rather than defining extra lifecycle constants.
+The supervisor is ready when projection and catalog generations/revisions agree, catalog and projection are routable, and it is not draining. It gates on catalog routability rather than catalog readiness: one dead plugin must not withhold state from callers invoking the healthy ones, and per-call admission rejects the dead route with `ErrPluginUnavailable`.
+
+Runtime availability is unavailable during a transition/drain or when projection/catalog is missing, and degraded when dependencies exist but are not all ready. Component readiness feeds this composite state; it adds no lifecycle constants.
 
 ## Plugin Application
 
 ### Lifecycle
 
-The application is single-use: `New → Running → Stopping → Terminated`. `Start` marks it running only after registered-supervisor lookup succeeds.
-`Terminate` completes pending calls with `ErrRuntimeStopped`, or `ErrPluginUnavailable` when already stopping.
+The application is single-use: `New → Running → Stopping → Terminated`. `Start` marks it running only after registered-supervisor lookup succeeds. `Terminate` completes pending calls with `ErrRuntimeStopped`, or `ErrPluginUnavailable` when already stopping.
 
 ```mermaid
 stateDiagram-v2
@@ -94,9 +97,24 @@ stateDiagram-v2
 
 ### Readiness
 
-`Start` marks the application running only after lookup of its registered supervisor succeeds. Production `Submit` first reserves the plugin's own share of the budget, `MaxOutstandingInvocationsPerPlugin`, rejecting with `ErrQueueFull` when that share is full, and only then acquires the application-wide blocking `MaxOutstandingInvocations` permit, which includes queue waiters. The per-plugin share is what stops one saturated plugin - a stalled deployment holding its whole queue plus its plugin processes - from consuming the shared budget and blocking every other plugin's caller until that caller's own deadline expires; it fails its own calls fast instead. `SubmitShadow` uses a separate non-blocking budget and returns `ErrShadowDropped` when full.
+Admission takes two permits. `Submit` first reserves the plugin's own share, `MaxOutstandingInvocationsPerPlugin`, and rejects with `ErrQueueFull` when that share is full. Only then does it acquire the blocking application-wide `MaxOutstandingInvocations` permit, which includes queue waiters. `SubmitShadow` uses a separate non-blocking budget and returns `ErrShadowDropped` when full.
 
-Because that share rejects rather than waits, it must cover the widest fan-out one caller batch can legitimately produce, times the batches the caller runs at once, so the budgets are derived from `MaxBatchSize` and `MaxConcurrentCalls` rather than fixed. One call is at most `MaxDeploymentProcs + 1` invocations - a shard per plugin process, plus the one more an uneven two-way rollout split costs - or the batch's own event count, since a shard needs an event to carry, so the per-plugin share defaults to `min(MaxBatchSize, MaxDeploymentProcs+1) * MaxConcurrentCalls` and a caller that declares no `MaxBatchSize` is sized for the widest `max_procs` a deployment may legally declare rather than for an assumed event count it may exceed. Both bounds are properties of the call rather than of the rollout shape, so the share tracks a fan-out the caller can actually reach at every batch size. The shared budget cannot be derived the same way, because nothing here knows how many plugins a batch touches; it only blocks, so it is a process-wide ceiling of `perPlugin * MaxConcurrentCalls` - a smaller one would serialise batches that the caller has already bounded - and the shadow budget a sixteenth of it. The deployment manager's `QueueSize` default rises with the per-plugin share, since one plugin's whole fan-out lands on one manager and everything past its running capacity waits in its queue; a smaller queue would only move the same `ErrQueueFull` one layer down. A service that raises its batch size or concurrency therefore raises these budgets by passing both; explicitly set budgets are always left alone, and a shared budget too small for one fan-out simply gives a single plugin all of it, because the per-plugin share isolates plugins from each other rather than rejecting a caller's own batch. These budgets bound calls, which are cheap to hold; the separate `ProcessBudget` described under Deployment Manager bounds the subprocesses that serve them, which is why it is sized from CPUs instead of from the batch. [concurrency-knobs.md](concurrency-knobs.md) tabulates these budgets against every other knob that moves call counts.
+The per-plugin share stops one saturated plugin from consuming the shared budget and blocking every other plugin's caller until that caller's deadline expires. It fails its own calls fast instead.
+
+Because the share rejects rather than waits, it is sized from the widest fan-out one caller batch can produce:
+
+| Budget                                | Size                                                    | Why                                                                                                  |
+| ------------------------------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `MaxOutstandingInvocationsPerPlugin`  | `min(MaxBatchSize, MaxDeploymentProcs+1) * MaxConcurrentCalls` | One call is at most one shard per process a deployment may run, or the batch's own event count. |
+| `MaxOutstandingInvocations`           | `perPlugin * MaxConcurrentCalls`                        | Nothing here knows how many plugins a batch touches; it only blocks, so it is a process-wide ceiling. |
+| Shadow budget                         | a sixteenth of the shared one                           | Best-effort work must not be sized like production work.                                             |
+| `QueueSize` (deployment manager)      | rises with the per-plugin share                         | One plugin's whole fan-out lands on one manager, and everything past its capacity waits there.       |
+
+`MaxDeploymentProcs + 1` sits above both the process count and the two routing groups a batch can split into. A caller that declares no `MaxBatchSize` is sized for the widest fan-out one call is allowed. Callers ask for the smaller of the share and their deployment's declared capacity (`Application.CallBudget`), so a deployment declaring more than the share spends the rest over further calls.
+
+A service that raises its batch size or concurrency must pass both, since a budget set apart from the fan-out it holds rejects legitimate calls.
+
+These budgets bound concurrent calls, not the pieces a batch is cut into. A caller keeps each call's payload under the transport limit, and an oversized batch is cut into as many pieces as that takes and run through a bounded pool, so pieces can outnumber the capacity while live invocations never do. Calls are cheap to hold; the `ProcessBudget` under Deployment Manager bounds the subprocesses that serve them and is sized from CPUs instead. [concurrency-knobs.md](concurrency-knobs.md) tabulates all of these against every other knob that moves call counts.
 
 ## Runtime Supervisor
 
@@ -132,13 +150,15 @@ stateDiagram-v2
 
 ### Readiness
 
-The supervisor accepts `SupervisorStatusRequest` and `SupervisorStateRequest`. Its exact state reader requires a nonzero ready generation equal to the committed generation, a routable committed projection, matching desired snapshot generation and catalog revision, a routable catalog, an idle transition, and a non-draining lifecycle. After Catalog reports drained, the supervisor fails remaining calls, answers drain waiters, and terminates. The subtree uses independent finite retry domains; cancelling a scheduled retry invalidates its token.
+The supervisor answers `SupervisorStatusRequest` and `SupervisorStateRequest`. Its exact state reader requires a nonzero ready generation equal to the committed generation, a routable committed projection, matching desired snapshot generation and catalog revision, a routable catalog, an idle transition, and a non-draining lifecycle.
+
+After the catalog reports drained, the supervisor fails remaining calls, answers drain waiters, and terminates. The subtree uses independent finite retry domains, and cancelling a scheduled retry invalidates its token.
 
 ## Desired-State Transition
 
 ### Lifecycle
 
-The reconciler proposes a monotonic desired revision only after artifact resolution is complete and non-deferred. The supervisor holds a newer proposal until tracked invocations drain, applies it to the catalog, asks the reconciler to confirm freshness, then externally commits the matching projection generation.
+The reconciler proposes a monotonic desired revision once artifact resolution is complete and non-deferred. The supervisor holds a newer proposal until tracked invocations drain, applies it to the catalog, asks the reconciler to confirm freshness, then externally commits the matching projection generation.
 
 ```mermaid
 stateDiagram-v2
@@ -166,15 +186,15 @@ stateDiagram-v2
 
 ### Readiness
 
-Admission reopens only after projection, reconciler, catalog, generation, and revision agree. This is transition/admission readiness, not an additional lifecycle enum.
+Admission reopens only after projection, reconciler, catalog, generation, and revision agree. This is transition/admission readiness, not an extra lifecycle enum.
 
-The catalog side of that barrier is convergence, not aggregate health: every router must report the desired revision and be either ready or terminally failed (its deployment circuit open). A router still starting or restarting holds the transition until it resolves either way, but a plugin whose restart budget is spent never becomes healthy on its own, so gating on aggregate readiness would let one broken deployment freeze every later generation.
+The catalog side of the barrier is convergence, not aggregate health: every router must report the desired revision and be either ready or terminally failed (deployment circuit open). A router still starting holds the transition until it resolves either way. A plugin whose restart budget is spent never becomes healthy on its own, so gating on aggregate readiness would freeze every later generation.
 
 ## Reconciler Actor
 
 ### Lifecycle
 
-The reconciler monitors the snapshot subtree's buffered snapshot/status events, starts resolver and watcher metas, and coalesces snapshot/filesystem changes.
+The reconciler monitors the snapshot subtree's buffered snapshot/status events, starts resolver and watcher metas, and coalesces snapshot and filesystem changes.
 
 ```mermaid
 stateDiagram-v2
@@ -209,7 +229,7 @@ stateDiagram-v2
 
 ### Readiness
 
-Resolver and watcher facts are fenced by meta alias. Resolution results are also fenced by snapshot generation and discarded when a newer filesystem or snapshot change made them dirty. Resolver, watcher, and resolution retries use separate shared scheduled-backoff instances; retry timers carry tokens. Exhaustion is an actor failure, not an unbounded loop.
+Resolver and watcher facts are fenced by meta alias. Resolution results are also fenced by snapshot generation and discarded when a newer filesystem or snapshot change made them dirty. Resolver, watcher, and resolution retries use separate shared scheduled-backoff instances, and retry timers carry tokens. Exhaustion is an actor failure, not an unbounded loop.
 
 ## Artifact Resolver Meta
 
@@ -234,7 +254,7 @@ stateDiagram-v2
 | `MessageResolveArtifacts`         | reconciler → artifact resolver meta        | Supplies the snapshot to resolve.                              |
 | `MessageArtifactResolutionResult` | artifact resolver meta → reconciler        | Returns resolved/deferred route candidates for its meta alias. |
 | `SendExitMeta`                    | reconciler → Ergo meta runtime             | Requests termination of the resolver meta.                     |
-| `Terminate`                       | Ergo meta runtime → artifact resolver meta | Invokes cleanup for the resolver's one-slot worker.            |
+| `Terminate`                       | Ergo meta runtime → artifact resolver meta | Invokes cleanup for the resolver's in-flight resolution.       |
 
 ### Readiness
 
@@ -268,13 +288,13 @@ stateDiagram-v2
 
 ### Readiness
 
-The watcher combines fsnotify with a five-second metadata-fingerprint poll and 300 ms notification debounce. A missing or unreadable directory is drift: it reports state and continues polling rather than terminating. The resolver is the authority for content checksum, not the watcher fingerprint.
+The watcher combines fsnotify with a five-second metadata-fingerprint poll and a 300 ms notification debounce. A missing or unreadable directory is drift: it reports state and keeps polling rather than terminating. The resolver, not the watcher fingerprint, is the authority for content checksum.
 
 ## Catalog Actor
 
 ### Lifecycle
 
-Catalog activation enables status publication. It applies only nondecreasing desired revisions, dynamically creates one router incarnation per logical plugin ID, marks removed routers retiring, drains them, and removes their state.
+Catalog activation enables status publication. The catalog applies only nondecreasing desired revisions, dynamically creates one router incarnation per logical plugin ID, marks removed routers retiring, drains them, and removes their state.
 
 ```mermaid
 stateDiagram-v2
@@ -304,13 +324,21 @@ stateDiagram-v2
 
 ### Readiness
 
-Router facts are accepted only from the current PID, generation, and increasing epoch. PID identifies the live process, generation identifies the Catalog-created incarnation, and epoch orders that incarnation's status facts, so late messages cannot revive or overwrite a replacement. On router loss, Catalog fails calls assigned to that PID and uses token-fenced `MessageRouterRestart` for a non-retiring desired router; draining suppresses restart.
+Router facts are accepted only from the current PID, generation, and increasing epoch. PID identifies the live process, generation identifies the catalog-created incarnation, and epoch orders that incarnation's status facts, so late messages cannot revive or overwrite a replacement. On router loss the catalog fails calls assigned to that PID and uses token-fenced `MessageRouterRestart` for a non-retiring desired router. Draining suppresses restart.
 
 ## Router Actor
 
 ### Lifecycle
 
-Each router dynamically creates primary, canary, and shadow deployment routes from its desired state. A normal production call uses primary unless its rollout bucket selects an active canary; `SubmitShadow` independently makes best-effort fan-out only to an active shadow candidate, so a full shadow budget never consumes production capacity. Callers gate their own submissions on `ProjectionData.RolloutByID[id].Shadow`, so a plugin with no shadow candidate never clones a batch for a call the router would discard as unroutable. The same entry's `HasCandidate` and `Shadow` gate the rollout split itself for the same reason: a batch only has to be cut where its routing decision changes, so a plugin with no canary candidate takes its whole batch as one group, and one with a canary is cut in two - the buckets the candidate wins and the rest - rather than once per bucket, since the router re-derives the decision from the one rollout key the call carries. A candidate appearing mid-batch moves the committed generation, and calls from a retired generation are rejected so the caller re-resolves against fresh state, which is what makes that collapse safe.
+Each router dynamically creates primary, canary, and shadow deployment routes from its desired state. A production call uses primary unless its rollout bucket selects an active canary. `SubmitShadow` fans out best-effort only to an active shadow candidate, so a full shadow budget never consumes production capacity.
+
+The router routes a whole call by the single rollout key that call carries, so a batch only has to be cut where that decision changes:
+
+- Callers gate submissions on `ProjectionData.RolloutByID[id].Shadow`, so a plugin with no shadow candidate never clones a batch for a call the router would discard.
+- The same entry's `CanaryPct` gates the rollout split. `runtime.RouteSides` takes that percentage and the batch's rollout keys and answers the way the router will: no candidate, or one at 100% (elected primary), yields no groups and the batch is sent as it stands; a partial canary yields two, the buckets the candidate wins and the rest. It checks the percentage before walking the batch and the groups afterwards, so an undivided batch pays no per-item index or gather.
+- A shadow candidate's own `rollout_pct` is not recorded there, since shadow calls are never routed by bucket.
+- A candidate appearing mid-batch moves the committed generation, and calls from a retired generation are rejected so the caller re-resolves against fresh state.
+- The entry also carries the shape a caller shards against. `MaxProcs` and `CallsPerProcess` are the larger of what the artifacts under that id declare, defaulted the way their deployments default them, and `Capacity()` is their product, so a batch fills the capacity whichever deployment it reaches can actually run.
 
 ```mermaid
 stateDiagram-v2
@@ -339,14 +367,13 @@ stateDiagram-v2
 
 ### Readiness
 
-The router records an acceptance deadline before routing. A manager must acknowledge the call; unaccepted, route-failed, stale, or timed-out calls complete as unavailable. Cancellation goes to the accepted manager, or the current route manager while acknowledgement is pending.
+The router records an acceptance deadline before routing. A manager must acknowledge the call; unaccepted, route-failed, stale, or timed-out calls complete as unavailable. Cancellation goes to the accepted manager, or to the current route manager while acknowledgement is pending.
 
 ## Deployment Route
 
 ### Lifecycle
 
-A route has a stable SHA-256-derived atom for one concrete `DeploymentPoolKey`; it is a dynamic router route, not a supervisor. Route status,
-acceptance, and termination are accepted only from the live manager PID; known past manager PIDs are retained solely to fence late termination facts.
+A route has a stable SHA-256-derived atom for one concrete `DeploymentRouteKey`. It is a dynamic router route, not a supervisor. Route status, acceptance, and termination are accepted only from the live manager PID; known past manager PIDs are retained only to fence late termination facts.
 
 ```mermaid
 stateDiagram-v2
@@ -375,44 +402,47 @@ stateDiagram-v2
 
 ### Readiness
 
-`AddRoute`, `RespawnRoute`, and `RemoveRoute` each retry through the route's independent `MessageRetryRouteStep` backoff. A pending route made
-obsolete is deleted directly. On active-manager loss, the retry timer runs before `RespawnRoute`; draining with no live manager respawns a draining manager to complete the normal drain protocol.
+`AddRoute`, `RespawnRoute`, and `RemoveRoute` each retry through the route's independent `MessageRetryRouteStep` backoff. A pending route made obsolete is deleted directly. On active-manager loss the retry timer runs before `RespawnRoute`. Draining with no live manager respawns a draining manager so the normal drain protocol can complete.
 
 ## Deployment Manager
 
 ### Lifecycle
 
-The manager validates `0 <= MinProcs <= max(1, MaxProcs) <= 100` and `MaxConcurrentCallsPerProcess <= MaxDeploymentCallsPerProcess` (64), then clamps
-the declared per-process capacity to `supportedCallsPerProcess` - what one process really serves, 1 today - and warns when the two differ, so an
-operator learns a declared 16 is not running from a log rather than from throughput that never arrives. It accepts an invocation before queue admission
-so the router can bind its completion path, then rejects draining/open-circuit calls and a full pending queue with `ErrQueueFull`. Queue depth is
-bounded by `QueueSize`, and the queue links the call entries themselves, so unlinking a cancelled or expired call costs the same wherever it sits: a
-plugin's queue is sized from its admission budget and runs thousands of entries deep, while callers cancel calls that are nowhere near the head.
+The manager validates `0 <= MinProcs <= max(1, MaxProcs) <= 100` and `MaxConcurrentCallsPerProcess <= MaxDeploymentCallsPerProcess` (64). It then schedules from what the deployment declared: `CapacityPerProcess()` is read at each use rather than cached, and returns the declared figure or the default `32`.
 
-The manager owns its plugin processes directly; nothing sits between them. Each is spawned with `LinkParent` and then `MonitorPID`, so the link carries
-manager termination downward while the monitor is what reports a process death upward - one dying subprocess never takes its deployment with it.
-`processes` holds what each one last reported plus the invocations assigned to it, and `order` records the sequence they started in, so shrinking
-retires the newest rather than whichever one a map iteration reached first: a deployment that grew under load gives back what it just took.
+It acknowledges an invocation before queue admission so the router can bind its completion path, then rejects draining and open-circuit calls, and a full pending queue, with `ErrQueueFull`. Queue depth is bounded by `QueueSize`. The queue links the call entries themselves, so unlinking a cancelled or expired call costs the same wherever it sits - a plugin's queue is sized from its admission budget and runs thousands of entries deep, while callers cancel calls nowhere near the head.
 
-Dispatch is capacity-aware rather than slot-shaped, which is why there is no actor pool here. Committed capacity is `ready processes x
-callsPerProcess`, and `selectProcess` hands the call to the ready process holding the fewest invocations. Least-loaded rather than round-robin: a
-process that serves several calls at once still finishes them at different times, and stacking the next call behind a busy one while a quiet process
-waits is latency the deployment already paid for.
+The manager owns its plugin processes directly. Each is spawned with `LinkParent` and then `MonitorPID`: the link carries manager termination downward, the monitor reports a process death upward, and one dying subprocess never takes its deployment with it.
 
-Queue pressure can scale up only to `max(1, MaxProcs)`, and every reconciliation moves the desired count by exactly one process. The default scale
-cooldown is one second, and growth also requires every desired process to be ready and committed capacity to be fully committed, so a deployment grows
-only when the processes it already has cannot absorb the queue. After 30 seconds idle it removes one process - but not while an invocation is still
-active, since that call's completion reconciles the manager again and waiting costs one more idle period rather than the call. At a zero minimum the
-last process goes with it and the deployment sleeps holding nothing.
+What the manager owns is a set of process slots. A slot is a stable identity that outlives the PIDs filling it, and holds what its current process reported, the invocations assigned to it, and the retry budget that owes it the next process.
 
-`MaxProcs` is only this deployment's own ceiling. Because every plugin process is a subprocess, growth past a deployment's reserved `max(1, MinProcs)`
-also needs a permit from one `ProcessBudget` shared by every manager in the process, sized `GOMAXPROCS x DefaultRuntimeProcessGrowthPerProc` (2) so the
-count follows the container's CPU limit rather than the node's core count. The reservations are outside the budget: desired state always gets its
-`MinProcs`, and a `MinProcs=0` route always gets the one process a queued call wakes, because a route that could start no process at all would fail
-every call routed to it. Reservations are counted only to warn - a catalog whose reservations already exceed the budget logs `reserved plugin processes
-exceed the process budget` and starts anyway. A denied permit is not an error either: the calls stay queued and the cooldown paces the next
-attempt, and every permit is returned when the deployment shrinks, when its circuit opens, or when the manager terminates, so a process at its budget
-still moves growth to whichever deployment has queued work.
+| Field       | Holds                                                        |
+| ----------- | ------------------------------------------------------------ |
+| `processes` | slot state by monotonic slot id                              |
+| `order`     | slot ids in the sequence they were opened                    |
+| `byPID`     | a child's PID resolved back to the slot it fills             |
+
+A process dying empties its slot instead of dropping it, which is what gives each slot its own retry budget. The deployment's processes are interchangeable and have no natural name to key that budget under, so a counted id stands in for one, as the router keys its children by plugin id. The ids are counted rather than positional because a restart message names the slot it is for and positions shift as slots are released; ids only grow, so the newest slot is the highest id.
+
+Shrinking retires the newest slot holding nothing: a deployment that grew under load gives back what it just took, and never a process whose calls are still running. A process left above the desired count is retired by the reconciliation its next completion triggers.
+
+Dispatch is capacity-aware rather than one-worker-per-call. Committed capacity is `ready processes x callsPerProcess`, and `selectProcess` hands the call to the ready process holding the fewest invocations. Least-loaded, not round-robin: one process serves several calls and finishes them at different times, so stacking the next call behind a busy one while a quiet process waits adds latency for nothing.
+
+Scaling reasons in demand rather than in processes. Demand is active plus dispatching plus queued invocations, and `requiredProcs` is `ceil(demand / callsPerProcess)` clamped to `MinProcs..max(1, MaxProcs)`. One process carries `callsPerProcess` of that demand, so the count a queue needs falls as declared capacity rises.
+
+| Direction | Conditions                                                                                              | Step                                          |
+| --------- | ------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| Growth    | every ready process at capacity, a call still waiting, every desired process ready, 1 s scale cooldown   | straight to the required count in one pass    |
+| Shrink    | required below desired, queue empty, nothing dispatching, 30 s idle, a process holding no invocation     | one process per cooldown, arming the next pass |
+
+Growth goes to the required count at once so a wide `calls_per_process` does not ramp a second at a time. Shrink arms its own next pass because nothing else reconciles a deployment that has gone quiet, and it gives back only an empty process - demand counts active calls, so the deployment stays at the count those calls need. At a zero minimum the last process goes too and the deployment sleeps holding nothing.
+
+`MaxProcs` is only this deployment's own ceiling. Because every plugin process is a subprocess, growth past a deployment's reserved `max(1, MinProcs)` also needs a permit from one `ProcessBudget` shared by every manager in the process, sized `GOMAXPROCS x DefaultRuntimeProcessGrowthPerProc` (2) so the count follows the container's CPU limit rather than the node's core count.
+
+- Reservations are outside the budget. Desired state always gets its `MinProcs`, and a `MinProcs=0` route always gets the one process a queued call wakes, since a route that could start no process would fail every call routed to it.
+- Reservations are counted only to warn: a catalog whose reservations exceed the budget logs `reserved plugin processes exceed the process budget` and starts anyway.
+- A denied permit is not an error. The calls stay queued and the cooldown paces the next attempt.
+- Permits are returned when the deployment shrinks, when its circuit opens, and when the manager terminates, so a process at its budget still moves growth to whichever deployment has queued work.
 
 ```mermaid
 stateDiagram-v2
@@ -421,8 +451,8 @@ stateDiagram-v2
     Running --> Running: only some processes ready => availability is degraded
     Running --> Starting: the last ready process is lost
     Starting --> Running: a replacement process reports ready
-    Starting --> Failed: manager restart budget exhausted => circuit opens
-    Failed --> Starting: circuit cooldown re-arms the restart budget
+    Starting --> Failed: a slot's restart budget exhausted => circuit opens
+    Failed --> Starting: circuit cooldown opens fresh slots
     Running --> Draining: MessageDrain
     Draining --> Stopped: calls and processes drained
     Draining --> Stopped: drain deadline expires
@@ -436,19 +466,19 @@ stateDiagram-v2
 | `MessageInvocationAccepted`                | deployment manager → router                                                       | Binds the router's completion/cancellation path to this manager PID.                                                           |
 | `MessageCancelInvocation`                  | `plugin.Application` → runtime supervisor → catalog → router → deployment manager | Cancels the accepted or pending invocation at its fenced manager.                                                              |
 | `MessageDeploymentManagerDispatchDeadline` | manager → manager                                                                 | Times out an invocation awaiting process acceptance.                                                                           |
-| `MessageDeploymentManagerRestart`          | manager → manager                                                                 | Token-fenced plugin-process-creation retry.                                                                                    |
+| `MessageDeploymentManagerRestart`          | manager → manager                                                                 | Token-fenced retry that refills one named slot.                                                                                |
 | `MessageDeploymentManagerReconcile`        | deployment manager → deployment manager                                           | Token-fenced autoscaling pass.                                                                                                 |
-| `MessageDeploymentManagerCircuitCooldown`  | manager → manager                                                                 | Token-fenced circuit re-arm: restores the process restart budget after the cooldown.                                           |
+| `MessageDeploymentManagerCircuitCooldown`  | manager → manager                                                                 | Token-fenced circuit re-arm: opens a fresh set of slots after the cooldown.                                                    |
 | `MessageDeploymentManagerDrainDeadline`    | manager → manager                                                                 | Cancels remaining work with `context.DeadlineExceeded`.                                                                        |
 | `MessageDrain`                             | router → deployment manager                                                       | Stops new work, cancels recovery/scale activity, and starts graceful drain.                                                    |
 | `MessageInvokePlugin`                      | deployment manager → plugin process                                               | Dispatches one queued call to the least-loaded ready process.                                                                  |
 | `MessageStop`                              | deployment manager → plugin process                                               | Asks a retired process to finish once its last invocation completes.                                                           |
-| `MessagePluginProcessStatusChanged`        | plugin process → deployment manager                                               | Drives capacity, availability, dispatch, and scaling; a process reaching ready resets the restart budget.                      |
+| `MessagePluginProcessStatusChanged`        | plugin process → deployment manager                                               | Drives capacity, availability, dispatch, and scaling; a process reaching ready resets its own slot's budget.                  |
 | `MessageInvocationStarted`                 | plugin process → deployment manager                                               | Clears the dispatch deadline and marks the call active.                                                                        |
-| `MessageInvocationFinished`                | plugin process → deployment manager                                               | Returns the invocation result and frees that process's slot.                                                                   |
+| `MessageInvocationFinished`                | plugin process → deployment manager                                               | Returns the invocation result and frees that much of the process's capacity.                                                   |
 | `MessagePluginProcessRestartExhausted`     | plugin process → deployment manager                                               | Retires only the spent process and owes it a backoff-paced replacement.                                                        |
 | `MessagePluginProcessStopped`              | plugin process → deployment manager                                               | Fails calls dispatched to a stopping process before its DOWN arrives.                                                          |
-| `gen.MessageDownPID`                       | Ergo monitor → deployment manager                                                 | Drops the lost process and starts bounded replacement when unexpected.                                                         |
+| `gen.MessageDownPID`                       | Ergo monitor → deployment manager                                                 | Empties the slot the lost process filled and starts that slot's own bounded replacement when unexpected.                       |
 | `MessageDeploymentManagerStatusChanged`    | deployment manager → router                                                       | Publishes process, lifecycle, and availability changes; queue counters ride along, and an unchanged status is not republished. |
 | `MessageDeploymentManagerDrained`          | deployment manager → router                                                       | Reports that no invocation or process remains.                                                                                 |
 | `MessageRetryDeployment`                   | no production sender                                                              | Defined router control message; no production path emits it.                                                                   |
@@ -456,28 +486,46 @@ stateDiagram-v2
 
 ### Readiness
 
-`MinProcs=0` starts no process; the first queued call wakes one. Dispatch requires available capacity beyond active plus dispatching calls and has `MessageDeploymentManagerDispatchDeadline`; each invocation is bounded by the process's own invocation timeout; graceful drain has `MessageDeploymentManagerDrainDeadline`.
+`MinProcs=0` starts no process; the first queued call wakes one. Dispatch requires available capacity beyond active plus dispatching calls and is bounded by `MessageDeploymentManagerDispatchDeadline`. Each invocation is bounded by the process's own invocation timeout, and graceful drain by `MessageDeploymentManagerDrainDeadline`.
 
-The two recovery budgets are independent and deliberately so: `ProcessOptions.RetryMin/RetryMax` paces one process restarting its own subprocess, while the manager's `RetryMin/RetryMax` paces replacing a process it lost. A process reporting ready resets the manager's budget, so a deployment that loses one process a day does not eventually open its circuit for a fault it recovered from every time. A process that reports restart exhaustion is retired alone, and its replacement is owed rather than started: the retiring process keeps its slot in `runningProcs` until its DOWN arrives, so the backoff and not the next reconcile pass decides when the successor starts. The deployment's remaining processes keep serving the calls they hold, which is why a partially broken deployment reports `running` with degraded availability instead of failing as a whole.
+Two recovery budgets are independent:
 
-Exhausting the manager's own budget opens the circuit, which fails every tracked invocation, drops the desired count back to `MinProcs`, returns every grown permit to the process budget, retires every process, and stops recovery. An open circuit re-arms itself: `openCircuit` schedules a token-fenced `MessageDeploymentManagerCircuitCooldown` after `CircuitCooldown` (default 5 minutes), and handling it restores the full restart budget and reconciles, so a deployment broken by a transient host problem recovers without an operator and one that is genuinely broken simply re-opens the circuit. Drain and terminate cancel the pending cooldown. `MessageDeploymentManagerRetry` resets the circuit immediately, but no production sender currently emits `MessageRetryDeployment`. An existing active route is otherwise unchanged by the circuit; it changes only when desired state removes or replaces that route. `Recovering` is useful operational/composite-state prose for unavailable process recovery, but it is not a `DeploymentManagerLifecycle` constant; declared lifecycle/status values remain `starting`, `running`, `draining`, `failed`, and `stopped`.
+| Budget                              | Paces                                          | Owner  |
+| ----------------------------------- | ---------------------------------------------- | ------ |
+| `ProcessOptions.RetryMin/RetryMax`  | one process restarting its own subprocess      | process |
+| manager `RetryMin/RetryMax`         | refilling a slot whose process the manager lost | slot   |
 
-A deployment is ready when its ready process count covers a nonzero `MinProcs`, degraded when only some of its processes are ready or while it drains, and unavailable while it starts with none ready or while its circuit is open. A `MinProcs=0` deployment holding no process, no call, no pending retry, and no error is ready rather than unavailable: it is asleep, not broken. Status is published only when that health changes - lifecycle, availability, desired or ready counts, per-process capacity, total capacity, last error, or any owned process's own status. Queue depth, dispatching, active, and available capacity ride along with the next health change rather than publishing one of their own, because every accepted, dispatched, and completed invocation reconciles this manager and the router recomputes its own status - and the catalog and supervisor above it - for each fact it receives.
+Each slot owns one manager budget, so a deployment that loses a different process now and then never spends a single shared one, and a slot waiting on its backoff does not hold back the others. A process reporting ready resets its own slot's budget, so a deployment that loses one process a day does not eventually open its circuit for a fault it recovers from every time.
+
+A process reporting restart exhaustion is retired alone, and its replacement is owed rather than started: the slot counts toward `runningProcs` until its DOWN arrives, then waits on its own backoff, so that backoff decides when the successor starts. The remaining processes keep serving the calls they hold, so a partially broken deployment reports `running` with degraded availability.
+
+Exhausting any one slot's budget opens the deployment's circuit. That fails every tracked invocation, drops the desired count back to `MinProcs`, returns every grown permit to the process budget, releases every slot, and stops recovery. The circuit re-arms itself: `openCircuit` schedules a token-fenced `MessageDeploymentManagerCircuitCooldown` after `CircuitCooldown` (default 5 minutes), and handling it reconciles, which opens fresh slots with fresh budgets. A deployment broken by a transient host problem recovers without an operator; one genuinely broken re-opens the circuit. Drain and terminate cancel the pending cooldown.
+
+`MessageDeploymentManagerRetry` resets the circuit immediately, but no production sender emits `MessageRetryDeployment`. An active route is otherwise unchanged by the circuit; it changes only when desired state removes or replaces it. `Recovering` is composite-state prose, not a `DeploymentManagerLifecycle` constant - those are `starting`, `running`, `draining`, `failed`, and `stopped`.
+
+A deployment is ready when its ready process count covers a nonzero `MinProcs`, degraded when only some processes are ready or while it drains, and unavailable while it starts with none ready or while its circuit is open. A `MinProcs=0` deployment holding no process, no call, no pending retry, and no error is ready: it is asleep, not broken.
+
+Status is published only when health changes - lifecycle, availability, desired or ready counts, per-process capacity, total capacity, last error, or any owned process's status. Queue depth, dispatching, active, and available capacity ride along with the next health change, because every accepted, dispatched, and completed invocation reconciles this manager and the router recomputes its own status for each fact it receives.
 
 ## Plugin Process
 
 ### Lifecycle
 
-Each plugin process owns one replaceable meta alias, uses independent normal and health restart budgets, and has `idle`/`busy` activity separate from lifecycle. A ready process periodically pings the meta; ping timeout/error retires its alias and takes the health-recovery path. Exhaustion marks the process failed and notifies its manager, which replaces that one process rather than the deployment.
+Each plugin process owns one replaceable meta alias, uses independent normal and health restart budgets, and has `idle`/`busy`/`saturated` activity separate from lifecycle. A ready process periodically pings the meta; a ping timeout or error retires its alias and takes the health-recovery path. Exhaustion marks the process failed and notifies its manager, which replaces that one process rather than the deployment.
 
 ```mermaid
 stateDiagram-v2
     [*] --> Starting
     Starting --> Ready: plugin meta started
-    Ready --> Busy: invocation starts
-    Busy --> Ready: invocation finishes
+    Ready --> Busy: an invocation accepted below calls_per_process
+    Ready --> Saturated: an invocation accepted that fills calls_per_process
+    Busy --> Saturated: the last free slot is taken
+    Saturated --> Busy: a slot frees with calls still in flight
+    Busy --> Ready: last invocation answered
+    Saturated --> Ready: last invocation answered at a capacity of one
     Ready --> Restarting: meta down or health failure
     Busy --> Restarting: transport failure or timeout
+    Saturated --> Restarting: transport failure or timeout
     Restarting --> Ready: meta restart
     Restarting --> Failed: restart budget exhausted
 ```
@@ -492,11 +540,12 @@ stateDiagram-v2
 | `MessagePluginMetaRestart`             | plugin process → plugin process     | Token-fenced normal or health restart timer.                            |
 | `MessagePluginMetaHealthTick`          | plugin process → plugin process     | Drives the next meta Ping attempt.                                      |
 | `MessagePluginMetaHealthTimeout`       | plugin process → plugin process     | Retires an unanswered meta health check.                                |
+| `MessagePluginMetaInvokeTimeout`       | plugin process → plugin process     | Per-call backstop for an invocation the meta never answered.            |
 | `MessagePluginMetaStartResult`         | plugin meta → plugin process        | Drives ready state or normal restart.                                   |
 | `MessagePluginMetaPing`                | plugin process → plugin meta        | Performs the parent-authorized health RPC.                              |
 | `MessagePluginMetaPingResult`          | plugin meta → plugin process        | Drives health confirmation or health restart.                           |
 | `gen.MessageDownAlias`                 | Ergo meta monitor → plugin process  | Retires the current meta and starts normal/health recovery.             |
-| `MessagePluginProcessStatusChanged`    | plugin process → deployment manager | Publishes lifecycle, availability, and idle/busy activity.              |
+| `MessagePluginProcessStatusChanged`    | plugin process → deployment manager | Publishes lifecycle, availability, and idle/busy/saturated activity.    |
 | `MessagePluginProcessStopped`          | plugin process → deployment manager | Reports process shutdown so its calls fail at once.                     |
 | `MessagePluginProcessRestartExhausted` | plugin process → deployment manager | Escalates exhausted local recovery for this process alone.              |
 | `MessageStop`                          | deployment manager → plugin process | Stops normally after the manager retired it and its last call finished. |
@@ -505,9 +554,21 @@ stateDiagram-v2
 
 ### Readiness
 
-The process is ready only when its current meta alias is ready. Its lifecycle, availability, and idle/busy activity are distinct parts of its operational/composite state.
+The process is ready only when its current meta alias is ready. Lifecycle, availability, and idle/busy/saturated activity are distinct parts of its composite state.
 
-Its invocation capacity is `supportedCallsPerProcess`, which is 1 today: `HandleMessage` runs the call to completion through a synchronous `CallWithTimeout` on the meta, and an actor takes one message at a time, so a second call reaches this subprocess only after the first returns. Capacity is a property of this layer rather than of the manager's arithmetic, which is why the manager clamps a deployment's declared `calls_per_process` to it - a declared capacity can never overstate what the runtime will actually run. Raising it belongs with the asynchronous invocation path that removes the serialization, not with the scheduler that would dispatch into it.
+Dispatch does not block this actor. `invoke` reports `MessageInvocationStarted`, wraps the caller's context in the process's own `InvocationTimeout`, records the call in `p.calls`, and sends a `pluginMetaInvoke` message to the meta alias. The answer arrives later as `pluginMetaInvokeResult` and completes the call. Nothing waits in between, so health checks, further invocations, restart timers, and manager messages are all served while a plugin works. Each entry therefore records the meta incarnation - a monotone `generation` bumped whenever a new alias is adopted - so an answer from a replaced subprocess finds no live entry and is dropped.
+
+Three things end a call:
+
+- **Its answer.** If the answer is `recycle`, the process reports itself unavailable to its manager before completing the call; the call reports its own failure and only its siblings inherit the generic `ErrProcessRecycle`. Order matters: the manager routes from its own copy of this process's availability, which is one message behind, and completing the call is what frees the capacity that makes the manager dispatch again. A completion sent first provokes a dispatch decided on lapsed readiness, and with one process there is nowhere else for that call to go. Retiring the meta reports the same unavailability again, so `reportUnavailable` is idempotent.
+- **A retired or DOWN meta.** Those calls can never be answered, so `failGenerationCalls` fails them with `ErrProcessRecycle` rather than leaving callers to time out.
+- **`MessagePluginMetaInvokeTimeout`,** armed for the caller's remaining deadline plus `pluginMetaCancelGrace` plus a second of slack. The meta answers a cancelled or expired call inside its grace, so this timer firing means a hung subprocess. It carries only the call id, which is fence enough: a completed call is no longer tracked and ids are never reused.
+
+Shutdown cancels every in-flight call's context. The manager fails those calls when it sees the process stop, but the subprocess should stop working on them regardless.
+
+Invocation capacity is the deployment's `calls_per_process`, `32` unless the artifact declared its own. Nothing in this layer serializes invocations: `p.calls` holds every call in flight and each is a message to the meta alias, so a declared capacity of four really runs four. Capacity cannot make the plugin re-entrant - the subprocess holds one plugin object and gRPC hands every RPC its own goroutine - so the default asks every plugin to be concurrency-safe, and a plugin that is not declares `calls_per_process: 1`. A call arriving beyond capacity is refused with `ErrQueueFull` rather than queued here, since exceeding the published capacity means the manager's view is stale. That check is the last one `invoke` makes, after a dead context, a missing callback, unreadiness, and a duplicate call ID.
+
+Activity follows the same number. `refreshActivity` labels the process `saturated` once `len(p.calls)` reaches capacity, `busy` below that, and `idle` at none, and samples `inFlight` and `capacity` on every change. At a declared capacity of one, saturated is the label a working process publishes and busy never appears. Only a label change publishes a status - the two counters ride along - so a deployment pays no status publish per invocation.
 
 ## Plugin Meta
 
@@ -520,8 +581,8 @@ stateDiagram-v2
     Serving --> Pinging: parent health request
     Pinging --> Serving: Ping succeeds
     Pinging --> Closing: Ping fails
-    Serving --> Invoking: authenticated parent call
-    Invoking --> Serving: callback returns
+    Serving --> Invoking: parent invocation message
+    Invoking --> Serving: callback answered
     Invoking --> Closing: recycle-worthy transport/context failure
     Closing --> Stopped: Shutdown RPC then subprocess kill
 ```
@@ -533,17 +594,21 @@ stateDiagram-v2
 | `MessagePluginMetaStartResult` | plugin meta → plugin process       | Reports checksum/handshake/session startup outcome for its alias.     |
 | `MessagePluginMetaPing`        | plugin process → plugin meta       | Requests a parent-authorized health RPC.                              |
 | `MessagePluginMetaPingResult`  | plugin meta → plugin process       | Returns the alias-fenced Ping result.                                 |
-| `pluginMetaInvoke`             | plugin process → plugin meta       | Synchronous parent-only callback invocation.                          |
-| `pluginMetaInvokeResult`       | plugin meta → plugin process       | Returns the plugin result and whether the session must be recycled.   |
+| `pluginMetaInvoke`             | plugin process → plugin meta       | Parent-only callback invocation, run without blocking either side.    |
+| `pluginMetaInvokeResult`       | plugin meta → plugin process       | Returns one call's result and whether the session must be recycled.   |
 | `Shutdown`                     | plugin meta → plugin RPC           | Bounded session shutdown before client kill.                          |
 | `SendExitMeta`                 | plugin process → Ergo meta runtime | Requests meta termination after a recycle-worthy failure or shutdown. |
 | `Terminate`                    | Ergo meta runtime → plugin meta    | Invokes session close after the process's exit request.               |
 
 ### Readiness
 
-The meta verifies the artifact checksum before `exec.CommandContext`, requires the configured gRPC handshake, and runs `Init`. Only its parent plugin process may call or ping it. It sends `Shutdown` with a three-second bound then kills the client on close. Plugin `Unavailable`, malformed responses, transport failures, and health failures retire the alias and enter bounded health recovery.
+The meta verifies the artifact checksum before `exec.CommandContext`, requires the configured gRPC handshake, and runs `Init`. Only its parent plugin process may call or ping it. On close it sends `Shutdown` with a three-second bound then kills the client. Plugin `Unavailable`, malformed responses, transport failures, and health failures retire the alias and enter bounded health recovery.
 
-Cancellation and deadlines are classified rather than assumed fatal, because killing the subprocess is the only isolation mechanism this layer has and a shared subprocess would make every sibling call pay for one caller's withdrawal. A cancelled or expired call is local to that call whenever the plugin answers it: `classifyInvocation` recycles on `Unavailable`, and on `Canceled` or `DeadlineExceeded` only when the caller's own context is still live, since that is the transport reporting its own failure rather than a caller withdrawing a request. When the caller's context ends while the callback is still running, the meta waits out `pluginMetaCancelGrace` (one second) before deciding: a plugin that honours its RPC context returns inside that window and keeps its subprocess, while one that ignores cancellation can be stopped no other way, because Go cannot kill the goroutine running an arbitrary callback. The parent process actor adds that grace to its own Ergo call timeout so its timeout never races this decision, and it no longer treats a dead caller context as evidence against the subprocess - it substitutes the caller's reason only when the call itself returned nothing.
+Cancellation and deadlines are classified rather than assumed fatal, because killing the subprocess is this layer's only isolation mechanism and a shared subprocess would make every sibling call pay for one caller's withdrawal. `classifyInvocation` recycles on `Unavailable`, and on `Canceled` or `DeadlineExceeded` only when the caller's own context is still live - that is the transport reporting its own failure rather than a caller withdrawing a request.
+
+When the caller's context ends while the callback is still running, the meta waits out `pluginMetaCancelGrace` (one second) before deciding. A plugin that honours its RPC context returns inside that window and keeps its subprocess; one that ignores cancellation can be stopped no other way, since Go cannot kill the goroutine running an arbitrary callback. The context the plugin sees carries the caller's deadline but not the grace: no context can express "one second after this other context ends", and none can stop that goroutine. The grace only decides when to stop waiting. Its owner arms an independent backstop timer past the grace so its own giving-up never races this decision, and substitutes the caller's reason only when the call returned nothing.
+
+An answer is sent to the owner before a fatal one closes the session. Closing first would race that message against the meta's own DOWN, and the caller would be told its call was recycled rather than why.
 
 ## Invocation
 
@@ -587,23 +652,15 @@ stateDiagram-v2
 
 ### Readiness
 
-Submission requires a running application and a runtime whose expected generation is exactly ready and committed; draining or a desired-state barrier rejects it as unavailable. Every terminal path enters the idempotent `runtime.AsyncResult`; `Invocation` closes `Done` only when that result completes. Call IDs bind one supervisor, catalog, router, manager, and plugin-process path; PID/alias plus generation/epoch checks reject stale completion, status, and recovery facts, and the manager accepts an invocation fact only from the process it dispatched that call to.
+Submission requires a running application and a runtime whose expected generation is exactly ready and committed; draining or a desired-state barrier rejects it as unavailable. Every terminal path enters the idempotent `runtime.AsyncResult`, and `Invocation` closes `Done` only when that result completes.
+
+Call IDs bind one supervisor, catalog, router, manager, and plugin-process path. PID/alias plus generation/epoch checks reject stale completion, status, and recovery facts, and the manager accepts an invocation fact only from the process it dispatched that call to.
 
 ## References
 
-- [`internal/runtime/plugin/runtime_application.go`](../../internal/runtime/plugin/runtime_application.go) - application lifecycle, admission, State,
-  submit, completion.
-- [`internal/runtime/plugin/runtime_supervisor.go`](../../internal/runtime/plugin/runtime_supervisor.go) - RestForOne tree, desired-state barrier,
-  projection commit, drain.
-- [`internal/runtime/plugin/reconciler_actor.go`](../../internal/runtime/plugin/reconciler_actor.go),
-  [`artifact_resolver_meta.go`](../../internal/runtime/plugin/artifact_resolver_meta.go), and
-  [`artifact_watcher_meta.go`](../../internal/runtime/plugin/artifact_watcher_meta.go) - desired state and local artifact facts.
-- [`internal/runtime/plugin/catalog_actor.go`](../../internal/runtime/plugin/catalog_actor.go) and
-  [`router_actor.go`](../../internal/runtime/plugin/router_actor.go) - router ownership, route lifecycle, rollout, and fences.
-- [`internal/runtime/plugin/deployment_manager.go`](../../internal/runtime/plugin/deployment_manager.go),
-  [`process_budget.go`](../../internal/runtime/plugin/process_budget.go),
-  [`plugin_process.go`](../../internal/runtime/plugin/plugin_process.go), and
-  [`plugin_process_meta.go`](../../internal/runtime/plugin/plugin_process_meta.go) - queue, capacity-aware dispatch, plugin processes, subprocess,
-  recovery, and drain.
-- [`internal/runtime/invocation.go`](../../internal/runtime/invocation.go) and
-  [`internal/runtime/backoff.go`](../../internal/runtime/backoff.go) - one-shot completion and shared scheduled backoff.
+- [`internal/runtime/plugin/runtime_application.go`](../../internal/runtime/plugin/runtime_application.go) - application lifecycle, admission, State, submit, completion.
+- [`internal/runtime/plugin/runtime_supervisor.go`](../../internal/runtime/plugin/runtime_supervisor.go) - RestForOne tree, desired-state barrier, projection commit, drain.
+- [`internal/runtime/plugin/reconciler_actor.go`](../../internal/runtime/plugin/reconciler_actor.go), [`artifact_resolver_meta.go`](../../internal/runtime/plugin/artifact_resolver_meta.go), and [`artifact_watcher_meta.go`](../../internal/runtime/plugin/artifact_watcher_meta.go) - desired state and local artifact facts.
+- [`internal/runtime/plugin/catalog_actor.go`](../../internal/runtime/plugin/catalog_actor.go) and [`router_actor.go`](../../internal/runtime/plugin/router_actor.go) - router ownership, route lifecycle, rollout, and fences.
+- [`internal/runtime/plugin/deployment_manager.go`](../../internal/runtime/plugin/deployment_manager.go), [`process_budget.go`](../../internal/runtime/plugin/process_budget.go), [`plugin_process.go`](../../internal/runtime/plugin/plugin_process.go), and [`plugin_process_meta.go`](../../internal/runtime/plugin/plugin_process_meta.go) - queue, capacity-aware dispatch, plugin processes, subprocess, recovery, and drain.
+- [`internal/runtime/invocation.go`](../../internal/runtime/invocation.go) and [`internal/runtime/backoff.go`](../../internal/runtime/backoff.go) - one-shot completion and shared scheduled backoff.
