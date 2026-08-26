@@ -16,7 +16,10 @@ import (
 	"ergo.services/registrar/etcd"
 )
 
-// FIXME should be dynamic and coming from env ?
+// clusterAcceptorPort is the fallback cluster port when ClusterOptions.Port is left zero; matches
+// Ergo's gen.AcceptorOptions default. Override via ClusterOptions.Port (EtcdClusterConfig.Port,
+// CLUSTER_PORT) if 11144 needs to change - the controller's Helm chart must then set a matching
+// cluster.port so its Service still forwards the right port.
 const clusterAcceptorPort = 11144
 
 // Host owns the single Ergo node for one Blink process.
@@ -45,6 +48,10 @@ type NodeOptions struct {
 type ClusterOptions struct {
 	// Cookie authenticates connections between nodes; every node in the cluster must share it.
 	Cookie string
+	// Port is the cluster acceptor port, pinned (PortRange: 1) rather than left to Ergo's
+	// try-every-port-up-to-65535 default. Zero uses clusterAcceptorPort. A caller fronting this
+	// node with a fixed Service port (e.g. the controller) needs this to never silently drift.
+	Port uint16
 	// Registrar resolves peer nodes for discovery. Nil falls back to Ergo's embedded, single-
 	// process, dev-only registrar - never use nil in production.
 	Registrar gen.Registrar
@@ -66,6 +73,7 @@ func DefaultClusterFlags() gen.NetworkFlags { return gen.DefaultNetworkFlags }
 type EtcdClusterConfig struct {
 	Endpoints   string `env:"ETCD_ENDPOINTS"`
 	Cookie      string `env:"CLUSTER_COOKIE"`
+	Port        uint16 `env:"CLUSTER_PORT,optional"`
 	Username    string `env:"ETCD_USERNAME,optional"`
 	Password    string `env:"ETCD_PASSWORD,optional"`
 	ClusterName string `env:"ETCD_CLUSTER,optional"`
@@ -108,12 +116,16 @@ func Start(opts NodeOptions) (*NodeHost, error) {
 
 	network := gen.NetworkOptions{Mode: gen.NetworkModeDisabled}
 	if opts.Cluster != nil {
+		port := opts.Cluster.Port
+		if port == 0 {
+			port = clusterAcceptorPort
+		}
 		network = gen.NetworkOptions{
 			Mode:      gen.NetworkModeEnabled,
 			Cookie:    opts.Cluster.Cookie,
 			Registrar: opts.Cluster.Registrar,
 			Flags:     opts.Cluster.Flags,
-			Acceptors: []gen.AcceptorOptions{{Host: "0.0.0.0", Port: clusterAcceptorPort, PortRange: 1}},
+			Acceptors: []gen.AcceptorOptions{{Host: "0.0.0.0", Port: port, PortRange: 1}},
 		}
 	}
 

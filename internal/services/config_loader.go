@@ -98,19 +98,19 @@ func setFieldWithEnvVar(field reflect.Value, env string, optional bool) errors.E
 		}
 		field.SetBool(v)
 
-	case kind == reflect.Int:
-		v, err := strconv.Atoi(envValue)
+	case kind == reflect.Int || kind == reflect.Int8 || kind == reflect.Int16 || kind == reflect.Int32 || kind == reflect.Int64:
+		v, err := strconv.ParseInt(envValue, 10, field.Type().Bits())
 		if err != nil {
 			return errors.NewE(err)
 		}
-		field.SetInt(int64(v))
+		field.SetInt(v)
 
-	case kind == reflect.Uint:
-		v, err := strconv.Atoi(envValue)
+	case kind == reflect.Uint || kind == reflect.Uint8 || kind == reflect.Uint16 || kind == reflect.Uint32 || kind == reflect.Uint64:
+		v, err := strconv.ParseUint(envValue, 10, field.Type().Bits())
 		if err != nil {
 			return errors.NewE(err)
 		}
-		field.SetUint(uint64(v))
+		field.SetUint(v)
 
 	case kind == reflect.String:
 		field.SetString(envValue)
