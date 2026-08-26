@@ -1,0 +1,15 @@
+id: "06761cae-9f3b-4bc7-8490-333cc8bd96ce"
+name: "cloud_log_type"
+display_name: "Cloud Log Type"
+description: "Matches events whose log_type is \"cloud\". Use for testing only."
+enabled: true
+version: "1.0.0"
+
+# global: true means this matcher runs on all rules regardless of their
+# matchers list. Set to false (or omit) for opt-in use only.
+global: false
+
+# Rollout control (optional - defaults to blue-green).
+# mode: "blue-green"  # blue-green | canary | shadow
+# min_procs: 1
+# max_procs: 2

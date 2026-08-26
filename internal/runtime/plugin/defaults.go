@@ -1,9 +1,6 @@
 package plugin
 
-import (
-	goruntime "runtime"
-	"time"
-)
+import "time"
 
 const (
 	// DefaultDeploymentCallsPerProcess is what a process serves undeclared; above 1 the plugin has to be concurrency-safe.
@@ -66,9 +63,10 @@ func runtimeOptionsWithDefaults(opts Options) Options {
 		opts.SupervisorOptions.CatalogOptions.RouterOptions.ManagerOptions.QueueSize = opts.maxOutstandingInvocationsPerPlugin
 	}
 
-	// Growth past a deployment's min_procs only pays off while a core is free, so GOMAXPROCS bounds it.
+	// Growth past a deployment's min_procs: see processBudgetFromResources for why this is sized
+	// from CPU and memory together, not GOMAXPROCS alone.
 	if opts.SupervisorOptions.CatalogOptions.RouterOptions.ManagerOptions.ProcessBudget == nil {
-		opts.SupervisorOptions.CatalogOptions.RouterOptions.ManagerOptions.ProcessBudget = NewProcessBudget(goruntime.GOMAXPROCS(0) * DefaultRuntimeProcessGrowthPerProc)
+		opts.SupervisorOptions.CatalogOptions.RouterOptions.ManagerOptions.ProcessBudget = NewProcessBudget(processBudgetFromResources())
 	}
 	opts.SupervisorOptions = supervisorOptionsWithDefaults(opts.SupervisorOptions)
 	if opts.CloseTimeout <= 0 {

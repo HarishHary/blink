@@ -1,9 +1,62 @@
 package plugin
 
-import "sync/atomic"
+import (
+	"os"
+	goruntime "runtime"
+	"strconv"
+	"strings"
+	"sync/atomic"
+)
+
+const (
+	DefaultPluginProcessMemoryFootprint = 64 << 20  // 64MB per plugin subprocess
+	DefaultProcessBudgetMemoryReserve   = 256 << 20 // 256MB left for the service process itself
+	DefaultProcessBudgetHardCap         = 512       // sanity ceiling regardless of memory available
+)
+
+// processBudgetFromResources sizes the default ProcessBudget from CPU and memory together.
+// GOMAXPROCS alone undercounts it for the common case here: small, mostly-idle plugin
+// subprocesses (a matcher's whole job can be one comparison) that spend far more time on a gRPC
+// round trip than on CPU, so cores are not the binding constraint - memory is, since running past
+// the container's limit OOMs the pod regardless of how idle each subprocess is.
+func processBudgetFromResources() int {
+	cpuFloor := goruntime.GOMAXPROCS(0) * DefaultRuntimeProcessGrowthPerProc
+	limit, ok := cgroupMemoryLimitBytes()
+	if !ok {
+		return cpuFloor
+	}
+	available := limit - DefaultProcessBudgetMemoryReserve
+	if available <= 0 {
+		return cpuFloor
+	}
+	memoryBudget := min(int(available/DefaultPluginProcessMemoryFootprint), DefaultProcessBudgetHardCap)
+	return max(cpuFloor, memoryBudget)
+}
+
+// cgroupMemoryLimitBytes reads this container's memory limit: cgroup v2's memory.max, falling
+// back to cgroup v1's memory.limit_in_bytes.
+func cgroupMemoryLimitBytes() (int64, bool) {
+	const unlimitedV1Threshold = 1 << 62
+	for _, path := range []string{"/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		text := strings.TrimSpace(string(data))
+		if text == "max" {
+			return 0, false
+		}
+		limit, err := strconv.ParseInt(text, 10, 64)
+		if err != nil || limit <= 0 || limit >= unlimitedV1Threshold {
+			continue
+		}
+		return limit, true
+	}
+	return 0, false
+}
 
 // ProcessBudget caps the plugin processes one service process may run past every deployment's
-// reserved min_procs, because those plugin processes are subprocesses competing for the same cores.
+// reserved min_procs - sized by processBudgetFromResources when a caller leaves it unset.
 type ProcessBudget struct {
 	max      int64
 	growth   atomic.Int64

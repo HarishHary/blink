@@ -1,0 +1,15 @@
+# Canary candidate for the allow-all baseline: same id, so the controller elects this as the
+# candidate slot alongside allow-all's blue-green primary for the same logical plugin.
+id: "550e8400-e29b-41d4-a716-446655440012"
+name: "allow_all"
+display_name: "Allow All"
+description: "Matches every event. Use for testing only."
+enabled: true
+version: "2.0.0"
+
+global: false
+
+# Rollout control: canary at 10% - the runtime routes ~10% of traffic to this candidate and the
+# rest stays on the allow-all primary.
+mode: "canary"
+rollout_pct: 10

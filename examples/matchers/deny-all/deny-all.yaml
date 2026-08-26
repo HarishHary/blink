@@ -1,0 +1,15 @@
+id: "62501b9c-3329-4078-80d2-2a8a30697eb3"
+name: "deny_all"
+display_name: "Deny All"
+description: "Matches no event. Use for testing only."
+enabled: true
+version: "1.0.0"
+
+# global: true means this matcher runs on all rules regardless of their
+# matchers list. Set to false (or omit) for opt-in use only.
+global: false
+
+# Rollout control (optional - defaults to blue-green).
+# mode: "blue-green"  # blue-green | canary | shadow
+# min_procs: 1
+# max_procs: 2
