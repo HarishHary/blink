@@ -9,7 +9,7 @@ import (
 	"github.com/harishhary/blink/internal/logger"
 	"github.com/harishhary/blink/internal/runtime"
 	"github.com/harishhary/blink/internal/runtime/plugin"
-	snapshotruntime "github.com/harishhary/blink/internal/runtime/snapshot"
+	"github.com/harishhary/blink/internal/runtime/snapshot"
 	"github.com/harishhary/blink/pkg/events"
 )
 
@@ -24,7 +24,7 @@ func NewApplication(opts plugin.Options, logger *logger.Logger) *Application {
 }
 
 // Evaluate preserves input order while grouping events by rollout side and sharding each group.
-func (r *Application) Evaluate(ctx context.Context, state snapshotruntime.ProjectionState[*RuleMetadata], ruleID string, input *events.Batch) EvaluateResult {
+func (r *Application) Evaluate(ctx context.Context, state snapshot.ProjectionState[*RuleMetadata], ruleID string, input *events.Batch) EvaluateResult {
 	if r == nil || r.Application == nil {
 		return EvaluateResult{CallErr: errors.NewE(runtime.ErrRuntimeNotStarted)}
 	}
