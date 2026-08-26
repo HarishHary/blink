@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"ergo.services/application/radar"
 	"ergo.services/ergo"
 	"ergo.services/ergo/gen"
+	"ergo.services/registrar/etcd"
 )
 
 // Host owns the single Ergo node for one Blink process.
@@ -54,6 +56,33 @@ type ClusterOptions struct {
 // needs to customize cluster network flags: override only what you mean to change on the result,
 // never build a gen.NetworkFlags{Enable: true, ...} literal from scratch.
 func DefaultClusterFlags() gen.NetworkFlags { return gen.DefaultNetworkFlags }
+
+// EtcdClusterConfig configures the etcd-backed registrar every binary uses to join the Ergo
+// cluster, following the services.Common env-tag convention. Endpoints is a comma-separated list,
+// matching brokers.KafkaConfig.Brokers' convention.
+type EtcdClusterConfig struct {
+	Endpoints   string `env:"ETCD_ENDPOINTS"`
+	Cookie      string `env:"CLUSTER_COOKIE"`
+	Username    string `env:"ETCD_USERNAME,optional"`
+	Password    string `env:"ETCD_PASSWORD,optional"`
+	ClusterName string `env:"ETCD_CLUSTER,optional"`
+}
+
+// NewEtcdRegistrar builds the production registrar, namespacing it to blink-<env> unless
+// ClusterName overrides it. An empty Cluster falls back to etcd's shared "default" namespace
+// across every environment - NewEtcdRegistrar always avoids that footgun.
+func NewEtcdRegistrar(cfg EtcdClusterConfig, env string) (gen.Registrar, error) {
+	cluster := cfg.ClusterName
+	if cluster == "" {
+		cluster = "blink-" + env
+	}
+	return etcd.Create(etcd.Options{
+		Cluster:   cluster,
+		Endpoints: strings.Split(cfg.Endpoints, ","),
+		Username:  cfg.Username,
+		Password:  cfg.Password,
+	})
+}
 
 // Start creates a node whose lifecycle is owned by the returned host.
 func Start(opts NodeOptions) (*NodeHost, error) {
