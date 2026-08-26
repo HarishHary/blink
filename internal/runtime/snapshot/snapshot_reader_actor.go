@@ -2,12 +2,10 @@ package snapshot
 
 import (
 	"fmt"
-	"sort"
 
 	"ergo.services/ergo/act"
 	"ergo.services/ergo/gen"
 	"github.com/cenkalti/backoff/v4"
-	"github.com/harishhary/blink/internal/brokers"
 	"github.com/harishhary/blink/internal/runtime"
 	"github.com/harishhary/blink/internal/snapshot"
 )
@@ -31,25 +29,7 @@ type ReaderActorStatus struct {
 	Generation   int64
 }
 
-type readerMetaState struct {
-	alias   gen.Alias
-	restart *runtime.ScheduledBackoff
-	status  readerMetaStatus
-}
-
-type readerActor struct {
-	act.Actor
-	opts               ReaderActorOptions
-	snapshotEventName  gen.Atom
-	snapshotEventToken gen.Ref
-	readerMeta         readerMetaState
-	entries            map[string]snapshot.EffectiveEntry
-	committed          *snapshot.Snapshot
-}
-
 // --- messages ---
-
-type MessageReaderMetaRestart struct{ token uint64 }
 
 type MessageReaderActorActivate struct {
 	snapshotEventName  gen.Atom
@@ -133,7 +113,7 @@ func (a *readerActor) Init(...any) error {
 	return nil
 }
 
-// HandleMessage processes reader records, lifecycle, and restart messages.
+// HandleMessage processes activation, pushed snapshot updates, controller-loss, and restart messages.
 func (a *readerActor) HandleMessage(from gen.PID, message any) error {
 	defer a.reportStatus()
 	switch m := message.(type) {
@@ -143,26 +123,17 @@ func (a *readerActor) HandleMessage(from gen.PID, message any) error {
 		}
 		a.snapshotEventName = m.snapshotEventName
 		a.snapshotEventToken = m.snapshotEventToken
-		return a.startReaderMeta()
-	case MessageRecord:
-		if m.source != a.readerMeta.alias || a.readerMeta.alias == (gen.Alias{}) {
+		return a.subscribe()
+	case SnapshotUpdate:
+		if !a.subscribed || from != a.controllerPID || m.Snapshot == nil || m.Snapshot.Generation <= a.lastGeneration {
 			return nil
 		}
-		started := a.readerMeta.status.Lifecycle != ReaderMetaRunning
-		if started {
-			a.readerMeta.status.Lifecycle = ReaderMetaRunning
-			a.readerMeta.status.Availability = runtime.AvailabilityDegraded
-			a.readerMeta.status.CaughtUp = false
-			a.readerMeta.status.LastError = nil
-		}
-		committed := a.apply(m.message) && a.readerMeta.status.CaughtUp
-		if committed {
-			a.readerMeta.status.Availability = runtime.AvailabilityReady
-			a.readerMeta.status.LastError = nil
-			a.publishSnapshot()
-		}
-	case MessageCaughtUp:
-		if m.source != a.readerMeta.alias || a.readerMeta.alias == (gen.Alias{}) || a.readerMeta.status.CaughtUp {
+		a.lastGeneration = m.Snapshot.Generation
+		a.lastError = nil
+		a.publishSnapshot(m.Snapshot)
+		return nil
+	case MessageSubscribeRestart:
+		if !a.restart.Pending || a.restart.Token != m.token || a.subscribed {
 			return nil
 		}
 		a.restart.Pending = false
@@ -195,7 +166,7 @@ func (a *readerActor) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error)
 	return fmt.Errorf("snapshot reader actor: unsupported call %T", request), nil
 }
 
-// Terminate stops the reader meta-process and marks it unavailable.
+// Terminate cancels any pending resubscribe and notifies the controller, best effort.
 func (a *readerActor) Terminate(error) {
 	defer a.reportStatus()
 	a.restart.CancelScheduled(false)
@@ -237,7 +208,6 @@ func (a *readerActor) subscribe() error {
 		a.lastGeneration = sub.Current.Generation
 		a.publishSnapshot(sub.Current)
 	}
-	a.readerMeta.alias = alias
 	return nil
 }
 
@@ -274,12 +244,9 @@ func (a *readerActor) reportStatus() {
 	if a.snapshotEventToken == (gen.Ref{}) {
 		return
 	}
-
 	availability := runtime.AvailabilityUnavailable
 	if a.subscribed {
 		availability = runtime.AvailabilityReady
-	case runtime.AvailabilityDegraded:
-		availability = runtime.AvailabilityDegraded
 	}
 	_ = a.Send(a.Parent(), MessageReaderActorStatusChanged{status: ReaderActorStatus{
 		Lifecycle:    ReaderActorRunning,
