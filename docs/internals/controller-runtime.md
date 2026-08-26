@@ -372,5 +372,5 @@ The service allows 45 seconds for that, then requests an Ergo force-stop.
 - `internal/runtime/controller/{artifact_scanner_meta.go,snapshot_writer_meta.go,reconcile.go,writer_io_barrier.go,options.go,defaults.go}` - worker behavior, planning, shutdown barrier, names, and timing defaults.
 - `internal/runtime/backoff.go` - scheduled worker-restart budget and backoff implementation.
 - `internal/backends/{database.go,sql.go,record.go}` - namespace-scoped persistence and schema.
-- `internal/snapshot/snapshot.go` - effective entry and snapshot types.
-- `internal/runtime/snapshot/subscription.go` - the cross-node wire vocabulary (`SubscribeRequest`/`Response`, `SnapshotUpdate`, `UnsubscribeRequest`, `MessageExecutorReport`) shared with a subscribing executor's reader actor, and its EDF type registration list.
+- `internal/runtime/snapshot/types.go` - effective entry and snapshot types.
+- `internal/runtime/snapshot/{snapshot_reader_actor.go,subscription.go}` - the cross-node wire vocabulary (`SubscribeRequest`/`Response`, `SnapshotUpdate`, `UnsubscribeRequest`, `MessageExecutorReport`) shared with a subscribing executor's reader actor, and its EDF type registration list.

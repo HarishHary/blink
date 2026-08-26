@@ -63,7 +63,7 @@ type ProjectionState[T any] struct {
 	ProjectionData[T]
 }
 
-// ProjectionData is the independently owned typed data from a 
+// ProjectionData is the independently owned typed data parsed from a committed snapshot.
 type ProjectionData[T any] struct {
 	Primaries   []T
 	Candidates  []T
