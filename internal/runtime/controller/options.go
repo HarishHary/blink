@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"ergo.services/ergo/gen"
-	"github.com/harishhary/blink/internal/brokers"
 	"github.com/harishhary/blink/internal/runtime/plugin"
 )
 
@@ -14,8 +13,6 @@ type Options[T plugin.Artifact] struct {
 	Name              gen.Atom
 	DatabaseDSN       string
 	Namespace         string
-	Topic             string
-	Broker            brokers.Broker
 	SupervisorOptions SupervisorOptions[T]
 }
 
