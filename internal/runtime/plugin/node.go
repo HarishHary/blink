@@ -31,7 +31,29 @@ type NodeOptions struct {
 	Env             string
 	ShutdownTimeout time.Duration
 	Applications    []gen.ApplicationBehavior
+	// Cluster enables Ergo cluster networking (remote actor Send/Call between nodes). Nil keeps
+	// today's default: networking disabled, a single-process node.
+	Cluster *ClusterOptions
 }
+
+// ClusterOptions enables and configures Ergo cluster networking for a node.
+type ClusterOptions struct {
+	// Cookie authenticates connections between nodes; every node in the cluster must share it.
+	Cookie string
+	// Registrar resolves peer nodes for discovery. Nil falls back to Ergo's embedded, single-
+	// process, dev-only registrar - never use nil in production.
+	Registrar gen.Registrar
+	// Flags controls cluster network capabilities (remote spawn, important delivery, etc.).
+	// Build it from DefaultClusterFlags(), never a bare gen.NetworkFlags{Enable: true} literal -
+	// leaving Flags zero here is fine (Ergo substitutes its own default), but once Enable is set
+	// every flag not explicitly listed reverts to false, silently including EnableImportantDelivery.
+	Flags gen.NetworkFlags
+}
+
+// DefaultClusterFlags returns gen.DefaultNetworkFlags, the safe starting point for any caller that
+// needs to customize cluster network flags: override only what you mean to change on the result,
+// never build a gen.NetworkFlags{Enable: true, ...} literal from scratch.
+func DefaultClusterFlags() gen.NetworkFlags { return gen.DefaultNetworkFlags }
 
 // Start creates a node whose lifecycle is owned by the returned host.
 func Start(opts NodeOptions) (*NodeHost, error) {
@@ -52,14 +74,23 @@ func Start(opts NodeOptions) (*NodeHost, error) {
 	}
 	applications = append(applications, opts.Applications...)
 
+	network := gen.NetworkOptions{Mode: gen.NetworkModeDisabled}
+	if opts.Cluster != nil {
+		network = gen.NetworkOptions{
+			Mode:      gen.NetworkModeEnabled,
+			Cookie:    opts.Cluster.Cookie,
+			Registrar: opts.Cluster.Registrar,
+			Flags:     opts.Cluster.Flags,
+			Acceptors: []gen.AcceptorOptions{{}},
+		}
+	}
+
 	n, err := ergo.StartNode(
 		opts.Name,
 		gen.NodeOptions{
 			ShutdownTimeout: opts.ShutdownTimeout,
 			Applications:    applications,
-			Network: gen.NetworkOptions{
-				Mode: gen.NetworkModeDisabled,
-			},
+			Network:         network,
 			Log: gen.LogOptions{
 				Level: logLevel,
 				DefaultLogger: gen.DefaultLoggerOptions{
