@@ -182,8 +182,14 @@ func (m *artifactScannerMeta[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (
 	return fmt.Errorf("artifact scanner meta: unsupported call %T", request), nil
 }
 
-// HandleInspect provides no custom scanner diagnostics.
-func (m *artifactScannerMeta[T]) HandleInspect(gen.PID, ...string) map[string]string { return nil }
+// HandleInspect exposes the scanner's file-index sizes
+func (m *artifactScannerMeta[T]) HandleInspect(gen.PID, ...string) map[string]string {
+	return map[string]string{
+		"scanner:directory": m.directory,
+		"scanner:parsed":    fmt.Sprintf("%d", len(m.parsed)),
+		"scanner:binaries":  fmt.Sprintf("%d", len(m.digests)),
+	}
+}
 
 // Terminate cancels active filesystem observation.
 func (m *artifactScannerMeta[T]) Terminate(error) {

@@ -203,8 +203,12 @@ func (m *snapshotWriterMeta) HandleCall(_ gen.PID, _ gen.Ref, request any) (any,
 	return fmt.Errorf("snapshot writer meta: unsupported call %T", request), nil
 }
 
-// HandleInspect provides no custom writer diagnostics.
-func (m *snapshotWriterMeta) HandleInspect(gen.PID, ...string) map[string]string { return nil }
+// HandleInspect exposes the writer's job queue depth; richer health
+func (m *snapshotWriterMeta) HandleInspect(gen.PID, ...string) map[string]string {
+	return map[string]string{
+		"writer:queue": fmt.Sprintf("%d/%d", len(m.jobs), cap(m.jobs)),
+	}
+}
 
 // Terminate cancels active writer work.
 func (m *snapshotWriterMeta) Terminate(error) {

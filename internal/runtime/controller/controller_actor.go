@@ -605,14 +605,53 @@ func (a *actor[T]) maybeDrained() error {
 
 // reportStatus sends the current status to the supervisor.
 func (a *actor[T]) reportStatus() {
-	availability := runtime.AvailabilityUnavailable
-	if a.lifecycle == ActorRunning {
-		availability = runtime.AvailabilityDegraded
-		if a.scanner.status.Complete && a.scanner.status.Availability == runtime.AvailabilityReady && a.writer.status.Loaded && a.writer.status.Availability == runtime.AvailabilityReady {
-			availability = runtime.AvailabilityReady
+	_ = a.Send(a.Parent(), MessageActorStatusChanged{status: actorStatus{Lifecycle: a.lifecycle, Availability: a.availability(), Generation: a.generation}})
+}
+
+// availability derives the controller's own health from lifecycle and worker readiness, shared by
+// reportStatus (to the supervisor) and HandleInspect (to an operator).
+func (a *actor[T]) availability() runtime.Availability {
+	if a.lifecycle != ActorRunning {
+		return runtime.AvailabilityUnavailable
+	}
+	if a.scanner.status.Complete && a.scanner.status.Availability == runtime.AvailabilityReady && a.writer.status.Loaded && a.writer.status.Availability == runtime.AvailabilityReady {
+		return runtime.AvailabilityReady
+	}
+	return runtime.AvailabilityDegraded
+}
+
+// HandleInspect exposes concise controller operational state: lifecycle and generation, the
+// scanner and writer workers' own health, and the executor/subscriber counts that health doesn't
+// capture - a controller can be Ready while still drifting behind on executor convergence.
+func (a *actor[T]) HandleInspect(gen.PID, ...string) map[string]string {
+	drifting := 0
+	for _, status := range a.executors {
+		if !status.DriftSince.IsZero() {
+			drifting++
 		}
 	}
-	_ = a.Send(a.Parent(), MessageActorStatusChanged{status: actorStatus{Lifecycle: a.lifecycle, Availability: availability, Generation: a.generation}})
+	upserts, tombstones := 0, 0
+	if a.pending != nil {
+		upserts, tombstones = len(a.pending.entryUpserts), len(a.pending.tombstones)
+	}
+	return map[string]string{
+		"controller:lifecycle":                   string(a.lifecycle),
+		"controller:availability":                string(a.availability()),
+		"controller:generation":                  fmt.Sprintf("%d", a.generation),
+		"controller:records":                     fmt.Sprintf("%d", len(a.records)),
+		"controller:subscribers":                 fmt.Sprintf("%d", len(a.subscribers)),
+		"controller:executors":                   fmt.Sprintf("%d", len(a.executors)),
+		"controller:executors_drifting":          fmt.Sprintf("%d", drifting),
+		"controller:pending:upserts":             fmt.Sprintf("%d", upserts),
+		"controller:pending:tombstones":          fmt.Sprintf("%d", tombstones),
+		"controller:scanner:lifecycle":           string(a.scanner.status.Lifecycle),
+		"controller:scanner:availability":        string(a.scanner.status.Availability),
+		"controller:scanner:entries":             fmt.Sprintf("%d", len(a.scanner.entries)),
+		"controller:writer:lifecycle":            string(a.writer.status.Lifecycle),
+		"controller:writer:availability":         string(a.writer.status.Availability),
+		"controller:writer:writing":              fmt.Sprintf("%t", a.writer.status.Writing),
+		"controller:writer:consecutive_failures": fmt.Sprintf("%d", a.writer.consecutiveFailures),
+	}
 }
 
 // makePlan derives persistence updates and keyed snapshot changes.

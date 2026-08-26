@@ -271,3 +271,17 @@ func stalePIDSendFailure(err error) bool {
 func (s *supervisor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
 	return fmt.Errorf("controller supervisor: unsupported call %T", request), nil
 }
+
+// HandleInspect exposes concise supervisor operational state: its own lifecycle, the supervised
+// controller actor's identity and last-reported status, and how many writer I/O fences are still
+// blocking a drain from advancing.
+func (s *supervisor[T]) HandleInspect(gen.PID, ...string) map[string]string {
+	return map[string]string{
+		"supervisor:lifecycle":          string(s.lifecycle),
+		"supervisor:child":              fmt.Sprintf("%s", s.actor.pid),
+		"supervisor:child_lifecycle":    string(s.actor.status.Lifecycle),
+		"supervisor:child_availability": string(s.actor.status.Availability),
+		"supervisor:child_generation":   fmt.Sprintf("%d", s.actor.status.Generation),
+		"supervisor:writer_fences":      fmt.Sprintf("%d", len(s.writerFences)),
+	}
+}
