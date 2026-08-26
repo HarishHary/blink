@@ -7,6 +7,7 @@ require (
 	ergo.services/application/observer v0.1.1-0.20260807132520-3b2d3707a392
 	ergo.services/application/radar v0.0.0-20260807132520-3b2d3707a392
 	ergo.services/ergo v1.999.321-0.20260813122550-5102d48bf215
+	ergo.services/registrar/etcd v0.3.1-0.20260806082553-384fc6fb1b2f
 	github.com/Azure/azure-sdk-for-go/sdk/messaging/azeventhubs/v2 v2.0.2
 	github.com/cenkalti/backoff/v4 v4.3.0
 	github.com/fsnotify/fsnotify v1.10.1
@@ -25,7 +26,6 @@ require (
 	ergo.services/actor/health v0.0.0-20260807131927-95b2e1ebf6fe // indirect
 	ergo.services/actor/metrics v0.2.2-0.20260807131927-95b2e1ebf6fe // indirect
 	ergo.services/meta/sse v0.2.1-0.20260807132248-3e4748b06924 // indirect
-	ergo.services/registrar/etcd v0.3.1-0.20260806082553-384fc6fb1b2f // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.21.1 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/internal v1.12.0 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.6.4 // indirect

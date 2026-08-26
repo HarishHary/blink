@@ -7,7 +7,6 @@ import (
 	"ergo.services/ergo/act"
 	"ergo.services/ergo/gen"
 	"github.com/harishhary/blink/internal/backends"
-	"github.com/harishhary/blink/internal/brokers"
 	"github.com/harishhary/blink/internal/runtime"
 	"github.com/harishhary/blink/internal/runtime/plugin"
 )
@@ -36,7 +35,6 @@ type supervisor[T plugin.Artifact] struct {
 	act.Supervisor
 	opts            SupervisorOptions[T]
 	database        backends.Database
-	writer          brokers.Writer
 	barrier         *publisherIOBarrier
 	lifecycle       SupervisorLifecycle
 	actor           actorState
@@ -44,8 +42,8 @@ type supervisor[T plugin.Artifact] struct {
 }
 
 // newSupervisor constructs the controller supervisor with normalized options.
-func newSupervisor[T plugin.Artifact](opts SupervisorOptions[T], database backends.Database, writer brokers.Writer, barrier *publisherIOBarrier) gen.ProcessBehavior {
-	return &supervisor[T]{opts: supervisorOptionsWithDefaults("", opts), database: database, writer: writer, barrier: barrier}
+func newSupervisor[T plugin.Artifact](opts SupervisorOptions[T], database backends.Database, barrier *publisherIOBarrier) gen.ProcessBehavior {
+	return &supervisor[T]{opts: supervisorOptionsWithDefaults("", opts), database: database, barrier: barrier}
 }
 
 // --- messages ---
@@ -82,7 +80,7 @@ func (s *supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 				PreserveMailbox: true,
 			},
 			Factory: func() gen.ProcessBehavior {
-				return newActor(s.opts.ActorOptions, s.database, s.writer, s.barrier)
+				return newActor(s.opts.ActorOptions, s.database, s.barrier)
 			},
 		}},
 	}, nil
