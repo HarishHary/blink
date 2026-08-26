@@ -39,6 +39,9 @@ type NodeOptions struct {
 	Env             string
 	ShutdownTimeout time.Duration
 	Applications    []gen.ApplicationBehavior
+	// Observer starts Ergo's observer app independently of Env, so a prod-level Env (info logging,
+	// mcp off) can still expose it. Env == "dev" starts it regardless of this field.
+	Observer bool
 	// Cluster enables Ergo cluster networking (remote actor Send/Call between nodes). Nil keeps
 	// today's default: networking disabled, a single-process node.
 	Cluster *ClusterOptions
@@ -106,11 +109,11 @@ func Start(opts NodeOptions) (*NodeHost, error) {
 	applications := []gen.ApplicationBehavior{radar.CreateApp(radar.Options{})}
 	logLevel := gen.LogLevelInfo
 	if opts.Env == "dev" {
-		applications = append(applications,
-			observer.CreateApp(observer.Options{Port: 9911}),
-			mcp.CreateApp(mcp.Options{Port: 9922}),
-		)
+		applications = append(applications, mcp.CreateApp(mcp.Options{Port: 9922}))
 		logLevel = gen.LogLevelDebug
+	}
+	if opts.Env == "dev" || opts.Observer {
+		applications = append(applications, observer.CreateApp(observer.Options{Port: 9911}))
 	}
 	applications = append(applications, opts.Applications...)
 

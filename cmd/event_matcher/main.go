@@ -112,6 +112,7 @@ func main() {
 	host, err := plugin.Start(plugin.NodeOptions{
 		Name:            nodeName,
 		Env:             cfg.Env,
+		Observer:        cfg.Observer,
 		ShutdownTimeout: runtimeShutdownTimeout,
 		Applications:    []gen.ApplicationBehavior{app},
 		Cluster:         cluster,
