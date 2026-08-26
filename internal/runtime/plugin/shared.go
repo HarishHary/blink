@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 
@@ -17,32 +18,67 @@ type Deployment struct {
 	RolloutPct float64
 	MinProcs   int
 	MaxProcs   int
-	Path       string
-	Hash       string
-	Spec       []byte
+	// MaxConcurrentCallsPerProcess is one process's throughput, where MinProcs and MaxProcs bound the subprocesses; above 1 the plugin has to be concurrency-safe.
+	MaxConcurrentCallsPerProcess int
+	Path                         string
+	Hash                         string
+	Spec                         []byte
 }
 
-// DeploymentPoolKey identifies a pool for a plugin deployment.
-type DeploymentPoolKey struct {
-	runtime.PoolKey
-	MinProcs int
-	MaxProcs int
-	SpecHash [sha256.Size]byte
+// DeploymentRouteKey identifies one concrete deployment: its artifact plus what the runtime cannot change under running processes, so altering any of it replaces them.
+type DeploymentRouteKey struct {
+	runtime.ArtifactKey
+	MinProcs     int
+	MaxProcs     int
+	CallsPerProc int
+	SpecHash     [sha256.Size]byte
 }
 
-// PoolKey returns the pool key for the deployment.
-func (d *Deployment) PoolKey() DeploymentPoolKey {
-	return DeploymentPoolKey{
-		PoolKey:  runtime.PoolKey{Id: d.Id, Name: d.Name, Hash: d.Hash},
-		MinProcs: d.MinProcs,
-		MaxProcs: d.WorkerCount(),
-		SpecHash: sha256.Sum256(d.Spec),
+// RouteKey returns the route identity of the deployment.
+func (d *Deployment) RouteKey() DeploymentRouteKey {
+	return DeploymentRouteKey{
+		ArtifactKey:  runtime.ArtifactKey{Id: d.Id, Name: d.Name, Hash: d.Hash},
+		MinProcs:     d.MinProcs,
+		MaxProcs:     d.ProcessCountLimit(),
+		CallsPerProc: d.CapacityPerProcess(),
+		SpecHash:     sha256.Sum256(d.Spec),
 	}
 }
 
-// WorkerCount returns the number of workers for the deployment.
-func (d *Deployment) WorkerCount() int {
+// ProcessCountLimit returns the most plugin processes the deployment may run at once.
+func (d *Deployment) ProcessCountLimit() int {
 	return max(1, d.MaxProcs)
+}
+
+// CapacityPerProcess returns how many invocations one of those processes may run at once.
+func (d *Deployment) CapacityPerProcess() int {
+	if d.MaxConcurrentCallsPerProcess <= 0 {
+		return DefaultDeploymentCallsPerProcess
+	}
+	return d.MaxConcurrentCallsPerProcess
+}
+
+// MaxInvocationCapacity is the deployment's own ceiling on concurrent invocations, not a promise: running processes and the shared budget decide what exists.
+func (d *Deployment) MaxInvocationCapacity() int {
+	return d.ProcessCountLimit() * d.CapacityPerProcess()
+}
+
+// sameDeployment reports whether two deployments are field-for-field equal; a field added above belongs here too, or a real change reads as no change.
+func sameDeployment(left, right *Deployment) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return left.Id == right.Id &&
+		left.Name == right.Name &&
+		left.Enabled == right.Enabled &&
+		left.Mode == right.Mode &&
+		left.RolloutPct == right.RolloutPct &&
+		left.MinProcs == right.MinProcs &&
+		left.MaxProcs == right.MaxProcs &&
+		left.MaxConcurrentCallsPerProcess == right.MaxConcurrentCallsPerProcess &&
+		left.Path == right.Path &&
+		left.Hash == right.Hash &&
+		bytes.Equal(left.Spec, right.Spec)
 }
 
 // MessageDrain requests that an actor drain its work.

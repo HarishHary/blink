@@ -25,7 +25,7 @@ func (m *FormatterMetadata) Clone() *FormatterMetadata {
 // Formatter formats alert batches and exposes its live sidecar metadata.
 type Formatter interface {
 	plugin.Artifact
-	FormatBatch(ctx context.Context, alerts []*alerts.Alert) FormatResult
+	FormatBatch(ctx context.Context, batch *alerts.Batch) FormatResult
 	FormatterMetadata() *FormatterMetadata
 }
 

@@ -7,5 +7,9 @@ version: "1.0.0"
 
 # Rollout control (optional - defaults to blue-green).
 # mode: "blue-green"  # blue-green | canary | shadow
-# min_procs: 1
-# max_procs: 2
+# min_procs: 1  # default 0 - processes started before the first call, so no cold start;
+#               reserved outside the process budget, so every route gets them
+# max_procs: 2  # default 1 - raise only when the plugin's own per-event CPU dominates
+# calls_per_process: 1  # default 32 - one subprocess serving this many calls at once.
+#                       The default assumes concurrency-safe plugin code: one plugin
+#                       object answers every call, each on its own goroutine. Set 1 if it is not.

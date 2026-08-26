@@ -7,7 +7,6 @@
 package rpc_tuning_rules
 
 import (
-	pb "github.com/harishhary/blink/pkg/alerts/pb"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
@@ -23,9 +22,14 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// TuneBatchRequest carries one encoded alerts.Alert per alert, not the Alert itself. A bytes
+// field and a submessage field share proto's length-delimited encoding, so this is the same wire
+// format the field had when it was declared as repeated alerts.Alert and either side of the
+// handshake may predate the change. Bytes are what let the host encode each alert once for a batch
+// and reuse it for every tuning rule it is handed to, instead of once per call.
 type TuneBatchRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Alerts        []*pb.Alert            `protobuf:"bytes,1,rep,name=alerts,proto3" json:"alerts,omitempty"`
+	Alerts        [][]byte               `protobuf:"bytes,1,rep,name=alerts,proto3" json:"alerts,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -60,7 +64,7 @@ func (*TuneBatchRequest) Descriptor() ([]byte, []int) {
 	return file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *TuneBatchRequest) GetAlerts() []*pb.Alert {
+func (x *TuneBatchRequest) GetAlerts() [][]byte {
 	if x != nil {
 		return x.Alerts
 	}
@@ -167,9 +171,9 @@ var File_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto protoreflect.FileDe
 
 const file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_rawDesc = "" +
 	"\n" +
-	"3pkg/tuning_rules/rpc_tuning_rules/tuning_rule.proto\x12\ftuning_rules\x1a\x1bgoogle/protobuf/empty.proto\x1a\x19pkg/alerts/pb/alert.proto\"9\n" +
-	"\x10TuneBatchRequest\x12%\n" +
-	"\x06alerts\x18\x01 \x03(\v2\r.alerts.AlertR\x06alerts\":\n" +
+	"3pkg/tuning_rules/rpc_tuning_rules/tuning_rule.proto\x12\ftuning_rules\x1a\x1bgoogle/protobuf/empty.proto\"*\n" +
+	"\x10TuneBatchRequest\x12\x16\n" +
+	"\x06alerts\x18\x01 \x03(\fR\x06alerts\":\n" +
 	"\bTuneItem\x12\x18\n" +
 	"\aapplies\x18\x01 \x01(\bR\aapplies\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\"A\n" +
@@ -199,25 +203,23 @@ var file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_goTypes = []any{
 	(*TuneBatchRequest)(nil),  // 0: tuning_rules.TuneBatchRequest
 	(*TuneItem)(nil),          // 1: tuning_rules.TuneItem
 	(*TuneBatchResponse)(nil), // 2: tuning_rules.TuneBatchResponse
-	(*pb.Alert)(nil),          // 3: alerts.Alert
-	(*emptypb.Empty)(nil),     // 4: google.protobuf.Empty
+	(*emptypb.Empty)(nil),     // 3: google.protobuf.Empty
 }
 var file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_depIdxs = []int32{
-	3, // 0: tuning_rules.TuneBatchRequest.alerts:type_name -> alerts.Alert
-	1, // 1: tuning_rules.TuneBatchResponse.items:type_name -> tuning_rules.TuneItem
-	0, // 2: tuning_rules.TuningRule.TuneBatch:input_type -> tuning_rules.TuneBatchRequest
-	4, // 3: tuning_rules.TuningRule.Init:input_type -> google.protobuf.Empty
-	4, // 4: tuning_rules.TuningRule.Shutdown:input_type -> google.protobuf.Empty
-	4, // 5: tuning_rules.TuningRule.Ping:input_type -> google.protobuf.Empty
-	2, // 6: tuning_rules.TuningRule.TuneBatch:output_type -> tuning_rules.TuneBatchResponse
-	4, // 7: tuning_rules.TuningRule.Init:output_type -> google.protobuf.Empty
-	4, // 8: tuning_rules.TuningRule.Shutdown:output_type -> google.protobuf.Empty
-	4, // 9: tuning_rules.TuningRule.Ping:output_type -> google.protobuf.Empty
-	6, // [6:10] is the sub-list for method output_type
-	2, // [2:6] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	1, // 0: tuning_rules.TuneBatchResponse.items:type_name -> tuning_rules.TuneItem
+	0, // 1: tuning_rules.TuningRule.TuneBatch:input_type -> tuning_rules.TuneBatchRequest
+	3, // 2: tuning_rules.TuningRule.Init:input_type -> google.protobuf.Empty
+	3, // 3: tuning_rules.TuningRule.Shutdown:input_type -> google.protobuf.Empty
+	3, // 4: tuning_rules.TuningRule.Ping:input_type -> google.protobuf.Empty
+	2, // 5: tuning_rules.TuningRule.TuneBatch:output_type -> tuning_rules.TuneBatchResponse
+	3, // 6: tuning_rules.TuningRule.Init:output_type -> google.protobuf.Empty
+	3, // 7: tuning_rules.TuningRule.Shutdown:output_type -> google.protobuf.Empty
+	3, // 8: tuning_rules.TuningRule.Ping:output_type -> google.protobuf.Empty
+	5, // [5:9] is the sub-list for method output_type
+	1, // [1:5] is the sub-list for method input_type
+	1, // [1:1] is the sub-list for extension type_name
+	1, // [1:1] is the sub-list for extension extendee
+	0, // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_pkg_tuning_rules_rpc_tuning_rules_tuning_rule_proto_init() }

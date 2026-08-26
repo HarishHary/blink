@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -45,10 +46,23 @@ type artifactScannerMeta[T plugin.Artifact] struct {
 	gen.MetaProcess
 	directory string
 	loader    plugin.Loader[T]
-	parsed    map[string]T
-	digests   map[string]string
+	parsed    map[string]fileIndex[T]
+	digests   map[string]fileIndex[string]
 	runCtx    context.Context
 	cancelRun context.CancelFunc
+}
+
+// fileIndex is something derived from a file — a parsed spec, or a binary's checksum — and
+// the file identity it was derived from, so a poll only re-reads what changed.
+type fileIndex[T any] struct {
+	value   T
+	size    int64
+	modTime time.Time
+}
+
+// current reports whether info still matches the file the value was derived from.
+func (f fileIndex[T]) current(info fs.FileInfo) bool {
+	return f.size == info.Size() && f.modTime.Equal(info.ModTime())
 }
 
 // --- messages ---
@@ -70,8 +84,8 @@ func (m *artifactScannerMeta[T]) Init(process gen.MetaProcess) error {
 	}
 	m.MetaProcess = process
 	m.runCtx, m.cancelRun = context.WithCancel(context.Background())
-	m.parsed = make(map[string]T)
-	m.digests = make(map[string]string)
+	m.parsed = make(map[string]fileIndex[T])
+	m.digests = make(map[string]fileIndex[string])
 	m.Log().Debug("artifact scanner initialized: directory=%q alias=%s", m.directory, m.ID())
 	return nil
 }
@@ -223,8 +237,21 @@ func (m *artifactScannerMeta[T]) scan() ([]snapshot.EffectiveEntry, []string, bo
 		}
 		name := file.Name()
 		path := filepath.Join(m.directory, name)
+		// Size and modification time identify a file well enough to skip re-reading it: a
+		// spec rewrite that preserves both keeps the last parsed generation, and a binary
+		// rewrite that preserves both stalls that rollout instead of deploying something
+		// unverified, because the plugin runtime re-checksums against the published digest
+		// before it launches.
+		info, infoErr := file.Info()
 		if isYAML(name) {
 			seenParsed[path] = struct{}{}
+			if infoErr != nil {
+				m.Log().Debug("artifact spec stat failed: path=%q error=%v", path, infoErr)
+				continue
+			}
+			if indexed, ok := m.parsed[path]; ok && indexed.current(info) {
+				continue
+			}
 			data, readErr := os.ReadFile(path)
 			if readErr != nil {
 				m.Log().Debug("artifact spec read failed: path=%q error=%v", path, readErr)
@@ -235,12 +262,11 @@ func (m *artifactScannerMeta[T]) scan() ([]snapshot.EffectiveEntry, []string, bo
 				m.Log().Debug("artifact spec parse failed: path=%q error=%v", path, parseErr)
 				continue
 			}
-			m.parsed[path] = item
+			m.parsed[path] = fileIndex[T]{value: item, size: info.Size(), modTime: info.ModTime()}
 			metadata := item.Metadata()
 			m.Log().Debug("artifact spec parsed: path=%q id=%q name=%q version=%q enabled=%t mode=%s", path, metadata.Id, metadata.Name, metadata.Version, metadata.Enabled, metadata.RolloutMode)
 			continue
 		}
-		info, infoErr := file.Info()
 		if infoErr != nil {
 			m.Log().Debug("artifact binary stat failed: path=%q error=%v", path, infoErr)
 			if _, known := m.digests[name]; known {
@@ -254,12 +280,15 @@ func (m *artifactScannerMeta[T]) scan() ([]snapshot.EffectiveEntry, []string, bo
 			continue
 		}
 		seenBinaries[name] = struct{}{}
+		if indexed, ok := m.digests[name]; ok && indexed.current(info) {
+			continue
+		}
 		digest, digestErr := helpers.BinaryChecksum(path)
 		if digestErr != nil {
 			m.Log().Debug("artifact binary checksum failed: path=%q error=%v", path, digestErr)
 			continue
 		}
-		m.digests[name] = digest
+		m.digests[name] = fileIndex[string]{value: digest, size: info.Size(), modTime: info.ModTime()}
 		m.Log().Debug("artifact binary indexed: path=%q name=%q", path, name)
 	}
 	for path := range m.parsed {
@@ -273,10 +302,15 @@ func (m *artifactScannerMeta[T]) scan() ([]snapshot.EffectiveEntry, []string, bo
 		}
 	}
 
+	hashes := make(map[string]string, len(m.digests))
+	for name, indexed := range m.digests {
+		hashes[name] = indexed.value
+	}
 	groups := make(map[string][]T)
 	ids := make([]string, 0, len(m.parsed))
 	idSet := make(map[string]struct{})
-	for _, item := range m.parsed {
+	for _, indexed := range m.parsed {
+		item := indexed.value
 		id := item.Metadata().Id
 		groups[id] = append(groups[id], item)
 		if _, ok := idSet[id]; !ok {
@@ -292,7 +326,7 @@ func (m *artifactScannerMeta[T]) scan() ([]snapshot.EffectiveEntry, []string, bo
 		paired := groupItems[:0]
 		for _, item := range groupItems {
 			metadata := item.Metadata()
-			if !metadata.Enabled || m.digests[metadata.Name] != "" {
+			if !metadata.Enabled || hashes[metadata.Name] != "" {
 				paired = append(paired, item)
 			}
 		}
@@ -300,7 +334,7 @@ func (m *artifactScannerMeta[T]) scan() ([]snapshot.EffectiveEntry, []string, bo
 		if len(paired) == 0 || len(ValidateGroup(group)) != 0 {
 			continue
 		}
-		entries = append(entries, ElectGroup(id, group, m.digests))
+		entries = append(entries, ElectGroup(id, group, hashes))
 	}
 	return entries, ids, true, nil
 }

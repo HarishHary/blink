@@ -67,8 +67,8 @@ func NewSupervisor[T any](opts SupervisorOptions[T]) *Supervisor[T] {
 func (s *Supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 	defer s.reportStatus()
 
-	if s.opts.Name == "" || s.opts.Logger == nil || s.opts.ReaderFactory == nil {
-		return act.SupervisorSpec{}, fmt.Errorf("actor snapshot: name, logger, and reader factory are required")
+	if s.opts.Name == "" || s.opts.ReaderFactory == nil {
+		return act.SupervisorSpec{}, fmt.Errorf("actor snapshot: name and reader factory are required")
 	}
 	if s.opts.Loader == nil {
 		return act.SupervisorSpec{}, fmt.Errorf("snapshot projection: loader is required")
@@ -76,8 +76,12 @@ func (s *Supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 	if s.opts.ProjectionMode != ProjectionCommitDirect && s.opts.ProjectionMode != ProjectionCommitExternal {
 		return act.SupervisorSpec{}, fmt.Errorf("snapshot projection: invalid commit mode")
 	}
-	if err := s.RegisterName(s.opts.Name); err != nil {
-		return act.SupervisorSpec{}, fmt.Errorf("register snapshot supervisor %q: %w", s.opts.Name, err)
+	if s.Name() == "" {
+		if err := s.RegisterName(s.opts.Name); err != nil {
+			return act.SupervisorSpec{}, fmt.Errorf("register snapshot supervisor %q: %w", s.opts.Name, err)
+		}
+	} else if s.Name() != s.opts.Name {
+		return act.SupervisorSpec{}, fmt.Errorf("snapshot supervisor registered as %q, want %q", s.Name(), s.opts.Name)
 	}
 
 	s.events = EventsFor(s.Node(), s.opts.Name)
@@ -123,7 +127,6 @@ func (s *Supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 
 // HandleChildStart tracks and activates a started reader or projection child.
 func (s *Supervisor[T]) HandleChildStart(name gen.Atom, pid gen.PID) error {
-	defer s.reportStatus()
 	switch name {
 	case projectionActorName(s.opts.Name):
 		if s.projectionActor.pid != (gen.PID{}) {
@@ -140,7 +143,11 @@ func (s *Supervisor[T]) HandleChildStart(name gen.Atom, pid gen.PID) error {
 			return nil
 		}
 		s.readerActor.pid = pid
-		s.readerActor.status = newReaderActorStatus()
+		status := newReaderActorStatus()
+		if s.readerActor.status != status {
+			s.readerActor.status = status
+			s.reportStatus()
+		}
 		return s.Send(pid, MessageReaderActorActivate{
 			snapshotEventName:  s.events.Snapshot.Name,
 			snapshotEventToken: s.events.snapshotToken,
@@ -152,7 +159,6 @@ func (s *Supervisor[T]) HandleChildStart(name gen.Atom, pid gen.PID) error {
 
 // HandleChildTerminate records a terminated child and reports external commit failures.
 func (s *Supervisor[T]) HandleChildTerminate(_ gen.Atom, pid gen.PID, reason error) error {
-	defer s.reportStatus()
 	switch pid {
 	case s.projectionActor.pid:
 		s.projectionActor.pid = gen.PID{}
@@ -171,8 +177,11 @@ func (s *Supervisor[T]) HandleChildTerminate(_ gen.Atom, pid gen.PID, reason err
 		return nil
 	case s.readerActor.pid:
 		s.readerActor.pid = gen.PID{}
-		s.readerActor.status.Lifecycle = ReaderActorRestarting
-		s.readerActor.status.Availability = runtime.AvailabilityUnavailable
+		status := s.readerActor.status
+		status.Lifecycle = ReaderActorRestarting
+		status.Availability = runtime.AvailabilityUnavailable
+		s.readerActor.status = status
+		s.reportStatus()
 		return nil
 	default:
 		return nil
@@ -181,11 +190,13 @@ func (s *Supervisor[T]) HandleChildTerminate(_ gen.Atom, pid gen.PID, reason err
 
 // HandleMessage routes child status and external projection commit messages.
 func (s *Supervisor[T]) HandleMessage(from gen.PID, message any) error {
-	defer s.reportStatus()
 	switch message := message.(type) {
 	case MessageReaderActorStatusChanged:
 		if from == s.readerActor.pid {
-			s.readerActor.status = message.status
+			if s.readerActor.status != message.status {
+				s.readerActor.status = message.status
+				s.reportStatus()
+			}
 		}
 	case MessageProjectionActorStatusChanged:
 		if from == s.projectionActor.pid {

@@ -3,8 +3,6 @@ package matchers
 import (
 	"context"
 
-	"google.golang.org/protobuf/types/known/structpb"
-
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/runtime/plugin"
 	evts "github.com/harishhary/blink/pkg/events"
@@ -38,26 +36,18 @@ func (r *rpcMatcher) Metadata() plugin.Spec {
 
 func (r *rpcMatcher) Checksum() string { return r.checksum }
 
-func (r *rpcMatcher) MatchBatch(ctx context.Context, events []evts.Event) MatchResult {
-	protoEvents := make([]*structpb.Struct, 0, len(events))
-	for _, event := range events {
-		s, err := structpb.NewStruct(event)
-		if err != nil {
-			return MatchResult{CallErr: errors.NewE(err)}
-		}
-		protoEvents = append(protoEvents, s)
-	}
-	resp, err := r.client.MatchBatch(ctx, &rpc_matchers.MatchBatchRequest{Events: protoEvents})
+func (r *rpcMatcher) MatchBatch(ctx context.Context, batch *evts.Batch) MatchResult {
+	resp, err := r.client.MatchBatch(ctx, &rpc_matchers.MatchBatchRequest{Events: batch.Raw()})
 	if err != nil {
 		return MatchResult{CallErr: errors.NewE(err)}
 	}
 	if resp == nil {
 		return MatchResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "matcher", PluginID: r.fileName, Field: "response", Expected: 1})}
 	}
-	if len(resp.GetItems()) != len(events) {
-		return MatchResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "matcher", PluginID: r.fileName, Field: "items", Expected: len(events), Actual: len(resp.GetItems())})}
+	if len(resp.GetItems()) != batch.Len() {
+		return MatchResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "matcher", PluginID: r.fileName, Field: "items", Expected: batch.Len(), Actual: len(resp.GetItems())})}
 	}
-	items := make([]MatchItem, len(events))
+	items := make([]MatchItem, batch.Len())
 	for i, item := range resp.GetItems() {
 		items[i].Matched = item.GetMatched()
 		if item.GetError() != "" {

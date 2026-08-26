@@ -9,7 +9,7 @@ import (
 	"github.com/harishhary/blink/internal/logger"
 	"github.com/harishhary/blink/internal/runtime"
 	"github.com/harishhary/blink/internal/runtime/plugin"
-	snapshotruntime "github.com/harishhary/blink/internal/runtime/snapshot"
+	"github.com/harishhary/blink/internal/runtime/snapshot"
 	"github.com/harishhary/blink/pkg/events"
 )
 
@@ -19,92 +19,87 @@ type Application struct {
 }
 
 // NewApplication creates a rule plugin application.
-func NewApplication(opts plugin.Options, runtimeLogger *logger.Logger) *Application {
-	return &Application{Application: plugin.NewApplication(opts, NewAdapter(), Loader{}, runtimeLogger)}
+func NewApplication(opts plugin.Options, logger *logger.Logger) *Application {
+	return &Application{Application: plugin.NewApplication(opts, NewAdapter(), Loader{}, logger)}
 }
 
-// Evaluate preserves input order while grouping tenant rollout buckets and sharding each route.
-func (r *Application) Evaluate(ctx context.Context, state snapshotruntime.ProjectionState[*RuleMetadata], ruleID string, input []events.Event) EvaluateResult {
+// Evaluate preserves input order while grouping events by rollout side and sharding each group.
+func (r *Application) Evaluate(ctx context.Context, state snapshot.ProjectionState[*RuleMetadata], ruleID string, input *events.Batch) EvaluateResult {
 	if r == nil || r.Application == nil {
 		return EvaluateResult{CallErr: errors.NewE(runtime.ErrRuntimeNotStarted)}
 	}
-	if len(input) == 0 {
+	if input.Len() == 0 {
 		return EvaluateResult{Items: []EvaluateItem{}}
 	}
 	generation := state.CommittedGeneration
-	r.shadow(ctx, ruleID, input, max(1, state.MaxProcsByID[ruleID]), generation)
+	rollout := state.RolloutByID[ruleID]
+	callBudget := r.CallBudget(rollout)
 
-	type routeGroup struct {
-		rolloutKey string
-		indexes    []int
-		events     []events.Event
+	if rollout.Shadow {
+		r.shadow(ctx, ruleID, input, callBudget, generation)
 	}
-	groups := make([]routeGroup, 0)
-	groupByBucket := make(map[uint32]int)
-	for i, event := range input {
-		rolloutKey := runtime.NormalizeRolloutKey(event["tenant_id"])
-		bucket := runtime.RolloutBucket(rolloutKey)
-		groupIndex, ok := groupByBucket[bucket]
-		if !ok {
-			groupIndex = len(groups)
-			groupByBucket[bucket] = groupIndex
-			groups = append(groups, routeGroup{rolloutKey: rolloutKey})
-		}
-		groups[groupIndex].indexes = append(groups[groupIndex].indexes, i)
-		groups[groupIndex].events = append(groups[groupIndex].events, event)
+
+	keys := input.RolloutKeys()
+	groups := runtime.RouteSides(keys, rollout.CanaryPct)
+	// One side takes the whole batch, so it goes as it stands: gathering it would copy the batch to
+	// reproduce it and the items come back already in order.
+	if groups == nil {
+		return r.evaluateRoute(ctx, ruleID, keys[0], generation, input, callBudget)
 	}
 
 	parts := make([]EvaluateResult, len(groups))
-	workerCount := max(1, state.MaxProcsByID[ruleID])
+	workerBudget := max(1, callBudget/len(groups))
 	var wg sync.WaitGroup
 	for i, group := range groups {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			shards := runtime.ShardConcurrent(group.events, workerCount, func(chunk []events.Event) EvaluateResult {
-				return r.evaluateChunk(ctx, ruleID, group.rolloutKey, generation, chunk)
-			})
-			part := EvaluateResult{Items: make([]EvaluateItem, 0, len(group.events))}
-			for _, shard := range shards {
-				if shard.CallErr != nil {
-					parts[i] = EvaluateResult{CallErr: shard.CallErr}
-					return
-				}
-				part.Items = append(part.Items, shard.Items...)
-			}
-			parts[i] = part
-		}()
+		wg.Go(func() {
+			parts[i] = r.evaluateRoute(ctx, ruleID, group.Key, generation, input.Gather(group.Indexes), workerBudget)
+		})
 	}
 	wg.Wait()
 
-	result := EvaluateResult{Items: make([]EvaluateItem, len(input))}
+	result := EvaluateResult{Items: make([]EvaluateItem, input.Len())}
 	for i, part := range parts {
 		if part.CallErr != nil {
 			return EvaluateResult{CallErr: part.CallErr}
 		}
-		if len(part.Items) != len(groups[i].indexes) {
-			return EvaluateResult{CallErr: errors.NewF("rule %s returned invalid routed result shape", ruleID)}
-		}
-		for j, inputIndex := range groups[i].indexes {
+		for j, inputIndex := range groups[i].Indexes {
 			result.Items[inputIndex] = part.Items[j]
 		}
 	}
 	return result
 }
 
-func (r *Application) evaluateChunk(ctx context.Context, ruleID, rolloutKey string, generation int64, input []events.Event) EvaluateResult {
-	owned := events.CloneEvents(input)
-	items := make([]EvaluateItem, len(owned))
+// evaluateRoute runs one side's batch, cut by bytes across the calls it is allowed, and concatenates
+// the items in batch order.
+func (r *Application) evaluateRoute(ctx context.Context, ruleID, rolloutKey string, generation int64, batch *events.Batch, workers int) EvaluateResult {
+	shards := runtime.ShardBytes(batch.WireSizes(), runtime.MaxCallPayloadBytes, workers, func(start, end int) EvaluateResult {
+		return r.evaluateChunk(ctx, ruleID, rolloutKey, generation, batch.Slice(start, end))
+	})
+	result := EvaluateResult{Items: make([]EvaluateItem, 0, batch.Len())}
+	for _, shard := range shards {
+		if shard.CallErr != nil {
+			return EvaluateResult{CallErr: shard.CallErr}
+		}
+		result.Items = append(result.Items, shard.Items...)
+	}
+	if len(result.Items) != batch.Len() {
+		return EvaluateResult{CallErr: errors.NewF("rule %s returned invalid routed result shape", ruleID)}
+	}
+	return result
+}
+
+func (r *Application) evaluateChunk(ctx context.Context, ruleID, rolloutKey string, generation int64, chunk *events.Batch) EvaluateResult {
+	items := make([]EvaluateItem, chunk.Len())
 	invocation, err := r.Application.Submit(ctx, ruleID, rolloutKey, generation, func(callCtx context.Context, rule Rule) error {
 		if !rule.RuleMetadata().Enabled {
 			return nil
 		}
-		result := rule.EvaluateBatch(callCtx, owned)
+		result := rule.EvaluateBatch(callCtx, chunk)
 		if result.CallErr != nil {
 			return result.CallErr
 		}
-		if len(result.Items) != len(owned) {
-			return &errors.ResultCardinalityError{PluginKind: "rule", PluginID: ruleID, Field: "items", Expected: len(owned), Actual: len(result.Items)}
+		if len(result.Items) != chunk.Len() {
+			return &errors.ResultCardinalityError{PluginKind: "rule", PluginID: ruleID, Field: "items", Expected: chunk.Len(), Actual: len(result.Items)}
 		}
 		copy(items, result.Items)
 		return nil
@@ -124,19 +119,22 @@ func (r *Application) evaluateChunk(ctx context.Context, ruleID, rolloutKey stri
 	}
 }
 
-func (r *Application) shadow(ctx context.Context, ruleID string, input []events.Event, workerCount int, generation int64) {
-	for _, chunk := range runtime.ShardSlice(input, workerCount) {
-		owned := events.CloneEvents(chunk)
+// shadow mirrors the batch onto a shadow candidate, cut the way production cuts it so an oversized
+// payload fails the same way. SubmitShadow does not block; the runtime has its own shadow budget.
+func (r *Application) shadow(ctx context.Context, ruleID string, input *events.Batch, callBudget int, generation int64) {
+	bounds := runtime.ChunkBounds(input.WireSizes(), runtime.MaxCallPayloadBytes, callBudget)
+	for i := range len(bounds) - 1 {
+		chunk := input.Slice(bounds[i], bounds[i+1])
 		_, _ = r.Application.SubmitShadow(ctx, ruleID, generation, func(callCtx context.Context, rule Rule) error {
 			if !rule.RuleMetadata().Enabled {
 				return nil
 			}
-			result := rule.EvaluateBatch(callCtx, owned)
+			result := rule.EvaluateBatch(callCtx, chunk)
 			if result.CallErr != nil {
 				return result.CallErr
 			}
-			if len(result.Items) != len(owned) {
-				return fmt.Errorf("rule %s returned %d items for %d shadow events", ruleID, len(result.Items), len(owned))
+			if len(result.Items) != chunk.Len() {
+				return fmt.Errorf("rule %s returned %d items for %d shadow events", ruleID, len(result.Items), chunk.Len())
 			}
 			for _, item := range result.Items {
 				if item.Err != nil {

@@ -66,10 +66,23 @@ type ProjectionState[T any] struct {
 
 // ProjectionData is the independently owned typed data from a snapshot.
 type ProjectionData[T any] struct {
-	Primaries    []T
-	Candidates   []T
-	ByFileName   map[string]T
-	MaxProcsByID map[string]int
+	Primaries   []T
+	Candidates  []T
+	ByFileName  map[string]T
+	RolloutByID map[string]Rollout
+}
+
+// Rollout is what a generation says about one plugin id's rollout; its zero value describes an id it does not carry.
+type Rollout struct {
+	MaxProcs        int
+	CallsPerProcess int
+	CanaryPct       float64
+	Shadow          bool
+}
+
+// Capacity is the invocations this id's deployment can run at once: the two bounds multiplied, a ceiling not a promise.
+func (r Rollout) Capacity() int {
+	return max(1, r.MaxProcs) * max(1, r.CallsPerProcess)
 }
 
 // clone returns an independently owned copy of the projection data.
@@ -81,7 +94,7 @@ func (s ProjectionData[T]) clone(loader Loader[T]) ProjectionData[T] {
 	for name, value := range s.ByFileName {
 		clone.ByFileName[name] = loader.Clone(value)
 	}
-	clone.MaxProcsByID = maps.Clone(s.MaxProcsByID)
+	clone.RolloutByID = maps.Clone(s.RolloutByID)
 	return clone
 }
 
@@ -112,8 +125,7 @@ type projectionActor[T any] struct {
 // ProjectionStateRequest reads the current immutable projection state.
 type ProjectionStateRequest struct{}
 
-// MessageProjectionActorStatusChanged reports projection status. The child sends it
-// to its parent with a zero PID; Supervisor stamps external reports.
+// MessageProjectionActorStatusChanged reports projection status, with a zero PID from the child and stamped by Supervisor.
 type MessageProjectionActorStatusChanged struct {
 	Status        ProjectionActorStatus
 	ProjectionPID gen.PID
@@ -132,8 +144,7 @@ type MessageProjectionCommitResult struct {
 	Err           error
 }
 
-// MessageProjectionActorActivate tells a projection child that its parent has recorded
-// the child's PID and it may begin monitoring snapshot events.
+// MessageProjectionActorActivate tells a projection child its parent recorded its PID and it may monitor snapshot events.
 type MessageProjectionActorActivate struct{}
 
 // --- messages ---
@@ -226,8 +237,9 @@ func (a *projectionActor[T]) applyEvent(event gen.MessageEvent) error {
 		a.observedGeneration = snap.Generation
 		a.prepared = nil
 		parsed, err := newParsedProjection(snap, a.loader)
-		if err != nil {
-			a.lastError = err
+		a.lastError = err
+		// Nothing parsed leaves the previous generation standing; a partial one serves what parsed and stays degraded.
+		if err != nil && len(parsed.data.ByFileName) == 0 {
 			return nil
 		}
 		if a.mode == ProjectionCommitExternal {
@@ -235,7 +247,6 @@ func (a *projectionActor[T]) applyEvent(event gen.MessageEvent) error {
 		} else {
 			a.committed = &parsed
 		}
-		a.lastError = nil
 	case a.events.Status:
 		status, ok := event.Message.(ReaderActorStatus)
 		if ok {
@@ -286,12 +297,13 @@ type parsedProjection[T any] struct {
 	data       ProjectionData[T]
 }
 
-// newParsedProjection converts a snapshot into independently owned typed data.
+// newParsedProjection converts a snapshot into owned typed data, skipping and joining specs that fail so one break costs itself.
 func newParsedProjection[T any](snap *snapshot.Snapshot, loader Loader[T]) (parsedProjection[T], error) {
 	data := ProjectionData[T]{
-		ByFileName:   make(map[string]T),
-		MaxProcsByID: make(map[string]int),
+		ByFileName:  make(map[string]T),
+		RolloutByID: make(map[string]Rollout),
 	}
+	var parseErrs []error
 	for _, entry := range snap.Entries {
 		for index, ref := range []*snapshot.ArtifactRef{entry.Primary, entry.Candidate} {
 			if ref == nil || len(ref.Spec) == 0 {
@@ -299,23 +311,28 @@ func newParsedProjection[T any](snap *snapshot.Snapshot, loader Loader[T]) (pars
 			}
 			value, err := loader.ParseSpec(ref.Name, append([]byte(nil), ref.Spec...))
 			if err != nil {
-				return parsedProjection[T]{}, fmt.Errorf("parse snapshot spec %q (id %q): %w", ref.Name, entry.Id, err)
+				parseErrs = append(parseErrs, fmt.Errorf("parse snapshot spec %q (id %q): %w", ref.Name, entry.Id, err))
+				continue
 			}
 			value = loader.Clone(value)
 			data.ByFileName[ref.Name] = loader.Clone(value)
-			maxProcs := loader.MaxProcs(value)
-			maxProcs = max(1, maxProcs)
-			if maxProcs > data.MaxProcsByID[entry.Id] {
-				data.MaxProcsByID[entry.Id] = maxProcs
-			}
+			rollout := data.RolloutByID[entry.Id]
+			// Primary and candidate may declare different bounds and a call routes to either, so the id carries the larger.
+			rollout.MaxProcs = max(rollout.MaxProcs, 1, loader.MaxProcs(value))
+			rollout.CallsPerProcess = max(rollout.CallsPerProcess, 1, loader.CallsPerProcess(value))
 			if index == 0 {
 				data.Primaries = append(data.Primaries, loader.Clone(value))
 			} else {
 				data.Candidates = append(data.Candidates, loader.Clone(value))
+				rollout.Shadow = rollout.Shadow || ref.RolloutMode == runtime.RolloutModeShadow
+				if ref.RolloutMode == runtime.RolloutModeCanary {
+					rollout.CanaryPct = loader.RolloutPct(value)
+				}
 			}
+			data.RolloutByID[entry.Id] = rollout
 		}
 	}
-	return parsedProjection[T]{generation: snap.Generation, data: data}, nil
+	return parsedProjection[T]{generation: snap.Generation, data: data}, errors.Join(parseErrs...)
 }
 
 // ProjectionClient performs bounded reads against the stable projection endpoint.

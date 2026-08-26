@@ -22,7 +22,7 @@ import (
 
 const runtimeShutdownTimeout = 45 * time.Second
 
-type controllerConfig struct {
+type config struct {
 	services.Common
 	ControllerDatabaseDSN  string `env:"CONTROLLER_DATABASE_DSN"`
 	ExecutorSnapshotTopic  string `env:"KAFKA_TOPIC_EXECUTOR_SNAPSHOT"`
@@ -41,7 +41,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	var cfg controllerConfig
+	var cfg config
 	if err := services.LoadFromEnvironment(&cfg); err != nil {
 		slog.Error("load controller config", "error", err)
 		os.Exit(1)
@@ -59,19 +59,20 @@ func main() {
 
 	node := host.Node()
 	runner := services.New(rootLogger.With("component", "runner"))
-	runner.Register(
-		controller.NewService(node, "controller-rule", controller.Options[*rules.RuleMetadata]{
-			DatabaseDSN: cfg.ControllerDatabaseDSN,
-			Namespace:   "rule",
-			Topic:       cfg.ExecutorSnapshotTopic,
-			Broker:      broker,
-			SupervisorOptions: controller.SupervisorOptions[*rules.RuleMetadata]{
-				ActorOptions: controller.ActorOptions[*rules.RuleMetadata]{
-					Directory: cfg.RulePluginDir,
-					Loader:    rules.Loader{},
-				},
+	ruleControllerSvc := controller.NewService(node, "controller-rule", controller.Options[*rules.RuleMetadata]{
+		DatabaseDSN: cfg.ControllerDatabaseDSN,
+		Namespace:   "rule",
+		Topic:       cfg.ExecutorSnapshotTopic,
+		Broker:      broker,
+		SupervisorOptions: controller.SupervisorOptions[*rules.RuleMetadata]{
+			ActorOptions: controller.ActorOptions[*rules.RuleMetadata]{
+				Directory: cfg.RulePluginDir,
+				Loader:    rules.Loader{},
 			},
-		}),
+		},
+	})
+	runner.Register(
+		ruleControllerSvc,
 		controller.NewService(node, "controller-matcher", controller.Options[*matchers.MatcherMetadata]{
 			DatabaseDSN: cfg.ControllerDatabaseDSN,
 			Namespace:   "matcher",
@@ -121,7 +122,7 @@ func main() {
 			},
 		}),
 	)
-	go services.ServeHealth(rootLogger.With("component", "health"), ":8080", nil)
+	runner.Register(services.NewHealthService(":8080", nil))
 	runner.Run(ctx)
 
 	closeCtx, cancel := context.WithTimeout(context.Background(), runtimeShutdownTimeout)
@@ -130,5 +131,5 @@ func main() {
 	if err != nil {
 		rootLogger.FatalF("close controller node: %v", err)
 	}
-	rootLogger.Info("controller stopped")
+	rootLogger.Info("Shutting down controller")
 }

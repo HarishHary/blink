@@ -128,7 +128,7 @@ func (a *readerActor) HandleMessage(from gen.PID, message any) error {
 		a.readerMeta.status.Availability = runtime.AvailabilityUnavailable
 		a.readerMeta.status.CaughtUp = false
 		a.readerMeta.status.LastError = m.Reason
-		a.opts.Logger.ErrorF("snapshot reader actor: reader %s stopped: %v", m.Alias, m.Reason)
+		a.Log().Error("snapshot reader actor: reader %s stopped: %v", m.Alias, m.Reason)
 		return a.scheduleReaderMetaRestart()
 	}
 	return nil
@@ -222,14 +222,14 @@ func (a *readerActor) apply(message brokers.Message) bool {
 	if key == snapshot.GenerationMarkerKey {
 		generation, err := snapshot.DecodeGeneration(message.Value)
 		if err != nil {
-			a.opts.Logger.ErrorF("snapshot reader actor: decode generation marker: %v", err)
+			a.Log().Error("snapshot reader actor: decode generation marker: %v", err)
 			return false
 		}
 		if a.committed != nil && generation <= a.committed.Generation {
 			if generation == a.committed.Generation {
 				return false
 			}
-			a.opts.Logger.ErrorF(
+			a.Log().Error(
 				"snapshot reader actor: generation went backwards %d -> %d",
 				a.committed.Generation,
 				generation,
@@ -250,7 +250,7 @@ func (a *readerActor) apply(message brokers.Message) bool {
 
 	entry, err := snapshot.Unmarshal(message.Value)
 	if err != nil {
-		a.opts.Logger.ErrorF("snapshot reader actor: unmarshal entry %q: %v", key, err)
+		a.Log().Error("snapshot reader actor: unmarshal entry %q: %v", key, err)
 		return false
 	}
 	a.entries[entry.Id] = entry

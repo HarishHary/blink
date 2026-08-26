@@ -9,7 +9,6 @@ import (
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/runtime/plugin"
 	"github.com/harishhary/blink/pkg/alerts"
-	"github.com/harishhary/blink/pkg/alerts/pb"
 	"github.com/harishhary/blink/pkg/enrichments/rpc_enrichments"
 )
 
@@ -40,45 +39,39 @@ func (r *rpcEnrichment) Metadata() plugin.Spec {
 
 func (r *rpcEnrichment) Checksum() string { return r.checksum }
 
-func (r *rpcEnrichment) EnrichBatch(ctx context.Context, batch []*alerts.Alert) EnrichResult {
-	pbAlerts := make([]*pb.Alert, 0, len(batch))
-	for _, a := range batch {
-		pa, err := alerts.AlertToProto(a)
-		if err != nil {
-			return EnrichResult{CallErr: errors.NewE(err)}
-		}
-		pbAlerts = append(pbAlerts, pa)
-	}
-	resp, err := r.client.EnrichBatch(ctx, &rpc_enrichments.EnrichBatchRequest{Alerts: pbAlerts})
+// EnrichBatch sends the batch's encodings and applies each returned enrichment to the alert the call
+// carried, which is the caller's copy to keep or discard by the error beside it.
+func (r *rpcEnrichment) EnrichBatch(ctx context.Context, batch *alerts.Batch) EnrichResult {
+	resp, err := r.client.EnrichBatch(ctx, &rpc_enrichments.EnrichBatchRequest{Alerts: batch.Raw()})
 	if err != nil {
 		return EnrichResult{CallErr: errors.NewE(err)}
 	}
 	if resp == nil {
 		return EnrichResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "enrichment", PluginID: r.fileName, Field: "response", Expected: 1})}
 	}
-	if len(resp.GetItems()) != len(batch) {
-		return EnrichResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "enrichment", PluginID: r.fileName, Field: "items", Expected: len(batch), Actual: len(resp.GetItems())})}
+	if len(resp.GetItems()) != batch.Len() {
+		return EnrichResult{CallErr: errors.NewE(&errors.ResultCardinalityError{PluginKind: "enrichment", PluginID: r.fileName, Field: "items", Expected: batch.Len(), Actual: len(resp.GetItems())})}
 	}
 
-	perErrs := make([]errors.Error, len(batch))
+	perErrs := make([]errors.Error, batch.Len())
 	for i, item := range resp.GetItems() {
 		if item.GetError() != "" {
 			perErrs[i] = errors.New(item.GetError())
 		}
 	}
-	enrichedAlerts := make([]map[string]any, len(batch))
+	enrichedAlerts := make([]map[string]any, batch.Len())
 	for i, item := range resp.GetItems() {
 		if perErrs[i] != nil {
 			continue
 		}
 		var enriched map[string]any
 		if err := json.Unmarshal(item.GetResultJson(), &enriched); err != nil {
-			return EnrichResult{CallErr: errors.NewE(fmt.Errorf("decode enrichment %q result for alert %q: %w", r.fileName, batch[i].Id, err))}
+			return EnrichResult{CallErr: errors.NewE(fmt.Errorf("decode enrichment %q result for alert %q: %w", r.fileName, batch.At(i).Id, err))}
 		}
 		enrichedAlerts[i] = enriched
 	}
 	for i, enriched := range enrichedAlerts {
-		maps.Copy(batch[i].Event, enriched)
+		maps.Copy(batch.At(i).Event, enriched)
 	}
 	return EnrichResult{Errs: perErrs}
 }

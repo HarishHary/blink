@@ -11,7 +11,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/helpers"
-	"github.com/harishhary/blink/internal/runtime"
 	"github.com/harishhary/blink/pkg/events"
 	"github.com/harishhary/blink/pkg/rules"
 	"github.com/harishhary/blink/pkg/scoring"
@@ -19,25 +18,21 @@ import (
 
 // Alert wraps a detection Event with its rule reference, scoring, and pipeline metadata as it flows through the stages.
 type Alert struct {
-	Id                 string
-	Attempts           int
-	Cluster            string
-	Created            time.Time
-	Dispatched         time.Time
-	Event              events.Event
-	Staged             bool
-	OutputsSent        []string
-	EnrichmentsApplied []string
-
-	LogSource string
-	LogType   string
-
-	SourceEntity  string
-	SourceService string
-
-	Confidence scoring.Confidence
-	Severity   scoring.Severity
-
+	Id                  string
+	Attempts            int
+	Cluster             string
+	Created             time.Time
+	Dispatched          time.Time
+	Event               events.Event
+	Staged              bool
+	OutputsSent         []string
+	EnrichmentsApplied  []string
+	LogSource           string
+	LogType             string
+	SourceEntity        string
+	SourceService       string
+	Confidence          scoring.Confidence
+	Severity            scoring.Severity
 	Rule                *rules.RuleMetadata
 	OverrideMergeByKeys []string
 }
@@ -51,6 +46,9 @@ func (a *Alert) Clone() *Alert {
 	clone.OverrideMergeByKeys = append([]string(nil), a.OverrideMergeByKeys...)
 	return &clone
 }
+
+// RolloutKey is the side this alert routes to, taken from the event it was raised on.
+func (a *Alert) RolloutKey() string { return a.Event.RolloutKey() }
 
 // CloneAlerts returns alert copies with deeply cloned Events, preserving input order.
 func CloneAlerts(in []*Alert) []*Alert {
@@ -72,7 +70,7 @@ func (a *Alert) MergeByKeys() []string {
 	return a.Rule.MergeByKeys
 }
 
-// Creates a new Alert
+// NewAlert raises an alert for a rule on an event, with the options applied.
 func NewAlert(rule *rules.RuleMetadata, event events.Event, optFns ...AlertOptions) (*Alert, errors.Error) {
 	alert := &Alert{
 		Id:         uuid.NewString(),
@@ -90,7 +88,7 @@ func NewAlert(rule *rules.RuleMetadata, event events.Event, optFns ...AlertOptio
 	return alert, nil
 }
 
-// Merges multiple alerts into a new merged alert
+// Merge folds alerts sharing a merge key into one, oldest first, keeping the highest severity and confidence.
 func Merge(alerts []*Alert) (*Alert, errors.Error) {
 	if len(alerts) == 0 {
 		return nil, errors.New("no alerts to merge")
@@ -144,7 +142,7 @@ func Merge(alerts []*Alert) (*Alert, errors.Error) {
 	return merged, nil
 }
 
-// Finds values common to all records
+// computeCommon is the values every event agrees on.
 func computeCommon(events []events.Event) map[string]any {
 	if len(events) == 0 {
 		return make(map[string]any)
@@ -166,7 +164,7 @@ func computeCommon(events []events.Event) map[string]any {
 	return common
 }
 
-// Finds values in the records that are not in the common subset
+// getValueDiffs is each event's values that differ from the common subset, keyed by when the alert was created.
 func getValueDiffs(common map[string]any, alerts []*Alert, events []events.Event) map[string]any {
 	valueDiffs := make(map[string]any)
 	for i, event := range events {
@@ -179,7 +177,7 @@ func getValueDiffs(common map[string]any, alerts []*Alert, events []events.Event
 	return valueDiffs
 }
 
-// Checks if any alert is staged
+// anyStaged reports whether any alert is staged.
 func anyStaged(alerts []*Alert) bool {
 	for _, alert := range alerts {
 		if alert.Staged {
@@ -189,7 +187,7 @@ func anyStaged(alerts []*Alert) bool {
 	return false
 }
 
-// Converts the alert to a dictionary ready to send to an output
+// OutputDict is the alert as the map an output receives.
 func (a *Alert) OutputDict() map[string]any {
 	output := map[string]any{
 		"cluster":          a.Cluster,
@@ -209,12 +207,12 @@ func (a *Alert) OutputDict() map[string]any {
 	return output
 }
 
-// Returns a simple representation of the alert
+// String is the alert in one line, for logs.
 func (a *Alert) String() string {
 	return fmt.Sprintf("Alert %s triggered from %s", a.Id, a.Rule.Name)
 }
 
-// Returns a detailed representation of the alert
+// FullString is the whole alert as indented JSON.
 func (a *Alert) FullString() (string, errors.Error) {
 	recordJSON, err := json.MarshalIndent(a, "", "  ")
 	if err != nil {
@@ -223,12 +221,12 @@ func (a *Alert) FullString() (string, errors.Error) {
 	return string(recordJSON), nil
 }
 
-// Compares alerts by their creation time
+// Less orders alerts by creation time.
 func (a *Alert) Less(other *Alert) bool {
 	return a.Created.Before(other.Created)
 }
 
-// Checks if two alerts can be merged together
+// CanMerge reports whether both alerts opt into merging and agree on rule, version, window, and merge values.
 func (a *Alert) CanMerge(other *Alert) bool {
 	if other == nil || !a.MergeEnabled() || !other.MergeEnabled() {
 		return false
@@ -276,10 +274,7 @@ func (a *Alert) MergePartitionKey() string {
 		ruleID = ruleIdentity(a.Rule)
 		version = a.Rule.Version
 	}
-	tenant := runtime.NormalizeRolloutKey(nil)
-	if a.Event != nil {
-		tenant = runtime.NormalizeRolloutKey(a.Event["tenant_id"])
-	}
+	tenant := a.RolloutKey()
 	parts := []string{
 		"tenant=" + mergeKeyValue(tenant, true),
 		"rule=" + mergeKeyValue(ruleID, true),

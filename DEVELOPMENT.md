@@ -1,103 +1,57 @@
 # Development
 
-This guide contains useful information for developing on the Blink project. For _what_ Blink
-is and how messages flow, start with [README.md](README.md) and
-[docs/internals/message-flow.md](docs/internals/message-flow.md).
-
-- [Development](#development)
-    - [Overview](#overview)
-    - [Prerequisites](#prerequisites)
-    - [Components](#components)
-    - [Common commands](#common-commands)
-    - [Running on Kubernetes](#running-on-kubernetes)
-    - [IDEs \& Dev Containers](#ides-dev-containers)
-    - [Formatting \& hooks](#formatting-hooks)
-    - [Contributing](#contributing)
-
-## Overview
-
-Blink is a Go monorepo: an event-driven detection pipeline of small services wired over Kafka,
-with detection logic running in `hashicorp/go-plugin` subprocesses (gRPC). Supporting code is
-Bash (`scripts/`) and YAML/Helm (Kubernetes manifests under `deployments/`).
-
-A separate control plane (`cmd/controller`) turns each plugin type's YAML into an effective
-`Snapshot` and publishes it on a log-compacted Kafka topic; every pipeline pod consumes its type's
-snapshot and reconciles its subprocesses. Both planes react to change with the same
-subscribe → signal → re-read → re-sync loop - see
-[docs/internals/reconcile-loop.md](docs/internals/reconcile-loop.md).
+This guide is scoped to the currently documented `controller` and `event_matcher` services and their Ergo runtime.
 
 ## Prerequisites
 
-- [Go](https://go.dev/doc/install) **>= 1.26** (see `go.mod`)
-- [Docker](https://docs.docker.com/get-docker/) or [Podman](https://podman.io/) - containers and a local Kafka
-- [Minikube](https://minikube.sigs.k8s.io/) - local Kubernetes (see [deployments/README.md](deployments/README.md))
-- [pre-commit](https://pre-commit.com/) - git hooks
-- Optional: VS Code + the Dev Containers extension (a `.devcontainer` is provided)
+- Go 1.26 or newer (see `go.mod`)
+- Kafka for a running service
+- Docker or Podman and Minikube for the local Helm path
+- Optional: `staticcheck` and `pre-commit`
 
-## Components
+## Build and test
 
-| Path                                                                             | What                                                                                                                                                                            |
-| -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cmd/`                                                                           | the eight services: `event_matcher`, `rule_executor`, `alert_merger`, `rule_tuner`, `alert_enricher`, `alert_formatter`, `alert_dispatcher`, and the control plane `controller` |
-| `internal/brokers`                                                               | Kafka broker abstraction (`Reader`/`Writer`/`Broker`); also an Event Hubs implementation                                                                                        |
-| `internal/controller`                                                            | control plane: `LocalReader[T]` (disk parse+elect → `Snapshot`), `PluginController[T]` (writer), `SnapshotReader` (per-pod reader)                                              |
-| `internal/plugin`, `internal/pools`                                              | generic plugin runtime (`PluginExecutor[T]`) and process pools (`ProcessPool[T]`)                                                                                               |
-| `internal/config`, `internal/services`, `internal/backends`, `internal/snapshot` | plugin config `Loader[T]`/`Source[T]`/`SnapshotConfig[T]`, service runner/config loader, persistence adapters, snapshot wire model                                              |
-| `pkg/{events,alerts,scoring}`                                                    | domain types                                                                                                                                                                    |
-| `pkg/{rules,matchers,tuning_rules,enrichments,formatters}`                       | per-type plugin interfaces, RPC, and SDKs                                                                                                                                       |
-| `deployments/`                                                                   | Kubernetes Helm charts: `helm/kafka/` (cluster + topics), `helm/blink/` (services + config), `helm/keda/` (Kafka-lag scalers)                                                   |
-| `examples/`                                                                      | sample plugin configs, one directory per plugin type                                                                                                                            |
-| `docs/`                                                                          | architecture & internals - `docs/internals/message-flow.md` is the message-schema reference                                                                                     |
-
-## Common commands
+Run these commands from the repository root:
 
 ```bash
-go build ./...                       # build everything
-go build ./cmd/rule_executor         # build one service
-go test ./...                        # run all tests
-go test ./pkg/rules/...              # tests for one package
-go test ./pkg/rules -run TestName    # a single test by name
-staticcheck ./...                    # static analysis (matches CI)
-pre-commit run --all-files           # hooks: trailing whitespace, YAML lint, commit-msg
+go build ./cmd/controller ./cmd/event_matcher
+go test ./cmd/controller
+go test ./cmd/event_matcher/matcher
+go test ./internal/runtime/controller ./internal/runtime/plugin ./internal/runtime/snapshot
+go test ./...
+staticcheck ./...
+pre-commit run --all-files
 ```
 
-Some tests build plugin binaries at runtime (e.g. `pkg/rules/executor_test.go`), so a Go
-toolchain must be on `PATH`. If a test fails with a missing-binary error, look for a
-`testdata/` directory with a `go build` step in the test setup.
+The focused test commands cover the two composition roots and their current actor runtimes. `go test ./...` remains the repository-wide check.
 
-## Running on Kubernetes
+## Runtime layout
 
-Local clusters run on Podman or Minikube. See **[deployments/README.md](deployments/README.md)**
-for the Strimzi and KEDA operator prerequisites, chart validation, and install sequence.
-Install the independent Helm charts in order: `deployments/helm/kafka`, then
-`deployments/helm/blink`, then `deployments/helm/keda`; every chart command passes
-`-f deployments/helm/values.yaml`, where the shared alert-stage topology
-(`global.stages`) is defined once. Each stage declares its own topic, group, DLQ,
-snapshot, and plugin variables under `workload.environment`; Kafka and KEDA read
-the stage's `kafka_topic_<stage>` and `kafka_group_<stage>` entries from the same
-map. The presence of `topic.dlq` creates a DLQ, while the presence of `scaler`
-creates its KEDA ScaledObject. Merger and dispatcher DLQs remain disabled pending
-runtime support. See the canonical values and commands in
-[deployments/README.md](deployments/README.md).
+- `cmd/controller` starts one local Ergo node and registers five controller services: rule, matcher, tuning, formatter, and enrichment catalogs.
+- `cmd/event_matcher` starts one local Ergo node, an attempt-owned matcher plugin application, and a rule snapshot projection.
+- `internal/runtime/controller`, `internal/runtime/plugin`, and `internal/runtime/snapshot` contain the actor implementations.
+- Each process exposes `/health/live`, `/health/ready`, and `/metrics` on port 8080. The matcher readiness check requires both current projections to be ready; the controller health service has no
+  extra readiness predicate.
 
-## IDEs & Dev Containers
+## Required environment
 
-Use any editor you like. The team uses VS Code, and a Dev Container is provided to give a
-ready-made environment: with Docker installed, open the repo in VS Code and install the
-[Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers),
-then "Reopen in Container". See
-[Developing inside a Container](https://code.visualstudio.com/docs/devcontainers/containers).
+All processes require `KAFKA_BROKERS`; `ENVIRONMENT` is optional and selects logging/runtime diagnostics (`dev` enables the local Ergo observer and MCP applications).
 
-## Formatting & hooks
+| Process         | Required service-specific variables                                                                                                                                                                                                                                                                     |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `controller`    | `CONTROLLER_DATABASE_DSN`, `KAFKA_TOPIC_EXECUTOR_SNAPSHOT`, `KAFKA_TOPIC_MATCHER_SNAPSHOT`, `KAFKA_TOPIC_TUNER_SNAPSHOT`, `KAFKA_TOPIC_FORMATTER_SNAPSHOT`, `KAFKA_TOPIC_ENRICHER_SNAPSHOT`, `RULE_PLUGIN_DIR`, `MATCHER_PLUGIN_DIR`, `TUNER_PLUGIN_DIR`, `FORMATTER_PLUGIN_DIR`, `ENRICHER_PLUGIN_DIR` |
+| `event_matcher` | `KAFKA_TOPIC_MATCHER`, `KAFKA_GROUP_MATCHER`, `KAFKA_TOPIC_EXECUTOR`, `KAFKA_TOPIC_MATCHER_DLQ`, `KAFKA_TOPIC_MATCHER_SNAPSHOT`, `KAFKA_TOPIC_EXECUTOR_SNAPSHOT`, `MATCHER_PLUGIN_DIR`                                                                                                                  |
 
-Install the git hooks once so style/lint issues are caught before review:
+Optional matcher settings are `MAX_BATCH_SIZE`, `MAX_CONCURRENT_CALLS`, `MATCHER_TIMEOUT_SEC`, `MATCHER_MAX_ATTEMPTS`, `MATCHER_RETRY_BASE_MS`, and `MATCHER_RETRY_CAP_MS`. Defaults are
+respectively 50, 8, 10 seconds, 3, 100 ms, and 5000 ms.
 
-```bash
-pre-commit install
-```
+## Kubernetes
 
-Run `gofmt` and `staticcheck ./...` before opening a PR.
+Use the shared `deployments/helm/values.yaml` with each Helm chart. The current deployment instructions, image builds, and render checks are in [deployment](deployments/README.md).
 
-## Contributing
+## References
 
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+- [Service index](docs/services/README.md)
+- [Runtime overview](docs/internals/README.md)
+- [Message flow](docs/internals/message-flow.md)
+- [Schema reference](docs/internals/schemas/README.md)

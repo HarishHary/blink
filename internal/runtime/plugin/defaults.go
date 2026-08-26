@@ -1,40 +1,74 @@
 package plugin
 
-import "time"
+import (
+	goruntime "runtime"
+	"time"
+)
 
-// DefaultDeploymentManagerQueueSize and related constants define default deployment options.
 const (
-	DefaultRuntimeMaxOutstandingInvocations       = 512
-	DefaultRuntimeShadowMaxOutstandingInvocations = 32
-	DefaultRuntimeCloseGracePeriod                = 5 * time.Second
-	DefaultDeploymentManagerQueueSize             = 128
-	DefaultDeploymentManagerDispatchTimeout       = 30 * time.Second
-	DefaultDeploymentManagerScaleCooldown         = time.Second
-	DefaultDeploymentManagerIdleTimeout           = 30 * time.Second
-	DefaultDeploymentManagerDrainTimeout          = 30 * time.Second
-	DefaultDeploymentPoolSize                     = 1
-	DefaultDeploymentPoolRetryMin                 = 5 * time.Second
-	DefaultDeploymentPoolRetryMax                 = 5 * time.Minute
-	DefaultWorkerInvocationTimeout                = 30 * time.Second
-	DefaultWorkerHealthInterval                   = 15 * time.Second
-	DefaultWorkerRetryMin                         = time.Second
-	DefaultWorkerRetryMax                         = time.Minute
-	DefaultSupervisorRetryMin                     = DefaultWorkerRetryMin
-	DefaultSupervisorRetryMax                     = DefaultWorkerRetryMax
-	DefaultSupervisorControlTimeout               = 30 * time.Second
-	DefaultCatalogRetryMin                        = DefaultWorkerRetryMin
-	DefaultCatalogRetryMax                        = DefaultWorkerRetryMax
-	DefaultRouterRetryMin                         = DefaultWorkerRetryMin
-	DefaultRouterRetryMax                         = DefaultWorkerRetryMax
+	// DefaultDeploymentCallsPerProcess is what a process serves undeclared; above 1 the plugin has to be concurrency-safe.
+	DefaultDeploymentCallsPerProcess = 32
+	// MaxDeploymentCallsPerProcess is the most one process may declare, each a goroutine and a stream in a subprocess Blink cannot size.
+	MaxDeploymentCallsPerProcess = 64
+	// DefaultMaxDeploymentProcs is what a deployment scales to when it declares nothing.
+	DefaultMaxDeploymentProcs = 1
+	// MaxDeploymentProcs is the most plugin processes one deployment may declare.
+	MaxDeploymentProcs = 100
+)
+
+// Default option values for the runtime and every child it configures.
+const (
+	DefaultRetryMin                         = 5 * time.Second
+	DefaultRetryMax                         = 5 * time.Minute
+	DefaultRuntimeMaxConcurrentCalls        = 8  // concurrent caller calls the budgets are sized for
+	DefaultRuntimeShadowAdmissionShare      = 16 // divides the production budget into the shadow one
+	DefaultRuntimeProcessGrowthPerProc      = 2  // plugin process growth per usable CPU
+	DefaultRuntimeCloseGracePeriod          = 240 * time.Second
+	DefaultDeploymentManagerQueueSize       = 128
+	DefaultDeploymentManagerDispatchTimeout = 30 * time.Second
+	DefaultDeploymentManagerScaleCooldown   = time.Second
+	DefaultDeploymentManagerIdleTimeout     = 30 * time.Second
+	DefaultDeploymentManagerDrainTimeout    = 30 * time.Second
+	DefaultDeploymentManagerCircuitCooldown = 5 * time.Minute
+	DefaultDeploymentManagerRetryMin        = DefaultRetryMin
+	DefaultDeploymentManagerRetryMax        = DefaultRetryMax
+	DefaultPluginProcessInvocationTimeout   = 120 * time.Second
+	DefaultPluginProcessHealthInterval      = 10 * time.Second
+	DefaultPluginProcessRetryMin            = DefaultRetryMin
+	DefaultPluginProcessRetryMax            = DefaultRetryMax
+	DefaultSupervisorRetryMin               = DefaultRetryMin
+	DefaultSupervisorRetryMax               = DefaultRetryMax
+	DefaultSupervisorControlTimeout         = 120 * time.Second
+	DefaultCatalogRetryMin                  = DefaultRetryMin
+	DefaultCatalogRetryMax                  = DefaultRetryMax
+	DefaultRouterRetryMin                   = DefaultRetryMin
+	DefaultRouterRetryMax                   = DefaultRetryMax
 )
 
 // runtimeOptionsWithDefaults fills public runtime option defaults.
 func runtimeOptionsWithDefaults(opts Options) Options {
-	if opts.MaxOutstandingInvocations <= 0 {
-		opts.MaxOutstandingInvocations = DefaultRuntimeMaxOutstandingInvocations
+	if opts.MaxConcurrentCalls <= 0 {
+		opts.MaxConcurrentCalls = DefaultRuntimeMaxConcurrentCalls
 	}
-	if opts.ShadowMaxOutstandingInvocations <= 0 {
-		opts.ShadowMaxOutstandingInvocations = DefaultRuntimeShadowMaxOutstandingInvocations
+	// One call is at most this wide, and never wider than the batch; capacity past it arrives as further calls.
+	opts.callFanOut = MaxDeploymentProcs + 1
+	if opts.MaxBatchSize > 0 {
+		opts.callFanOut = min(opts.MaxBatchSize, opts.callFanOut)
+	}
+	// The per-plugin share rejects rather than waits, so it holds a whole fan-out per concurrent call.
+	opts.maxOutstandingInvocationsPerPlugin = opts.callFanOut * opts.MaxConcurrentCalls
+	// The shared budget only blocks, so it sits that many shares above one plugin's share.
+	opts.maxOutstandingInvocations = opts.maxOutstandingInvocationsPerPlugin * opts.MaxConcurrentCalls
+	opts.shadowMaxOutstandingInvocations = max(1, opts.maxOutstandingInvocations/DefaultRuntimeShadowAdmissionShare)
+	// One plugin's whole fan-out lands on one manager, so a queue under its share would move the same rejection a layer down.
+	if opts.SupervisorOptions.CatalogOptions.RouterOptions.ManagerOptions.QueueSize <= 0 &&
+		opts.maxOutstandingInvocationsPerPlugin > DefaultDeploymentManagerQueueSize {
+		opts.SupervisorOptions.CatalogOptions.RouterOptions.ManagerOptions.QueueSize = opts.maxOutstandingInvocationsPerPlugin
+	}
+
+	// Growth past a deployment's min_procs only pays off while a core is free, so GOMAXPROCS bounds it.
+	if opts.SupervisorOptions.CatalogOptions.RouterOptions.ManagerOptions.ProcessBudget == nil {
+		opts.SupervisorOptions.CatalogOptions.RouterOptions.ManagerOptions.ProcessBudget = NewProcessBudget(goruntime.GOMAXPROCS(0) * DefaultRuntimeProcessGrowthPerProc)
 	}
 	opts.SupervisorOptions = supervisorOptionsWithDefaults(opts.SupervisorOptions)
 	if opts.CloseTimeout <= 0 {
@@ -91,7 +125,7 @@ func routerOptionsWithDefaults(opts RouterOptions) RouterOptions {
 	return opts
 }
 
-// deploymentManagerOptionsWithDefaults fills manager and pool defaults.
+// deploymentManagerOptionsWithDefaults fills manager and plugin process defaults.
 func deploymentManagerOptionsWithDefaults(opts DeploymentManagerOptions) DeploymentManagerOptions {
 	if opts.QueueSize <= 0 {
 		opts.QueueSize = DefaultDeploymentManagerQueueSize
@@ -108,44 +142,35 @@ func deploymentManagerOptionsWithDefaults(opts DeploymentManagerOptions) Deploym
 	if opts.DrainTimeout <= 0 {
 		opts.DrainTimeout = DefaultDeploymentManagerDrainTimeout
 	}
-	opts.PoolOptions = deploymentPoolOptionsWithDefaults(opts.PoolOptions)
-	return opts
-}
-
-// deploymentPoolOptionsWithDefaults fills pool and worker defaults.
-func deploymentPoolOptionsWithDefaults(opts DeploymentPoolOptions) DeploymentPoolOptions {
-	if opts.InitialSize < 1 {
-		opts.InitialSize = DefaultDeploymentPoolSize
-	}
-	if opts.MaxSize < opts.InitialSize {
-		opts.MaxSize = opts.InitialSize
+	if opts.CircuitCooldown <= 0 {
+		opts.CircuitCooldown = DefaultDeploymentManagerCircuitCooldown
 	}
 	if opts.RetryMin <= 0 {
-		opts.RetryMin = DefaultDeploymentPoolRetryMin
+		opts.RetryMin = DefaultDeploymentManagerRetryMin
 	}
 	if opts.RetryMax <= 0 {
-		opts.RetryMax = DefaultDeploymentPoolRetryMax
+		opts.RetryMax = DefaultDeploymentManagerRetryMax
 	}
 	if opts.RetryMax < opts.RetryMin {
 		opts.RetryMax = opts.RetryMin
 	}
-	opts.WorkerOptions = deploymentWorkerOptionsWithDefaults(opts.WorkerOptions)
+	opts.ProcessOptions = pluginProcessOptionsWithDefaults(opts.ProcessOptions)
 	return opts
 }
 
-// deploymentWorkerOptionsWithDefaults fills worker timing defaults.
-func deploymentWorkerOptionsWithDefaults(opts DeploymentWorkerOptions) DeploymentWorkerOptions {
+// pluginProcessOptionsWithDefaults fills plugin process timing defaults.
+func pluginProcessOptionsWithDefaults(opts PluginProcessOptions) PluginProcessOptions {
 	if opts.InvocationTimeout <= 0 {
-		opts.InvocationTimeout = DefaultWorkerInvocationTimeout
+		opts.InvocationTimeout = DefaultPluginProcessInvocationTimeout
 	}
 	if opts.HealthInterval <= 0 {
-		opts.HealthInterval = DefaultWorkerHealthInterval
+		opts.HealthInterval = DefaultPluginProcessHealthInterval
 	}
 	if opts.RetryMin <= 0 {
-		opts.RetryMin = DefaultWorkerRetryMin
+		opts.RetryMin = DefaultPluginProcessRetryMin
 	}
-	if opts.RetryMax < opts.RetryMin {
-		opts.RetryMax = DefaultWorkerRetryMax
+	if opts.RetryMax <= 0 {
+		opts.RetryMax = DefaultPluginProcessRetryMax
 	}
 	if opts.RetryMax < opts.RetryMin {
 		opts.RetryMax = opts.RetryMin

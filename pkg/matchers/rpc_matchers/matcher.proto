@@ -3,9 +3,13 @@ package matchers;
 option go_package = "rpc_matchers/;rpc_matchers";
 
 import "google/protobuf/empty.proto";
-import "google/protobuf/struct.proto";
 
-message MatchBatchRequest  { repeated google.protobuf.Struct events = 1; }
+// MatchBatchRequest carries one encoded google.protobuf.Struct per event, not the Struct itself. A
+// bytes field and a submessage field share proto's length-delimited encoding, so this is the same
+// wire format the field had when it was declared as repeated google.protobuf.Struct and either side
+// of the handshake may predate the change. Bytes are what let the host encode each event once for a
+// batch and reuse it for every matcher that evaluates the batch, instead of once per matcher.
+message MatchBatchRequest  { repeated bytes events = 1; }
 
 message MatchItem {
   bool matched = 1;

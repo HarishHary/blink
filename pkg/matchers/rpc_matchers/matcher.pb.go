@@ -10,7 +10,6 @@ import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
-	structpb "google.golang.org/protobuf/types/known/structpb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -23,9 +22,14 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// MatchBatchRequest carries one encoded google.protobuf.Struct per event, not the Struct itself. A
+// bytes field and a submessage field share proto's length-delimited encoding, so this is the same
+// wire format the field had when it was declared as repeated google.protobuf.Struct and either side
+// of the handshake may predate the change. Bytes are what let the host encode each event once for a
+// batch and reuse it for every matcher that evaluates the batch, instead of once per matcher.
 type MatchBatchRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Events        []*structpb.Struct     `protobuf:"bytes,1,rep,name=events,proto3" json:"events,omitempty"`
+	Events        [][]byte               `protobuf:"bytes,1,rep,name=events,proto3" json:"events,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -60,7 +64,7 @@ func (*MatchBatchRequest) Descriptor() ([]byte, []int) {
 	return file_pkg_matchers_rpc_matchers_matcher_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *MatchBatchRequest) GetEvents() []*structpb.Struct {
+func (x *MatchBatchRequest) GetEvents() [][]byte {
 	if x != nil {
 		return x.Events
 	}
@@ -167,9 +171,9 @@ var File_pkg_matchers_rpc_matchers_matcher_proto protoreflect.FileDescriptor
 
 const file_pkg_matchers_rpc_matchers_matcher_proto_rawDesc = "" +
 	"\n" +
-	"'pkg/matchers/rpc_matchers/matcher.proto\x12\bmatchers\x1a\x1bgoogle/protobuf/empty.proto\x1a\x1cgoogle/protobuf/struct.proto\"D\n" +
-	"\x11MatchBatchRequest\x12/\n" +
-	"\x06events\x18\x01 \x03(\v2\x17.google.protobuf.StructR\x06events\";\n" +
+	"'pkg/matchers/rpc_matchers/matcher.proto\x12\bmatchers\x1a\x1bgoogle/protobuf/empty.proto\"+\n" +
+	"\x11MatchBatchRequest\x12\x16\n" +
+	"\x06events\x18\x01 \x03(\fR\x06events\";\n" +
 	"\tMatchItem\x12\x18\n" +
 	"\amatched\x18\x01 \x01(\bR\amatched\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\"?\n" +
@@ -199,25 +203,23 @@ var file_pkg_matchers_rpc_matchers_matcher_proto_goTypes = []any{
 	(*MatchBatchRequest)(nil),  // 0: matchers.MatchBatchRequest
 	(*MatchItem)(nil),          // 1: matchers.MatchItem
 	(*MatchBatchResponse)(nil), // 2: matchers.MatchBatchResponse
-	(*structpb.Struct)(nil),    // 3: google.protobuf.Struct
-	(*emptypb.Empty)(nil),      // 4: google.protobuf.Empty
+	(*emptypb.Empty)(nil),      // 3: google.protobuf.Empty
 }
 var file_pkg_matchers_rpc_matchers_matcher_proto_depIdxs = []int32{
-	3, // 0: matchers.MatchBatchRequest.events:type_name -> google.protobuf.Struct
-	1, // 1: matchers.MatchBatchResponse.items:type_name -> matchers.MatchItem
-	0, // 2: matchers.Matcher.MatchBatch:input_type -> matchers.MatchBatchRequest
-	4, // 3: matchers.Matcher.Init:input_type -> google.protobuf.Empty
-	4, // 4: matchers.Matcher.Shutdown:input_type -> google.protobuf.Empty
-	4, // 5: matchers.Matcher.Ping:input_type -> google.protobuf.Empty
-	2, // 6: matchers.Matcher.MatchBatch:output_type -> matchers.MatchBatchResponse
-	4, // 7: matchers.Matcher.Init:output_type -> google.protobuf.Empty
-	4, // 8: matchers.Matcher.Shutdown:output_type -> google.protobuf.Empty
-	4, // 9: matchers.Matcher.Ping:output_type -> google.protobuf.Empty
-	6, // [6:10] is the sub-list for method output_type
-	2, // [2:6] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	1, // 0: matchers.MatchBatchResponse.items:type_name -> matchers.MatchItem
+	0, // 1: matchers.Matcher.MatchBatch:input_type -> matchers.MatchBatchRequest
+	3, // 2: matchers.Matcher.Init:input_type -> google.protobuf.Empty
+	3, // 3: matchers.Matcher.Shutdown:input_type -> google.protobuf.Empty
+	3, // 4: matchers.Matcher.Ping:input_type -> google.protobuf.Empty
+	2, // 5: matchers.Matcher.MatchBatch:output_type -> matchers.MatchBatchResponse
+	3, // 6: matchers.Matcher.Init:output_type -> google.protobuf.Empty
+	3, // 7: matchers.Matcher.Shutdown:output_type -> google.protobuf.Empty
+	3, // 8: matchers.Matcher.Ping:output_type -> google.protobuf.Empty
+	5, // [5:9] is the sub-list for method output_type
+	1, // [1:5] is the sub-list for method input_type
+	1, // [1:1] is the sub-list for extension type_name
+	1, // [1:1] is the sub-list for extension extendee
+	0, // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_pkg_matchers_rpc_matchers_matcher_proto_init() }

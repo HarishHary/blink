@@ -44,10 +44,10 @@ func (s *server) Init(_ context.Context, _ *emptypb.Empty) (*emptypb.Empty, erro
 
 func (s *server) TuneBatch(ctx context.Context, req *rpc_tuning_rules.TuneBatchRequest) (*rpc_tuning_rules.TuneBatchResponse, error) {
 	items := make([]*rpc_tuning_rules.TuneItem, len(req.GetAlerts()))
-	for i, pa := range req.GetAlerts() {
+	for i, raw := range req.GetAlerts() {
 		item := &rpc_tuning_rules.TuneItem{}
 		items[i] = item
-		alert, err := alerts.ProtoToAlert(pa)
+		alert, err := alerts.Unmarshal(raw)
 		if err != nil {
 			return nil, errors.PluginErrorStatus(err).Err()
 		}

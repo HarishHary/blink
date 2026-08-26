@@ -43,6 +43,7 @@ type catalogActorStatus struct {
 	routableRouters    int
 	degradedRouters    int
 	unavailableRouters int
+	settledRouters     int
 	routers            map[string]routerActorStatus
 }
 
@@ -321,7 +322,7 @@ func (a *catalogActor[T]) HandleMessage(from gen.PID, message any) error {
 
 // HandleCall rejects synchronous calls because the catalog exposes no call API.
 func (a *catalogActor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
-	return fmt.Errorf("actorruntime: unsupported catalog call %T", request), nil
+	return fmt.Errorf("unsupported catalog call %T", request), nil
 }
 
 // ---------------------------------------------------------------------------
@@ -376,15 +377,15 @@ func (a *catalogActor[T]) startRouter(id string) (*routerState, error) {
 		lifecycle:    RouterActorStarting,
 		availability: runtime.AvailabilityUnavailable,
 		lastError:    prevErr,
-		primary: deploymentPoolStatus{
-			lifecycle:    DeploymentPoolStopped,
+		primary: deploymentRouteStatus{
+			lifecycle:    DeploymentRouteStopped,
 			availability: runtime.AvailabilityUnavailable,
-			workers:      make(map[gen.PID]deploymentWorkerStatus),
+			processes:    make(map[gen.PID]pluginProcessStatus),
 		},
-		candidate: deploymentPoolStatus{
-			lifecycle:    DeploymentPoolStopped,
+		candidate: deploymentRouteStatus{
+			lifecycle:    DeploymentRouteStopped,
 			availability: runtime.AvailabilityUnavailable,
-			workers:      make(map[gen.PID]deploymentWorkerStatus),
+			processes:    make(map[gen.PID]pluginProcessStatus),
 		},
 	}
 	a.reconcileStatus()
@@ -446,15 +447,15 @@ func (a *catalogActor[T]) retireRouter(id string, callErr error) {
 		availability: runtime.AvailabilityUnavailable,
 		lastError:    prevErr,
 		revision:     a.desiredRevision,
-		primary: deploymentPoolStatus{
-			lifecycle:    DeploymentPoolStopped,
+		primary: deploymentRouteStatus{
+			lifecycle:    DeploymentRouteStopped,
 			availability: runtime.AvailabilityUnavailable,
-			workers:      make(map[gen.PID]deploymentWorkerStatus),
+			processes:    make(map[gen.PID]pluginProcessStatus),
 		},
-		candidate: deploymentPoolStatus{
-			lifecycle:    DeploymentPoolStopped,
+		candidate: deploymentRouteStatus{
+			lifecycle:    DeploymentRouteStopped,
 			availability: runtime.AvailabilityUnavailable,
-			workers:      make(map[gen.PID]deploymentWorkerStatus),
+			processes:    make(map[gen.PID]pluginProcessStatus),
 		},
 	}
 }
@@ -565,6 +566,7 @@ func (a *catalogActor[T]) reconcileStatus() {
 	routable := 0
 	degraded := 0
 	unavailable := 0
+	settled := 0
 
 	for id := range a.desired {
 		ref := a.routers[id]
@@ -581,6 +583,9 @@ func (a *catalogActor[T]) reconcileStatus() {
 		routers[id] = status
 		if status.normalRoutable {
 			routable++
+		}
+		if routerSettled(status, a.desiredRevision) {
+			settled++
 		}
 		switch status.availability {
 		case runtime.AvailabilityDegraded:
@@ -620,6 +625,7 @@ func (a *catalogActor[T]) reconcileStatus() {
 		routableRouters:    routable,
 		degradedRouters:    degraded,
 		unavailableRouters: unavailable,
+		settledRouters:     settled,
 		routers:            routers,
 	}
 	if sameCatalogStatus(a.liveStatus, next) && a.statusEpoch != 0 {
@@ -638,6 +644,20 @@ func (a *catalogActor[T]) reconcileStatus() {
 	})
 }
 
+// routerSettled reports whether a router is done moving toward revision: it reached that
+// revision and either routes or has failed for good. Failed counts as done because a route
+// that has spent its restart budget never recovers on its own, so a caller waiting for the
+// whole catalog to be healthy would wait forever on it. Starting and restarting still may
+// go either way, so they are not settled.
+func routerSettled(status routerActorStatus, revision uint64) bool {
+	if status.revision != revision {
+		return false
+	}
+	return status.availability == runtime.AvailabilityReady ||
+		status.primary.lifecycle == DeploymentRouteFailed ||
+		status.candidate.lifecycle == DeploymentRouteFailed
+}
+
 // sameCatalogStatus reports whether two catalog statuses are equal.
 func sameCatalogStatus(left, right catalogActorStatus) bool {
 	if left.lifecycle != right.lifecycle ||
@@ -647,6 +667,7 @@ func sameCatalogStatus(left, right catalogActorStatus) bool {
 		left.routableRouters != right.routableRouters ||
 		left.degradedRouters != right.degradedRouters ||
 		left.unavailableRouters != right.unavailableRouters ||
+		left.settledRouters != right.settledRouters ||
 		len(left.routers) != len(right.routers) {
 		return false
 	}

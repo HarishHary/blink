@@ -44,7 +44,7 @@ const (
 // TuningRule is the host-side runtime interface for a live tuning-rule plugin.
 type TuningRule interface {
 	plugin.Artifact
-	TuneBatch(ctx context.Context, alerts []*alerts.Alert) TuneResult
+	TuneBatch(ctx context.Context, batch *alerts.Batch) TuneResult
 	TuningRuleMetadata() *TuningRuleMetadata
 }
 

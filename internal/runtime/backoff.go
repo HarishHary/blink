@@ -22,8 +22,8 @@ var (
 	ErrBackoffStopped    = errors.New("scheduled backoff stopped")
 	ErrRuntimeNotStarted = errors.New("actor runtime not started")
 	ErrRuntimeStopped    = errors.New("actor runtime stopped")
-	ErrWorkerRecycle     = errors.New("worker recycled after plugin transport failure")
-	ErrWorkerUnhealthy   = errors.New("worker plugin health check failed")
+	ErrProcessRecycle    = errors.New("plugin process recycled after transport failure")
+	ErrProcessUnhealthy  = errors.New("plugin process health check failed")
 )
 
 type ScheduledBackoff struct {

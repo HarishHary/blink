@@ -200,7 +200,7 @@ func (s *supervisor[P, M]) Init(...any) (act.SupervisorSpec, error) {
 		s.opts.Directory == "" ||
 		s.opts.SnapshotReader.ReaderFactory == nil || s.loader == nil {
 		return act.SupervisorSpec{}, fmt.Errorf(
-			"actorruntime: name, adapter, reader options, projection, and directory are required",
+			"name, adapter, reader options, projection, and directory are required",
 		)
 	}
 	if err := s.RegisterName(s.opts.Name); err != nil {
@@ -302,12 +302,12 @@ func (s *supervisor[P, M]) HandleCall(from gen.PID, ref gen.Ref, request any) (a
 
 	case SupervisorStateRequest:
 		if !s.supervisorStateReader() {
-			return nil, runtime.ErrPluginUnavailable
+			return SupervisorStateResponse{}, nil
 		}
 		return SupervisorStateResponse{Generation: s.projection.ReadyGeneration}, nil
 
 	default:
-		return nil, fmt.Errorf("actorruntime: unsupported supervisor call %T", request)
+		return nil, fmt.Errorf("unsupported supervisor call %T", request)
 	}
 }
 
@@ -374,6 +374,13 @@ func (s *supervisor[P, M]) HandleMessage(from gen.PID, message any) error {
 			return nil
 		}
 		s.transition = SupervisorTransitionAwaitingProjection
+		if s.projection.ReadyGeneration == m.snapshotGeneration &&
+			s.projection.CommittedGeneration == m.snapshotGeneration {
+			s.finishDesiredStateTransition()
+			s.reconcileStatus()
+			s.publishStatus()
+			return nil
+		}
 		s.projection.CommittedGeneration = m.snapshotGeneration
 		s.projection.ReadyGeneration = 0
 		err := s.requestProjectionCommit()
@@ -731,7 +738,6 @@ func (s *supervisor[P, M]) pendingProjectionReady() bool {
 			s.projection.Status.PreparedGeneration == 0
 	}
 	return s.projection.Status.Lifecycle == snapshot.ProjectionActorRunning &&
-		s.projection.Status.Availability == runtime.AvailabilityReady &&
 		s.projection.Status.PreparedGeneration == target
 }
 
@@ -749,6 +755,8 @@ func (s *supervisor[P, M]) completeDesiredStateTransition() {
 }
 
 // desiredStateTransitionReadyToCommit reports whether all transition dependencies converged.
+// The catalog counts a router as settled once it routes or fails for good, so a plugin that
+// can no longer recover does not hold this transition or any later one.
 func (s *supervisor[P, M]) desiredStateTransitionReadyToCommit() bool {
 	return s.transition == SupervisorTransitionPreparing &&
 		s.pendingDesiredState.desiredRevision == 0 &&
@@ -758,7 +766,7 @@ func (s *supervisor[P, M]) desiredStateTransitionReadyToCommit() bool {
 		s.desiredState.snapshotGeneration == s.transitionGeneration &&
 		s.reconciler.status.revision == s.desiredState.desiredRevision &&
 		s.catalog.status.desiredRevision == s.desiredState.desiredRevision &&
-		s.catalog.status.availability == runtime.AvailabilityReady
+		s.catalog.status.settledRouters == s.catalog.status.desiredRouters
 }
 
 // finishDesiredStateTransition reopens admission after every current dependency converges.
@@ -775,7 +783,7 @@ func (s *supervisor[P, M]) finishDesiredStateTransition() {
 		s.reconciler.status.revision != s.desiredState.desiredRevision ||
 		s.reconciler.status.availability != runtime.AvailabilityReady ||
 		s.catalog.status.desiredRevision != s.desiredState.desiredRevision ||
-		s.catalog.status.availability != runtime.AvailabilityReady {
+		s.catalog.status.settledRouters != s.catalog.status.desiredRouters {
 		return
 	}
 	s.transition = SupervisorTransitionIdle
@@ -1082,7 +1090,11 @@ func (s *supervisor[P, M]) catalogActorName() gen.Atom {
 	return gen.Atom(string(s.opts.Name) + "-catalog")
 }
 
-// supervisorStateReader reports whether the runtime state is ready for callers.
+// supervisorStateReader reports whether the runtime state is ready for callers. A catalog
+// that lost one plugin still serves every other, so the gate is routability rather than
+// full readiness: withholding the state would stop callers from invoking healthy plugins
+// too, and the generation - not the catalog verdict - is what makes a call safe.
+// Invocations against the lost plugin still fail admission with ErrPluginUnavailable.
 func (s *supervisor[P, M]) supervisorStateReader() bool {
 	return s.projection.ReadyGeneration != 0 &&
 		s.projection.ReadyGeneration == s.projection.CommittedGeneration &&
@@ -1090,6 +1102,6 @@ func (s *supervisor[P, M]) supervisorStateReader() bool {
 		s.projection.Status.Availability.Routable() &&
 		s.desiredState.snapshotGeneration == s.projection.ReadyGeneration &&
 		s.catalog.status.desiredRevision == s.desiredState.desiredRevision &&
-		s.catalog.status.availability == runtime.AvailabilityReady &&
+		s.catalog.status.availability.Routable() &&
 		s.transition == SupervisorTransitionIdle && s.lifecycle != SupervisorDraining
 }

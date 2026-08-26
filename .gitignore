@@ -9,6 +9,7 @@
 # Test binary, built with `go test -c`
 *.test
 *_test.go
+testdata
 
 # Output of the go coverage tool, specifically when used with LiteIDE
 *.out
@@ -70,8 +71,9 @@ terraform.rc
 
 ## Temporary files
 .claude/*
-docs/*
 bin/*
+docs/plan/*
+docs/reviews/*
 .serena/*
 openwiki/*
 .DS_Store

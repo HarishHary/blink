@@ -45,7 +45,7 @@ func Start(opts NodeOptions) (*NodeHost, error) {
 	logLevel := gen.LogLevelInfo
 	if opts.Env == "dev" {
 		applications = append(applications,
-			observer.CreateApp(observer.Options{}),
+			observer.CreateApp(observer.Options{Port: 9911}),
 			mcp.CreateApp(mcp.Options{Port: 9922}),
 		)
 		logLevel = gen.LogLevelDebug

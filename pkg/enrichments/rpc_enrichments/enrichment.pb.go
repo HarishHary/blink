@@ -7,7 +7,6 @@
 package rpc_enrichments
 
 import (
-	pb "github.com/harishhary/blink/pkg/alerts/pb"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
@@ -23,9 +22,14 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// EnrichBatchRequest carries one encoded alerts.Alert per alert, not the Alert itself. A bytes
+// field and a submessage field share proto's length-delimited encoding, so this is the same wire
+// format the field had when it was declared as repeated alerts.Alert and either side of the
+// handshake may predate the change. Bytes are what let the host encode each alert once for a batch
+// and reuse it for every enrichment it is handed to, instead of once per call.
 type EnrichBatchRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Alerts        []*pb.Alert            `protobuf:"bytes,1,rep,name=alerts,proto3" json:"alerts,omitempty"`
+	Alerts        [][]byte               `protobuf:"bytes,1,rep,name=alerts,proto3" json:"alerts,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -60,7 +64,7 @@ func (*EnrichBatchRequest) Descriptor() ([]byte, []int) {
 	return file_pkg_enrichments_rpc_enrichments_enrichment_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *EnrichBatchRequest) GetAlerts() []*pb.Alert {
+func (x *EnrichBatchRequest) GetAlerts() [][]byte {
 	if x != nil {
 		return x.Alerts
 	}
@@ -167,9 +171,9 @@ var File_pkg_enrichments_rpc_enrichments_enrichment_proto protoreflect.FileDescr
 
 const file_pkg_enrichments_rpc_enrichments_enrichment_proto_rawDesc = "" +
 	"\n" +
-	"0pkg/enrichments/rpc_enrichments/enrichment.proto\x12\venrichments\x1a\x1bgoogle/protobuf/empty.proto\x1a\x19pkg/alerts/pb/alert.proto\";\n" +
-	"\x12EnrichBatchRequest\x12%\n" +
-	"\x06alerts\x18\x01 \x03(\v2\r.alerts.AlertR\x06alerts\"C\n" +
+	"0pkg/enrichments/rpc_enrichments/enrichment.proto\x12\venrichments\x1a\x1bgoogle/protobuf/empty.proto\",\n" +
+	"\x12EnrichBatchRequest\x12\x16\n" +
+	"\x06alerts\x18\x01 \x03(\fR\x06alerts\"C\n" +
 	"\n" +
 	"EnrichItem\x12\x1f\n" +
 	"\vresult_json\x18\x01 \x01(\fR\n" +
@@ -201,25 +205,23 @@ var file_pkg_enrichments_rpc_enrichments_enrichment_proto_goTypes = []any{
 	(*EnrichBatchRequest)(nil),  // 0: enrichments.EnrichBatchRequest
 	(*EnrichItem)(nil),          // 1: enrichments.EnrichItem
 	(*EnrichBatchResponse)(nil), // 2: enrichments.EnrichBatchResponse
-	(*pb.Alert)(nil),            // 3: alerts.Alert
-	(*emptypb.Empty)(nil),       // 4: google.protobuf.Empty
+	(*emptypb.Empty)(nil),       // 3: google.protobuf.Empty
 }
 var file_pkg_enrichments_rpc_enrichments_enrichment_proto_depIdxs = []int32{
-	3, // 0: enrichments.EnrichBatchRequest.alerts:type_name -> alerts.Alert
-	1, // 1: enrichments.EnrichBatchResponse.items:type_name -> enrichments.EnrichItem
-	0, // 2: enrichments.Enrichment.EnrichBatch:input_type -> enrichments.EnrichBatchRequest
-	4, // 3: enrichments.Enrichment.Init:input_type -> google.protobuf.Empty
-	4, // 4: enrichments.Enrichment.Shutdown:input_type -> google.protobuf.Empty
-	4, // 5: enrichments.Enrichment.Ping:input_type -> google.protobuf.Empty
-	2, // 6: enrichments.Enrichment.EnrichBatch:output_type -> enrichments.EnrichBatchResponse
-	4, // 7: enrichments.Enrichment.Init:output_type -> google.protobuf.Empty
-	4, // 8: enrichments.Enrichment.Shutdown:output_type -> google.protobuf.Empty
-	4, // 9: enrichments.Enrichment.Ping:output_type -> google.protobuf.Empty
-	6, // [6:10] is the sub-list for method output_type
-	2, // [2:6] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	1, // 0: enrichments.EnrichBatchResponse.items:type_name -> enrichments.EnrichItem
+	0, // 1: enrichments.Enrichment.EnrichBatch:input_type -> enrichments.EnrichBatchRequest
+	3, // 2: enrichments.Enrichment.Init:input_type -> google.protobuf.Empty
+	3, // 3: enrichments.Enrichment.Shutdown:input_type -> google.protobuf.Empty
+	3, // 4: enrichments.Enrichment.Ping:input_type -> google.protobuf.Empty
+	2, // 5: enrichments.Enrichment.EnrichBatch:output_type -> enrichments.EnrichBatchResponse
+	3, // 6: enrichments.Enrichment.Init:output_type -> google.protobuf.Empty
+	3, // 7: enrichments.Enrichment.Shutdown:output_type -> google.protobuf.Empty
+	3, // 8: enrichments.Enrichment.Ping:output_type -> google.protobuf.Empty
+	5, // [5:9] is the sub-list for method output_type
+	1, // [1:5] is the sub-list for method input_type
+	1, // [1:1] is the sub-list for extension type_name
+	1, // [1:1] is the sub-list for extension extendee
+	0, // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_pkg_enrichments_rpc_enrichments_enrichment_proto_init() }

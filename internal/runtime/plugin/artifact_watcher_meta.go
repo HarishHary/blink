@@ -187,68 +187,16 @@ func (m *artifactWatcherMeta) Start() error {
 			return fmt.Errorf("%w: %w", runtime.ErrArtifactWatch, err)
 
 		case <-debounceC:
+			// An fsnotify event says to look, not what to conclude: executing a plugin binary
+			// produces one on macOS, so the fingerprint decides as it does on a poll tick.
 			debounceC = nil
-			// An fsnotify event itself is sufficient evidence of possible drift.
-			// Refresh the poll baseline when possible, then trigger a full resolve.
-			if fingerprint, err := artifactDirectoryFingerprint(m.directory); err == nil {
-				state.fingerprint = fingerprint
-				state.directoryReadable = true
-				if err := m.tryAttachWatch(&state); err != nil {
-					state.watchingDirectory = false
-					if err := m.publishWatchError(&state, err); err != nil {
-						return err
-					}
-				} else if err := m.publishWatchState(&state); err != nil {
-					return err
-				}
-			} else {
-				state.directoryReadable = false
-				state.watchingDirectory = false
-				if err := m.publishWatchError(&state, fmt.Errorf("%w: fingerprint directory %q: %w", runtime.ErrArtifactWatch, m.directory, err)); err != nil {
-					return err
-				}
-			}
-			if err := m.Send(m.Parent(), MessageArtifactDirectoryChanged{source: m.ID()}); err != nil {
-				return fmt.Errorf("%w: notify directory change: %w", runtime.ErrArtifactWatch, err)
-			}
-
-		case <-poll.C:
-			fingerprint, err := artifactDirectoryFingerprint(m.directory)
-			if err != nil {
-				// Missing or unreadable directories invalidate the current resolution.
-				// Notify only on the transition; the reconciler's backoff continues
-				// retries until the directory recovers.
-				wasReadable := state.directoryReadable
-				state.directoryReadable = false
-				state.watchingDirectory = false
-				if err := m.publishWatchError(&state, fmt.Errorf("%w: fingerprint directory %q: %w", runtime.ErrArtifactWatch, m.directory, err)); err != nil {
-					return err
-				}
-				if wasReadable {
-					if err := m.Send(m.Parent(), MessageArtifactDirectoryChanged{source: m.ID()}); err != nil {
-						return fmt.Errorf("%w: notify directory change: %w", runtime.ErrArtifactWatch, err)
-					}
-				}
-				continue
-			}
-
-			wasReadable := state.directoryReadable
-			state.directoryReadable = true
-			if err := m.tryAttachWatch(&state); err != nil {
-				state.watchingDirectory = false
-				if err := m.publishWatchError(&state, err); err != nil {
-					return err
-				}
-			} else if err := m.publishWatchState(&state); err != nil {
+			if err := m.notifyOnDirectoryChange(&state); err != nil {
 				return err
 			}
 
-			if wasReadable && fingerprint == state.fingerprint {
-				continue
-			}
-			state.fingerprint = fingerprint
-			if err := m.Send(m.Parent(), MessageArtifactDirectoryChanged{source: m.ID()}); err != nil {
-				return fmt.Errorf("%w: notify directory change: %w", runtime.ErrArtifactWatch, err)
+		case <-poll.C:
+			if err := m.notifyOnDirectoryChange(&state); err != nil {
+				return err
 			}
 		}
 	}
@@ -270,7 +218,7 @@ func (m *artifactWatcherMeta) HandleMessage(gen.PID, any) error { return nil }
 
 // HandleCall rejects synchronous calls because the watcher exposes no call API.
 func (m *artifactWatcherMeta) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
-	return fmt.Errorf("actorruntime: unsupported artifact watcher call %T", request), nil
+	return fmt.Errorf("unsupported artifact watcher call %T", request), nil
 }
 
 // HandleInspect exposes no watcher inspection fields.
@@ -279,6 +227,44 @@ func (m *artifactWatcherMeta) HandleInspect(gen.PID, ...string) map[string]strin
 // ---------------------------------------------------------------------------
 // Watcher operations
 // ---------------------------------------------------------------------------
+
+// notifyOnDirectoryChange republishes watcher state and notifies the reconciler only when the
+// directory fingerprint moved. Both change-detection paths decide here so they cannot diverge.
+func (m *artifactWatcherMeta) notifyOnDirectoryChange(state *artifactWatcherRunState) error {
+	fingerprint, err := artifactDirectoryFingerprint(m.directory)
+	if err != nil {
+		// An unreadable directory invalidates the resolution; notify once on the transition.
+		wasReadable := state.directoryReadable
+		state.directoryReadable = false
+		state.watchingDirectory = false
+		if err := m.publishWatchError(state, fmt.Errorf("%w: fingerprint directory %q: %w", runtime.ErrArtifactWatch, m.directory, err)); err != nil {
+			return err
+		}
+		if !wasReadable {
+			return nil
+		}
+	} else {
+		wasReadable := state.directoryReadable
+		state.directoryReadable = true
+		if err := m.tryAttachWatch(state); err != nil {
+			state.watchingDirectory = false
+			if err := m.publishWatchError(state, err); err != nil {
+				return err
+			}
+		} else if err := m.publishWatchState(state); err != nil {
+			return err
+		}
+		if wasReadable && fingerprint == state.fingerprint {
+			return nil
+		}
+		state.fingerprint = fingerprint
+	}
+
+	if err := m.Send(m.Parent(), MessageArtifactDirectoryChanged{source: m.ID()}); err != nil {
+		return fmt.Errorf("%w: notify directory change: %w", runtime.ErrArtifactWatch, err)
+	}
+	return nil
+}
 
 // tryAttachWatch attaches fsnotify to the configured directory when needed.
 func (m *artifactWatcherMeta) tryAttachWatch(state *artifactWatcherRunState) error {

@@ -3,9 +3,13 @@ package tuning_rules;
 option go_package = "rpc_tuning_rules/;rpc_tuning_rules";
 
 import "google/protobuf/empty.proto";
-import "pkg/alerts/pb/alert.proto";
 
-message TuneBatchRequest  { repeated alerts.Alert alerts = 1; } // structured alerts.Alert per alert
+// TuneBatchRequest carries one encoded alerts.Alert per alert, not the Alert itself. A bytes
+// field and a submessage field share proto's length-delimited encoding, so this is the same wire
+// format the field had when it was declared as repeated alerts.Alert and either side of the
+// handshake may predate the change. Bytes are what let the host encode each alert once for a batch
+// and reuse it for every tuning rule it is handed to, instead of once per call.
+message TuneBatchRequest { repeated bytes alerts = 1; }
 
 message TuneItem {
   bool applies = 1;

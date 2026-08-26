@@ -19,96 +19,87 @@ type Application struct {
 }
 
 // NewApplication creates a formatter plugin application.
-func NewApplication(opts plugin.Options, runtimeLogger *logger.Logger) *Application {
-	return &Application{Application: plugin.NewApplication(opts, NewAdapter(), Loader{}, runtimeLogger)}
+func NewApplication(opts plugin.Options, logger *logger.Logger) *Application {
+	return &Application{Application: plugin.NewApplication(opts, NewAdapter(), Loader{}, logger)}
 }
 
-// Format preserves input order while grouping rollout buckets and sharding each
-// group into contiguous batches.
-func (r *Application) Format(ctx context.Context, state snapshot.ProjectionState[*FormatterMetadata], formatterID string, input []*alerts.Alert) FormatResult {
+// Format preserves input order while grouping alerts by rollout side and sharding each group.
+func (r *Application) Format(ctx context.Context, state snapshot.ProjectionState[*FormatterMetadata], formatterID string, input *alerts.Batch) FormatResult {
 	if r == nil || r.Application == nil {
 		return FormatResult{CallErr: errors.NewE(runtime.ErrRuntimeNotStarted)}
 	}
-	if len(input) == 0 {
+	if input.Len() == 0 {
 		return FormatResult{Items: []FormatItem{}}
 	}
 	generation := state.CommittedGeneration
-	r.shadow(ctx, formatterID, input, max(1, state.MaxProcsByID[formatterID]), generation)
+	rollout := state.RolloutByID[formatterID]
+	callBudget := r.CallBudget(rollout)
 
-	type routeGroup struct {
-		rolloutKey string
-		indexes    []int
-		alerts     []*alerts.Alert
+	if rollout.Shadow {
+		r.shadow(ctx, formatterID, input, callBudget, generation)
 	}
-	groups := make([]routeGroup, 0)
-	groupByBucket := make(map[uint32]int)
-	for i, alert := range input {
-		rolloutKey := runtime.MissingTenantRolloutKey
-		if alert != nil {
-			rolloutKey = runtime.NormalizeRolloutKey(alert.Event["tenant_id"])
-		}
-		bucket := runtime.RolloutBucket(rolloutKey)
-		groupIndex, ok := groupByBucket[bucket]
-		if !ok {
-			groupIndex = len(groups)
-			groupByBucket[bucket] = groupIndex
-			groups = append(groups, routeGroup{rolloutKey: rolloutKey})
-		}
-		groups[groupIndex].indexes = append(groups[groupIndex].indexes, i)
-		groups[groupIndex].alerts = append(groups[groupIndex].alerts, alert)
+
+	keys := input.RolloutKeys()
+	groups := runtime.RouteSides(keys, rollout.CanaryPct)
+	// One side takes the whole batch, so it goes as it stands: gathering it would copy the batch to
+	// reproduce it and the items come back already in order.
+	if groups == nil {
+		return r.formatRoute(ctx, formatterID, keys[0], generation, input, callBudget)
 	}
 
 	parts := make([]FormatResult, len(groups))
-	workerCount := max(1, state.MaxProcsByID[formatterID])
+	workerBudget := max(1, callBudget/len(groups))
 	var wg sync.WaitGroup
 	for i, group := range groups {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			shards := runtime.ShardConcurrent(group.alerts, workerCount, func(chunk []*alerts.Alert) FormatResult {
-				return r.formatChunk(ctx, formatterID, group.rolloutKey, generation, chunk)
-			})
-			part := FormatResult{Items: make([]FormatItem, 0, len(group.alerts))}
-			for _, shard := range shards {
-				if shard.CallErr != nil {
-					parts[i] = FormatResult{CallErr: shard.CallErr}
-					return
-				}
-				part.Items = append(part.Items, shard.Items...)
-			}
-			parts[i] = part
-		}()
+		wg.Go(func() {
+			parts[i] = r.formatRoute(ctx, formatterID, group.Key, generation, input.Gather(group.Indexes), workerBudget)
+		})
 	}
 	wg.Wait()
 
-	result := FormatResult{Items: make([]FormatItem, len(input))}
+	result := FormatResult{Items: make([]FormatItem, input.Len())}
 	for i, part := range parts {
 		if part.CallErr != nil {
 			return FormatResult{CallErr: part.CallErr}
 		}
-		if len(part.Items) != len(groups[i].indexes) {
-			return FormatResult{CallErr: errors.NewF("formatter %s returned invalid routed result shape", formatterID)}
-		}
-		for j, inputIndex := range groups[i].indexes {
+		for j, inputIndex := range groups[i].Indexes {
 			result.Items[inputIndex] = part.Items[j]
 		}
 	}
 	return result
 }
 
-func (r *Application) formatChunk(ctx context.Context, formatterID, rolloutKey string, generation int64, input []*alerts.Alert) FormatResult {
-	owned := alerts.CloneAlerts(input)
-	items := make([]FormatItem, len(owned))
+// formatRoute runs one side's alerts, cut by bytes across the calls it is allowed, and concatenates
+// the items in input order.
+func (r *Application) formatRoute(ctx context.Context, formatterID, rolloutKey string, generation int64, input *alerts.Batch, workers int) FormatResult {
+	shards := runtime.ShardBytes(input.WireSizes(), runtime.MaxCallPayloadBytes, workers, func(start, end int) FormatResult {
+		return r.formatChunk(ctx, formatterID, rolloutKey, generation, input.Slice(start, end))
+	})
+	result := FormatResult{Items: make([]FormatItem, 0, input.Len())}
+	for _, shard := range shards {
+		if shard.CallErr != nil {
+			return FormatResult{CallErr: shard.CallErr}
+		}
+		result.Items = append(result.Items, shard.Items...)
+	}
+	if len(result.Items) != input.Len() {
+		return FormatResult{CallErr: errors.NewF("formatter %s returned invalid routed result shape", formatterID)}
+	}
+	return result
+}
+
+func (r *Application) formatChunk(ctx context.Context, formatterID, rolloutKey string, generation int64, input *alerts.Batch) FormatResult {
+	items := make([]FormatItem, input.Len())
 	invocation, err := r.Application.Submit(ctx, formatterID, rolloutKey, generation, func(callCtx context.Context, formatter Formatter) error {
 		if !formatter.FormatterMetadata().Enabled {
 			return nil
 		}
-		result := formatter.FormatBatch(callCtx, owned)
+		result := formatter.FormatBatch(callCtx, input)
 		if result.CallErr != nil {
 			return result.CallErr
 		}
-		if len(result.Items) != len(owned) {
-			return &errors.ResultCardinalityError{PluginKind: "formatter", PluginID: formatterID, Field: "items", Expected: len(owned), Actual: len(result.Items)}
+		if len(result.Items) != input.Len() {
+			return &errors.ResultCardinalityError{PluginKind: "formatter", PluginID: formatterID, Field: "items", Expected: input.Len(), Actual: len(result.Items)}
 		}
 		copy(items, result.Items)
 		return nil
@@ -128,19 +119,22 @@ func (r *Application) formatChunk(ctx context.Context, formatterID, rolloutKey s
 	}
 }
 
-func (r *Application) shadow(ctx context.Context, formatterID string, input []*alerts.Alert, workerCount int, generation int64) {
-	for _, chunk := range runtime.ShardSlice(input, workerCount) {
-		owned := alerts.CloneAlerts(chunk)
+// shadow mirrors the batch onto a shadow candidate, cut the way production cuts it so an oversized
+// payload fails the same way. SubmitShadow does not block; the runtime has its own shadow budget.
+func (r *Application) shadow(ctx context.Context, formatterID string, input *alerts.Batch, callBudget int, generation int64) {
+	bounds := runtime.ChunkBounds(input.WireSizes(), runtime.MaxCallPayloadBytes, callBudget)
+	for i := range len(bounds) - 1 {
+		chunk := input.Slice(bounds[i], bounds[i+1])
 		_, _ = r.Application.SubmitShadow(ctx, formatterID, generation, func(callCtx context.Context, formatter Formatter) error {
 			if !formatter.FormatterMetadata().Enabled {
 				return nil
 			}
-			result := formatter.FormatBatch(callCtx, owned)
+			result := formatter.FormatBatch(callCtx, chunk)
 			if result.CallErr != nil {
 				return result.CallErr
 			}
-			if len(result.Items) != len(owned) {
-				return fmt.Errorf("formatter %s returned %d items for %d shadow alerts", formatterID, len(result.Items), len(owned))
+			if len(result.Items) != chunk.Len() {
+				return fmt.Errorf("formatter %s returned %d items for %d shadow alerts", formatterID, len(result.Items), chunk.Len())
 			}
 			for _, item := range result.Items {
 				if item.Err != nil {
