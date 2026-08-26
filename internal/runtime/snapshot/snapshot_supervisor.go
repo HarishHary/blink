@@ -237,6 +237,22 @@ func (s *Supervisor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, erro
 	return fmt.Errorf("snapshot supervisor: unsupported call %T", request), nil
 }
 
+// HandleInspect exposes concise supervisor operational state: the reader and projection
+// children's identity and last-reported status, and any external commit still in flight.
+func (s *Supervisor[T]) HandleInspect(gen.PID, ...string) map[string]string {
+	return map[string]string{
+		"supervisor:reader":                          fmt.Sprintf("%s", s.readerActor.pid),
+		"supervisor:reader_lifecycle":                string(s.readerActor.status.Lifecycle),
+		"supervisor:reader_availability":             string(s.readerActor.status.Availability),
+		"supervisor:reader_generation":               fmt.Sprintf("%d", s.readerActor.status.Generation),
+		"supervisor:projection":                      fmt.Sprintf("%s", s.projectionActor.pid),
+		"supervisor:projection_lifecycle":            string(s.projectionActor.status.Lifecycle),
+		"supervisor:projection_availability":         string(s.projectionActor.status.Availability),
+		"supervisor:projection_committed_generation": fmt.Sprintf("%d", s.projectionActor.status.CommittedGeneration),
+		"supervisor:commit_pending":                  fmt.Sprintf("%d", s.projectionActor.commitGeneration),
+	}
+}
+
 // Terminate marks children stopped and reports the shutdown reason.
 func (s *Supervisor[T]) Terminate(reason error) {
 	defer s.reportStatus()

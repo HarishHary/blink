@@ -243,13 +243,27 @@ func (a *readerActor) reportStatus() {
 	if a.snapshotEventToken == (gen.Ref{}) {
 		return
 	}
+	_ = a.Send(a.Parent(), MessageReaderActorStatusChanged{status: a.status()})
+}
+
+// status derives the reader's current publishable status, shared by reportStatus (to the
+// supervisor) and HandleInspect (to an operator).
+func (a *readerActor) status() ReaderActorStatus {
 	availability := runtime.AvailabilityUnavailable
 	if a.subscribed {
 		availability = runtime.AvailabilityReady
 	}
-	_ = a.Send(a.Parent(), MessageReaderActorStatusChanged{status: ReaderActorStatus{
-		Lifecycle:    ReaderActorRunning,
-		Availability: availability,
-		Generation:   a.lastGeneration,
-	}})
+	return ReaderActorStatus{Lifecycle: ReaderActorRunning, Availability: availability, Generation: a.lastGeneration}
+}
+
+// HandleInspect exposes concise reader operational state: whether it's currently subscribed, the
+// last generation it received, and which controller it's subscribed to.
+func (a *readerActor) HandleInspect(gen.PID, ...string) map[string]string {
+	return map[string]string{
+		"reader:availability": string(a.status().Availability),
+		"reader:subscribed":   fmt.Sprintf("%t", a.subscribed),
+		"reader:generation":   fmt.Sprintf("%d", a.lastGeneration),
+		"reader:controller":   fmt.Sprintf("%s", a.controllerPID),
+		"reader:executor_id":  a.opts.ExecutorID,
+	}
 }

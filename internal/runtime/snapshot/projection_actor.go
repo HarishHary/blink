@@ -291,6 +291,22 @@ func (a *projectionActor[T]) reportStatus() {
 	_ = a.Send(a.Parent(), MessageProjectionActorStatusChanged{Status: a.currentStatus()})
 }
 
+// HandleInspect exposes concise projection operational state: lifecycle/availability plus the
+// generation at each stage - observed from the reader, prepared, committed - that a Ready status
+// alone doesn't distinguish.
+func (a *projectionActor[T]) HandleInspect(gen.PID, ...string) map[string]string {
+	status := a.currentStatus()
+	return map[string]string{
+		"projection:lifecycle":            string(status.Lifecycle),
+		"projection:availability":         string(status.Availability),
+		"projection:committed_generation": fmt.Sprintf("%d", status.CommittedGeneration),
+		"projection:prepared_generation":  fmt.Sprintf("%d", status.PreparedGeneration),
+		"projection:observed_generation":  fmt.Sprintf("%d", a.observedGeneration),
+		"projection:reader_ready":         fmt.Sprintf("%t", a.readerActorReady),
+		"projection:reader_generation":    fmt.Sprintf("%d", a.readerGeneration),
+	}
+}
+
 type parsedProjection[T any] struct {
 	generation int64
 	data       ProjectionData[T]
