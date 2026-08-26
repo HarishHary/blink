@@ -11,8 +11,31 @@
 {{- $controllerWorkload := required "global.controller.workload is required" $controller.workload }}
 {{- $controllerConfig := include "blink.workloadConfig" (dict "root" . "overrides" $controllerWorkload) | fromYaml }}
 {{- $controllerName := required "global.controller.workload.name is required" $controllerWorkload.name }}
-{{- $workloads = append $workloads (dict "workload" $controllerName "container" (default $controllerName $controllerWorkload.container) "config" $controllerConfig "plugins" true) }}
+{{- $workloads = append $workloads (dict "workload" $controllerName "container" (default $controllerName $controllerWorkload.container) "config" $controllerConfig "plugins" true "controllerState" true) }}
 {{- range $item := $workloads }}
+{{- if and $item.controllerState (ne (int $item.config.replicas) 1) }}
+{{- fail "the Blink controller requires exactly one replica until publication leader election is implemented" }}
+{{- end }}
+{{- if and $item.controllerState (not $.Values.controllerState.existingClaim) }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $item.workload }}-state
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    app: {{ $item.workload }}
+    {{- include "blink.labels" $ | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml $.Values.controllerState.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ $.Values.controllerState.size }}
+  {{- if $.Values.controllerState.storageClassName }}
+  storageClassName: {{ $.Values.controllerState.storageClassName | quote }}
+  {{- end }}
+{{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -24,6 +47,10 @@ metadata:
     {{- include "blink.labels" $ | nindent 4 }}
 spec:
   replicas: {{ $item.config.replicas }}
+  {{- with $item.config.strategy }}
+  strategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   selector:
     matchLabels:
       app: {{ $item.workload }}
@@ -43,6 +70,14 @@ spec:
           env:
             - name: APP_NAME
               value: {{ $item.container | quote }}
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
 {{ range $name, $value := $item.config.environment }}
             - name: {{ $name | upper }}
               value: {{ $value | quote }}
@@ -51,15 +86,28 @@ spec:
             - name: http
               containerPort: 8080
           {{- include "blink.probes" $ | nindent 10 }}
-{{ if $item.plugins }}
+{{ if or $item.plugins $item.controllerState }}
           volumeMounts:
+{{ if $item.plugins }}
             {{- include "blink.pluginVolumeMount" $ | nindent 12 }}
+{{ end }}
+{{ if $item.controllerState }}
+            - name: controller-state
+              mountPath: {{ $.Values.controllerState.mountPath }}
+{{ end }}
 {{ end }}
           resources:
             {{- toYaml $item.config.resources | nindent 12 }}
-{{ if $item.plugins }}
+{{ if or $item.plugins $item.controllerState }}
       volumes:
+{{ if $item.plugins }}
         {{- include "blink.pluginVolume" $ | nindent 8 }}
+{{ end }}
+{{ if $item.controllerState }}
+        - name: controller-state
+          persistentVolumeClaim:
+            claimName: {{ default (printf "%s-state" $item.workload) $.Values.controllerState.existingClaim }}
+{{ end }}
 {{ end }}
 ---
 apiVersion: v1

@@ -16,17 +16,32 @@ plugins:
       path: /blink/plugins
       type: Directory
 
+# Durable controller generation and snapshot state. Leave existingClaim empty
+# to let this chart create a dedicated ReadWriteOnce claim.
+controllerState:
+  mountPath: /var/lib/blink/controller
+  existingClaim: ""
+  accessModes:
+    - ReadWriteOnce
+  size: 1Gi
+  storageClassName: ""
+
 # Capacity shared by every workload, including the controller.
+# Every plugin-hosting service runs its plugins as subprocesses, so the CPU limit is not
+# only a throttle: Go derives GOMAXPROCS from it, and the runtime sizes its plugin process
+# budget from GOMAXPROCS, so a 500m limit caps plugin scale-up at two extra processes however
+# many matchers are deployed. Raise a single stage's resources in deployments/helm/values.yaml
+# when one of them needs more than this.
 workloadDefaults:
   replicas: 1
   terminationGracePeriodSeconds: 30
   resources:
     requests:
-      cpu: "100m"
-      memory: "128Mi"
-    limits:
-      cpu: "500m"
+      cpu: "250m"
       memory: "256Mi"
+    limits:
+      cpu: "2"
+      memory: "1Gi"
 
 # ---------------------------------------------------------------------------
 # Auth Secret - override in production via --set or external secret manager.
@@ -35,3 +50,32 @@ auth:
   product: "blink"
   auth0Audience: "https://api.example.com"
   auth0Issuer: "https://example.auth0.com/"
+
+# ---------------------------------------------------------------------------
+# Native Ergo cluster networking (controller <-> executors) - the only snapshot distribution
+# path; every workload joins the cluster. cookie is sensitive - override in production via
+# --set or an external secret manager.
+# ---------------------------------------------------------------------------
+cluster:
+  cookie: ""
+  # controllerNodeHost is the controller's cluster-reachable node host - its own Service name.
+  controllerNodeHost: "blink-controller"
+
+# etcd is the production registrar for cluster node discovery - a dedicated 3-member cluster
+# for Blink's exclusive use, not a shared etcd. username/password are sensitive - override in
+# production via --set or an external secret manager.
+etcd:
+  image: "quay.io/coreos/etcd:v3.5.17"
+  replicas: 3
+  endpoints: "blink-etcd:2379"
+  username: ""
+  password: ""
+  storageClassName: ""
+  size: 1Gi
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "1"
+      memory: "512Mi"

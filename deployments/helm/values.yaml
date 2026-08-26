@@ -6,13 +6,13 @@
 #     container: <binary-name>          # defaults to name
 #     plugins: true                     # set false to omit the plugin volume
 #     replicas: 2
-#     resources:
-#       requests:
-#         cpu: "100m"
-#         memory: "128Mi"
-#       limits:
-#         cpu: "500m"
+#     resources:                        # defaults in the chart; the CPU limit also sets
+#       requests:                       # GOMAXPROCS, and with it the plugin process budget
+#         cpu: "250m"
 #         memory: "256Mi"
+#       limits:
+#         cpu: "2"
+#         memory: "1Gi"
 #     environment:                     # snake_case keys render uppercase
 #       kafka_topic_<stage>: <input-topic>
 #       kafka_group_<stage>: <consumer-group>
@@ -34,10 +34,6 @@
 #       replicas: 1
 #       config:
 #         retention.ms: "86400000"
-#     snapshot:                         # omit if the stage has no plugin snapshot
-#       replicas: 1
-#       config:
-#         cleanup.policy: compact
 global:
   # The controller is not a pipeline stage, but uses the same workload settings.
   controller:
@@ -45,12 +41,11 @@ global:
       name: blink-controller
       container: controller
       replicas: 1
+      terminationGracePeriodSeconds: 120
+      strategy:
+        type: Recreate
       environment:
-        kafka_topic_executor_snapshot: rule-executor-snapshot-topic
-        kafka_topic_matcher_snapshot: event-matcher-snapshot-topic
-        kafka_topic_tuner_snapshot: rule-tuner-snapshot-topic
-        kafka_topic_formatter_snapshot: alert-formatter-snapshot-topic
-        kafka_topic_enricher_snapshot: alert-enricher-snapshot-topic
+        controller_database_dsn: "file:/var/lib/blink/controller/controller.db?_journal_mode=WAL&_busy_timeout=5000"
         rule_plugin_dir: /plugins/rules
         matcher_plugin_dir: /plugins/matchers
         tuner_plugin_dir: /plugins/tuning_rules
@@ -66,8 +61,6 @@ global:
           kafka_group_matcher: event-matcher-group
           kafka_topic_executor: rule-executor-topic
           kafka_topic_matcher_dlq: event-matcher-dlq-topic
-          kafka_topic_matcher_snapshot: event-matcher-snapshot-topic
-          kafka_topic_executor_snapshot: rule-executor-snapshot-topic
           matcher_plugin_dir: /plugins/matchers
           matcher_concurrency: "8"
           matcher_timeout_sec: "10"
@@ -78,7 +71,6 @@ global:
       scaler: {}
       topic:
         dlq: {}
-        snapshot: {}
     executor:
       workload:
         name: rule-executor
@@ -88,7 +80,6 @@ global:
           kafka_topic_executor_dlq: rule-executor-dlq-topic
           kafka_group_executor: rule-executor-group
           kafka_topic_merger: alert-merger-topic
-          kafka_topic_executor_snapshot: rule-executor-snapshot-topic
           rule_plugin_dir: /plugins/rules
           executor_batch_size: "50"
           executor_concurrency: "8"
@@ -97,8 +88,6 @@ global:
           executor_retry_base_ms: "100"
           executor_retry_cap_ms: "5000"
       scaler: {}
-      topic:
-        snapshot: {}
     merger:
       workload:
         name: alert-merger
@@ -130,7 +119,6 @@ global:
           kafka_group_tuner: rule-tuner-group
           kafka_topic_enricher: alert-enricher-topic
           kafka_topic_tuner_dlq: rule-tuner-dlq-topic
-          kafka_topic_tuner_snapshot: rule-tuner-snapshot-topic
           tuner_plugin_dir: /plugins/tuning_rules
           tuner_batch_size: "50"
           tuner_concurrency: "8"
@@ -141,7 +129,6 @@ global:
       scaler: {}
       topic:
         dlq: {}
-        snapshot: {}
     enricher:
       workload:
         name: alert-enricher
@@ -151,7 +138,6 @@ global:
           kafka_group_enricher: alert-enricher-group
           kafka_topic_formatter: alert-formatter-topic
           kafka_topic_enricher_dlq: alert-enricher-dlq-topic
-          kafka_topic_enricher_snapshot: alert-enricher-snapshot-topic
           enricher_plugin_dir: /plugins/enrichments
           enricher_batch_size: "50"
           enricher_concurrency: "8"
@@ -162,7 +148,6 @@ global:
       scaler: {}
       topic:
         dlq: {}
-        snapshot: {}
     formatter:
       workload:
         name: alert-formatter
@@ -172,7 +157,6 @@ global:
           kafka_group_formatter: alert-formatter-group
           kafka_topic_dispatcher: alert-dispatcher-topic
           kafka_topic_formatter_dlq: alert-formatter-dlq-topic
-          kafka_topic_formatter_snapshot: alert-formatter-snapshot-topic
           formatter_plugin_dir: /plugins/formatters
           formatter_batch_size: "50"
           formatter_concurrency: "8"
@@ -183,7 +167,6 @@ global:
       scaler: {}
       topic:
         dlq: {}
-        snapshot: {}
     dispatcher:
       workload:
         name: alert-dispatcher
