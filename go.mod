@@ -3,6 +3,8 @@ module github.com/harishhary/blink
 go 1.26
 
 require (
+	ergo.services/actor/health v0.0.0-20260807131927-95b2e1ebf6fe
+	ergo.services/actor/metrics v0.2.2-0.20260807131927-95b2e1ebf6fe
 	ergo.services/application/mcp v0.0.0-20260807132520-3b2d3707a392
 	ergo.services/application/observer v0.1.1-0.20260807132520-3b2d3707a392
 	ergo.services/application/radar v0.0.0-20260807132520-3b2d3707a392
@@ -23,8 +25,6 @@ require (
 )
 
 require (
-	ergo.services/actor/health v0.0.0-20260807131927-95b2e1ebf6fe // indirect
-	ergo.services/actor/metrics v0.2.2-0.20260807131927-95b2e1ebf6fe // indirect
 	ergo.services/meta/sse v0.2.1-0.20260807132248-3e4748b06924 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.21.1 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/internal v1.12.0 // indirect
