@@ -99,6 +99,7 @@ type readerActor struct {
 	lastGeneration int64
 	lastError      error
 	restart        *runtime.ScheduledBackoff
+	lastStatus     ReaderActorStatus
 }
 
 // newReaderActor constructs the reader actor for one subscription.
@@ -114,7 +115,7 @@ func (a *readerActor) Init(...any) error {
 
 // HandleMessage processes activation, pushed snapshot updates, controller-loss, and restart messages.
 func (a *readerActor) HandleMessage(from gen.PID, message any) error {
-	defer a.reportStatus()
+	defer a.reconcileStatus()
 	switch m := message.(type) {
 	case MessageReaderActorActivate:
 		if from != a.Parent() || a.snapshotEventToken != (gen.Ref{}) {
@@ -167,7 +168,7 @@ func (a *readerActor) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error)
 
 // Terminate cancels any pending resubscribe and notifies the controller, best effort.
 func (a *readerActor) Terminate(error) {
-	defer a.reportStatus()
+	defer a.reconcileStatus()
 	a.restart.CancelScheduled(false)
 	if a.subscribed {
 		_ = a.SendProcessID(a.opts.Endpoint, UnsubscribeRequest{ExecutorID: a.opts.ExecutorID})
@@ -238,16 +239,20 @@ func (a *readerActor) publishSnapshot(snap *Snapshot) {
 	_ = a.SendEvent(a.snapshotEventName, a.snapshotEventToken, snap.Clone())
 }
 
-// reportStatus sends current reader status to the supervisor.
-func (a *readerActor) reportStatus() {
+// reconcileStatus recomputes and, on change, sends the current reader status to the supervisor.
+func (a *readerActor) reconcileStatus() {
 	if a.snapshotEventToken == (gen.Ref{}) {
 		return
 	}
-	_ = a.Send(a.Parent(), MessageReaderActorStatusChanged{status: a.status()})
+	next := a.status()
+	if next == a.lastStatus {
+		return
+	}
+	a.lastStatus = next
+	_ = a.Send(a.Parent(), MessageReaderActorStatusChanged{status: next})
 }
 
-// status derives the reader's current publishable status, shared by reportStatus (to the
-// supervisor) and HandleInspect (to an operator).
+// status derives the reader's current publishable status, shared by reconcileStatus (to the supervisor) and HandleInspect (to an operator).
 func (a *readerActor) status() ReaderActorStatus {
 	availability := runtime.AvailabilityUnavailable
 	if a.subscribed {

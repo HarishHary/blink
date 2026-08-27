@@ -117,6 +117,7 @@ type projectionActor[T any] struct {
 	committed          *parsedProjection[T]
 	prepared           *parsedProjection[T]
 	lastError          error
+	lastStatus         ProjectionActorStatus
 }
 
 // --- messages ---
@@ -174,7 +175,7 @@ func (a *projectionActor[T]) HandleMessage(from gen.PID, message any) error {
 				}
 			}
 		}
-		a.reportStatus()
+		a.reconcileStatus()
 	case MessageProjectionCommit:
 		if from != a.Parent() {
 			return nil
@@ -194,7 +195,7 @@ func (a *projectionActor[T]) HandleMessage(from gen.PID, message any) error {
 				a.lastError = nil
 			}
 		}
-		a.reportStatus()
+		a.reconcileStatus()
 		return a.Send(a.Parent(), MessageProjectionCommitResult{Generation: m.Generation, ProjectionPID: m.ProjectionPID, Err: err})
 	case gen.MessageDownEvent:
 		if m.Event == a.events.Snapshot || m.Event == a.events.Status {
@@ -211,7 +212,7 @@ func (a *projectionActor[T]) HandleEvent(event gen.MessageEvent) error {
 	if event.Event == a.events.Snapshot && a.observedGeneration > previousGeneration && a.lastError != nil {
 		a.Log().Error("snapshot projection parse failed: generation=%d error=%v", a.observedGeneration, a.lastError)
 	}
-	a.reportStatus()
+	a.reconcileStatus()
 	return err
 }
 
@@ -256,8 +257,8 @@ func (a *projectionActor[T]) applyEvent(event gen.MessageEvent) error {
 	return nil
 }
 
-// currentStatus derives the projection actor's current availability.
-func (a *projectionActor[T]) currentStatus() ProjectionActorStatus {
+// status derives the projection actor's current availability.
+func (a *projectionActor[T]) status() ProjectionActorStatus {
 	status := ProjectionActorStatus{Lifecycle: ProjectionActorRunning, Availability: runtime.AvailabilityUnavailable}
 	if a.mode == ProjectionCommitExternal && a.prepared != nil {
 		status.PreparedGeneration = a.prepared.generation
@@ -278,7 +279,7 @@ func (a *projectionActor[T]) currentStatus() ProjectionActorStatus {
 
 // reportState returns an independently owned projection view.
 func (a *projectionActor[T]) reportState() ProjectionState[T] {
-	state := ProjectionState[T]{ProjectionActorStatus: a.currentStatus()}
+	state := ProjectionState[T]{ProjectionActorStatus: a.status()}
 	if a.committed == nil {
 		return state
 	}
@@ -286,16 +287,21 @@ func (a *projectionActor[T]) reportState() ProjectionState[T] {
 	return state
 }
 
-// reportStatus sends the current projection status to the supervisor.
-func (a *projectionActor[T]) reportStatus() {
-	_ = a.Send(a.Parent(), MessageProjectionActorStatusChanged{Status: a.currentStatus()})
+// reconcileStatus recomputes and, on change, sends the current projection status to the supervisor
+func (a *projectionActor[T]) reconcileStatus() {
+	next := a.status()
+	if next == a.lastStatus {
+		return
+	}
+	a.lastStatus = next
+	_ = a.Send(a.Parent(), MessageProjectionActorStatusChanged{Status: next})
 }
 
 // HandleInspect exposes concise projection operational state: lifecycle/availability plus the
 // generation at each stage - observed from the reader, prepared, committed - that a Ready status
 // alone doesn't distinguish.
 func (a *projectionActor[T]) HandleInspect(gen.PID, ...string) map[string]string {
-	status := a.currentStatus()
+	status := a.status()
 	return map[string]string{
 		"projection:lifecycle":            string(status.Lifecycle),
 		"projection:availability":         string(status.Availability),

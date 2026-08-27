@@ -216,7 +216,7 @@ func (s *supervisor[P, M]) Init(...any) (act.SupervisorSpec, error) {
 		lifecycle:    ReconcilerActorStarting,
 		availability: runtime.AvailabilityUnavailable,
 	}
-	s.reconcileStatus()
+	s.refreshStatus()
 
 	token, err := s.RegisterEvent(s.events.Status.Name, gen.EventOptions{Buffer: 1})
 	if err != nil {
@@ -290,7 +290,7 @@ func (s *supervisor[P, M]) HandleCall(from gen.PID, ref gen.Ref, request any) (a
 
 		s.lifecycle = SupervisorDraining
 		s.cancelProjectionDeadline()
-		s.reconcileStatus()
+		s.refreshStatus()
 		s.publishStatus()
 		if s.catalog.pid != (gen.PID{}) {
 			_ = s.Send(s.catalog.pid, MessageDrain{})
@@ -361,7 +361,7 @@ func (s *supervisor[P, M]) HandleMessage(from gen.PID, message any) error {
 		}
 		s.completeDesiredStateTransition()
 		s.finishDesiredStateTransition()
-		s.reconcileStatus()
+		s.refreshStatus()
 		s.publishStatus()
 
 	case MessageDesiredStateFreshness:
@@ -377,14 +377,14 @@ func (s *supervisor[P, M]) HandleMessage(from gen.PID, message any) error {
 		if s.projection.ReadyGeneration == m.snapshotGeneration &&
 			s.projection.CommittedGeneration == m.snapshotGeneration {
 			s.finishDesiredStateTransition()
-			s.reconcileStatus()
+			s.refreshStatus()
 			s.publishStatus()
 			return nil
 		}
 		s.projection.CommittedGeneration = m.snapshotGeneration
 		s.projection.ReadyGeneration = 0
 		err := s.requestProjectionCommit()
-		s.reconcileStatus()
+		s.refreshStatus()
 		s.publishStatus()
 		return err
 
@@ -437,7 +437,7 @@ func (s *supervisor[P, M]) HandleMessage(from gen.PID, message any) error {
 
 		s.pendingDesiredState = m.desired
 		if !s.pendingProjectionReady() {
-			s.reconcileStatus()
+			s.refreshStatus()
 			s.publishStatus()
 			return nil
 		}
@@ -471,7 +471,7 @@ func (s *supervisor[P, M]) HandleMessage(from gen.PID, message any) error {
 		s.mergeCatalogStatus(m.status)
 		s.completeDesiredStateTransition()
 		s.finishDesiredStateTransition()
-		s.reconcileStatus()
+		s.refreshStatus()
 		s.publishStatus()
 
 	case MessageCatalogDrained:
@@ -530,7 +530,7 @@ func (s *supervisor[P, M]) HandleChildTerminate(name gen.Atom, pid gen.PID, reas
 		s.retireCatalogActor(pid, reason)
 	}
 
-	s.reconcileStatus()
+	s.refreshStatus()
 	s.publishStatus()
 	return nil
 }
@@ -566,7 +566,7 @@ func (s *supervisor[P, M]) startSnapshotSupervisor(pid gen.PID) {
 	}
 	s.cancelProjectionCommitRetry(false)
 	s.cancelProjectionDeadline()
-	s.reconcileStatus()
+	s.refreshStatus()
 	s.publishStatus()
 }
 
@@ -581,7 +581,7 @@ func (s *supervisor[P, M]) startReconcilerActor(pid gen.PID) error {
 		lifecycle:    ReconcilerActorStarting,
 		availability: runtime.AvailabilityUnavailable,
 	}
-	s.reconcileStatus()
+	s.refreshStatus()
 	s.publishStatus()
 
 	revisionBase := s.desiredState.desiredRevision
@@ -603,7 +603,7 @@ func (s *supervisor[P, M]) startCatalogActor(pid gen.PID) error {
 	state.pid = pid
 	state.lastEpoch = 0
 	state.status = newCatalogStatus(state.status.lastError)
-	s.reconcileStatus()
+	s.refreshStatus()
 	s.publishStatus()
 
 	if err := s.Send(pid, MessageCatalogActivate{}); err != nil {
@@ -702,7 +702,7 @@ func (s *supervisor[P, M]) promotePendingDesiredState() error {
 		}
 	}
 	s.completeDesiredStateTransition()
-	s.reconcileStatus()
+	s.refreshStatus()
 	s.publishStatus()
 	return nil
 }
@@ -719,7 +719,7 @@ func (s *supervisor[P, M]) beginPendingDesiredStateTransition() error {
 	s.cancelProjectionDeadline()
 	s.projection.PendingGeneration = 0
 	s.projection.PendingPID = gen.PID{}
-	s.reconcileStatus()
+	s.refreshStatus()
 	s.publishStatus()
 	return s.promotePendingDesiredState()
 }
@@ -817,13 +817,13 @@ func (s *supervisor[P, M]) mergeCatalogStatus(status catalogActorStatus) {
 	state.status = next
 }
 
-// reconcileStatus rebuilds the published runtime status.
-func (s *supervisor[P, M]) reconcileStatus() {
+// status computes the current publishable runtime status, shared by refreshStatus (which caches it as liveStatus) and HandleInspect (to an operator).
+func (s *supervisor[P, M]) status() SupervisorStatus {
 	lifecycle := s.lifecycle
 	if lifecycle == "" {
 		lifecycle = SupervisorStarting
 	}
-	s.liveStatus = SupervisorStatus{
+	return SupervisorStatus{
 		Lifecycle:       lifecycle,
 		Availability:    s.runtimeAvailability(),
 		DesiredRevision: s.currentDesiredRevision(),
@@ -833,12 +833,42 @@ func (s *supervisor[P, M]) reconcileStatus() {
 	}
 }
 
+// refreshStatus recomputes and caches liveStatus, unconditionally - unlike the reconcileStatus
+// used elsewhere in this codebase, this neither dedups nor sends by itself: liveStatus must stay
+// current for HandleCall's independent SupervisorStatusRequest reads, and publishStatus (always
+// called right after, at every call site) is what actually emits it.
+func (s *supervisor[P, M]) refreshStatus() {
+	s.liveStatus = s.status()
+}
+
 // publishStatus emits the current runtime status event.
 func (s *supervisor[P, M]) publishStatus() {
 	if s.events.Status.Name == "" || s.statusToken == (gen.Ref{}) {
 		return
 	}
 	_ = s.SendEvent(s.events.Status.Name, s.statusToken, s.liveStatus.clone())
+}
+
+// HandleInspect exposes concise runtime operational state: lifecycle/availability/desired
+// revision plus the catalog and reconciler sub-status, and the projection generations and
+// in-flight call/drain-waiter counts a Ready status alone doesn't distinguish.
+func (s *supervisor[P, M]) HandleInspect(gen.PID, ...string) map[string]string {
+	status := s.status()
+	return map[string]string{
+		"runtime:lifecycle":                       string(status.Lifecycle),
+		"runtime:availability":                    string(status.Availability),
+		"runtime:desired_revision":                fmt.Sprintf("%d", status.DesiredRevision),
+		"runtime:transition":                      fmt.Sprintf("%d", status.Transition),
+		"runtime:catalog:lifecycle":               string(status.Catalog.lifecycle),
+		"runtime:catalog:availability":            string(status.Catalog.availability),
+		"runtime:catalog:routers":                 fmt.Sprintf("%d", status.Catalog.desiredRouters),
+		"runtime:reconciler:lifecycle":            string(status.Reconciler.lifecycle),
+		"runtime:reconciler:availability":         string(status.Reconciler.availability),
+		"runtime:projection:ready_generation":     fmt.Sprintf("%d", s.projection.ReadyGeneration),
+		"runtime:projection:committed_generation": fmt.Sprintf("%d", s.projection.CommittedGeneration),
+		"runtime:in_flight_calls":                 fmt.Sprintf("%d", len(s.inFlightCalls)),
+		"runtime:drain_waiters":                   fmt.Sprintf("%d", len(s.drainWaiters)),
+	}
 }
 
 // runtimeAvailability derives runtime availability from child component status.
@@ -916,7 +946,7 @@ func (s *supervisor[P, M]) handleProjectionStatus(status snapshot.ProjectionActo
 		// Keep that correlation alive; only the acknowledgement or deadline resolves it.
 		s.projection.ReadyGeneration = 0
 		s.projection.Status = status
-		s.reconcileStatus()
+		s.refreshStatus()
 		s.publishStatus()
 		return s.beginPendingDesiredStateTransition()
 	}
@@ -926,7 +956,7 @@ func (s *supervisor[P, M]) handleProjectionStatus(status snapshot.ProjectionActo
 		s.projection.ReadyGeneration == s.projection.CommittedGeneration {
 		s.projection.Status = status
 		s.finishDesiredStateTransition()
-		s.reconcileStatus()
+		s.refreshStatus()
 		s.publishStatus()
 		return s.beginPendingDesiredStateTransition()
 	}
@@ -939,7 +969,7 @@ func (s *supervisor[P, M]) handleProjectionStatus(status snapshot.ProjectionActo
 	s.projection.PendingPID = gen.PID{}
 	s.cancelProjectionCommitRetry(false)
 	s.cancelProjectionDeadline()
-	s.reconcileStatus()
+	s.refreshStatus()
 	s.publishStatus()
 	if err := s.beginPendingDesiredStateTransition(); err != nil {
 		return err
@@ -956,7 +986,7 @@ func (s *supervisor[P, M]) handleProjectionCommitResult(m snapshot.MessageProjec
 		if s.adoptAuthoritativeProjectionPID(m.ProjectionPID) {
 			s.cancelProjectionDeadline()
 			s.cancelProjectionCommitRetry(false)
-			s.reconcileStatus()
+			s.refreshStatus()
 			s.publishStatus()
 			return s.requestProjectionCommit()
 		}
@@ -983,7 +1013,7 @@ func (s *supervisor[P, M]) handleProjectionCommitResult(m snapshot.MessageProjec
 	if err := s.beginPendingDesiredStateTransition(); err != nil {
 		return err
 	}
-	s.reconcileStatus()
+	s.refreshStatus()
 	s.publishStatus()
 	return nil
 }

@@ -90,7 +90,7 @@ type routerActor[T Artifact] struct {
 	act.Router
 	opts             RouterOptions
 	lifecycle        RouterActorLifecycle
-	liveStatus       routerActorStatus
+	lastStatus       routerActorStatus
 	pluginID         string
 	generation       uint64
 	desiredRevision  uint64
@@ -822,8 +822,8 @@ func (a *routerActor[T]) activeRouteAvailable(deployment *Deployment) bool {
 	return ref != nil && ref.phase == deploymentRouteActive && a.refreshRoutePID(ref) != (gen.PID{})
 }
 
-// reconcileStatus recomputes router status and publishes an epoch-tagged update on change.
-func (a *routerActor[T]) reconcileStatus() {
+// routeAvailability computes route status and routability from desired/active deployments
+func (a *routerActor[T]) routeAvailability() (deploymentRouteStatus, deploymentRouteStatus, bool, bool, runtime.Availability) {
 	primaryStatus, candidateStatus := a.deploymentStatusFor(a.desiredPrimary), a.deploymentStatusFor(a.desiredCandidate)
 	primaryRoutable, candidateRoutable := a.activeRouteAvailable(a.activePrimary), a.activeRouteAvailable(a.activeCandidate)
 	shadowRoutable := candidateRoutable && a.activeCandidate != nil && a.activeCandidate.Mode == runtime.RolloutModeShadow
@@ -834,9 +834,6 @@ func (a *routerActor[T]) reconcileStatus() {
 			fullNormalCoverage = true
 		}
 	}
-	if normalRoutable && a.lifecycle == RouterActorStarting {
-		a.lifecycle = RouterActorRunning
-	}
 	primaryHealthy := a.desiredPrimary == nil || (primaryStatus.lifecycle == DeploymentRouteRunning && primaryStatus.availability == runtime.AvailabilityReady)
 	candidateHealthy := a.desiredCandidate == nil || (candidateStatus.lifecycle == DeploymentRouteRunning && candidateStatus.availability == runtime.AvailabilityReady)
 	availability := runtime.AvailabilityUnavailable
@@ -846,14 +843,48 @@ func (a *routerActor[T]) reconcileStatus() {
 	case normalRoutable || shadowRoutable:
 		availability = runtime.AvailabilityDegraded
 	}
-	next := routerActorStatus{lifecycle: a.lifecycle, availability: availability, revision: a.desiredRevision,
+	return primaryStatus, candidateStatus, normalRoutable, shadowRoutable, availability
+}
+
+// status computes the router's current publishable status, shared by reconcileStatus (to the catalog) and HandleInspect (to an operator).
+func (a *routerActor[T]) status() routerActorStatus {
+	primaryStatus, candidateStatus, normalRoutable, shadowRoutable, availability := a.routeAvailability()
+	return routerActorStatus{lifecycle: a.lifecycle, availability: availability, revision: a.desiredRevision,
 		normalRoutable: normalRoutable, shadowRoutable: shadowRoutable, primary: primaryStatus, candidate: candidateStatus}
-	if sameRouterStatus(a.liveStatus, next) && a.statusEpoch != 0 {
+}
+
+// reconcileStatus recomputes router status and publishes an epoch-tagged update on change.
+func (a *routerActor[T]) reconcileStatus() {
+	if _, _, normalRoutable, _, _ := a.routeAvailability(); normalRoutable && a.lifecycle == RouterActorStarting {
+		a.lifecycle = RouterActorRunning
+	}
+	next := a.status()
+	if sameRouterStatus(a.lastStatus, next) && a.statusEpoch != 0 {
 		return
 	}
-	a.statusEpoch, a.liveStatus = a.statusEpoch+1, next
+	a.statusEpoch, a.lastStatus = a.statusEpoch+1, next
 	if a.generation != 0 {
 		_ = a.SendWithPriority(a.Parent(), MessageRouterStatusChanged{pluginID: a.pluginID, pid: a.PID(), generation: a.generation, epoch: a.statusEpoch, status: next.clone()}, gen.MessagePriorityHigh)
+	}
+}
+
+// HandleInspect exposes concise router operational state: lifecycle/availability plus the primary
+// and candidate routes' own health, since a Ready router status alone doesn't say whether
+// canary/shadow traffic is actually being served.
+func (a *routerActor[T]) HandleInspect(gen.PID, ...string) map[string]string {
+	status := a.status()
+	return map[string]string{
+		"router:lifecycle":              string(status.lifecycle),
+		"router:availability":           string(status.availability),
+		"router:revision":               fmt.Sprintf("%d", status.revision),
+		"router:normal_routable":        fmt.Sprintf("%t", status.normalRoutable),
+		"router:shadow_routable":        fmt.Sprintf("%t", status.shadowRoutable),
+		"router:routes":                 fmt.Sprintf("%d", len(a.routesByKey)),
+		"router:in_flight_calls":        fmt.Sprintf("%d", len(a.inFlightCalls)),
+		"router:primary:lifecycle":      string(status.primary.lifecycle),
+		"router:primary:availability":   string(status.primary.availability),
+		"router:candidate:lifecycle":    string(status.candidate.lifecycle),
+		"router:candidate:availability": string(status.candidate.availability),
 	}
 }
 

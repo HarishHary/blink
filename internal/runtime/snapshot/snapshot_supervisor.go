@@ -65,7 +65,7 @@ func NewSupervisor[T any](opts SupervisorOptions[T]) *Supervisor[T] {
 
 // Init validates options and configures the supervised reader and projection actors.
 func (s *Supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
-	defer s.reportStatus()
+	defer s.publishStatus()
 
 	if s.opts.ReaderActorOptions.Name == "" || s.opts.ReaderActorOptions.Endpoint.Name == "" || s.opts.ReaderActorOptions.ExecutorID == "" {
 		return act.SupervisorSpec{}, fmt.Errorf("actor snapshot: name, endpoint, and executor ID are required")
@@ -146,7 +146,7 @@ func (s *Supervisor[T]) HandleChildStart(name gen.Atom, pid gen.PID) error {
 		status := newReaderActorStatus()
 		if s.readerActor.status != status {
 			s.readerActor.status = status
-			s.reportStatus()
+			s.publishStatus()
 		}
 		return s.Send(pid, MessageReaderActorActivate{
 			snapshotEventName:  s.events.Snapshot.Name,
@@ -181,7 +181,7 @@ func (s *Supervisor[T]) HandleChildTerminate(_ gen.Atom, pid gen.PID, reason err
 		status.Lifecycle = ReaderActorRestarting
 		status.Availability = runtime.AvailabilityUnavailable
 		s.readerActor.status = status
-		s.reportStatus()
+		s.publishStatus()
 		return nil
 	default:
 		return nil
@@ -195,7 +195,7 @@ func (s *Supervisor[T]) HandleMessage(from gen.PID, message any) error {
 		if from == s.readerActor.pid {
 			if s.readerActor.status != message.status {
 				s.readerActor.status = message.status
-				s.reportStatus()
+				s.publishStatus()
 			}
 		}
 	case MessageProjectionActorStatusChanged:
@@ -255,7 +255,7 @@ func (s *Supervisor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 
 // Terminate marks children stopped and reports the shutdown reason.
 func (s *Supervisor[T]) Terminate(reason error) {
-	defer s.reportStatus()
+	defer s.publishStatus()
 	s.projectionActor.status.Lifecycle = ProjectionActorStopped
 	s.projectionActor.status.Availability = runtime.AvailabilityUnavailable
 	s.readerActor.status.Lifecycle = ReaderActorStopped
@@ -268,8 +268,8 @@ func (s *Supervisor[T]) Terminate(reason error) {
 	}
 }
 
-// reportStatus publishes the reader actor's current status.
-func (s *Supervisor[T]) reportStatus() {
+// publishStatus publishes the reader actor's current status.
+func (s *Supervisor[T]) publishStatus() {
 	if s.events.statusToken != (gen.Ref{}) {
 		_ = s.SendEvent(s.events.Status.Name, s.events.statusToken, s.readerActor.status)
 	}
