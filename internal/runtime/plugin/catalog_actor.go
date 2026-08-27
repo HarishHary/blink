@@ -70,7 +70,7 @@ type catalogActor[T Artifact] struct {
 	activated       bool
 	draining        bool
 	drainReported   bool
-	liveStatus      catalogActorStatus
+	lastStatus      catalogActorStatus
 	statusEpoch     uint64
 	routers         map[string]*routerState
 	desired         map[string]routerDesiredState
@@ -560,8 +560,8 @@ func (a *catalogActor[T]) finishTrackedCall(callID uint64, err error) {
 // Status projection
 // ---------------------------------------------------------------------------
 
-// reconcileStatus recomputes and publishes the aggregate catalog status.
-func (a *catalogActor[T]) reconcileStatus() {
+// status computes the current aggregate catalog status from desired and router state, shared by reconcileStatus (to the supervisor) and HandleInspect (to an operator).
+func (a *catalogActor[T]) status() catalogActorStatus {
 	routers := make(map[string]routerActorStatus, len(a.desired))
 	routable := 0
 	degraded := 0
@@ -617,7 +617,7 @@ func (a *catalogActor[T]) reconcileStatus() {
 		availability = runtime.AvailabilityDegraded
 	}
 
-	next := catalogActorStatus{
+	return catalogActorStatus{
 		lifecycle:          lifecycle,
 		availability:       availability,
 		desiredRevision:    a.desiredRevision,
@@ -628,12 +628,17 @@ func (a *catalogActor[T]) reconcileStatus() {
 		settledRouters:     settled,
 		routers:            routers,
 	}
-	if sameCatalogStatus(a.liveStatus, next) && a.statusEpoch != 0 {
+}
+
+// reconcileStatus recomputes and publishes the aggregate catalog status.
+func (a *catalogActor[T]) reconcileStatus() {
+	next := a.status()
+	if sameCatalogStatus(a.lastStatus, next) && a.statusEpoch != 0 {
 		return
 	}
 
 	a.statusEpoch++
-	a.liveStatus = next
+	a.lastStatus = next
 	if !a.activated {
 		return
 	}
@@ -642,6 +647,22 @@ func (a *catalogActor[T]) reconcileStatus() {
 		epoch:  a.statusEpoch,
 		status: next.clone(),
 	})
+}
+
+// HandleInspect exposes concise catalog operational state: aggregate router health plus the desired-vs-actual router count and in-flight call depth a Ready status alone doesn't distinguish.
+func (a *catalogActor[T]) HandleInspect(gen.PID, ...string) map[string]string {
+	status := a.status()
+	return map[string]string{
+		"catalog:lifecycle":        string(status.lifecycle),
+		"catalog:availability":     string(status.availability),
+		"catalog:desired_revision": fmt.Sprintf("%d", status.desiredRevision),
+		"catalog:routers":          fmt.Sprintf("%d/%d", len(a.routers), status.desiredRouters),
+		"catalog:routable":         fmt.Sprintf("%d", status.routableRouters),
+		"catalog:degraded":         fmt.Sprintf("%d", status.degradedRouters),
+		"catalog:unavailable":      fmt.Sprintf("%d", status.unavailableRouters),
+		"catalog:settled":          fmt.Sprintf("%d", status.settledRouters),
+		"catalog:in_flight_calls":  fmt.Sprintf("%d", len(a.inFlightCalls)),
+	}
 }
 
 // routerSettled reports whether a router is done moving toward revision: it reached that

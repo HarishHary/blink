@@ -15,10 +15,13 @@ import (
 	"github.com/harishhary/blink/internal/runtime/snapshot"
 )
 
-// database/sql handles connection-pool waits with context. Disabling SQLite's
-// own cancellation-blind busy sleep makes lock contention return immediately
-// so the controller's bounded retry loop remains in control.
-const sqliteBusyTimeout time.Duration = 0
+// Each controller sub-application (rule, matcher, tuning, formatter, enrichment) opens its own
+// connection pool against the same underlying file, so brief cross-pool lock contention is normal,
+// not exceptional - especially at boot, when every pool's first write lands at once. A small
+// cancellation-blind busy sleep lets SQLite absorb that without bubbling SQLITE_BUSY up as an
+// error; anything that outlasts it still returns promptly into the controller's own bounded retry
+// loop, which remains the backstop for genuinely stuck contention.
+const sqliteBusyTimeout = 200 * time.Millisecond
 
 // OpenSQLite opens a SQLite database at dsn (a file path, or ":memory:" for tests).
 // The mattn/go-sqlite3 driver is registered by this package.

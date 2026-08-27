@@ -156,7 +156,7 @@ type deploymentManager[T Artifact] struct {
 	desiredProcs   int
 	inFlightCalls  map[uint64]*deploymentManagerCall[T]
 	pendingCalls   pendingQueue[T]
-	liveStatus     deploymentManagerStatus
+	lastStatus     deploymentManagerStatus
 	statusEpoch    uint64
 	circuitOpen    bool
 	circuitToken   uint64
@@ -562,7 +562,7 @@ func (m *deploymentManager[T]) selectProcess() (int, *pluginProcessState) {
 // reconcile advances drain, process lifecycle, dispatch, scaling, and status publication.
 func (m *deploymentManager[T]) reconcile() {
 	if m.draining || m.circuitOpen {
-		m.publishStatus()
+		m.reconcileStatus()
 		if m.draining && !m.drained && len(m.inFlightCalls) == 0 {
 			m.reportDrained()
 		}
@@ -578,7 +578,7 @@ func (m *deploymentManager[T]) reconcile() {
 	m.reconcileProcesses()
 	m.dispatchInvocation()
 	m.reconcileScale()
-	m.publishStatus()
+	m.reconcileStatus()
 }
 
 // reconcileProcesses moves the deployment's slots toward the desired count and fills the empty ones, one pass at a time.
@@ -916,7 +916,7 @@ func (m *deploymentManager[T]) openCircuit(err error) {
 	if cancel, sendErr := m.SendAfter(m.PID(), MessageDeploymentManagerCircuitCooldown{token: m.circuitToken}, m.options.CircuitCooldown); sendErr == nil {
 		m.circuitStop = cancel
 	}
-	m.publishStatus()
+	m.reconcileStatus()
 }
 
 // closeCircuit reopens admission, resetting the retry budget of any slot that outlived the circuit opening.
@@ -998,7 +998,7 @@ func (m *deploymentManager[T]) reportDrained() {
 	_ = m.SendWithPriority(m.Parent(), MessageDeploymentManagerDrained{
 		route: m.route, manager: m.PID(),
 	}, gen.MessagePriorityHigh)
-	m.publishStatus()
+	m.reconcileStatus()
 }
 
 // ---------------------------------------------------------------------------
@@ -1104,13 +1104,13 @@ func sameDeploymentManagerStatus(left, right deploymentManagerStatus) bool {
 	return true
 }
 
-// publishStatus sends the latest manager snapshot to its Router parent, skipping one the Router already has: every accepted, dispatched, and completed invocation reconciles this manager, and the Router recomputes its own status - and the catalog and supervisor above it - for each fact it receives, so republishing an unchanged status would walk that whole chain twice per call.
-func (m *deploymentManager[T]) publishStatus() {
+// reconcileStatus recomputes and, on change, sends the latest manager snapshot to its Router parent: every accepted, dispatched, and completed invocation reconciles this manager, and the Router recomputes its own status - and the catalog and supervisor above it - for each fact it receives, so republishing an unchanged status would walk that whole chain twice per call.
+func (m *deploymentManager[T]) reconcileStatus() {
 	next := m.status()
-	if m.statusEpoch != 0 && sameDeploymentManagerStatus(m.liveStatus, next) {
+	if m.statusEpoch != 0 && sameDeploymentManagerStatus(m.lastStatus, next) {
 		return
 	}
-	m.statusEpoch, m.liveStatus = m.statusEpoch+1, next
+	m.statusEpoch, m.lastStatus = m.statusEpoch+1, next
 	_ = m.SendWithPriority(m.Parent(), MessageDeploymentManagerStatusChanged{
 		route: m.route, manager: m.PID(),
 		status: next,

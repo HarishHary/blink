@@ -72,6 +72,7 @@ type actor[T plugin.Artifact] struct {
 	fullRewriteRequired bool
 	subscribers         map[string]gen.PID
 	executors           map[string]ExecutorStatus
+	lastStatus          actorStatus
 }
 
 // newActor constructs the controller actor with normalized options.
@@ -173,7 +174,7 @@ func (a *actor[T]) Init(...any) error {
 
 // HandleMessage advances controller state from lifecycle and worker messages.
 func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
-	defer a.reportStatus()
+	defer a.reconcileStatus()
 	switch message.(type) {
 	case MessageActorActivate:
 		if from != a.Parent() || a.lifecycle != ActorStarting {
@@ -392,7 +393,7 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 
 // Terminate stops workers and reports the final controller state.
 func (a *actor[T]) Terminate(error) {
-	defer a.reportStatus()
+	defer a.reconcileStatus()
 	a.lifecycle = ActorStopped
 	a.scanner.restart.CancelScheduled(false)
 	a.writer.restart.CancelScheduled(false)
@@ -603,13 +604,22 @@ func (a *actor[T]) maybeDrained() error {
 	return nil
 }
 
-// reportStatus sends the current status to the supervisor.
-func (a *actor[T]) reportStatus() {
-	_ = a.Send(a.Parent(), MessageActorStatusChanged{status: actorStatus{Lifecycle: a.lifecycle, Availability: a.availability(), Generation: a.generation}})
+// reconcileStatus recomputes and, on change, sends the current status to the supervisor.
+func (a *actor[T]) reconcileStatus() {
+	next := a.status()
+	if next == a.lastStatus {
+		return
+	}
+	a.lastStatus = next
+	_ = a.Send(a.Parent(), MessageActorStatusChanged{status: next})
 }
 
-// availability derives the controller's own health from lifecycle and worker readiness, shared by
-// reportStatus (to the supervisor) and HandleInspect (to an operator).
+// status computes the controller's current publishable status, shared by reconcileStatus (to the supervisor) and HandleInspect (to an operator).
+func (a *actor[T]) status() actorStatus {
+	return actorStatus{Lifecycle: a.lifecycle, Availability: a.availability(), Generation: a.generation}
+}
+
+// availability derives the controller's own health from lifecycle and worker readiness.
 func (a *actor[T]) availability() runtime.Availability {
 	if a.lifecycle != ActorRunning {
 		return runtime.AvailabilityUnavailable
@@ -634,10 +644,11 @@ func (a *actor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 	if a.pending != nil {
 		upserts, tombstones = len(a.pending.entryUpserts), len(a.pending.tombstones)
 	}
+	status := a.status()
 	return map[string]string{
-		"controller:lifecycle":                   string(a.lifecycle),
-		"controller:availability":                string(a.availability()),
-		"controller:generation":                  fmt.Sprintf("%d", a.generation),
+		"controller:lifecycle":                   string(status.Lifecycle),
+		"controller:availability":                string(status.Availability),
+		"controller:generation":                  fmt.Sprintf("%d", status.Generation),
 		"controller:records":                     fmt.Sprintf("%d", len(a.records)),
 		"controller:subscribers":                 fmt.Sprintf("%d", len(a.subscribers)),
 		"controller:executors":                   fmt.Sprintf("%d", len(a.executors)),

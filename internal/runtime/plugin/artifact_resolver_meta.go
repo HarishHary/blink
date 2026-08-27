@@ -133,8 +133,13 @@ func (m *artifactResolverMeta) HandleCall(_ gen.PID, _ gen.Ref, request any) (an
 	return fmt.Errorf("unsupported artifact resolver call %T", request), nil
 }
 
-// HandleInspect exposes no inspect fields for the artifact resolver.
-func (m *artifactResolverMeta) HandleInspect(gen.PID, ...string) map[string]string { return nil }
+// HandleInspect exposes the resolver's directory and job queue depth (capacity 1, so this is effectively whether a resolution is already queued or running)
+func (m *artifactResolverMeta) HandleInspect(gen.PID, ...string) map[string]string {
+	return map[string]string{
+		"resolver:directory": m.directory,
+		"resolver:queue":     fmt.Sprintf("%d/%d", len(m.jobs), cap(m.jobs)),
+	}
+}
 
 // ---------------------------------------------------------------------------
 // Artifact resolution

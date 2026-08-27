@@ -280,8 +280,15 @@ func (m *pluginProcessMeta[T]) classifyInvocation(ctx context.Context, err error
 	return pluginMetaInvokeResult{err: err, recycle: recycle}
 }
 
-// HandleInspect exposes no custom meta-process metadata.
-func (m *pluginProcessMeta[T]) HandleInspect(gen.PID, ...string) map[string]string { return nil }
+// HandleInspect exposes which artifact this subprocess runs and whether it's connected
+func (m *pluginProcessMeta[T]) HandleInspect(gen.PID, ...string) map[string]string {
+	return map[string]string{
+		"meta:deployment_id":   m.deployment.Id,
+		"meta:deployment_name": m.deployment.Name,
+		"meta:connected":       fmt.Sprintf("%t", m.session.Load() != nil),
+		"meta:shutting_down":   fmt.Sprintf("%t", m.runCtx != nil && m.runCtx.Err() != nil),
+	}
+}
 
 // ---------------------------------------------------------------------------
 // Plugin session management

@@ -200,7 +200,7 @@ func (p *pluginProcess[T]) HandleMessage(from gen.PID, message any) error {
 			capacity:     p.deployment.CapacityPerProcess(),
 		}
 		p.scheduleHealthCheck(p.pluginMeta.alias)
-		p.publishStatus(PluginProcessRunning)
+		p.reportStatus(PluginProcessRunning)
 
 	case MessagePluginMetaRestart:
 		restart := p.pluginMeta.restart
@@ -271,6 +271,23 @@ func (p *pluginProcess[T]) HandleMessage(from gen.PID, message any) error {
 // HandleCall rejects unsupported synchronous process calls.
 func (p *pluginProcess[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
 	return fmt.Errorf("unsupported plugin process call %T", request), nil
+}
+
+// HandleInspect exposes concise plugin process operational state: the subprocess meta's own
+// lifecycle/availability/activity plus the two independent restart tracks (a normal failure and a
+// health-check failure use separate backoffs) and in-flight call depth.
+func (p *pluginProcess[T]) HandleInspect(gen.PID, ...string) map[string]string {
+	return map[string]string{
+		"process:meta_lifecycle":         string(p.pluginMeta.status.lifecycle),
+		"process:meta_availability":      string(p.pluginMeta.status.availability),
+		"process:meta_activity":          string(p.pluginMeta.status.activity),
+		"process:generation":             fmt.Sprintf("%d", p.pluginMeta.generation),
+		"process:has_subprocess":         fmt.Sprintf("%t", p.pluginMeta.alias != (gen.Alias{})),
+		"process:calls":                  fmt.Sprintf("%d/%d", len(p.calls), p.pluginMeta.status.capacity),
+		"process:restart_pending":        fmt.Sprintf("%t", p.pluginMeta.restart.Pending),
+		"process:health_restart_pending": fmt.Sprintf("%t", p.pluginMeta.healthRestart.Pending),
+		"process:ping_pending":           fmt.Sprintf("%t", p.pluginMeta.pingPending),
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -408,7 +425,7 @@ func (p *pluginProcess[T]) refreshActivity() {
 		return
 	}
 	p.pluginMeta.status.activity = activity
-	p.publishStatus(PluginProcessRunning)
+	p.reportStatus(PluginProcessRunning)
 }
 
 // ---------------------------------------------------------------------------
@@ -427,7 +444,7 @@ func (p *pluginProcess[T]) startPluginMeta() error {
 		activity:     PluginMetaIdle,
 		capacity:     p.deployment.CapacityPerProcess(),
 	}
-	p.publishStatus(PluginProcessStarting)
+	p.reportStatus(PluginProcessStarting)
 	alias, err := p.SpawnMeta(&pluginProcessMeta[T]{
 		adapter:    p.adapter,
 		deployment: p.deployment,
@@ -500,7 +517,7 @@ func (p *pluginProcess[T]) failPluginMeta(err error) {
 		capacity:     p.deployment.CapacityPerProcess(),
 		lastError:    err,
 	}
-	p.publishStatus(PluginProcessFailed)
+	p.reportStatus(PluginProcessFailed)
 	_ = p.SendWithPriority(p.Parent(), MessagePluginProcessRestartExhausted{err: err}, gen.MessagePriorityHigh)
 }
 
@@ -558,11 +575,11 @@ func (p *pluginProcess[T]) reportUnavailable(err error) {
 		return
 	}
 	p.pluginMeta.status = status
-	p.publishStatus(PluginProcessRestarting)
+	p.reportStatus(PluginProcessRestarting)
 }
 
-// publishStatus sends the current process status to its manager.
-func (p *pluginProcess[T]) publishStatus(lifecycle PluginProcessLifecycle) {
+// reportStatus sends the current process status to its manager.
+func (p *pluginProcess[T]) reportStatus(lifecycle PluginProcessLifecycle) {
 	_ = p.SendWithPriority(p.Parent(), MessagePluginProcessStatusChanged{
 		process: p.PID(),
 		status: pluginProcessStatus{

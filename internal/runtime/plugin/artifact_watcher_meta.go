@@ -221,8 +221,13 @@ func (m *artifactWatcherMeta) HandleCall(_ gen.PID, _ gen.Ref, request any) (any
 	return fmt.Errorf("unsupported artifact watcher call %T", request), nil
 }
 
-// HandleInspect exposes no watcher inspection fields.
-func (m *artifactWatcherMeta) HandleInspect(gen.PID, ...string) map[string]string { return nil }
+// HandleInspect exposes the watched directory and whether this instance is shutting down
+func (m *artifactWatcherMeta) HandleInspect(gen.PID, ...string) map[string]string {
+	return map[string]string{
+		"watcher:directory":     m.directory,
+		"watcher:shutting_down": fmt.Sprintf("%t", m.runCtx != nil && m.runCtx.Err() != nil),
+	}
+}
 
 // ---------------------------------------------------------------------------
 // Watcher operations
