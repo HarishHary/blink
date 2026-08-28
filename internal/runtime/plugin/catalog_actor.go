@@ -7,6 +7,7 @@ import (
 	"ergo.services/ergo/gen"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/harishhary/blink/internal/runtime"
+	"github.com/harishhary/blink/internal/runtime/telemetry"
 )
 
 // ---------------------------------------------------------------------------
@@ -75,6 +76,7 @@ type catalogActor[T Artifact] struct {
 	routers         map[string]*routerState
 	desired         map[string]routerDesiredState
 	inFlightCalls   map[uint64]gen.PID
+	labels          telemetry.Labels
 }
 
 // ---------------------------------------------------------------------------
@@ -111,8 +113,8 @@ type MessageRouterRestart struct {
 }
 
 // newCatalogActor creates a catalog actor with its runtime options.
-func newCatalogActor[T Artifact](opts CatalogOptions, adapter *Adapter[T]) gen.ProcessBehavior {
-	return &catalogActor[T]{opts: opts, adapter: adapter}
+func newCatalogActor[T Artifact](opts CatalogOptions, adapter *Adapter[T], labels telemetry.Labels) gen.ProcessBehavior {
+	return &catalogActor[T]{opts: opts, adapter: adapter, labels: labels}
 }
 
 // ---------------------------------------------------------------------------
@@ -285,6 +287,7 @@ func (a *catalogActor[T]) HandleMessage(from gen.PID, message any) error {
 				continue
 			}
 
+			a.labels.Count(a, metricRouterTerminations, telemetry.TerminationReason(m.Reason))
 			ref.status.lifecycle = RouterActorRestarting
 			ref.status.availability = runtime.AvailabilityUnavailable
 			ref.status.lastError = m.Reason
@@ -395,6 +398,7 @@ func (a *catalogActor[T]) startRouter(id string) (*routerState, error) {
 			opts:     a.opts.RouterOptions,
 			adapter:  a.adapter,
 			pluginID: id,
+			labels:   a.labels,
 		}
 	}, gen.ProcessOptions{LinkParent: true})
 	if err != nil {
@@ -415,6 +419,7 @@ func (a *catalogActor[T]) startRouter(id string) (*routerState, error) {
 		_ = a.Node().SendExit(pid, fmt.Errorf("activate router: %w", err))
 		return ref, err
 	}
+	a.labels.Count(a, metricRouterStarts)
 	return ref, nil
 }
 
@@ -503,6 +508,7 @@ func (a *catalogActor[T]) scheduleRouterRestart(id string) error {
 	}
 	state.Pending = true
 	state.Cancel = cancel
+	a.labels.Count(a, metricRouterRestarts)
 	if ref := a.routers[id]; ref != nil {
 		ref.status.lifecycle = RouterActorRestarting
 		ref.status.availability = runtime.AvailabilityUnavailable

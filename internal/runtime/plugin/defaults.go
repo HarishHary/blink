@@ -1,6 +1,10 @@
 package plugin
 
-import "time"
+import (
+	"time"
+
+	"ergo.services/ergo/gen"
+)
 
 const (
 	// DefaultDeploymentCallsPerProcess is what a process serves undeclared; above 1 the plugin has to be concurrency-safe.
@@ -42,8 +46,19 @@ const (
 	DefaultRouterRetryMax                   = DefaultRetryMax
 )
 
+// Every process in a namespace's subtree is named from that namespace, mirroring the controller's
+// controller-<namespace>-* names, so a caller addresses one without being told what it was called.
+func ApplicationName(namespace string) gen.Atom     { return subtreeName(namespace, "application") }
+func SupervisorName(namespace string) gen.Atom      { return subtreeName(namespace, "supervisor") }
+func ReconcilerActorName(namespace string) gen.Atom { return subtreeName(namespace, "reconciler") }
+func CatalogActorName(namespace string) gen.Atom    { return subtreeName(namespace, "catalog") }
+
+func subtreeName(namespace, suffix string) gen.Atom {
+	return gen.Atom("plugin-" + namespace + "-" + suffix)
+}
+
 // runtimeOptionsWithDefaults fills public runtime option defaults.
-func runtimeOptionsWithDefaults(opts Options) Options {
+func runtimeOptionsWithDefaults(opts ApplicationOptions) ApplicationOptions {
 	if opts.MaxConcurrentCalls <= 0 {
 		opts.MaxConcurrentCalls = DefaultRuntimeMaxConcurrentCalls
 	}
@@ -58,19 +73,18 @@ func runtimeOptionsWithDefaults(opts Options) Options {
 	opts.maxOutstandingInvocations = opts.maxOutstandingInvocationsPerPlugin * opts.MaxConcurrentCalls
 	opts.shadowMaxOutstandingInvocations = max(1, opts.maxOutstandingInvocations/DefaultRuntimeShadowAdmissionShare)
 	// One plugin's whole fan-out lands on one manager, so a queue under its share would move the same rejection a layer down.
-	if opts.SupervisorOptions.CatalogOptions.RouterOptions.ManagerOptions.QueueSize <= 0 &&
+	if opts.SupervisorOptions.CatalogOptions.RouterOptions.DeploymentManagerOptions.QueueSize <= 0 &&
 		opts.maxOutstandingInvocationsPerPlugin > DefaultDeploymentManagerQueueSize {
-		opts.SupervisorOptions.CatalogOptions.RouterOptions.ManagerOptions.QueueSize = opts.maxOutstandingInvocationsPerPlugin
+		opts.SupervisorOptions.CatalogOptions.RouterOptions.DeploymentManagerOptions.QueueSize = opts.maxOutstandingInvocationsPerPlugin
 	}
 
-	// Growth past a deployment's min_procs: see processBudgetFromResources for why this is sized
-	// from CPU and memory together, not GOMAXPROCS alone.
-	if opts.SupervisorOptions.CatalogOptions.RouterOptions.ManagerOptions.ProcessBudget == nil {
-		opts.SupervisorOptions.CatalogOptions.RouterOptions.ManagerOptions.ProcessBudget = NewProcessBudget(processBudgetFromResources())
+	// Growth past a deployment's min_procs: see processBudgetFromResources for why this is sized from CPU and memory together
+	if opts.SupervisorOptions.CatalogOptions.RouterOptions.DeploymentManagerOptions.ProcessBudget == nil {
+		opts.SupervisorOptions.CatalogOptions.RouterOptions.DeploymentManagerOptions.ProcessBudget = NewProcessBudget(processBudgetFromResources())
 	}
 	opts.SupervisorOptions = supervisorOptionsWithDefaults(opts.SupervisorOptions)
 	if opts.CloseTimeout <= 0 {
-		opts.CloseTimeout = opts.SupervisorOptions.CatalogOptions.RouterOptions.ManagerOptions.DrainTimeout + DefaultRuntimeCloseGracePeriod
+		opts.CloseTimeout = opts.SupervisorOptions.CatalogOptions.RouterOptions.DeploymentManagerOptions.DrainTimeout + DefaultRuntimeCloseGracePeriod
 	}
 	return opts
 }
@@ -119,7 +133,7 @@ func routerOptionsWithDefaults(opts RouterOptions) RouterOptions {
 	if opts.RetryMax < opts.RetryMin {
 		opts.RetryMax = opts.RetryMin
 	}
-	opts.ManagerOptions = deploymentManagerOptionsWithDefaults(opts.ManagerOptions)
+	opts.DeploymentManagerOptions = deploymentManagerOptionsWithDefaults(opts.DeploymentManagerOptions)
 	return opts
 }
 
@@ -152,7 +166,7 @@ func deploymentManagerOptionsWithDefaults(opts DeploymentManagerOptions) Deploym
 	if opts.RetryMax < opts.RetryMin {
 		opts.RetryMax = opts.RetryMin
 	}
-	opts.ProcessOptions = pluginProcessOptionsWithDefaults(opts.ProcessOptions)
+	opts.PluginProcessOptions = pluginProcessOptionsWithDefaults(opts.PluginProcessOptions)
 	return opts
 }
 

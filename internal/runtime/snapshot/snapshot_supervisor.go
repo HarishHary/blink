@@ -40,11 +40,22 @@ type Events struct {
 	statusToken   gen.Ref
 }
 
-// EventsFor returns the stable event identifiers for a namespace's snapshot subtree.
+// snapshotPublication is what the reader actor publishes committed snapshots through.
+func (e Events) snapshotPublication() runtime.EventPublication {
+	return runtime.EventPublication{Name: e.Snapshot.Name, Token: e.snapshotToken}
+}
+
+// statusPublication is what the supervisor publishes reader status through, keeping it itself.
+func (e Events) statusPublication() runtime.EventPublication {
+	return runtime.EventPublication{Name: e.Status.Name, Token: e.statusToken}
+}
+
+// EventsFor returns the stable event identifiers for a namespace's snapshot subtree. Both are
+// node-local and derived on either side, so neither name is configurable.
 func EventsFor(node gen.Node, namespace string) Events {
 	return Events{
-		Snapshot: gen.Event{Name: subtreeName(namespace, "snapshot"), Node: node.Name()},
-		Status:   gen.Event{Name: subtreeName(namespace, "status"), Node: node.Name()},
+		Snapshot: gen.Event{Name: subtreeName(namespace, "artifacts"), Node: node.Name()},
+		Status:   gen.Event{Name: subtreeName(namespace, "reader-actor-status"), Node: node.Name()},
 	}
 }
 
@@ -133,12 +144,13 @@ func (s *Supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 	if s.opts.ProjectionMode != ProjectionCommitDirect && s.opts.ProjectionMode != ProjectionCommitExternal {
 		return act.SupervisorSpec{}, fmt.Errorf("snapshot projection: invalid commit mode")
 	}
+	name := SupervisorName(s.opts.Namespace)
 	if s.Name() == "" {
-		if err := s.RegisterName(s.opts.Name); err != nil {
-			return act.SupervisorSpec{}, fmt.Errorf("register snapshot supervisor %q: %w", s.opts.Name, err)
+		if err := s.RegisterName(name); err != nil {
+			return act.SupervisorSpec{}, fmt.Errorf("register snapshot supervisor %q: %w", name, err)
 		}
-	} else if s.Name() != s.opts.Name {
-		return act.SupervisorSpec{}, fmt.Errorf("snapshot supervisor registered as %q, want %q", s.Name(), s.opts.Name)
+	} else if s.Name() != name {
+		return act.SupervisorSpec{}, fmt.Errorf("snapshot supervisor registered as %q, want %q", s.Name(), name)
 	}
 
 	s.events = EventsFor(s.Node(), s.opts.Namespace)
@@ -220,8 +232,7 @@ func (s *Supervisor[T]) HandleChildStart(name gen.Atom, pid gen.PID) error {
 			s.publishStatus()
 		}
 		return s.Send(pid, MessageReaderActorActivate{
-			snapshotEventName:  s.events.Snapshot.Name,
-			snapshotEventToken: s.events.snapshotToken,
+			snapshotEvent: s.events.snapshotPublication(),
 		})
 	default:
 		return nil
@@ -485,8 +496,8 @@ func (s *Supervisor[T]) executorAvailability() runtime.Availability {
 
 // publishStatus publishes the reader actor's current status.
 func (s *Supervisor[T]) publishStatus() {
-	if s.events.statusToken != (gen.Ref{}) {
-		_ = s.SendEvent(s.events.Status.Name, s.events.statusToken, s.readerActor.status)
+	if status := s.events.statusPublication(); status.Registered() {
+		_ = s.SendEvent(status.Name, status.Token, s.readerActor.status)
 	}
 }
 

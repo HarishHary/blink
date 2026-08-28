@@ -33,8 +33,7 @@ type ReaderActorStatus struct {
 // --- messages ---
 
 type MessageReaderActorActivate struct {
-	snapshotEventName  gen.Atom
-	snapshotEventToken gen.Ref
+	snapshotEvent runtime.EventPublication
 }
 
 type MessageReaderActorStatusChanged struct{ status ReaderActorStatus }
@@ -69,12 +68,9 @@ type MessageSubscribeRestart struct{ token uint64 }
 // readerActor issues one bounded Call to subscribe, then passively receives pushed SnapshotUpdate messages - Ergo remote delivery is push-based, so there's no read loop or meta process to supervise.
 type readerActor struct {
 	act.Actor
-	opts   ReaderActorOptions
-	labels telemetry.Labels
-
-	snapshotEventName  gen.Atom
-	snapshotEventToken gen.Ref
-
+	opts           ReaderActorOptions
+	labels         telemetry.Labels
+	snapshotEvent  runtime.EventPublication
 	controllerPID  gen.PID
 	subscribed     bool
 	lastGeneration int64
@@ -99,11 +95,10 @@ func (a *readerActor) HandleMessage(from gen.PID, message any) error {
 	defer a.reconcileStatus()
 	switch m := message.(type) {
 	case MessageReaderActorActivate:
-		if from != a.Parent() || a.snapshotEventToken != (gen.Ref{}) {
+		if from != a.Parent() || a.snapshotEvent.Registered() {
 			return nil
 		}
-		a.snapshotEventName = m.snapshotEventName
-		a.snapshotEventToken = m.snapshotEventToken
+		a.snapshotEvent = m.snapshotEvent
 		return a.subscribe()
 	case SnapshotUpdate:
 		if reason := a.updateRejection(from, m); reason != "" {
@@ -237,15 +232,15 @@ func (a *readerActor) scheduleSubscribeRestart() error {
 
 // publishSnapshot sends the received snapshot to subscribers.
 func (a *readerActor) publishSnapshot(snap *Snapshot) {
-	if a.snapshotEventToken == (gen.Ref{}) {
+	if !a.snapshotEvent.Registered() {
 		return
 	}
-	_ = a.SendEvent(a.snapshotEventName, a.snapshotEventToken, snap.Clone())
+	_ = a.SendEvent(a.snapshotEvent.Name, a.snapshotEvent.Token, snap.Clone())
 }
 
 // reconcileStatus recomputes and, on change, sends the current reader status to the supervisor.
 func (a *readerActor) reconcileStatus() {
-	if a.snapshotEventToken == (gen.Ref{}) {
+	if !a.snapshotEvent.Registered() {
 		return
 	}
 	next := a.status()

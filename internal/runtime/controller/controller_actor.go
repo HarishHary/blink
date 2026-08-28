@@ -60,7 +60,8 @@ type reconcilePlan struct {
 
 type actor[T plugin.Artifact] struct {
 	act.Actor
-	opts                ActorOptions[T]
+	opts                ActorOptions
+	loader              plugin.Loader[T]
 	database            backends.Database
 	barrier             *writerIOBarrier
 	lifecycle           ActorLifecycle
@@ -78,9 +79,10 @@ type actor[T plugin.Artifact] struct {
 	labels              telemetry.Labels
 }
 
-// newActor constructs the controller actor with normalized options.
-func newActor[T plugin.Artifact](opts ActorOptions[T], database backends.Database, barrier *writerIOBarrier) gen.ProcessBehavior {
-	return &actor[T]{opts: actorOptionsWithDefaults(opts), database: database, barrier: barrier}
+// newActor constructs the controller actor with normalized options, its typed loader, and the labels
+// its supervisor built from the namespace.
+func newActor[T plugin.Artifact](opts ActorOptions, loader plugin.Loader[T], labels telemetry.Labels, database backends.Database, barrier *writerIOBarrier) gen.ProcessBehavior {
+	return &actor[T]{opts: actorOptionsWithDefaults(opts), loader: loader, labels: labels, database: database, barrier: barrier}
 }
 
 // --- messages ---
@@ -150,15 +152,13 @@ const (
 
 // Init validates dependencies and initializes controller state.
 func (a *actor[T]) Init(...any) error {
-	// Namespace is required: this actor's name and every metric label come from it.
-	if a.opts.Namespace == "" || a.opts.Directory == "" || a.opts.Loader == nil || a.database == nil || a.barrier == nil {
-		return fmt.Errorf("controller actor: namespace, directory, loader, database, and barrier are required")
+	if a.opts.Directory == "" || a.loader == nil || a.database == nil || a.barrier == nil {
+		return fmt.Errorf("controller actor: directory, loader, database, and barrier are required")
 	}
 	a.lifecycle = ActorStarting
 	a.records = make(map[string]backends.ControllerRecord)
 	a.subscribers = make(map[string]gen.PID)
 	a.executors = make(map[string]ExecutorStatus)
-	a.labels = telemetry.NewLabels(a.opts.Namespace)
 	a.scanner = scannerMetaState{
 		restart: runtime.NewScheduledBackoff(a.opts.RestartMin, a.opts.RestartMax),
 		status: artifactScannerMetaStatus{
@@ -216,7 +216,7 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 			return fmt.Errorf("schedule executor drift check: %w", err)
 		}
 		a.actorGauges().publish(a.labels, a)
-		a.Log().Info("controller activated: name=%s scanner_alias=%s writer_alias=%s", a.opts.Name, a.scanner.alias, a.writer.alias)
+		a.Log().Info("controller activated: name=%s scanner_alias=%s writer_alias=%s", a.Name(), a.scanner.alias, a.writer.alias)
 		return nil
 	case snapshot.MessageExecutorReport:
 		a.executors[m.ExecutorID] = a.executors[m.ExecutorID].Apply(m)
@@ -255,7 +255,7 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 		}
 		a.scanner.entries = snapshot.CloneEntries(m.entries)
 		a.scanner.presentIDs = append([]string(nil), m.presentIDs...)
-		a.Log().Debug("artifact scan accepted: name=%s entries=%d present_ids=%d nonfatal_error=%t", a.opts.Name, len(m.entries), len(m.presentIDs), m.err != nil)
+		a.Log().Debug("artifact scan accepted: name=%s entries=%d present_ids=%d nonfatal_error=%t", a.Name(), len(m.entries), len(m.presentIDs), m.err != nil)
 		return a.reconcile()
 	case MessageSnapshotLoadResult:
 		if from != a.PID() || m.source != a.writer.alias {
@@ -314,10 +314,10 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 		a.fullRewriteRequired = false
 		if changed {
 			a.labels.Count(a, metricSnapshotCommits)
-			a.Log().Info("snapshot committed: name=%s generation=%d upserts=%d tombstones=%d", a.opts.Name, a.pending.next.Generation, len(a.pending.entryUpserts), len(a.pending.tombstones))
+			a.Log().Info("snapshot committed: name=%s generation=%d upserts=%d tombstones=%d", a.Name(), a.pending.next.Generation, len(a.pending.entryUpserts), len(a.pending.tombstones))
 			a.notifySubscribers(snapshot.SnapshotUpdate{
 				Snapshot:   a.committed.Clone(),
-				Changes:    ClassifyChanges(a.opts.Loader, priorCommitted, a.pending.entryUpserts),
+				Changes:    ClassifyChanges(a.loader, priorCommitted, a.pending.entryUpserts),
 				Tombstones: append([]string(nil), a.pending.tombstones...),
 			})
 		}
@@ -375,7 +375,7 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 		switch m.Alias {
 		case a.scanner.alias:
 			if a.lifecycle == ActorRunning {
-				a.Log().Error("artifact scanner stopped unexpectedly: name=%s alias=%s reason=%v", a.opts.Name, m.Alias, m.Reason)
+				a.Log().Error("artifact scanner stopped unexpectedly: name=%s alias=%s reason=%v", a.Name(), m.Alias, m.Reason)
 			}
 			a.scanner.alias = gen.Alias{}
 			if a.lifecycle == ActorDraining || a.lifecycle == ActorDrained {
@@ -389,7 +389,7 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 			return a.scheduleScannerRestart()
 		case a.writer.alias:
 			if a.lifecycle == ActorRunning {
-				a.Log().Error("snapshot writer stopped unexpectedly: name=%s alias=%s reason=%v", a.opts.Name, m.Alias, m.Reason)
+				a.Log().Error("snapshot writer stopped unexpectedly: name=%s alias=%s reason=%v", a.Name(), m.Alias, m.Reason)
 			}
 			a.writer.alias = gen.Alias{}
 			a.writer.status.Lifecycle = SnapshotWriterMetaRestarting
@@ -428,16 +428,16 @@ func (a *actor[T]) startScanner() error {
 		return nil
 	}
 	a.scanner.status = artifactScannerMetaStatus{Lifecycle: ArtifactScannerMetaStarting, Availability: runtime.AvailabilityUnavailable}
-	alias, err := a.SpawnMeta(&artifactScannerMeta[T]{directory: a.opts.Directory, loader: a.opts.Loader, labels: a.labels}, gen.MetaOptions{})
+	alias, err := a.SpawnMeta(&artifactScannerMeta[T]{directory: a.opts.Directory, loader: a.loader, labels: a.labels}, gen.MetaOptions{})
 	if err != nil {
 		a.scanner.status.LastError = fmt.Errorf("spawn artifact scanner meta: %w", err)
-		a.Log().Error("artifact scanner meta spawn failed: name=%s error=%v", a.opts.Name, a.scanner.status.LastError)
+		a.Log().Error("artifact scanner meta spawn failed: name=%s error=%v", a.Name(), a.scanner.status.LastError)
 		return a.scheduleScannerRestart()
 	}
 	if err := a.MonitorAlias(alias); err != nil {
 		_ = a.SendExitMeta(alias, gen.TerminateReasonShutdown)
 		a.scanner.status.LastError = fmt.Errorf("monitor artifact scanner meta: %w", err)
-		a.Log().Error("artifact scanner meta monitor failed: name=%s error=%v", a.opts.Name, a.scanner.status.LastError)
+		a.Log().Error("artifact scanner meta monitor failed: name=%s error=%v", a.Name(), a.scanner.status.LastError)
 		return a.scheduleScannerRestart()
 	}
 	a.scanner.alias = alias
@@ -464,7 +464,7 @@ func (a *actor[T]) startWriter() error {
 	}, gen.MetaOptions{})
 	if err != nil {
 		a.writer.status.LastError = fmt.Errorf("spawn snapshot writer meta: %w", err)
-		a.Log().Error("snapshot writer meta spawn failed: name=%s error=%v", a.opts.Name, a.writer.status.LastError)
+		a.Log().Error("snapshot writer meta spawn failed: name=%s error=%v", a.Name(), a.writer.status.LastError)
 		a.writer.replacementPending = true
 		return a.scheduleWriterRestart()
 	}
@@ -472,7 +472,7 @@ func (a *actor[T]) startWriter() error {
 	if err := a.MonitorAlias(alias); err != nil {
 		_ = a.SendExitMeta(alias, gen.TerminateReasonShutdown)
 		a.writer.status.LastError = fmt.Errorf("monitor snapshot writer meta: %w", err)
-		a.Log().Error("snapshot writer meta monitor failed: name=%s error=%v", a.opts.Name, a.writer.status.LastError)
+		a.Log().Error("snapshot writer meta monitor failed: name=%s error=%v", a.Name(), a.writer.status.LastError)
 		a.writer.replacementPending = true
 		return a.scheduleWriterRestart()
 	}
@@ -520,7 +520,7 @@ func (a *actor[T]) scheduleScannerRestart() error {
 	a.scanner.restart.Cancel = cancel
 	a.scanner.status.Lifecycle = ArtifactScannerMetaRestarting
 	a.labels.Count(a, metricWorkerRestarts, "scanner")
-	a.Log().Debug("artifact scanner restart scheduled: name=%s delay=%s token=%d", a.opts.Name, delay, token)
+	a.Log().Debug("artifact scanner restart scheduled: name=%s delay=%s token=%d", a.Name(), delay, token)
 	return nil
 }
 
@@ -543,7 +543,7 @@ func (a *actor[T]) scheduleWriterRestart() error {
 	a.writer.restart.Cancel = cancel
 	a.writer.status.Lifecycle = SnapshotWriterMetaRestarting
 	a.labels.Count(a, metricWorkerRestarts, "writer")
-	a.Log().Debug("snapshot writer restart scheduled: name=%s delay=%s token=%d", a.opts.Name, delay, token)
+	a.Log().Debug("snapshot writer restart scheduled: name=%s delay=%s token=%d", a.Name(), delay, token)
 	return nil
 }
 
@@ -575,7 +575,7 @@ func (a *actor[T]) sendPending() error {
 		message.records[i] = message.records[i].Clone()
 	}
 	if err := a.Send(a.writer.alias, message); err != nil {
-		a.Log().Error("pending write dispatch failed: name=%s generation=%d error=%v", a.opts.Name, message.next.Generation, err)
+		a.Log().Error("pending write dispatch failed: name=%s generation=%d error=%v", a.Name(), message.next.Generation, err)
 		a.writer.status.Writing = false
 		a.recordWriteFailure(fmt.Errorf("%w: queue write: %w", runtime.ErrSnapshotWrite, err))
 		a.writer.status.Availability = runtime.AvailabilityUnavailable
@@ -584,7 +584,7 @@ func (a *actor[T]) sendPending() error {
 		a.stopWriter(gen.TerminateReasonShutdown)
 		return a.scheduleWriterRestart()
 	}
-	a.Log().Debug("pending write dispatched: name=%s generation=%d changed=%t upserts=%d tombstones=%d", a.opts.Name, message.next.Generation, message.changed, len(message.upserts), len(message.tombstones))
+	a.Log().Debug("pending write dispatched: name=%s generation=%d changed=%t upserts=%d tombstones=%d", a.Name(), message.next.Generation, message.changed, len(message.upserts), len(message.tombstones))
 	return nil
 }
 
@@ -604,7 +604,7 @@ func (a *actor[T]) beginDrain() error {
 		return nil
 	}
 	a.lifecycle = ActorDraining
-	a.Log().Info("controller draining: name=%s writer_active_io=%d", a.opts.Name, len(a.writer.activeIO))
+	a.Log().Info("controller draining: name=%s writer_active_io=%d", a.Name(), len(a.writer.activeIO))
 	a.scanner.restart.CancelScheduled(false)
 	a.writer.restart.CancelScheduled(false)
 	a.stopScanner(gen.TerminateReasonShutdown)
@@ -619,7 +619,7 @@ func (a *actor[T]) maybeDrained() error {
 	}
 	if a.lifecycle != ActorDrained {
 		a.lifecycle = ActorDrained
-		a.Log().Info("controller drained: name=%s", a.opts.Name)
+		a.Log().Info("controller drained: name=%s", a.Name())
 	}
 	return nil
 }
@@ -777,7 +777,7 @@ func (a *actor[T]) HandleCall(from gen.PID, _ gen.Ref, request any) (any, error)
 		_ = a.MonitorPID(from)
 		return snapshot.SubscribeResponse{
 			Current:       a.committed.Clone(),
-			Changes:       ClassifyChanges(a.opts.Loader, nil, a.committedUpserts()),
+			Changes:       ClassifyChanges(a.loader, nil, a.committedUpserts()),
 			ControllerPID: a.PID(),
 		}, nil
 	case StatusRequest:
@@ -803,7 +803,7 @@ func (a *actor[T]) committedUpserts() []snapshot.EffectiveEntry {
 func (a *actor[T]) notifySubscribers(update snapshot.SnapshotUpdate) {
 	for id, pid := range a.subscribers {
 		if err := a.SendImportant(pid, update); err != nil {
-			a.Log().Error("snapshot push failed: name=%s executor_id=%s pid=%s error=%v", a.opts.Name, id, pid, err)
+			a.Log().Error("snapshot push failed: name=%s executor_id=%s pid=%s error=%v", a.Name(), id, pid, err)
 		}
 	}
 }
@@ -817,7 +817,7 @@ func (a *actor[T]) checkExecutorDrift() {
 		// returns, and keeping it would inflate the executor gauge for the life of the controller.
 		if _, subscribed := a.subscribers[id]; stale && !subscribed {
 			delete(a.executors, id)
-			a.Log().Debug("executor forgotten: name=%s executor_id=%s last_seen=%s", a.opts.Name, id, status.LastSeen)
+			a.Log().Debug("executor forgotten: name=%s executor_id=%s last_seen=%s", a.Name(), id, status.LastSeen)
 			continue
 		}
 		behind := status.ReadyGeneration < a.generation
@@ -834,7 +834,7 @@ func (a *actor[T]) checkExecutorDrift() {
 			driftDuration := now.Sub(status.DriftSince)
 			// Log once around the grace threshold crossing, not on every tick it stays drifting.
 			if driftDuration > executorDriftGrace && driftDuration-executorDriftCheckInterval <= executorDriftGrace {
-				a.Log().Error("executor drift detected: name=%s executor_id=%s ready_generation=%d committed_generation=%d drift=%s", a.opts.Name, id, status.ReadyGeneration, a.generation, driftDuration)
+				a.Log().Error("executor drift detected: name=%s executor_id=%s ready_generation=%d committed_generation=%d drift=%s", a.Name(), id, status.ReadyGeneration, a.generation, driftDuration)
 			}
 		}
 	}

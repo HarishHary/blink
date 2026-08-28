@@ -17,13 +17,14 @@ const serviceShutdownTimeout = 45 * time.Second
 type Service[T plugin.Artifact] struct {
 	node            gen.Node
 	name            string
-	opts            ApplicationOptions[T]
+	opts            ApplicationOptions
+	loader          plugin.Loader[T]
 	shutdownTimeout time.Duration
 }
 
 // NewService creates a service that constructs a fresh application per Run.
-func NewService[T plugin.Artifact](node gen.Node, name string, opts ApplicationOptions[T]) *Service[T] {
-	return &Service[T]{node: node, name: name, opts: opts, shutdownTimeout: serviceShutdownTimeout}
+func NewService[T plugin.Artifact](node gen.Node, name string, opts ApplicationOptions, loader plugin.Loader[T]) *Service[T] {
+	return &Service[T]{node: node, name: name, opts: opts, loader: loader, shutdownTimeout: serviceShutdownTimeout}
 }
 
 // Name identifies the service to the Runner.
@@ -31,7 +32,7 @@ func (s *Service[T]) Name() string { return s.name }
 
 // Run loads, runs, and safely cleans up one application attempt.
 func (s *Service[T]) Run(ctx context.Context) errs.Error {
-	app := NewApplication(s.opts)
+	app := NewApplication(s.opts, s.loader)
 	name, err := s.node.ApplicationLoad(app)
 	if err != nil {
 		return errs.NewE(errors.Join(err, s.cleanupAttempt(ctx, app, "")))
