@@ -9,6 +9,7 @@ import (
 	"github.com/harishhary/blink/internal/backends"
 	"github.com/harishhary/blink/internal/runtime"
 	"github.com/harishhary/blink/internal/runtime/plugin"
+	"github.com/harishhary/blink/internal/runtime/telemetry"
 )
 
 const (
@@ -39,8 +40,8 @@ type supervisor[T plugin.Artifact] struct {
 	lifecycle            SupervisorLifecycle
 	actor                actorState
 	writerFences         map[gen.Alias]gen.PID
-	scope                metricScope
-	signal               healthSignal
+	labels               telemetry.Labels
+	signal               telemetry.Signal
 	collectorsRegistered bool
 	radarLogged          bool
 }
@@ -52,7 +53,7 @@ func newSupervisor[T plugin.Artifact](opts SupervisorOptions[T], database backen
 		opts:     normalized,
 		database: database,
 		barrier:  barrier,
-		scope:    newMetricScope(normalized.Namespace),
+		labels:   telemetry.NewLabels(normalized.Namespace),
 		signal:   newHealthSignal(normalized.Namespace),
 	}
 }
@@ -115,7 +116,7 @@ func (s *supervisor[T]) HandleMessage(from gen.PID, message any) error {
 		}
 		s.reconcileRadar()
 		if s.lifecycle != SupervisorStopping {
-			if _, err := s.SendAfter(s.PID(), MessageRadarTick{}, healthHeartbeatInterval); err != nil {
+			if _, err := s.SendAfter(s.PID(), MessageRadarTick{}, telemetry.RadarTickInterval); err != nil {
 				return fmt.Errorf("reschedule radar tick: %w", err)
 			}
 		}
@@ -124,9 +125,9 @@ func (s *supervisor[T]) HandleMessage(from gen.PID, message any) error {
 		// Drop what a restarted radar process lost; the signal is rebuilt, not flagged, because radar
 		// marks a fresh registration up.
 		switch m.ProcessID.Name {
-		case radarMetricsProcess:
+		case telemetry.MetricsProcess:
 			s.collectorsRegistered = false
-		case radarHealthProcess:
+		case telemetry.HealthProcess:
 			s.signal = newHealthSignal(s.opts.Namespace)
 		default:
 			return nil
@@ -188,7 +189,7 @@ func (s *supervisor[T]) HandleChildStart(name gen.Atom, pid gen.PID) error {
 		return nil
 	}
 	defer s.publishState()
-	s.scope.count(s, metricChildStarts)
+	s.labels.Count(s, metricChildStarts)
 	s.actor = actorState{
 		pid: pid,
 		status: actorStatus{
@@ -206,7 +207,7 @@ func (s *supervisor[T]) HandleChildTerminate(name gen.Atom, pid gen.PID, reason 
 		return nil
 	}
 	defer s.publishState()
-	s.scope.count(s, metricChildTerminations, terminationReason(reason))
+	s.labels.Count(s, metricChildTerminations, telemetry.TerminationReason(reason))
 	s.actor.pid = gen.PID{}
 	if reason == gen.TerminateReasonNormal || reason == gen.TerminateReasonShutdown {
 		switch s.lifecycle {
@@ -224,9 +225,9 @@ func (s *supervisor[T]) HandleChildTerminate(name gen.Atom, pid gen.PID, reason 
 
 // publishState reports supervisor lifecycle and writer fences, then moves the readiness signal.
 func (s *supervisor[T]) publishState() {
-	s.scope.set(s, metricSupervisorLifecycle, supervisorLifecycleValue(s.lifecycle))
-	s.scope.set(s, metricWriterFences, float64(len(s.writerFences)))
-	s.signal.setReady(s, s.readyToServe())
+	s.labels.Set(s, metricSupervisorLifecycle, supervisorLifecycleValue(s.lifecycle))
+	s.labels.Set(s, metricWriterFences, float64(len(s.writerFences)))
+	s.signal.SetReady(s, s.readyToServe())
 }
 
 // readyToServe reports whether this namespace can answer snapshot requests: running, live child, ready child.
@@ -239,23 +240,23 @@ func (s *supervisor[T]) readyToServe() bool {
 // reconcileRadar registers whatever radar is still missing, then heartbeats the readiness signal.
 func (s *supervisor[T]) reconcileRadar() {
 	if !s.collectorsRegistered {
-		if err := registerMetrics(s.Node()); err != nil {
+		if err := telemetry.Register(s.Node(), controllerMetrics); err != nil {
 			s.radarUnavailableOnce(err)
 			return
 		}
 		s.collectorsRegistered = true
-		s.watchRadar(radarMetricsProcess)
+		s.watchRadar(telemetry.MetricsProcess)
 	}
-	if !s.signal.registered {
-		if err := s.signal.register(s); err != nil {
+	if !s.signal.Registered() {
+		if err := s.signal.Register(s); err != nil {
 			s.radarUnavailableOnce(err)
 			return
 		}
-		s.watchRadar(radarHealthProcess)
+		s.watchRadar(telemetry.HealthProcess)
 	}
 	s.radarLogged = false
-	s.signal.setReady(s, s.readyToServe())
-	s.signal.heartbeat(s)
+	s.signal.SetReady(s, s.readyToServe())
+	s.signal.Heartbeat(s)
 }
 
 // watchRadar monitors one radar process so a restart that drops these registrations announces itself.
@@ -381,6 +382,6 @@ func (s *supervisor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 		"supervisor:child_availability": string(s.actor.status.Availability),
 		"supervisor:child_generation":   fmt.Sprintf("%d", s.actor.status.Generation),
 		"supervisor:writer_fences":      fmt.Sprintf("%d", len(s.writerFences)),
-		"supervisor:readiness_signal":   readinessSignalState(s.signal),
+		"supervisor:readiness_signal":   s.signal.State(),
 	}
 }

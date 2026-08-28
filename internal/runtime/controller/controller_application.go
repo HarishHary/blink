@@ -10,6 +10,7 @@ import (
 	"github.com/harishhary/blink/internal/backends"
 	"github.com/harishhary/blink/internal/runtime/plugin"
 	"github.com/harishhary/blink/internal/runtime/snapshot"
+	"github.com/harishhary/blink/internal/runtime/telemetry"
 )
 
 // Application owns the resources for one plugin-type controller application.
@@ -19,7 +20,7 @@ type Application[T plugin.Artifact] struct {
 	database *sql.DB
 	barrier  *writerIOBarrier
 	stopped  chan error
-	scope    metricScope
+	labels   telemetry.Labels
 }
 
 // NewApplication creates an unloaded application for one plugin type.
@@ -29,7 +30,7 @@ func NewApplication[T plugin.Artifact](opts ApplicationOptions[T]) *Application[
 		opts:    normalized,
 		barrier: newWriterIOBarrier(),
 		stopped: make(chan error, 1),
-		scope:   newMetricScope(normalized.Namespace),
+		labels:  telemetry.NewLabels(normalized.Namespace),
 	}
 }
 
@@ -56,29 +57,29 @@ func (a *Application[T]) Load(_ ...any) (gen.ApplicationSpec, error) {
 	a.registerMetrics()
 	if a.opts.Name == "" || a.opts.SupervisorOptions.Name == "" || a.opts.Namespace == "" {
 		err := fmt.Errorf("controller application: name, supervisor name, and namespace are required")
-		a.scope.count(a.Node(), metricApplicationLoads, "invalid")
+		a.labels.Count(a.Node(), metricApplicationLoads, "invalid")
 		a.Log().Error("controller application configuration invalid: name=%s namespace=%q error=%v", a.opts.Name, a.opts.Namespace, err)
 		return gen.ApplicationSpec{}, err
 	}
 
 	database, err := backends.OpenSQLite(a.opts.DatabaseDSN)
 	if err != nil {
-		a.scope.count(a.Node(), metricApplicationLoads, "database")
+		a.labels.Count(a.Node(), metricApplicationLoads, "database")
 		a.Log().Error("controller application database open failed: name=%s namespace=%q error=%v", a.opts.Name, a.opts.Namespace, err)
 		return gen.ApplicationSpec{}, fmt.Errorf("open %s controller database: %w", a.opts.Namespace, err)
 	}
 	store, err := backends.NewSQLite(database, a.opts.Namespace)
 	if err != nil {
 		_ = database.Close()
-		a.scope.count(a.Node(), metricApplicationLoads, "database")
+		a.labels.Count(a.Node(), metricApplicationLoads, "database")
 		a.Log().Error("controller application database initialization failed: name=%s namespace=%q error=%v", a.opts.Name, a.opts.Namespace, err)
 		return gen.ApplicationSpec{}, fmt.Errorf("initialize %s controller database: %w", a.opts.Namespace, err)
 	}
 
 	a.database = database
 	supervisorOpts := a.opts.SupervisorOptions
-	a.scope.count(a.Node(), metricApplicationLoads, "ok")
-	a.scope.set(a.Node(), metricApplicationState, 1)
+	a.labels.Count(a.Node(), metricApplicationLoads, "ok")
+	a.labels.Set(a.Node(), metricApplicationState, 1)
 	a.Log().Info("controller application loaded: name=%s namespace=%q supervisor=%s", a.opts.Name, a.opts.Namespace, a.opts.SupervisorOptions.Name)
 
 	return gen.ApplicationSpec{
@@ -102,7 +103,7 @@ func (a *Application[T]) registerMetrics() {
 	if node == nil {
 		return
 	}
-	if err := registerMetrics(node); err != nil {
+	if err := telemetry.Register(node, controllerMetrics); err != nil {
 		a.Log().Debug("radar telemetry unavailable: namespace=%q error=%v", a.opts.Namespace, err)
 	}
 }
@@ -110,8 +111,8 @@ func (a *Application[T]) registerMetrics() {
 // Terminate only seals and reports. Waiting and closing belong to the service.
 func (a *Application[T]) Terminate(reason error) {
 	a.Seal()
-	a.scope.count(a.Node(), metricApplicationTerminations, terminationReason(reason))
-	a.scope.set(a.Node(), metricApplicationState, 0)
+	a.labels.Count(a.Node(), metricApplicationTerminations, telemetry.TerminationReason(reason))
+	a.labels.Set(a.Node(), metricApplicationState, 0)
 	a.Log().Info("controller application terminated: name=%s namespace=%q reason=%v", a.opts.Name, a.opts.Namespace, reason)
 	select {
 	case a.stopped <- reason:
@@ -123,7 +124,7 @@ func (a *Application[T]) Terminate(reason error) {
 func (a *Application[T]) Close(ctx context.Context) error {
 	if !a.barrier.Quiesced() {
 		err := fmt.Errorf("controller application writer I/O has not quiesced")
-		a.scope.count(a.Node(), metricApplicationCloses, "rejected")
+		a.labels.Count(a.Node(), metricApplicationCloses, "rejected")
 		a.Log().Error("controller application close rejected: name=%s namespace=%q error=%v", a.opts.Name, a.opts.Namespace, err)
 		return err
 	}
@@ -146,10 +147,10 @@ func (a *Application[T]) Close(ctx context.Context) error {
 
 	select {
 	case err := <-done:
-		a.scope.count(a.Node(), metricApplicationCloses, metricResult(err))
+		a.labels.Count(a.Node(), metricApplicationCloses, telemetry.Result(err))
 		return err
 	case <-ctx.Done():
-		a.scope.count(a.Node(), metricApplicationCloses, "timeout")
+		a.labels.Count(a.Node(), metricApplicationCloses, "timeout")
 		a.Log().Debug("controller application close wait interrupted: name=%s namespace=%q error=%v", a.opts.Name, a.opts.Namespace, ctx.Err())
 		return ctx.Err()
 	}

@@ -13,6 +13,7 @@ import (
 	"github.com/harishhary/blink/internal/runtime"
 	"github.com/harishhary/blink/internal/runtime/plugin"
 	"github.com/harishhary/blink/internal/runtime/snapshot"
+	"github.com/harishhary/blink/internal/runtime/telemetry"
 )
 
 type ActorLifecycle string
@@ -74,7 +75,7 @@ type actor[T plugin.Artifact] struct {
 	subscribers         map[string]gen.PID
 	executors           map[string]ExecutorStatus
 	lastStatus          actorStatus
-	scope               metricScope
+	labels              telemetry.Labels
 }
 
 // newActor constructs the controller actor with normalized options.
@@ -156,7 +157,7 @@ func (a *actor[T]) Init(...any) error {
 	a.records = make(map[string]backends.ControllerRecord)
 	a.subscribers = make(map[string]gen.PID)
 	a.executors = make(map[string]ExecutorStatus)
-	a.scope = newMetricScope(a.opts.Namespace)
+	a.labels = telemetry.NewLabels(a.opts.Namespace)
 	a.scanner = scannerMetaState{
 		restart: runtime.NewScheduledBackoff(a.opts.RestartMin, a.opts.RestartMax),
 		status: artifactScannerMetaStatus{
@@ -213,7 +214,7 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 		if _, err := a.SendAfter(a.PID(), MessageExecutorDriftCheck{}, executorDriftCheckInterval); err != nil {
 			return fmt.Errorf("schedule executor drift check: %w", err)
 		}
-		a.scope.publishGauges(a, a.actorGauges())
+		a.actorGauges().publish(a.labels, a)
 		a.Log().Info("controller activated: name=%s scanner_alias=%s writer_alias=%s", a.opts.Name, a.scanner.alias, a.writer.alias)
 		return nil
 	case snapshot.MessageExecutorReport:
@@ -221,7 +222,7 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 		return nil
 	case MessageExecutorDriftCheck:
 		a.checkExecutorDrift()
-		a.scope.publishGauges(a, a.actorGauges())
+		a.actorGauges().publish(a.labels, a)
 		if a.lifecycle == ActorRunning {
 			if _, err := a.SendAfter(a.PID(), MessageExecutorDriftCheck{}, executorDriftCheckInterval); err != nil {
 				return fmt.Errorf("reschedule executor drift check: %w", err)
@@ -237,7 +238,7 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 			a.scanner.status.Complete = false
 			a.scanner.status.Availability = runtime.AvailabilityUnavailable
 			a.scanner.status.LastError = m.err
-			a.scope.count(a, metricArtifactScans, "incomplete")
+			a.labels.Count(a, metricArtifactScans, "incomplete")
 			return nil
 		}
 		a.scanner.restart.CancelScheduled(true)
@@ -245,11 +246,11 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 		if m.err != nil {
 			a.scanner.status.Availability = runtime.AvailabilityDegraded
 			a.scanner.status.LastError = m.err
-			a.scope.count(a, metricArtifactScans, "degraded")
+			a.labels.Count(a, metricArtifactScans, "degraded")
 		} else {
 			a.scanner.status.Availability = runtime.AvailabilityReady
 			a.scanner.status.LastError = nil
-			a.scope.count(a, metricArtifactScans, "ok")
+			a.labels.Count(a, metricArtifactScans, "ok")
 		}
 		a.scanner.entries = snapshot.CloneEntries(m.entries)
 		a.scanner.presentIDs = append([]string(nil), m.presentIDs...)
@@ -297,13 +298,13 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 		}
 		if m.err != nil {
 			a.recordWriteFailure(m.err)
-			a.scope.count(a, metricSnapshotWrites, "error")
+			a.labels.Count(a, metricSnapshotWrites, "error")
 			return nil
 		}
 		a.writer.status.Writing = false
-		a.scope.count(a, metricSnapshotWrites, "ok")
-		if seconds, timed := elapsedSeconds(a.writer.writeDispatchedAt); timed {
-			a.scope.observe(a, metricSnapshotWriteTime, seconds)
+		a.labels.Count(a, metricSnapshotWrites, "ok")
+		if seconds, timed := telemetry.ElapsedSeconds(a.writer.writeDispatchedAt); timed {
+			a.labels.Observe(a, metricSnapshotWriteTime, seconds)
 		}
 		changed := a.pending.next.Generation != a.generation
 		priorCommitted := a.committed
@@ -311,7 +312,7 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 		a.generation = a.pending.next.Generation
 		a.fullRewriteRequired = false
 		if changed {
-			a.scope.count(a, metricSnapshotCommits)
+			a.labels.Count(a, metricSnapshotCommits)
 			a.Log().Info("snapshot committed: name=%s generation=%d upserts=%d tombstones=%d", a.opts.Name, a.pending.next.Generation, len(a.pending.entryUpserts), len(a.pending.tombstones))
 			a.notifySubscribers(snapshot.SnapshotUpdate{
 				Snapshot:   a.committed.Clone(),
@@ -426,7 +427,7 @@ func (a *actor[T]) startScanner() error {
 		return nil
 	}
 	a.scanner.status = artifactScannerMetaStatus{Lifecycle: ArtifactScannerMetaStarting, Availability: runtime.AvailabilityUnavailable}
-	alias, err := a.SpawnMeta(&artifactScannerMeta[T]{directory: a.opts.Directory, loader: a.opts.Loader, scope: a.scope}, gen.MetaOptions{})
+	alias, err := a.SpawnMeta(&artifactScannerMeta[T]{directory: a.opts.Directory, loader: a.opts.Loader, labels: a.labels}, gen.MetaOptions{})
 	if err != nil {
 		a.scanner.status.LastError = fmt.Errorf("spawn artifact scanner meta: %w", err)
 		a.Log().Error("artifact scanner meta spawn failed: name=%s error=%v", a.opts.Name, a.scanner.status.LastError)
@@ -455,10 +456,10 @@ func (a *actor[T]) startWriter() error {
 	alias, err := a.SpawnMeta(&snapshotWriterMeta{
 		database:   a.database,
 		barrier:    a.barrier,
-		scope:      a.scope,
 		supervisor: a.Parent(),
 		retryMin:   a.opts.RetryMin,
 		retryMax:   a.opts.RetryMax,
+		labels:     a.labels,
 	}, gen.MetaOptions{})
 	if err != nil {
 		a.writer.status.LastError = fmt.Errorf("spawn snapshot writer meta: %w", err)
@@ -517,7 +518,7 @@ func (a *actor[T]) scheduleScannerRestart() error {
 	a.scanner.restart.Pending = true
 	a.scanner.restart.Cancel = cancel
 	a.scanner.status.Lifecycle = ArtifactScannerMetaRestarting
-	a.scope.count(a, metricWorkerRestarts, "scanner")
+	a.labels.Count(a, metricWorkerRestarts, "scanner")
 	a.Log().Debug("artifact scanner restart scheduled: name=%s delay=%s token=%d", a.opts.Name, delay, token)
 	return nil
 }
@@ -540,7 +541,7 @@ func (a *actor[T]) scheduleWriterRestart() error {
 	a.writer.restart.Pending = true
 	a.writer.restart.Cancel = cancel
 	a.writer.status.Lifecycle = SnapshotWriterMetaRestarting
-	a.scope.count(a, metricWorkerRestarts, "writer")
+	a.labels.Count(a, metricWorkerRestarts, "writer")
 	a.Log().Debug("snapshot writer restart scheduled: name=%s delay=%s token=%d", a.opts.Name, delay, token)
 	return nil
 }
@@ -629,7 +630,7 @@ func (a *actor[T]) reconcileStatus() {
 		return
 	}
 	a.lastStatus = next
-	a.scope.publishGauges(a, a.actorGauges())
+	a.actorGauges().publish(a.labels, a)
 	_ = a.Send(a.Parent(), MessageActorStatusChanged{status: next})
 }
 
