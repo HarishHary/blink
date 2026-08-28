@@ -14,4 +14,8 @@ type Common struct {
 	// Observer independently enables Ergo's observer app (see NodeOptions.Observer) - Env == "dev"
 	// still implies it, so a prod-level Env can opt in without dropping to debug logging.
 	Observer bool `env:"OBSERVER_ENABLED,optional"`
+	// RadarHost and RadarPort bind the node's radar endpoint, which serves Prometheus metrics and
+	// readiness signals; empty values keep plugin.RadarOptions' pod-reachable defaults.
+	RadarHost string `env:"RADAR_HOST,optional"`
+	RadarPort uint16 `env:"RADAR_PORT,optional"`
 }

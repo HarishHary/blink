@@ -39,12 +39,17 @@ type NodeOptions struct {
 	Radar   *RadarOptions
 }
 
-// RadarOptions binds radar's health and Prometheus endpoints; radar defaults to localhost, so a
-// scraper or probe outside the process needs 0.0.0.0.
+// RadarOptions binds radar's health and Prometheus endpoints. Radar's own default is localhost,
+// which no scraper or probe outside the process can reach, so an empty Host binds all interfaces
+// instead; an empty Port keeps radar's 9090.
 type RadarOptions struct {
 	Host string
 	Port uint16
 }
+
+// defaultRadarHost is what an empty RadarOptions.Host binds: passing the options at all means the
+// endpoint is meant to be reachable from outside the pod.
+const defaultRadarHost = "0.0.0.0"
 
 // ClusterOptions enables and configures Ergo cluster networking for a node. Port zero uses
 // clusterAcceptorPort, pinned rather than port-scanned; nil Registrar is Ergo's dev-only one.
@@ -96,6 +101,9 @@ func Start(opts NodeOptions) (*NodeHost, error) {
 	radarOptions := radar.Options{}
 	if opts.Radar != nil {
 		radarOptions.Host, radarOptions.Port = opts.Radar.Host, opts.Radar.Port
+		if radarOptions.Host == "" {
+			radarOptions.Host = defaultRadarHost
+		}
 	}
 	applications := []gen.ApplicationBehavior{radar.CreateApp(radarOptions)}
 	logLevel := gen.LogLevelInfo
