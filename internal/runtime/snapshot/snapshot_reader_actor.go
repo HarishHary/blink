@@ -26,6 +26,7 @@ type ReaderActorStatus struct {
 	Lifecycle    ReaderActorLifecycle
 	Availability runtime.Availability
 	Generation   int64
+	LastError    string
 }
 
 // --- messages ---
@@ -60,27 +61,6 @@ type SnapshotUpdate struct {
 
 // UnsubscribeRequest stops future pushes to ExecutorID; best-effort only - MonitorPID on the executor's PID is the authoritative removal path.
 type UnsubscribeRequest struct{ ExecutorID string }
-
-// ExecutorHeartbeat is this reader's periodic liveness/generation report to the controller.
-type ExecutorHeartbeat struct {
-	CommittedGeneration int64
-	ReadyGeneration     int64
-	Availability        string
-}
-
-// ExecutorAppliedGeneration reports that this reader's owning plugin runtime reached a generation.
-type ExecutorAppliedGeneration struct {
-	Generation int64
-	Admitted   bool
-}
-
-// MessageExecutorReport carries this reader's convergence report (Heartbeat and/or AppliedGeneration, either may be nil), sent fire-and-forget to the controller actor.
-type MessageExecutorReport struct {
-	ExecutorID string
-	Heartbeat  *ExecutorHeartbeat
-	Applied    *ExecutorAppliedGeneration
-	LastError  string
-}
 
 type MessageSubscribeRestart struct{ token uint64 }
 
@@ -258,17 +238,27 @@ func (a *readerActor) status() ReaderActorStatus {
 	if a.subscribed {
 		availability = runtime.AvailabilityReady
 	}
-	return ReaderActorStatus{Lifecycle: ReaderActorRunning, Availability: availability, Generation: a.lastGeneration}
+	status := ReaderActorStatus{
+		Lifecycle:    ReaderActorRunning,
+		Availability: availability,
+		Generation:   a.lastGeneration,
+	}
+	if a.lastError != nil {
+		status.LastError = a.lastError.Error()
+	}
+	return status
 }
 
-// HandleInspect exposes concise reader operational state: whether it's currently subscribed, the
-// last generation it received, and which controller it's subscribed to.
+// HandleInspect exposes concise reader operational state: whether it's currently subscribed, why
+// not if it isn't, the last generation it received, and which controller it's subscribed to.
 func (a *readerActor) HandleInspect(gen.PID, ...string) map[string]string {
+	status := a.status()
 	return map[string]string{
-		"reader:availability": string(a.status().Availability),
+		"reader:availability": string(status.Availability),
 		"reader:subscribed":   fmt.Sprintf("%t", a.subscribed),
 		"reader:generation":   fmt.Sprintf("%d", a.lastGeneration),
 		"reader:controller":   fmt.Sprintf("%s", a.controllerPID),
 		"reader:executor_id":  a.opts.ExecutorID,
+		"reader:last_error":   status.LastError,
 	}
 }
