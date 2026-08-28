@@ -10,6 +10,7 @@ import (
 	"ergo.services/ergo/gen"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/harishhary/blink/internal/runtime"
+	"github.com/harishhary/blink/internal/runtime/telemetry"
 )
 
 // ---------------------------------------------------------------------------
@@ -66,6 +67,7 @@ type deploymentManagerCall[T Artifact] struct {
 	completed     bool
 	queued        bool                      // linked into the manager's pending queue
 	prev, next    *deploymentManagerCall[T] // pending queue links, valid while queued
+	accepted      time.Time                 // when the manager took the call, for the invocation histogram
 }
 
 // pendingQueue is the manager's FIFO of accepted invocations waiting for process capacity, linking the call entries themselves so unlinking one costs the same wherever it sits: the queue runs thousands of entries deep and callers cancel invocations nowhere near the head.
@@ -167,6 +169,7 @@ type deploymentManager[T Artifact] struct {
 	lastScale      time.Time
 	lastError      error
 	growthProcs    int // processes held from the process budget, above this deployment's reservation
+	labels         telemetry.Labels
 }
 
 // ---------------------------------------------------------------------------
@@ -362,6 +365,7 @@ func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 		if process == nil {
 			return nil
 		}
+		m.labels.Count(m, metricProcessTerminations, telemetry.TerminationReason(msg.Reason))
 		// The slot outlives the PID that filled it, so it is emptied rather than dropped: nothing it reported is true of anything now, and a retirement ends with the process it retired, leaving a slot the deployment either refills or is done with. Only its retry budget carries over, since a slot whose processes keep dying is what that budget is counting.
 		retiring, replace := process.retiring, process.replace
 		delete(m.byPID, msg.PID)
@@ -393,6 +397,7 @@ func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 		if entry == nil || entry.phase != deploymentManagerDispatching || entry.dispatchToken != msg.token {
 			return nil
 		}
+		m.labels.Count(m, metricDispatchTimeouts)
 		if entry.call.Cancel != nil {
 			entry.call.Cancel()
 		}
@@ -497,10 +502,11 @@ func (m *deploymentManager[T]) acceptInvocation(call MessageInvokePlugin[T]) {
 		return
 	}
 	if m.pendingCalls.length >= m.options.QueueSize {
+		m.labels.Count(m, metricQueueRejects)
 		m.completeInvocation(&deploymentManagerCall[T]{call: call}, runtime.ErrQueueFull)
 		return
 	}
-	entry := &deploymentManagerCall[T]{call: call, phase: deploymentManagerPending}
+	entry := &deploymentManagerCall[T]{call: call, phase: deploymentManagerPending, accepted: time.Now()}
 	m.inFlightCalls[call.CallID] = entry
 	m.pendingCalls.push(entry)
 	m.reconcile()
@@ -642,6 +648,7 @@ func (m *deploymentManager[T]) reconcileScale() {
 			m.scheduleScaleReconcile()
 			return
 		}
+		m.labels.Count(m, metricScaleEvents, "up")
 		m.reconcileProcesses()
 		return
 	}
@@ -657,6 +664,7 @@ func (m *deploymentManager[T]) reconcileScale() {
 		}
 		m.desiredProcs--
 		m.lastScale = time.Now()
+		m.labels.Count(m, metricScaleEvents, "down")
 		m.syncGrowthProcs()
 		m.reconcileProcesses()
 		// One process per cooldown on the way down, and nothing else will reconcile a deployment that has gone quiet, so the next step is armed here or a shrunk deployment stops halfway.
@@ -794,7 +802,7 @@ func (m *deploymentManager[T]) startPluginProcess(slot int) bool {
 	pid, err := m.Spawn(func() gen.ProcessBehavior {
 		return &pluginProcess[T]{
 			adapter:    m.adapter,
-			options:    m.options.ProcessOptions,
+			options:    m.options.PluginProcessOptions,
 			deployment: m.deployment,
 		}
 	}, gen.ProcessOptions{LinkParent: true})
@@ -815,6 +823,7 @@ func (m *deploymentManager[T]) startPluginProcess(slot int) bool {
 		availability: runtime.AvailabilityUnavailable,
 	}
 	m.byPID[pid] = slot
+	m.labels.Count(m, metricProcessStarts)
 	return true
 }
 
@@ -840,6 +849,7 @@ func (m *deploymentManager[T]) schedulePluginProcessRestart(slot int) {
 		return
 	}
 	process.restart.Pending, process.restart.Cancel = true, cancel
+	m.labels.Count(m, metricProcessRestarts)
 }
 
 // cancelPluginProcessRestarts drops every slot's pending start, resetting the budgets when the deployment is being given a clean one.
@@ -901,6 +911,7 @@ func (m *deploymentManager[T]) openCircuit(err error) {
 		return
 	}
 	m.circuitOpen, m.lastError = true, err
+	m.labels.Count(m, metricCircuitOpens)
 	m.cancelPluginProcessRestarts(false)
 	for callID := range m.inFlightCalls {
 		m.removeCall(callID, runtime.ErrPluginUnavailable)
@@ -983,6 +994,10 @@ func (m *deploymentManager[T]) completeInvocation(entry *deploymentManagerCall[T
 		return
 	}
 	entry.completed = true
+	// A rejected call was never accepted, so it has no duration to report.
+	if elapsed, ok := telemetry.ElapsedSeconds(entry.accepted); ok {
+		m.labels.Observe(m, metricInvocationTime, elapsed)
+	}
 	_ = m.SendWithPriority(m.Parent(), MessageInvocationCompleted{
 		CallID: entry.call.CallID,
 		Err:    err, Route: m.route, Manager: m.PID(),
