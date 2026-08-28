@@ -11,16 +11,13 @@ import (
 	"github.com/harishhary/blink/internal/runtime"
 )
 
-// Radar's own process names, which the radar package keeps private. The controller needs them
-// because only its actor and supervisor are the gen.Process radar's helpers accept: a meta process
-// has no Call and an application has no process at all, so both talk to these directly.
+// Radar's own process names, unexported by the radar package, addressed directly by every layer here.
 const (
 	radarHealthProcess  = gen.Atom("radar_health")
 	radarMetricsProcess = gen.Atom("radar_metrics")
 )
 
-// Radar metric names, grouped by the layer that publishes them. The namespace is a label rather
-// than part of any name, so one query covers every controller on the node.
+// Radar metric names by publishing layer; the namespace is a label, not part of any name.
 
 // Actor series: what the one controller actor per namespace knows about its own catalog.
 const (
@@ -37,8 +34,7 @@ const (
 	metricWorkerRestarts    = "blink_controller_worker_restarts_total"
 )
 
-// Meta series: the artifact scanner's and snapshot writer's own filesystem and database work, which
-// the actor only ever sees as a result message.
+// Meta series: the scanner's and writer's own filesystem and database work.
 const (
 	metricArtifactScanTime     = "blink_controller_artifact_scan_seconds"
 	metricArtifactSpecs        = "blink_controller_artifact_specs"
@@ -67,8 +63,7 @@ const (
 	metricApplicationCloses       = "blink_controller_application_closes_total"
 )
 
-// healthHeartbeatInterval is how often the supervisor proves it is still running; healthSignalTimeout
-// is the deadline radar applies, three beats so one missed tick does not flip readiness on its own.
+// Radar's deadline is three heartbeats, so one missed beat does not flip readiness.
 const (
 	healthHeartbeatInterval = 30 * time.Second
 	healthSignalTimeout     = 3 * healthHeartbeatInterval
@@ -90,15 +85,12 @@ type metricSpec struct {
 	buckets []float64
 }
 
-// metricRegistrar is the Call half of a process, which is all creating a collector needs. gen.Node
-// satisfies it too, and registering through the node is what makes these collectors outlive process
-// churn: radar deletes a metric when the process that registered it dies.
+// metricRegistrar is the Call half of a process, which is all creating a collector needs.
 type metricRegistrar interface {
 	Call(to any, request any) (any, error)
 }
 
-// metricSender is the Send half of a process. gen.Process, gen.MetaProcess, and gen.Node all
-// satisfy it, so any layer of the controller can publish into a collector another one registered.
+// metricSender is the Send half of a process; gen.Process, gen.MetaProcess, and gen.Node all satisfy it.
 type metricSender interface {
 	Send(to any, message any) error
 }
@@ -109,8 +101,7 @@ var metricTypes = map[metricKind]metrics.MetricType{
 	metricHistogram: metrics.MetricHistogram,
 }
 
-// register creates the metric on radar's registry; radar accepts a repeat registration of the same
-// type and labels, so this is idempotent.
+// register creates the metric on radar; a repeat registration of the same type and labels is a no-op.
 func (m metricSpec) register(registrar metricRegistrar) error {
 	result, err := registrar.Call(radarMetricsProcess, metrics.RegisterRequest{
 		Name:    m.name,
@@ -135,8 +126,7 @@ func (m metricSpec) register(registrar metricRegistrar) error {
 var (
 	namespaceLabels = []string{"namespace"}
 	resultLabels    = []string{"namespace", "result"}
-	// ioBuckets span a local SQLite write and a contended one; scanBuckets a directory listing and
-	// a full reparse of every spec.
+	// ioBuckets span an uncontended SQLite write to a contended one; scanBuckets a listing to a full reparse.
 	ioBuckets         = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}
 	scanBuckets       = []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5}
 	controllerMetrics = []metricSpec{
@@ -192,9 +182,7 @@ var (
 	}
 )
 
-// registerMetrics creates every controller collector. Always call it with the node: radar records
-// the registering PID as owner and deletes that owner's collectors when it dies, so registering as
-// the actor would drop the supervisor's and application's series on every actor restart.
+// registerMetrics creates every collector. Always pass the node: radar deletes a dead registrant's metrics.
 func registerMetrics(registrar metricRegistrar) error {
 	if registrar == nil {
 		return errors.New("radar metrics: no registrar")
@@ -207,8 +195,7 @@ func registerMetrics(registrar metricRegistrar) error {
 	return nil
 }
 
-// metricScope publishes one namespace's samples. It holds no registration state, so any layer can
-// carry a copy - including a meta process, which cannot register anything itself.
+// metricScope publishes one namespace's samples; it holds no registration state, so any layer can copy it.
 type metricScope struct{ labels []string }
 
 func newMetricScope(namespace string) metricScope {
@@ -222,7 +209,7 @@ func (s metricScope) set(sender metricSender, name string, value float64) {
 
 // count increments a counter, appending any label values the metric declares after the namespace.
 func (s metricScope) count(sender metricSender, name string, labels ...string) {
-	s.emit(sender, metrics.MessageCounterAdd{Name: name, Value: 1, Labels: s.values(labels...)})
+	s.emit(sender, metrics.MessageCounterAdd{Name: name, Value: 1, Labels: s.labelValues(labels...)})
 }
 
 // observe records one histogram sample.
@@ -230,8 +217,7 @@ func (s metricScope) observe(sender metricSender, name string, value float64) {
 	s.emit(sender, metrics.MessageHistogramObserve{Name: name, Value: value, Labels: s.labels})
 }
 
-// emit is best-effort: radar may not be running, and an unconfigured scope stays silent rather than
-// sending a label set whose cardinality would panic radar's collector.
+// emit is best-effort; an unconfigured scope stays silent, since a mismatched label count panics radar.
 func (s metricScope) emit(sender metricSender, message any) {
 	if sender == nil || len(s.labels) == 0 {
 		return
@@ -239,8 +225,8 @@ func (s metricScope) emit(sender metricSender, message any) {
 	_ = sender.Send(radarMetricsProcess, message)
 }
 
-// values prefixes the namespace to a metric's remaining label values.
-func (s metricScope) values(extra ...string) []string {
+// labelValues prefixes the namespace to a metric's remaining label values.
+func (s metricScope) labelValues(extra ...string) []string {
 	if len(extra) == 0 {
 		return s.labels
 	}
@@ -257,9 +243,8 @@ type actorGauges struct {
 	drifting     int
 }
 
-// publishState reports the actor's gauges. The actor republishes them on its drift-check tick so a
-// namespace whose status is steady still reports fresh series.
-func (s metricScope) publishState(sender metricSender, state actorGauges) {
+// publishGauges reports the actor's gauges, republished on its drift-check tick to keep the series fresh.
+func (s metricScope) publishGauges(sender metricSender, state actorGauges) {
 	s.set(sender, metricAvailability, availabilityValue(state.availability))
 	s.set(sender, metricGeneration, float64(state.generation))
 	s.set(sender, metricRecords, float64(state.records))
@@ -268,12 +253,7 @@ func (s metricScope) publishState(sender metricSender, state actorGauges) {
 	s.set(sender, metricExecutorsDrifting, float64(state.drifting))
 }
 
-// healthSignal is one namespace's readiness signal on radar. The supervisor owns it rather than the
-// actor: it outlives its child, so it can report a crashed controller as unready deliberately
-// instead of leaving radar to notice a heartbeat deadline lapse.
-//
-// It is never unregistered, only held down. Radar reports a node with no signals as healthy, so
-// radar.UnregisterService on a drain would make a draining pod read ready.
+// healthSignal is one namespace's radar readiness signal, held down rather than unregistered on a drain.
 type healthSignal struct {
 	name       gen.Atom
 	registered bool
@@ -284,14 +264,12 @@ func newHealthSignal(namespace string) healthSignal {
 	return healthSignal{name: gen.Atom("controller-" + namespace)}
 }
 
-// register creates the signal on radar, at most once per successful attempt. Radar marks a freshly
-// registered signal up, so the caller must assert its real intent afterwards.
+// register creates the signal on radar at most once; radar marks a fresh registration up.
 func (h *healthSignal) register(process gen.Process) error {
 	if h.registered {
 		return nil
 	}
-	// Readiness only, never liveness: a controller that cannot reach its database should stop
-	// serving snapshots, not have k8s kill the pod that owns the only writer.
+	// Readiness, never liveness: a controller that cannot reach its database must not be killed.
 	if err := radar.RegisterService(process, h.name, radar.ProbeReadiness, healthSignalTimeout); err != nil {
 		return err
 	}
@@ -299,9 +277,8 @@ func (h *healthSignal) register(process gen.Process) error {
 	return nil
 }
 
-// apply moves the signal to match serving, sending only on a change: radar's own handlers are
-// idempotent, but a resend would log a transition that did not happen.
-func (h *healthSignal) apply(process gen.Process, ready bool) {
+// setReady moves the signal only on a change; a resend would log a transition that did not happen.
+func (h *healthSignal) setReady(process gen.Process, ready bool) {
 	if !h.registered || ready == h.up {
 		return
 	}
@@ -313,8 +290,7 @@ func (h *healthSignal) apply(process gen.Process, ready bool) {
 	_ = radar.ServiceDown(process, h.name)
 }
 
-// heartbeat refreshes the deadline while the signal is up. It is deliberately skipped while the
-// signal is down, because radar treats a heartbeat as a recovery and would raise it.
+// heartbeat refreshes the deadline, skipped while down: radar treats a beat as a recovery.
 func (h *healthSignal) heartbeat(process gen.Process) {
 	if !h.registered || !h.up {
 		return
@@ -322,8 +298,7 @@ func (h *healthSignal) heartbeat(process gen.Process) {
 	_ = radar.Heartbeat(process, h.name)
 }
 
-// readinessSignalState renders the signal for an operator, distinguishing a signal radar never
-// accepted from one deliberately held down.
+// readinessSignalState distinguishes a signal radar never accepted from one deliberately held down.
 func readinessSignalState(h healthSignal) string {
 	switch {
 	case !h.registered:
@@ -335,8 +310,7 @@ func readinessSignalState(h healthSignal) string {
 	}
 }
 
-// availabilityValue maps availability onto a gauge an operator can alert on: below 2 is degraded,
-// 0 is a controller serving nothing.
+// availabilityValue maps availability onto a gauge an operator can alert on: below 2 is degraded.
 func availabilityValue(availability runtime.Availability) float64 {
 	switch availability {
 	case runtime.AvailabilityReady:
@@ -348,8 +322,7 @@ func availabilityValue(availability runtime.Availability) float64 {
 	}
 }
 
-// supervisorLifecycleValue orders the supervisor lifecycle so a dashboard reads it as progress
-// towards a stop.
+// supervisorLifecycleValue orders the lifecycle so a dashboard reads it as progress towards a stop.
 func supervisorLifecycleValue(lifecycle SupervisorLifecycle) float64 {
 	switch lifecycle {
 	case SupervisorRunning:
@@ -383,8 +356,7 @@ func terminationReason(reason error) string {
 	}
 }
 
-// elapsedSeconds converts a dispatch timestamp into a histogram sample, reporting zero when the
-// write was never timed (a writer replaced mid-flight).
+// elapsedSeconds converts a dispatch timestamp into a sample, false when the write was never timed.
 func elapsedSeconds(start time.Time) (float64, bool) {
 	if start.IsZero() {
 		return 0, false

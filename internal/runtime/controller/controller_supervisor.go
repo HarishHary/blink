@@ -226,7 +226,7 @@ func (s *supervisor[T]) HandleChildTerminate(name gen.Atom, pid gen.PID, reason 
 func (s *supervisor[T]) publishState() {
 	s.scope.set(s, metricSupervisorLifecycle, supervisorLifecycleValue(s.lifecycle))
 	s.scope.set(s, metricWriterFences, float64(len(s.writerFences)))
-	s.signal.apply(s, s.readyToServe())
+	s.signal.setReady(s, s.readyToServe())
 }
 
 // readyToServe reports whether this namespace can answer snapshot requests: running, live child, ready child.
@@ -254,7 +254,7 @@ func (s *supervisor[T]) reconcileRadar() {
 		s.watchRadar(radarHealthProcess)
 	}
 	s.radarLogged = false
-	s.signal.apply(s, s.readyToServe())
+	s.signal.setReady(s, s.readyToServe())
 	s.signal.heartbeat(s)
 }
 

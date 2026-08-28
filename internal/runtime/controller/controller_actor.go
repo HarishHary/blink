@@ -213,7 +213,7 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 		if _, err := a.SendAfter(a.PID(), MessageExecutorDriftCheck{}, executorDriftCheckInterval); err != nil {
 			return fmt.Errorf("schedule executor drift check: %w", err)
 		}
-		a.scope.publishState(a, a.actorGauges())
+		a.scope.publishGauges(a, a.actorGauges())
 		a.Log().Info("controller activated: name=%s scanner_alias=%s writer_alias=%s", a.opts.Name, a.scanner.alias, a.writer.alias)
 		return nil
 	case snapshot.MessageExecutorReport:
@@ -221,7 +221,7 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 		return nil
 	case MessageExecutorDriftCheck:
 		a.checkExecutorDrift()
-		a.scope.publishState(a, a.actorGauges())
+		a.scope.publishGauges(a, a.actorGauges())
 		if a.lifecycle == ActorRunning {
 			if _, err := a.SendAfter(a.PID(), MessageExecutorDriftCheck{}, executorDriftCheckInterval); err != nil {
 				return fmt.Errorf("reschedule executor drift check: %w", err)
@@ -629,7 +629,7 @@ func (a *actor[T]) reconcileStatus() {
 		return
 	}
 	a.lastStatus = next
-	a.scope.publishState(a, a.actorGauges())
+	a.scope.publishGauges(a, a.actorGauges())
 	_ = a.Send(a.Parent(), MessageActorStatusChanged{status: next})
 }
 
