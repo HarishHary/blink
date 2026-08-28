@@ -198,7 +198,8 @@ func (s *supervisor[P, M]) Init(...any) (act.SupervisorSpec, error) {
 	if s.opts.Name == "" ||
 		s.adapter == nil ||
 		s.opts.Directory == "" ||
-		s.opts.SnapshotReader.Endpoint.Name == "" || s.opts.SnapshotReader.ExecutorID == "" || s.loader == nil {
+		s.opts.SnapshotReader.Namespace == "" || s.opts.SnapshotReader.Endpoint.Name == "" ||
+		s.opts.SnapshotReader.ExecutorID == "" || s.loader == nil {
 		return act.SupervisorSpec{}, fmt.Errorf(
 			"name, adapter, reader options, projection, and directory are required",
 		)
@@ -242,10 +243,8 @@ func (s *supervisor[P, M]) Init(...any) (act.SupervisorSpec, error) {
 			{
 				Name: s.snapshotSupervisorName(),
 				Factory: func() gen.ProcessBehavior {
-					readerOptions := s.opts.SnapshotReader
-					readerOptions.Name = s.snapshotSupervisorName()
 					return snapshot.NewSupervisor(snapshot.SupervisorOptions[M]{
-						ReaderActorOptions: readerOptions,
+						ReaderActorOptions: s.opts.SnapshotReader,
 						Loader:             s.loader,
 						ProjectionMode:     snapshot.ProjectionCommitExternal,
 					})
@@ -254,7 +253,7 @@ func (s *supervisor[P, M]) Init(...any) (act.SupervisorSpec, error) {
 			{
 				Name: s.reconcilerActorName(),
 				Factory: func() gen.ProcessBehavior {
-					events := snapshot.EventsFor(s.Node(), s.snapshotSupervisorName())
+					events := snapshot.EventsFor(s.Node(), s.opts.SnapshotReader.Namespace)
 					return newReconcilerActor(
 						events,
 						s.opts.Directory,
@@ -1107,12 +1106,13 @@ func (s *supervisor[P, M]) cancelProjectionDeadline() {
 
 // reconcilerActorName returns the desired-state reconciler actor name.
 func (s *supervisor[P, M]) reconcilerActorName() gen.Atom {
-	return gen.Atom(string(s.opts.Name) + "-desired-state-reconciler")
+	return gen.Atom(string(s.opts.Name) + "-reconciler")
 }
 
-// snapshotSupervisorName returns the snapshot supervisor name.
+// snapshotSupervisorName returns the snapshot supervisor name, which the snapshot package derives
+// from the namespace this runtime follows rather than from this runtime's own name.
 func (s *supervisor[P, M]) snapshotSupervisorName() gen.Atom {
-	return gen.Atom(string(s.opts.Name) + "-snapshot")
+	return snapshot.SupervisorName(s.opts.SnapshotReader.Namespace)
 }
 
 // catalogActorName returns the catalog actor name.
