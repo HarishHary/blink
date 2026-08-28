@@ -9,6 +9,7 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/harishhary/blink/internal/runtime"
 	"github.com/harishhary/blink/internal/runtime/snapshot"
+	"github.com/harishhary/blink/internal/runtime/telemetry"
 )
 
 // ---------------------------------------------------------------------------
@@ -44,7 +45,8 @@ type reconcilerActor struct {
 	act.Actor
 	directory        string
 	revision         uint64
-	events           snapshot.Events
+	snapshotEvent    gen.Event
+	statusEvent      gen.Event
 	snapshot         *snapshot.Snapshot
 	readerActorReady bool
 	resolutionRetry  *runtime.ScheduledBackoff
@@ -57,6 +59,7 @@ type reconcilerActor struct {
 	proposed           map[string]routerDesiredState
 	proposedGeneration int64
 	lastStatus         reconcilerActorStatus
+	labels             telemetry.Labels
 }
 
 // ---------------------------------------------------------------------------
@@ -89,10 +92,12 @@ type MessageDesiredStateFreshness struct {
 // ---------------------------------------------------------------------------
 
 // newReconcilerActor constructs a reconciler actor with independent retry policies.
-func newReconcilerActor(events snapshot.Events, directory string, retryMin, retryMax time.Duration) gen.ProcessBehavior {
+func newReconcilerActor(snapshotEvent, statusEvent gen.Event, directory string, retryMin, retryMax time.Duration, labels telemetry.Labels) gen.ProcessBehavior {
 	return &reconcilerActor{
-		events:          events,
+		snapshotEvent:   snapshotEvent,
+		statusEvent:     statusEvent,
 		directory:       directory,
+		labels:          labels,
 		resolutionRetry: runtime.NewScheduledBackoff(retryMin, retryMax),
 		resolver: artifactResolverMetaState{
 			restart: runtime.NewScheduledBackoff(retryMin, retryMax),
@@ -113,7 +118,7 @@ func newReconcilerActor(events snapshot.Events, directory string, retryMin, retr
 
 // Init validates the reconciler actor's required events.
 func (a *reconcilerActor) Init(...any) error {
-	if a.events.Snapshot.Name == "" || a.events.Status.Name == "" {
+	if a.snapshotEvent.Name == "" || a.statusEvent.Name == "" {
 		return fmt.Errorf("plugin reconciler: snapshot events are required")
 	}
 	return nil
@@ -143,7 +148,7 @@ func (a *reconcilerActor) HandleMessage(from gen.PID, message any) error {
 		a.revision = m.revisionBase
 		a.reconcileStatus()
 
-		for _, event := range []gen.Event{a.events.Snapshot, a.events.Status} {
+		for _, event := range []gen.Event{a.snapshotEvent, a.statusEvent} {
 			buffered, err := a.MonitorEvent(event)
 			if err != nil {
 				return fmt.Errorf("monitor reconciler event %q: %w", event.Name, err)
@@ -215,27 +220,32 @@ func (a *reconcilerActor) HandleMessage(from gen.PID, message any) error {
 		}
 
 		if a.snapshot == nil || m.snapshotGeneration != a.snapshot.Generation {
+			a.labels.Count(a, metricResolutions, "stale")
 			a.dirty = true
 			return a.requestResolve()
 		}
 
 		// A filesystem or snapshot change arrived mid-resolution, so this result may be stale: resolve again from the current snapshot and filesystem.
 		if a.dirty {
+			a.labels.Count(a, metricResolutions, "stale")
 			return a.requestResolve()
 		}
 		a.deferred = m.deferred
 		if m.deferred {
+			a.labels.Count(a, metricResolutions, "deferred")
 			a.reconcileStatus()
 			return a.scheduleResolutionRetry()
 		}
 
 		// Re-proposing an unchanged state closes admission for a transition that changes nothing.
 		if a.proposed != nil && a.proposedGeneration == a.snapshot.Generation && sameDesiredState(m.desired, a.proposed) {
+			a.labels.Count(a, metricResolutions, "unchanged")
 			a.reconcileStatus()
 			a.resolutionRetry.CancelScheduled(true)
 			return nil
 		}
 
+		a.labels.Count(a, metricResolutions, "proposed")
 		a.revision++
 		if err := a.Send(a.Parent(), MessageProposeDesiredState{
 			desired: MessageApplyCatalogDesiredState{
@@ -313,7 +323,7 @@ func (a *reconcilerActor) HandleMessage(from gen.PID, message any) error {
 		}
 
 	case gen.MessageDownEvent:
-		if m.Event == a.events.Snapshot || m.Event == a.events.Status {
+		if m.Event == a.snapshotEvent || m.Event == a.statusEvent {
 			return fmt.Errorf("snapshot event terminated: %w", m.Reason)
 		}
 	}
@@ -439,7 +449,7 @@ func (a *reconcilerActor) stopArtifactWatcherMeta(reason error) {
 // applyEvent incorporates monitored snapshot and reader-status events.
 func (a *reconcilerActor) applyEvent(event gen.MessageEvent) error {
 	switch event.Event {
-	case a.events.Status:
+	case a.statusEvent:
 		status, ok := event.Message.(snapshot.ReaderActorStatus)
 		if !ok {
 			return nil
@@ -448,7 +458,7 @@ func (a *reconcilerActor) applyEvent(event gen.MessageEvent) error {
 		a.reconcileStatus()
 		return nil
 
-	case a.events.Snapshot:
+	case a.snapshotEvent:
 		snap, ok := event.Message.(*snapshot.Snapshot)
 		if !ok || snap == nil {
 			return nil
@@ -518,6 +528,7 @@ func (a *reconcilerActor) scheduleResolutionRetry() error {
 	}
 	a.resolutionRetry.Pending = true
 	a.resolutionRetry.Cancel = cancel
+	a.labels.Count(a, metricResolutionRetries)
 	return nil
 }
 
@@ -540,6 +551,7 @@ func (a *reconcilerActor) scheduleResolverRestart() error {
 	}
 	a.resolver.restart.Pending = true
 	a.resolver.restart.Cancel = cancel
+	a.labels.Count(a, metricWorkerRestarts, "resolver")
 	a.resolver.status.lifecycle = ArtifactResolverMetaRestarting
 	a.resolver.status.availability = runtime.AvailabilityUnavailable
 	a.reconcileStatus()
@@ -565,6 +577,7 @@ func (a *reconcilerActor) scheduleWatcherRestart() error {
 	}
 	a.watcher.restart.Pending = true
 	a.watcher.restart.Cancel = cancel
+	a.labels.Count(a, metricWorkerRestarts, "watcher")
 	a.watcher.status.lifecycle = ArtifactWatcherMetaRestarting
 	a.watcher.status.availability = runtime.AvailabilityUnavailable
 	a.reconcileStatus()

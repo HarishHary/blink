@@ -30,14 +30,12 @@ const (
 	SupervisorStopping SupervisorLifecycle = "stopping"
 )
 
-// Events identifies the buffered snapshot and status events produced
-// by a snapshot supervisor. Each retains only its latest value. Snapshot carries
-// *snapshot.Snapshot; Status carries ReaderStatus.
+// Events identifies the buffered snapshot and status events produced by a snapshot supervisor. Each
+// retains only its latest value. Snapshot carries *snapshot.Snapshot; Status carries ReaderStatus.
+// Identities only: both are derivable on either side, so a monitor needs nothing else.
 type Events struct {
-	Snapshot      gen.Event
-	Status        gen.Event
-	snapshotToken gen.Ref
-	statusToken   gen.Ref
+	Snapshot gen.Event
+	Status   gen.Event
 }
 
 // eventPublication is one registered event and the token SendEvent requires to publish through it:
@@ -50,16 +48,6 @@ type eventPublication struct {
 
 // registered reports whether the event was registered and its token handed over.
 func (p eventPublication) registered() bool { return p.token != (gen.Ref{}) }
-
-// snapshotPublication is what the reader actor publishes committed snapshots through.
-func (e Events) snapshotPublication() eventPublication {
-	return eventPublication{name: e.Snapshot.Name, token: e.snapshotToken}
-}
-
-// statusPublication is what the supervisor publishes reader status through, keeping it itself.
-func (e Events) statusPublication() eventPublication {
-	return eventPublication{name: e.Status.Name, token: e.statusToken}
-}
 
 // EventsFor returns the stable event identifiers for a namespace's snapshot subtree. Both are
 // node-local and derived on either side, so neither name is configurable.
@@ -96,7 +84,8 @@ type Supervisor[T any] struct {
 	lifecycle            SupervisorLifecycle
 	readerActor          readerActorState
 	projectionActor      projectionActorState
-	events               Events
+	snapshotEvent        eventPublication
+	statusEvent          eventPublication
 	reportCancel         gen.CancelFunc
 	labels               telemetry.Labels
 	collectorsRegistered bool
@@ -164,18 +153,18 @@ func (s *Supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 		return act.SupervisorSpec{}, fmt.Errorf("snapshot supervisor registered as %q, want %q", s.Name(), name)
 	}
 
-	s.events = EventsFor(s.Node(), s.opts.Namespace)
+	events := EventsFor(s.Node(), s.opts.Namespace)
 	// Keep only the latest snapshot available to a restarted projection.
-	snapshotToken, err := s.RegisterEvent(s.events.Snapshot.Name, gen.EventOptions{Buffer: 1})
+	snapshotToken, err := s.RegisterEvent(events.Snapshot.Name, gen.EventOptions{Buffer: 1})
 	if err != nil {
 		return act.SupervisorSpec{}, fmt.Errorf("register snapshot event: %w", err)
 	}
-	s.events.snapshotToken = snapshotToken
-	statusToken, err := s.RegisterEvent(s.events.Status.Name, gen.EventOptions{Buffer: 1})
+	s.snapshotEvent = eventPublication{name: events.Snapshot.Name, token: snapshotToken}
+	statusToken, err := s.RegisterEvent(events.Status.Name, gen.EventOptions{Buffer: 1})
 	if err != nil {
 		return act.SupervisorSpec{}, fmt.Errorf("register snapshot status event: %w", err)
 	}
-	s.events.statusToken = statusToken
+	s.statusEvent = eventPublication{name: events.Status.Name, token: statusToken}
 	s.lifecycle = SupervisorStarting
 	s.readerActor.status = newReaderActorStatus()
 	s.projectionActor.status = newProjectionActorStatus()
@@ -203,13 +192,13 @@ func (s *Supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 			{
 				Name: ReaderActorName(s.opts.Namespace),
 				Factory: func() gen.ProcessBehavior {
-					return newReaderActor(s.opts.ReaderActorOptions, s.labels, s.events.snapshotPublication())
+					return newReaderActor(s.opts.ReaderActorOptions, s.labels, s.snapshotEvent)
 				},
 			},
 			{
 				Name: ProjectionActorName(s.opts.Namespace),
 				Factory: func() gen.ProcessBehavior {
-					return newProjectionActor(s.events.Snapshot, s.events.Status, s.loader, s.opts.ProjectionMode, s.labels)
+					return newProjectionActor(events.Snapshot, events.Status, s.loader, s.opts.ProjectionMode, s.labels)
 				},
 			},
 		},
@@ -505,8 +494,8 @@ func (s *Supervisor[T]) executorAvailability() runtime.Availability {
 
 // publishStatus publishes the reader actor's current status.
 func (s *Supervisor[T]) publishStatus() {
-	if status := s.events.statusPublication(); status.registered() {
-		_ = s.SendEvent(status.name, status.token, s.readerActor.status)
+	if s.statusEvent.registered() {
+		_ = s.SendEvent(s.statusEvent.name, s.statusEvent.token, s.readerActor.status)
 	}
 }
 
