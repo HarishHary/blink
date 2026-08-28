@@ -12,6 +12,7 @@ import (
 	"ergo.services/ergo/gen"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/harishhary/blink/internal/runtime"
+	"github.com/harishhary/blink/internal/runtime/telemetry"
 )
 
 // ---------------------------------------------------------------------------
@@ -103,6 +104,7 @@ type routerActor[T Artifact] struct {
 	desiredCandidate *Deployment
 	activePrimary    *Deployment
 	activeCandidate  *Deployment
+	labels           telemetry.Labels
 }
 
 // ---------------------------------------------------------------------------
@@ -208,6 +210,7 @@ func (a *routerActor[T]) RouteMessage(_ gen.PID, message any) gen.Atom {
 	case MessageInvocationTimedOut:
 		call := a.inFlightCalls[m.callID]
 		if call != nil && !call.accepted && call.ackToken == m.token {
+			a.labels.Count(a, metricAcceptanceTimeouts)
 			a.finishTrackedCall(m.callID, runtime.ErrPluginUnavailable)
 		}
 		return act.RouteDiscard
@@ -497,10 +500,11 @@ func (a *routerActor[T]) newDeploymentManager(ref *deploymentRouteState) *deploy
 	}
 	return &deploymentManager[T]{
 		adapter:    a.adapter,
-		options:    a.opts.ManagerOptions,
+		options:    a.opts.DeploymentManagerOptions,
 		deployment: ref.deployment,
 		route:      ref.name,
 		draining:   ref.phase >= deploymentRouteDraining || a.isDraining(),
+		labels:     a.labels,
 	}
 }
 
@@ -546,27 +550,31 @@ func (a *routerActor[T]) currentManager(route gen.Atom, from, manager gen.PID) (
 // routeInvocation selects the rollout target route and tracks the call awaiting acceptance.
 func (a *routerActor[T]) routeInvocation(call MessageInvokePlugin[T]) gen.Atom {
 	if a.isDraining() {
+		a.labels.Count(a, metricUnroutable)
 		_ = a.SendWithPriority(a.Parent(), MessageInvocationCompleted{CallID: call.CallID, Err: runtime.ErrPluginUnavailable}, gen.MessagePriorityHigh)
 		return act.RouteDiscard
 	}
 	// Rollout routing decision: shadow -> shadow candidate; else primary,
 	// unless a canary candidate wins this call's rollout bucket.
 	var ref *deploymentRouteState
+	target := "shadow"
 	if call.Shadow {
 		if a.activeCandidate != nil && a.activeCandidate.Mode == runtime.RolloutModeShadow {
 			ref = a.routesByKey[a.activeCandidate.RouteKey()]
 		}
 	} else {
-		target := a.activePrimary
+		deployment := a.activePrimary
+		target = "primary"
 		if a.activeCandidate != nil && a.activeCandidate.Mode == runtime.RolloutModeCanary &&
 			float64(runtime.RolloutBucket(call.RolloutKey)) <= a.activeCandidate.RolloutPct {
-			target = a.activeCandidate
+			deployment, target = a.activeCandidate, "candidate"
 		}
-		if target != nil {
-			ref = a.routesByKey[target.RouteKey()]
+		if deployment != nil {
+			ref = a.routesByKey[deployment.RouteKey()]
 		}
 	}
 	if ref == nil || ref.phase != deploymentRouteActive || a.refreshRoutePID(ref) == (gen.PID{}) {
+		a.labels.Count(a, metricUnroutable)
 		_ = a.SendWithPriority(a.Parent(), MessageInvocationCompleted{CallID: call.CallID, Err: runtime.ErrPluginUnavailable}, gen.MessagePriorityHigh)
 		return act.RouteDiscard
 	}
@@ -574,17 +582,19 @@ func (a *routerActor[T]) routeInvocation(call MessageInvokePlugin[T]) gen.Atom {
 		return act.RouteDiscard
 	}
 	tracked := &routerInvocation{route: ref.name, ackToken: 1}
-	timeout := a.opts.ManagerOptions.DispatchTimeout
+	timeout := a.opts.DeploymentManagerOptions.DispatchTimeout
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
 	cancel, err := a.SendAfter(a.PID(), MessageInvocationTimedOut{callID: call.CallID, token: tracked.ackToken}, timeout)
 	if err != nil {
+		a.labels.Count(a, metricUnroutable)
 		_ = a.SendWithPriority(a.Parent(), MessageInvocationCompleted{CallID: call.CallID, Err: runtime.ErrPluginUnavailable}, gen.MessagePriorityHigh)
 		return act.RouteDiscard
 	}
 	tracked.ackStop = cancel
 	a.inFlightCalls[call.CallID] = tracked
+	a.labels.Count(a, metricRouted, target)
 	return ref.name
 }
 
