@@ -50,6 +50,7 @@ type artifactScannerMeta[T plugin.Artifact] struct {
 	digests   map[string]fileIndex[string]
 	runCtx    context.Context
 	cancelRun context.CancelFunc
+	scope     metricScope
 }
 
 // fileIndex is something derived from a file — a parsed spec, or a binary's checksum — and
@@ -204,7 +205,14 @@ func (m *artifactScannerMeta[T]) sendScan(watcher *fsnotify.Watcher) error {
 	if attachErr != nil && strings.Contains(attachErr.Error(), "exists") {
 		attachErr = nil
 	}
+	started := time.Now()
 	entries, ids, complete, err := m.scan()
+	m.scope.observe(m, metricArtifactScanTime, time.Since(started).Seconds())
+	m.scope.set(m, metricArtifactSpecs, float64(len(m.parsed)))
+	m.scope.set(m, metricArtifactBinaries, float64(len(m.digests)))
+	if attachErr != nil {
+		m.scope.count(m, metricArtifactScanFailures, "watch")
+	}
 	if err == nil && attachErr != nil {
 		err = fmt.Errorf("%w: directory %q: %w", runtime.ErrArtifactWatch, m.directory, attachErr)
 	}
@@ -233,6 +241,7 @@ func (m *artifactScannerMeta[T]) sendScan(watcher *fsnotify.Watcher) error {
 func (m *artifactScannerMeta[T]) scan() ([]snapshot.EffectiveEntry, []string, bool, error) {
 	files, err := os.ReadDir(m.directory)
 	if err != nil {
+		m.scope.count(m, metricArtifactScanFailures, "directory")
 		return nil, nil, false, fmt.Errorf("%w: directory %q: %w", runtime.ErrArtifactScan, m.directory, err)
 	}
 	seenParsed := make(map[string]struct{})
@@ -252,6 +261,7 @@ func (m *artifactScannerMeta[T]) scan() ([]snapshot.EffectiveEntry, []string, bo
 		if isYAML(name) {
 			seenParsed[path] = struct{}{}
 			if infoErr != nil {
+				m.scope.count(m, metricArtifactScanFailures, "spec_stat")
 				m.Log().Debug("artifact spec stat failed: path=%q error=%v", path, infoErr)
 				continue
 			}
@@ -260,11 +270,13 @@ func (m *artifactScannerMeta[T]) scan() ([]snapshot.EffectiveEntry, []string, bo
 			}
 			data, readErr := os.ReadFile(path)
 			if readErr != nil {
+				m.scope.count(m, metricArtifactScanFailures, "spec_read")
 				m.Log().Debug("artifact spec read failed: path=%q error=%v", path, readErr)
 				continue
 			}
 			item, parseErr := m.loader.ParseSpec(strings.TrimSuffix(name, filepath.Ext(name)), data)
 			if parseErr != nil {
+				m.scope.count(m, metricArtifactScanFailures, "spec_parse")
 				m.Log().Debug("artifact spec parse failed: path=%q error=%v", path, parseErr)
 				continue
 			}
@@ -274,6 +286,7 @@ func (m *artifactScannerMeta[T]) scan() ([]snapshot.EffectiveEntry, []string, bo
 			continue
 		}
 		if infoErr != nil {
+			m.scope.count(m, metricArtifactScanFailures, "binary_stat")
 			m.Log().Debug("artifact binary stat failed: path=%q error=%v", path, infoErr)
 			if _, known := m.digests[name]; known {
 				// Preserve a known digest only while metadata for a still-present
@@ -291,6 +304,7 @@ func (m *artifactScannerMeta[T]) scan() ([]snapshot.EffectiveEntry, []string, bo
 		}
 		digest, digestErr := helpers.BinaryChecksum(path)
 		if digestErr != nil {
+			m.scope.count(m, metricArtifactScanFailures, "binary_checksum")
 			m.Log().Debug("artifact binary checksum failed: path=%q error=%v", path, digestErr)
 			continue
 		}
