@@ -14,6 +14,7 @@ const (
 	RolloutModeShadow
 )
 
+// String returns the mode's wire spelling.
 func (m RolloutMode) String() string {
 	switch m {
 	case RolloutModeBlueGreen:
@@ -27,8 +28,10 @@ func (m RolloutMode) String() string {
 	}
 }
 
+// MarshalText encodes the mode as its wire spelling.
 func (m RolloutMode) MarshalText() ([]byte, error) { return []byte(m.String()), nil }
 
+// UnmarshalText decodes a mode, treating an empty value as blue-green.
 func (m *RolloutMode) UnmarshalText(text []byte) error {
 	switch string(text) {
 	case "blue-green", "bluegreen", "":

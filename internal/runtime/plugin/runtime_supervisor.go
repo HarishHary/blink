@@ -41,8 +41,7 @@ const (
 	SupervisorTransitionAwaitingProjection
 )
 
-// SupervisorStatus is the authoritative public status published by the runtime
-// supervisor.
+// SupervisorStatus is the authoritative public status the runtime supervisor publishes.
 type SupervisorStatus struct {
 	Lifecycle       SupervisorLifecycle
 	Availability    runtime.Availability
@@ -209,8 +208,7 @@ func (s *supervisor[P, M]) Init(...any) (act.SupervisorSpec, error) {
 		availability: runtime.AvailabilityUnavailable,
 	}
 	s.refreshStatus()
-	// A message, not an inline call: collectors must exist before a child emits, but radar must not
-	// delay the spec.
+	// A message, not an inline call: radar must not delay the spec.
 	if err := s.Send(s.PID(), MessageRadarTick{}); err != nil {
 		return act.SupervisorSpec{}, fmt.Errorf("schedule radar tick: %w", err)
 	}
@@ -263,8 +261,7 @@ func (s *supervisor[P, M]) Init(...any) (act.SupervisorSpec, error) {
 // Supervisor Message Handling
 // ---------------------------------------------------------------------------
 
-// HandleCall remains control-plane only. Plugin execution enters through
-// MessageSubmitInvocation in HandleMessage and never blocks an Ergo Call callback.
+// HandleCall is control-plane only; execution enters through MessageSubmitInvocation instead.
 func (s *supervisor[P, M]) HandleCall(from gen.PID, ref gen.Ref, request any) (any, error) {
 	defer s.publishState()
 	switch request.(type) {
@@ -399,8 +396,7 @@ func (s *supervisor[P, M]) HandleMessage(from gen.PID, message any) error {
 		return s.handleProjectionStatus(m.Status, m.ProjectionPID)
 
 	case snapshot.MessageProjectionCommitResult:
-		// A NACK is stamped by the authenticated snapshot supervisor with its
-		// current projection PID, allowing recovery from a stale pending PID.
+		// A NACK carries the snapshot supervisor's current projection PID, so a stale one recovers.
 		if from != s.snapshot.Pid ||
 			m.Generation != s.projection.PendingGeneration ||
 			(m.Err == nil && m.ProjectionPID != s.projection.PendingPID) {
@@ -761,9 +757,8 @@ func (s *supervisor[P, M]) completeDesiredStateTransition() {
 	}
 }
 
-// desiredStateTransitionReadyToCommit reports whether all transition dependencies converged.
-// The catalog counts a router as settled once it routes or fails for good, so a plugin that
-// can no longer recover does not hold this transition or any later one.
+// desiredStateTransitionReadyToCommit reports whether every dependency converged; a router that
+// failed for good counts as settled, so one lost plugin cannot hold a transition open.
 func (s *supervisor[P, M]) desiredStateTransitionReadyToCommit() bool {
 	return s.transition == SupervisorTransitionPreparing &&
 		s.pendingDesiredState.desiredRevision == 0 &&
@@ -840,15 +835,13 @@ func (s *supervisor[P, M]) status() SupervisorStatus {
 	}
 }
 
-// refreshStatus recomputes and caches liveStatus, unconditionally - unlike the reconcileStatus
-// used elsewhere in this codebase, this neither dedups nor sends: liveStatus is read directly by
-// HandleCall's SupervisorStatusRequest, so it must stay current after every state change.
+// refreshStatus recomputes liveStatus unconditionally: SupervisorStatusRequest reads it directly, so
+// it neither dedups nor sends.
 func (s *supervisor[P, M]) refreshStatus() {
 	s.liveStatus = s.status()
 }
 
-// publishState reports every gauge this runtime owns; the supervisor publishes all of them because
-// it is the one process holding the reconciler's and the catalog's status.
+// publishState reports every gauge this runtime owns, from the one process holding both statuses.
 func (s *supervisor[P, M]) publishState() {
 	status := s.status()
 	processesReady, processesDesired, queueDepth, activeCalls := s.routeTotals()
@@ -875,8 +868,8 @@ func (s *supervisor[P, M]) publishState() {
 	}.publish(s.labels, s)
 }
 
-// routeTotals sums what every route under every router reports, since a gauge labelled by namespace
-// alone is published once for the whole runtime rather than once per deployment.
+// routeTotals sums every route under every router, since these gauges are per runtime, not per
+// deployment.
 func (s *supervisor[P, M]) routeTotals() (ready, desired, queued, active int) {
 	for _, router := range s.catalog.status.routers {
 		for _, route := range []deploymentRouteStatus{router.primary, router.candidate} {
@@ -903,16 +896,14 @@ func (s *supervisor[P, M]) reconcileRadar() {
 		return
 	}
 	s.collectorsRegistered, s.radarLogged = true, false
-	// Monitored so a radar restart does not leave this runtime publishing into collectors that no
-	// longer exist.
+	// Monitored so a radar restart does not leave this runtime publishing into dropped collectors.
 	if err := s.MonitorProcessID(gen.ProcessID{Name: telemetry.MetricsProcess, Node: s.Node().Name()}); err != nil {
 		s.Log().Debug("radar monitor unavailable: namespace=%q error=%v", s.namespace, err)
 	}
 }
 
-// HandleInspect exposes concise runtime operational state: lifecycle/availability/desired
-// revision plus the catalog and reconciler sub-status, and the projection generations and
-// in-flight call/drain-waiter counts a Ready status alone doesn't distinguish.
+// HandleInspect exposes lifecycle, both children's sub-status, the projection generations, and the
+// in-flight call and drain-waiter counts.
 func (s *supervisor[P, M]) HandleInspect(gen.PID, ...string) map[string]string {
 	status := s.status()
 	return map[string]string{
@@ -1003,8 +994,7 @@ func (s *supervisor[P, M]) handleProjectionStatus(status snapshot.ProjectionActo
 	}
 	if !pidChanged && s.projection.PendingGeneration == s.projection.CommittedGeneration &&
 		s.projection.PendingPID == pid {
-		// Status precedes the matching commit result from the child.
-		// Keep that correlation alive; only the acknowledgement or deadline resolves it.
+		// Status precedes the child's commit result; only that or the deadline resolves it.
 		s.projection.ReadyGeneration = 0
 		s.projection.Status = status
 		s.refreshStatus()
@@ -1167,8 +1157,7 @@ func (s *supervisor[P, M]) reconcilerActorName() gen.Atom {
 	return ReconcilerActorName(s.namespace)
 }
 
-// snapshotSupervisorName returns the snapshot supervisor name, which the snapshot package derives
-// from the namespace this runtime follows rather than from this runtime's own name.
+// snapshotSupervisorName is derived from the followed namespace, not from this runtime's name.
 func (s *supervisor[P, M]) snapshotSupervisorName() gen.Atom {
 	return snapshot.SupervisorName(s.namespace)
 }
@@ -1178,11 +1167,8 @@ func (s *supervisor[P, M]) catalogActorName() gen.Atom {
 	return CatalogActorName(s.namespace)
 }
 
-// supervisorStateReader reports whether the runtime state is ready for callers. A catalog
-// that lost one plugin still serves every other, so the gate is routability rather than
-// full readiness: withholding the state would stop callers from invoking healthy plugins
-// too, and the generation - not the catalog verdict - is what makes a call safe.
-// Invocations against the lost plugin still fail admission with ErrPluginUnavailable.
+// supervisorStateReader gates on routability, not full readiness: one lost plugin must not stop
+// callers from invoking healthy ones, and its own invocations still fail with ErrPluginUnavailable.
 func (s *supervisor[P, M]) supervisorStateReader() bool {
 	return s.projection.ReadyGeneration != 0 &&
 		s.projection.ReadyGeneration == s.projection.CommittedGeneration &&

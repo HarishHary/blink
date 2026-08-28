@@ -408,6 +408,7 @@ func (a *Application[P, M]) checkAccepting() error {
 	return applicationAcceptingError(a.lifecycle)
 }
 
+// applicationAcceptingError maps a lifecycle to the error a submission is refused with, nil while running.
 func applicationAcceptingError(lifecycle applicationLifecycle) error {
 	switch lifecycle {
 	case applicationRunning:

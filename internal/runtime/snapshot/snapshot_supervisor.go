@@ -15,13 +15,12 @@ const (
 	readerActorRestartPeriod    uint16 = 10
 )
 
-// executorReportInterval is how often this executor reports convergence to its controller: a
-// quarter of the controller's staleness threshold, so three consecutive lost reports still don't
-// read as a dead executor.
+// executorReportInterval is a quarter of the controller's staleness threshold, so three lost
+// reports still do not read as a dead executor.
 const executorReportInterval = 30 * time.Second
 
-// SupervisorLifecycle describes the snapshot subtree as a whole. There is no draining stage: no child
-// holds external I/O a shutdown must wait out, so a stop is immediate.
+// SupervisorLifecycle describes the subtree as a whole; no child holds I/O a stop must wait out, so
+// there is no draining stage.
 type SupervisorLifecycle string
 
 const (
@@ -30,9 +29,7 @@ const (
 	SupervisorStopping SupervisorLifecycle = "stopping"
 )
 
-// eventPublication is one registered event and the token SendEvent requires to publish through it:
-// the pair the supervisor keeps for what it publishes itself, and hands to the child that publishes
-// in its place.
+// eventPublication is one registered event and the token SendEvent requires to publish through it.
 type eventPublication struct {
 	name  gen.Atom
 	token gen.Ref
@@ -41,15 +38,14 @@ type eventPublication struct {
 // registered reports whether the event was registered and its token handed over.
 func (p eventPublication) registered() bool { return p.token != (gen.Ref{}) }
 
-// ArtifactsEventFor names the buffered event a namespace's reader publishes committed snapshots
-// through; it retains only the latest and carries *Snapshot. Node-local and derived on either side,
-// so the name is not configurable.
+// ArtifactsEventFor names the buffered event a namespace's reader publishes *Snapshot through,
+// derived on either side rather than configured.
 func ArtifactsEventFor(node gen.Node, namespace string) gen.Event {
 	return gen.Event{Name: subtreeName(namespace, "artifacts"), Node: node.Name()}
 }
 
-// ReaderActorStatusEventFor names the buffered event a namespace's snapshot supervisor publishes
-// ReaderActorStatus through, derived the same way.
+// ReaderActorStatusEventFor names the buffered event the supervisor publishes ReaderActorStatus
+// through, derived the same way.
 func ReaderActorStatusEventFor(node gen.Node, namespace string) gen.Event {
 	return gen.Event{Name: subtreeName(namespace, "reader-actor-status"), Node: node.Name()}
 }
@@ -65,14 +61,14 @@ type projectionActorState struct {
 	status           ProjectionActorStatus
 }
 
-// runtimeSnapshotState tracks the snapshot supervisor incarnation.
+// SupervisorState identifies one snapshot supervisor incarnation.
 type SupervisorState struct {
 	Pid   gen.PID
 	Epoch uint64
 }
 
-// Supervisor owns a reader followed by a typed projection actor.
-// Rest-for-one restarts the projection whenever its reader restarts.
+// Supervisor owns a reader followed by a typed projection actor, rest-for-one so a reader restart
+// restarts the projection with it.
 type Supervisor[T any] struct {
 	act.Supervisor
 	opts                 SupervisorOptions
@@ -95,17 +91,15 @@ type ExecutorHeartbeat struct {
 	Availability        string
 }
 
-// ExecutorAppliedGeneration reports that a generation went live on this executor: the projection
-// committed it, which in external mode means the owning plugin runtime admitted it first.
+// ExecutorAppliedGeneration reports that the projection committed a generation, which in external
+// mode means the owning runtime admitted it first.
 type ExecutorAppliedGeneration struct {
 	Generation int64
 	Admitted   bool
 }
 
-// MessageExecutorReport carries one executor's convergence report (Heartbeat and/or Applied, either
-// may be nil), sent fire-and-forget to the controller actor by the snapshot supervisor. LastError is
-// text, not an error: it is rendered into /status and never compared, and EDF reduces an
-// unregistered error to its message anyway.
+// MessageExecutorReport carries one executor's convergence report, either half nil, sent
+// fire-and-forget to the controller actor; LastError is text because EDF reduces it to that anyway.
 type MessageExecutorReport struct {
 	ExecutorID string
 	Heartbeat  *ExecutorHeartbeat
@@ -165,13 +159,11 @@ func (s *Supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 	s.lifecycle = SupervisorStarting
 	s.readerActor.status = newReaderActorStatus()
 	s.projectionActor.status = newProjectionActorStatus()
-	// Delayed, not immediate: the first report is worth sending only once the reader has had its
-	// chance to subscribe, and every state change reports on its own before then.
+	// Delayed: the first report is worth sending only once the reader has had its chance to subscribe.
 	if err := s.scheduleExecutorReport(); err != nil {
 		return act.SupervisorSpec{}, err
 	}
-	// A message, not an inline call: collectors must exist before a child emits, but radar must not
-	// delay the spec.
+	// A message, not an inline call: radar must not delay the spec.
 	if err := s.Send(s.PID(), MessageRadarTick{}); err != nil {
 		return act.SupervisorSpec{}, fmt.Errorf("snapshot supervisor: schedule radar tick: %w", err)
 	}
@@ -356,8 +348,7 @@ func (s *Supervisor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, erro
 	return fmt.Errorf("snapshot supervisor: unsupported call %T", request), nil
 }
 
-// HandleInspect exposes concise supervisor operational state: the reader and projection
-// children's identity and last-reported status, and any external commit still in flight.
+// HandleInspect exposes both children's identity and last-reported status plus any in-flight commit.
 func (s *Supervisor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 	return map[string]string{
 		"supervisor:lifecycle":                       string(s.lifecycle),
@@ -393,11 +384,8 @@ func (s *Supervisor[T]) Terminate(reason error) {
 	}
 }
 
-// reportExecutor sends this executor's convergence report to its controller, fire-and-forget: the
-// controller keeps it for observability only, and the next report supersedes a lost one. The
-// supervisor is the one process that sees both halves - the generation the controller pushed to the
-// reader, and the generation the projection actually holds live, which in external commit mode is
-// the older of the two until the owning runtime admits the new one.
+// reportExecutor sends this executor's convergence report fire-and-forget; the supervisor is the one
+// process that sees both the pushed generation and the one the projection holds live.
 func (s *Supervisor[T]) reportExecutor(applied *ExecutorAppliedGeneration) {
 	s.labels.Count(s, metricExecutorReports)
 	_ = s.SendProcessID(s.opts.ReaderActorOptions.Endpoint, MessageExecutorReport{
@@ -431,11 +419,9 @@ func (s *Supervisor[T]) cancelExecutorReport() {
 	}
 }
 
-// publishState reports every gauge this subtree owns; the supervisor publishes all of them because
-// it is the one process holding both children's status.
+// publishState reports every gauge this subtree owns, from the one process holding both statuses.
 func (s *Supervisor[T]) publishState() {
-	// Both children up promotes the subtree once; a rest-for-one restart replaces a child rather than
-	// tearing the subtree down, so it never demotes.
+	// Both children up promotes the subtree once, and a rest-for-one restart never demotes it.
 	if s.lifecycle == SupervisorStarting && s.readerActor.pid != (gen.PID{}) && s.projectionActor.pid != (gen.PID{}) {
 		s.lifecycle = SupervisorRunning
 	}
@@ -452,8 +438,8 @@ func (s *Supervisor[T]) publishState() {
 	}.publish(s.labels, s)
 }
 
-// generationLag is what the controller has delivered but this executor does not serve yet, floored at
-// zero: a restarted reader reports generation 0 while the projection still serves the last one.
+// generationLag is what the controller delivered but this executor does not serve yet, floored at
+// zero for a restarted reader.
 func (s *Supervisor[T]) generationLag() int64 {
 	return max(0, s.readerActor.status.Generation-s.projectionActor.status.CommittedGeneration)
 }
@@ -472,15 +458,13 @@ func (s *Supervisor[T]) reconcileRadar() {
 		return
 	}
 	s.collectorsRegistered, s.radarLogged = true, false
-	// Registered through the node so no child's exit deletes them, monitored so a radar restart does
-	// not leave this subtree publishing into collectors that no longer exist.
+	// Monitored so a radar restart does not leave this subtree publishing into dropped collectors.
 	if err := s.MonitorProcessID(gen.ProcessID{Name: telemetry.MetricsProcess, Node: s.Node().Name()}); err != nil {
 		s.Log().Debug("radar monitor unavailable: namespace=%q error=%v", s.opts.Namespace, err)
 	}
 }
 
-// executorAvailability is what the controller needs to know about this executor: the projection's
-// own health, capped at degraded while the reader cannot receive the next generation.
+// executorAvailability is the projection's health, capped at degraded while the reader is detached.
 func (s *Supervisor[T]) executorAvailability() runtime.Availability {
 	availability := s.projectionActor.status.Availability
 	if availability == runtime.AvailabilityReady && s.readerActor.status.Availability != runtime.AvailabilityReady {

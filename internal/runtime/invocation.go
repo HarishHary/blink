@@ -14,10 +14,12 @@ type AsyncResult struct {
 	Ch   chan error
 }
 
+// NewAsyncResult returns a one-shot completion channel for one submitted invocation.
 func NewAsyncResult() *AsyncResult {
 	return &AsyncResult{Ch: make(chan error, 1)}
 }
 
+// Complete delivers the terminal result once; later calls are no-ops.
 func (r *AsyncResult) Complete(err error) {
 	if r == nil {
 		return
@@ -66,16 +68,15 @@ func (i Invocation) Cancel(err error) {
 }
 
 type invocationState struct {
-	done chan struct{}
-
-	mu  sync.RWMutex
-	err error
-
+	done         chan struct{}
+	mu           sync.RWMutex
+	err          error
 	completeOnce sync.Once
 	cancelOnce   sync.Once
 	cancel       func(error)
 }
 
+// NewInvocationState returns the shared state behind one Invocation handle.
 func NewInvocationState(cancel func(error)) *invocationState {
 	if cancel == nil {
 		cancel = func(error) {}
@@ -86,6 +87,7 @@ func NewInvocationState(cancel func(error)) *invocationState {
 	}
 }
 
+// RequestCancel runs the cancel hook once, defaulting to context.Canceled.
 func (s *invocationState) RequestCancel(err error) {
 	if s == nil {
 		return
@@ -98,6 +100,7 @@ func (s *invocationState) RequestCancel(err error) {
 	})
 }
 
+// Complete records the terminal error once and closes done.
 func (s *invocationState) Complete(err error) {
 	if s == nil {
 		return

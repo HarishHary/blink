@@ -6,11 +6,8 @@ import (
 	"ergo.services/ergo/gen"
 )
 
-// SupervisorOptions configures a raw reader and its typed projection sibling. Namespace is the
-// subtree's own: it names every process here, labels its series, and is the controller namespace the
-// reader follows. It never crosses the cluster. No name is configurable: the supervisor's and both
-// children's are derived from the namespace. The loader is a dependency, not an option: NewSupervisor
-// takes it directly, as the plugin runtime takes its own.
+// SupervisorOptions configures a raw reader and its typed projection sibling; Namespace names every
+// process here, labels its series, and is the controller namespace the reader follows.
 type SupervisorOptions struct {
 	Namespace          string
 	ProjectionMode     ProjectionCommitMode
@@ -18,8 +15,8 @@ type SupervisorOptions struct {
 	ReaderActorOptions ReaderActorOptions
 }
 
-// ReaderActorOptions configures the reader child of a snapshot supervisor: which controller actor to
-// subscribe to over the Ergo cluster, and how this executor identifies itself to it.
+// ReaderActorOptions configures the reader child: the controller actor it subscribes to and the ID
+// it subscribes as.
 type ReaderActorOptions struct {
 	Endpoint   gen.ProcessID
 	ExecutorID string

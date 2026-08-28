@@ -14,13 +14,17 @@ const (
 
 // Every process in a namespace's subtree is named from that namespace, so a caller addresses one
 // without being told what it was called.
+// ApplicationName is the controller application's registered name.
 func ApplicationName(namespace string) gen.Atom { return subtreeName(namespace, "application") }
-func SupervisorName(namespace string) gen.Atom  { return subtreeName(namespace, "supervisor") }
+
+// SupervisorName is the controller supervisor's registered name.
+func SupervisorName(namespace string) gen.Atom { return subtreeName(namespace, "supervisor") }
 
 // ActorName is the one name that crosses the cluster - executors subscribe to it - so it is defined
 // with the wire vocabulary they share and only re-exported here.
 func ActorName(namespace string) gen.Atom { return snapshot.ControllerActorName(namespace) }
 
+// subtreeName builds one controller subtree name from its namespace.
 func subtreeName(namespace, suffix string) gen.Atom {
 	return gen.Atom("controller-" + namespace + "-" + suffix)
 }

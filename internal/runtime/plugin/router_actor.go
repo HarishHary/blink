@@ -203,8 +203,8 @@ func (a *routerActor[T]) Terminate(error) {
 // Message handling
 // ---------------------------------------------------------------------------
 
-// RouteMessage is the only normal-priority ingress path. Timers are normal too,
-// so their expiration is consumed here rather than forwarded to a route.
+// RouteMessage is the only normal-priority ingress path, timers included, so an expiry is consumed
+// here rather than forwarded to a route.
 func (a *routerActor[T]) RouteMessage(_ gen.PID, message any) gen.Atom {
 	switch m := message.(type) {
 	case MessageInvocationTimedOut:
@@ -227,8 +227,7 @@ func (a *routerActor[T]) RouteMessage(_ gen.PID, message any) gen.Atom {
 // RouteCall discards synchronous calls; the router serves none over the route path.
 func (a *routerActor[T]) RouteCall(_ gen.PID, _ gen.Ref, _ any) gen.Atom { return act.RouteDiscard }
 
-// HandleMessage receives all router administration and route lifecycle facts at
-// High/Max priority, plus Ergo's routed-send failure sentinel.
+// HandleMessage receives every administration and route-lifecycle fact at High/Max priority.
 func (a *routerActor[T]) HandleMessage(from gen.PID, message any) error {
 	switch m := message.(type) {
 	case MessageRouterActivate:
@@ -554,8 +553,7 @@ func (a *routerActor[T]) routeInvocation(call MessageInvokePlugin[T]) gen.Atom {
 		_ = a.SendWithPriority(a.Parent(), MessageInvocationCompleted{CallID: call.CallID, Err: runtime.ErrPluginUnavailable}, gen.MessagePriorityHigh)
 		return act.RouteDiscard
 	}
-	// Rollout routing decision: shadow -> shadow candidate; else primary,
-	// unless a canary candidate wins this call's rollout bucket.
+	// Shadow goes to the shadow candidate; else primary, unless a canary wins this call's bucket.
 	var ref *deploymentRouteState
 	target := "shadow"
 	if call.Shadow {
@@ -721,14 +719,12 @@ func (a *routerActor[T]) drainRoute(ref *deploymentRouteState) {
 		_ = a.Send(pid, MessageDrain{})
 		return
 	}
-	// No live manager: respawn one (it starts already draining, per
-	// newDeploymentManager) so it can run the drain protocol to completion.
+	// No live manager: respawn one, already draining, so it can finish the drain protocol.
 	if err := a.RespawnRoute(ref.name); err != nil {
 		_ = a.scheduleRouteStep(ref)
 		return
 	}
-	// Respawn may not have registered the PID yet; drain it if it is live,
-	// otherwise reschedule to retry the drain once it appears.
+	// Respawn may not have registered the PID yet; retry the drain once it appears.
 	if pid := a.refreshRoutePID(ref); pid != (gen.PID{}) {
 		_ = a.Send(pid, MessageDrain{})
 		return
@@ -878,9 +874,8 @@ func (a *routerActor[T]) reconcileStatus() {
 	}
 }
 
-// HandleInspect exposes concise router operational state: lifecycle/availability plus the primary
-// and candidate routes' own health, since a Ready router status alone doesn't say whether
-// canary/shadow traffic is actually being served.
+// HandleInspect exposes lifecycle and availability plus each route's own health, which a Ready
+// router status alone does not distinguish.
 func (a *routerActor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 	status := a.status()
 	return map[string]string{

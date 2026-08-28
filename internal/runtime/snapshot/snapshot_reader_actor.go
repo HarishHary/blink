@@ -79,8 +79,8 @@ type readerActor struct {
 	lastStatus     ReaderActorStatus
 }
 
-// newReaderActor constructs the reader actor for one subscription. It publishes every snapshot it
-// receives, so it takes the publication its supervisor registered on its behalf.
+// newReaderActor constructs the reader for one subscription; it publishes every snapshot it
+// receives, so it takes the publication its supervisor registered for it.
 func newReaderActor(opts ReaderActorOptions, labels telemetry.Labels, snapshotEvent eventPublication) gen.ProcessBehavior {
 	return &readerActor{opts: opts, labels: labels, snapshotEvent: snapshotEvent}
 }
@@ -269,8 +269,7 @@ func (a *readerActor) status() ReaderActorStatus {
 	return status
 }
 
-// HandleInspect exposes concise reader operational state: whether it's currently subscribed, why
-// not if it isn't, the last generation it received, and which controller it's subscribed to.
+// HandleInspect exposes the subscription: whether it holds, why not, its generation, and to whom.
 func (a *readerActor) HandleInspect(gen.PID, ...string) map[string]string {
 	status := a.status()
 	return map[string]string{

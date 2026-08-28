@@ -76,6 +76,22 @@ type Service struct {
 	sem          *semaphore.Weighted
 }
 
+// Runtime is the rule call surface consumed by Service.
+type Runtime interface {
+	Evaluate(context.Context, snapshotruntime.ProjectionState[*rules.RuleMetadata], string, *events.Batch) rules.EvaluateResult
+}
+
+// RuleStateSource supplies one committed rule state for each Kafka batch.
+type RuleStateSource interface {
+	State(context.Context) (snapshotruntime.ProjectionState[*rules.RuleMetadata], error)
+}
+
+type RuleStateSourceFunc func(context.Context) (snapshotruntime.ProjectionState[*rules.RuleMetadata], error)
+
+func (f RuleStateSourceFunc) State(ctx context.Context) (snapshotruntime.ProjectionState[*rules.RuleMetadata], error) {
+	return f(ctx)
+}
+
 // Config contains the environment-loaded settings and runtime dependencies injected by main.
 type Config struct {
 	Broker        brokers.Broker

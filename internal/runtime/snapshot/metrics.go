@@ -5,10 +5,9 @@ import (
 	"github.com/harishhary/blink/internal/runtime/telemetry"
 )
 
-// Radar metric names by publishing layer. The namespace label carries the controller namespace this
-// subtree follows, the same value the controller's own series carry, so the two sides join on it.
+// Radar metric names by publishing layer, labelled by the controller namespace this subtree follows.
 
-// Supervisor series: every gauge, since the supervisor is the one process holding both children's status.
+// Supervisor series: every gauge, from the one process holding both children's status.
 const (
 	metricSupervisorLifecycle    = "blink_snapshot_supervisor_lifecycle"
 	metricReaderAvailability     = "blink_snapshot_reader_availability"
@@ -91,8 +90,7 @@ type subtreeGauges struct {
 	commitPending          int64
 }
 
-// publish reports the subtree's gauges; the supervisor republishes them on its report tick so a
-// converged subtree still reports fresh series.
+// publish reports the subtree's gauges, republished on the report tick so they stay fresh.
 func (g subtreeGauges) publish(labels telemetry.Labels, sender telemetry.Sender) {
 	labels.Set(sender, metricSupervisorLifecycle, supervisorLifecycleValue(g.lifecycle))
 	labels.Set(sender, metricReaderAvailability, telemetry.AvailabilityValue(g.readerAvailability))

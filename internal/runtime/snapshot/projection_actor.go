@@ -124,8 +124,8 @@ type projectionActor[T any] struct {
 	labels             telemetry.Labels
 }
 
-// newProjectionActor constructs the projection actor for one subtree's typed view. It monitors both
-// events and publishes through neither, so it takes the names and no token.
+// newProjectionActor constructs one subtree's typed view; it monitors both events and publishes
+// through neither, so it takes names and no token.
 func newProjectionActor[T any](snapshotEvent, statusEvent gen.Event, loader Loader[T], mode ProjectionCommitMode, labels telemetry.Labels) gen.ProcessBehavior {
 	return &projectionActor[T]{snapshotEvent: snapshotEvent, statusEvent: statusEvent, loader: loader, mode: mode, labels: labels}
 }
@@ -314,9 +314,7 @@ func (a *projectionActor[T]) reconcileStatus() {
 	_ = a.Send(a.Parent(), MessageProjectionActorStatusChanged{Status: next})
 }
 
-// HandleInspect exposes concise projection operational state: lifecycle/availability plus the
-// generation at each stage - observed from the reader, prepared, committed - that a Ready status
-// alone doesn't distinguish.
+// HandleInspect exposes lifecycle and availability plus the generation at each stage.
 func (a *projectionActor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 	status := a.status()
 	return map[string]string{

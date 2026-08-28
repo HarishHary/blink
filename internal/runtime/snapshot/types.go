@@ -4,18 +4,13 @@ import (
 	"github.com/harishhary/blink/internal/runtime"
 )
 
-// ArtifactRef is one binary artifact for a logical plugin ID.
+// ArtifactRef is one binary artifact for a logical plugin ID: its filename, its sidecar's rollout
+// mode, its yaml-marshaled spec, and the sha256 of the binary as the controller saw it.
 type ArtifactRef struct {
-	Name        string              // binary filename (== YAML sidecar stem)
-	RolloutMode runtime.RolloutMode // from its YAML sidecar
-
-	// Spec is this artifact's yaml-marshaled plugin metadata, letting a consumer reconstruct the
-	// full plugin config from the snapshot alone (no *_CONFIG_DIR). Empty when unmarshalable.
-	Spec []byte
-
-	// Hash is the sha256 (hex) of the artifact's binary as the controller saw it: flows binary
-	// changes through the snapshot and lets a consumer verify its local binary. Empty if none.
-	Hash string
+	Name        string
+	RolloutMode runtime.RolloutMode
+	Spec        []byte
+	Hash        string
 }
 
 // Clone returns a deep copy of the artifact reference.
@@ -39,13 +34,13 @@ func ArtifactRefEqual(left, right *ArtifactRef) bool {
 	return left.Name == right.Name && left.RolloutMode == right.RolloutMode && left.Hash == right.Hash && string(left.Spec) == string(right.Spec)
 }
 
-// EffectiveEntry is the computed desired state for one logical plugin ID.
-// Primary is the BG (active) artifact; Candidate is the CN/SH artifact if present.
+// EffectiveEntry is the computed desired state for one logical plugin ID: Primary is the active BG
+// artifact, Candidate the CN/SH one, either nil when the ID has none.
 type EffectiveEntry struct {
 	Id        string
-	Enabled   bool         // true if at least one artifact is enabled
-	Primary   *ArtifactRef // nil when the ID has no stable BG artifact yet
-	Candidate *ArtifactRef // nil when the ID is BG-only
+	Enabled   bool
+	Primary   *ArtifactRef
+	Candidate *ArtifactRef
 }
 
 // Clone returns a deep copy of the effective entry.
@@ -70,10 +65,8 @@ func EffectiveEntryEqual(left, right EffectiveEntry) bool {
 		ArtifactRefEqual(left.Primary, right.Primary) && ArtifactRefEqual(left.Candidate, right.Candidate)
 }
 
-// ChangeKind classifies why an upserted entry differs from what was previously committed. Computed
-// by internal/runtime/controller.ClassifyChanges (which needs the namespace's plugin.Loader[T] to
-// isolate a rollout-percentage-only change); the value type itself lives here so it can travel on
-// SnapshotUpdate alongside the rest of this package's wire vocabulary.
+// ChangeKind classifies why an upserted entry differs from the last commit; computed by
+// internal/runtime/controller.ClassifyChanges and carried on SnapshotUpdate.
 type ChangeKind uint8
 
 const (
@@ -89,9 +82,8 @@ type EntryChange struct {
 	Entry EffectiveEntry
 }
 
-// Snapshot is a computed desired state (a sorted set of EffectiveEntry) consumed by executors.
-// Generation is either the controller's durable fleet-wide DB generation or a reader's per-pod
-// localRevision change-token - the two are not comparable across pods.
+// Snapshot is a sorted set of EffectiveEntry consumed by executors; Generation is either the
+// controller's fleet-wide DB generation or a reader's per-pod change token, never both.
 type Snapshot struct {
 	Generation int64
 	Entries    []EffectiveEntry

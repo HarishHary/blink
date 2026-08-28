@@ -48,11 +48,19 @@ const (
 
 // Every process in a namespace's subtree is named from that namespace, mirroring the controller's
 // controller-<namespace>-* names, so a caller addresses one without being told what it was called.
-func ApplicationName(namespace string) gen.Atom     { return subtreeName(namespace, "application") }
-func SupervisorName(namespace string) gen.Atom      { return subtreeName(namespace, "supervisor") }
-func ReconcilerActorName(namespace string) gen.Atom { return subtreeName(namespace, "reconciler") }
-func CatalogActorName(namespace string) gen.Atom    { return subtreeName(namespace, "catalog") }
+// ApplicationName is the runtime application's registered name.
+func ApplicationName(namespace string) gen.Atom { return subtreeName(namespace, "application") }
 
+// SupervisorName is the runtime supervisor's registered name.
+func SupervisorName(namespace string) gen.Atom { return subtreeName(namespace, "supervisor") }
+
+// ReconcilerActorName is the reconciler child's registered name.
+func ReconcilerActorName(namespace string) gen.Atom { return subtreeName(namespace, "reconciler") }
+
+// CatalogActorName is the catalog child's registered name.
+func CatalogActorName(namespace string) gen.Atom { return subtreeName(namespace, "catalog") }
+
+// subtreeName builds one plugin runtime name from its namespace.
 func subtreeName(namespace, suffix string) gen.Atom {
 	return gen.Atom("plugin-" + namespace + "-" + suffix)
 }
