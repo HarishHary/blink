@@ -38,7 +38,7 @@ type config struct {
 // application is the matcher plugin runtime plus the rule snapshot supervisor, so both start and stop with the node.
 type application struct {
 	*matchers.Application
-	ruleOpts snapshot.SupervisorOptions[*rules.RuleMetadata]
+	ruleOpts snapshot.SupervisorOptions
 }
 
 // Load adds the rule snapshot supervisor to the matcher application's spec.
@@ -49,10 +49,10 @@ func (a *application) Load(...any) (gen.ApplicationSpec, error) {
 	}
 	spec.Group = append(spec.Group, gen.ApplicationMemberSpec{
 		Factory: func() gen.ProcessBehavior {
-			return snapshot.NewSupervisor(a.ruleOpts)
+			return snapshot.NewSupervisor(a.ruleOpts, rules.Loader{})
 		},
 	})
-	spec.Map["rule_snapshot"] = a.ruleOpts.ReaderActorOptions.Name
+	spec.Map["rule_snapshot"] = snapshot.SupervisorName(a.ruleOpts.Namespace)
 	return spec, nil
 }
 
@@ -84,27 +84,25 @@ func main() {
 	}
 
 	// snapshotReaderFor subscribes to the given namespace's controller actor over the cluster.
-	snapshotReaderFor := func(name gen.Atom, namespace string) snapshot.ReaderActorOptions {
+	snapshotReaderFor := func(namespace string) snapshot.ReaderActorOptions {
 		return snapshot.ReaderActorOptions{
-			Name:       name,
-			Endpoint:   gen.ProcessID{Name: gen.Atom("controller-" + namespace + "-actor"), Node: gen.Atom("controller@" + controllerHost)},
+			Endpoint:   gen.ProcessID{Name: snapshot.ControllerActorName(namespace), Node: gen.Atom("controller@" + controllerHost)},
 			ExecutorID: cfg.PodName,
-			Role:       namespace,
 		}
 	}
 
 	app := &application{
 		// Admission budgets come from the reader's batch size and the service's concurrency limit.
 		// ManagerOptions.ProcessBudget defaults to available CPUs when left unset.
-		Application: matchers.NewApplication(plugin.Options{MaxBatchSize: cfg.BatchSize, MaxConcurrentCalls: cfg.Concurrency,
+		Application: matchers.NewApplication(plugin.ApplicationOptions{MaxBatchSize: cfg.BatchSize, MaxConcurrentCalls: cfg.Concurrency, Namespace: "matcher",
 			SupervisorOptions: plugin.SupervisorOptions{
-				Name:           gen.Atom("event-matcher-runtime"),
 				Directory:      cfg.MatcherPluginDir,
-				SnapshotReader: snapshotReaderFor("matcher-snapshot-reader", "matcher"),
+				SnapshotReader: snapshotReaderFor("matcher"),
 			}}, rootLogger),
-		ruleOpts: snapshot.SupervisorOptions[*rules.RuleMetadata]{
-			ReaderActorOptions: snapshotReaderFor("rule-snapshot-reader", "rule"),
-			Loader:             rules.Loader{}, ProjectionMode: snapshot.ProjectionCommitDirect,
+		ruleOpts: snapshot.SupervisorOptions{
+			Namespace:          "rule",
+			ReaderActorOptions: snapshotReaderFor("rule"),
+			ProjectionMode:     snapshot.ProjectionCommitDirect,
 		},
 	}
 
@@ -116,6 +114,7 @@ func main() {
 		ShutdownTimeout: runtimeShutdownTimeout,
 		Applications:    []gen.ApplicationBehavior{app},
 		Cluster:         cluster,
+		Radar:           &plugin.RadarOptions{Host: cfg.RadarHost, Port: cfg.RadarPort},
 	})
 	if err != nil {
 		cancelRun()
@@ -131,7 +130,7 @@ func main() {
 		}
 	}()
 
-	matcherSvc := NewService(rootLogger.With("component", "service"), cfg.Config, app, snapshot.NewProjectionClient[*rules.RuleMetadata](host.Node(), gen.Atom("rule-snapshot-reader")))
+	matcherSvc := NewService(rootLogger.With("component", "service"), cfg.Config, app, snapshot.NewProjectionClient[*rules.RuleMetadata](host.Node(), "rule"))
 	healthSvc := services.NewHealthService(":8080", matcherSvc.Ready, nil)
 	runner := services.New(rootLogger.With("component", "runner"))
 	runner.Register(matcherSvc, healthSvc)

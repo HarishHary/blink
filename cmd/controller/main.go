@@ -42,7 +42,7 @@ func controllerStatus(node gen.Node, namespaces []string) func() any {
 	return func() any {
 		status := make(map[string]any, len(namespaces))
 		for _, namespace := range namespaces {
-			endpoint := gen.ProcessID{Name: gen.Atom("controller-" + namespace + "-actor"), Node: node.Name()}
+			endpoint := gen.ProcessID{Name: controller.ActorName(namespace), Node: node.Name()}
 			response, err := node.CallProcessID(endpoint, controller.StatusRequest{}, 1)
 			if err != nil {
 				status[namespace] = map[string]string{"error": err.Error()}
@@ -81,6 +81,7 @@ func main() {
 		Observer:        cfg.Observer,
 		ShutdownTimeout: runtimeShutdownTimeout,
 		Cluster:         cluster,
+		Radar:           &plugin.RadarOptions{Host: cfg.RadarHost, Port: cfg.RadarPort},
 	})
 	if err != nil {
 		rootLogger.FatalF("start controller node: %v", err)
@@ -88,58 +89,53 @@ func main() {
 
 	node := host.Node()
 	runner := services.New(rootLogger.With("component", "runner"))
-	ruleControllerSvc := controller.NewService(node, "controller-rule", controller.Options[*rules.RuleMetadata]{
+	ruleControllerSvc := controller.NewService(node, "controller-rule", controller.ApplicationOptions{
 		DatabaseDSN: cfg.ControllerDatabaseDSN,
 		Namespace:   "rule",
-		SupervisorOptions: controller.SupervisorOptions[*rules.RuleMetadata]{
-			ActorOptions: controller.ActorOptions[*rules.RuleMetadata]{
+		SupervisorOptions: controller.SupervisorOptions{
+			ActorOptions: controller.ActorOptions{
 				Directory: cfg.RulePluginDir,
-				Loader:    rules.Loader{},
 			},
 		},
-	})
+	}, rules.Loader{})
 	runner.Register(
 		ruleControllerSvc,
-		controller.NewService(node, "controller-matcher", controller.Options[*matchers.MatcherMetadata]{
+		controller.NewService(node, "controller-matcher", controller.ApplicationOptions{
 			DatabaseDSN: cfg.ControllerDatabaseDSN,
 			Namespace:   "matcher",
-			SupervisorOptions: controller.SupervisorOptions[*matchers.MatcherMetadata]{
-				ActorOptions: controller.ActorOptions[*matchers.MatcherMetadata]{
+			SupervisorOptions: controller.SupervisorOptions{
+				ActorOptions: controller.ActorOptions{
 					Directory: cfg.MatcherPluginDir,
-					Loader:    matchers.Loader{},
 				},
 			},
-		}),
-		controller.NewService(node, "controller-tuning", controller.Options[*tuning_rules.TuningRuleMetadata]{
+		}, matchers.Loader{}),
+		controller.NewService(node, "controller-tuning", controller.ApplicationOptions{
 			DatabaseDSN: cfg.ControllerDatabaseDSN,
 			Namespace:   "tuning",
-			SupervisorOptions: controller.SupervisorOptions[*tuning_rules.TuningRuleMetadata]{
-				ActorOptions: controller.ActorOptions[*tuning_rules.TuningRuleMetadata]{
+			SupervisorOptions: controller.SupervisorOptions{
+				ActorOptions: controller.ActorOptions{
 					Directory: cfg.TuningPluginDir,
-					Loader:    tuning_rules.Loader{},
 				},
 			},
-		}),
-		controller.NewService(node, "controller-formatter", controller.Options[*formatters.FormatterMetadata]{
+		}, tuning_rules.Loader{}),
+		controller.NewService(node, "controller-formatter", controller.ApplicationOptions{
 			DatabaseDSN: cfg.ControllerDatabaseDSN,
 			Namespace:   "formatter",
-			SupervisorOptions: controller.SupervisorOptions[*formatters.FormatterMetadata]{
-				ActorOptions: controller.ActorOptions[*formatters.FormatterMetadata]{
+			SupervisorOptions: controller.SupervisorOptions{
+				ActorOptions: controller.ActorOptions{
 					Directory: cfg.FormatterPluginDir,
-					Loader:    formatters.Loader{},
 				},
 			},
-		}),
-		controller.NewService(node, "controller-enrichment", controller.Options[*enrichments.EnrichmentMetadata]{
+		}, formatters.Loader{}),
+		controller.NewService(node, "controller-enrichment", controller.ApplicationOptions{
 			DatabaseDSN: cfg.ControllerDatabaseDSN,
 			Namespace:   "enrichment",
-			SupervisorOptions: controller.SupervisorOptions[*enrichments.EnrichmentMetadata]{
-				ActorOptions: controller.ActorOptions[*enrichments.EnrichmentMetadata]{
+			SupervisorOptions: controller.SupervisorOptions{
+				ActorOptions: controller.ActorOptions{
 					Directory: cfg.EnrichmentPluginDir,
-					Loader:    enrichments.Loader{},
 				},
 			},
-		}),
+		}, enrichments.Loader{}),
 	)
 	healthSvc := services.NewHealthService(":8080", nil, controllerStatus(node, []string{"rule", "matcher", "tuning", "formatter", "enrichment"}))
 	runner.Register(healthSvc)
