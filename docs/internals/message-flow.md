@@ -26,16 +26,16 @@ sequenceDiagram
     Controller->>Executor: SnapshotUpdate (cluster SendImportant)
 ```
 
-| Message                                      | Direction                                    | Meaning                                                               |
-| ----------------------------------------------- | ------------------------------------------------ | -------------------------------------------------------------------------- |
-| `SubscribeRequest`/`Response`                | reader actor ↔ controller actor (cluster)      | Registers a subscriber PID and returns the current committed snapshot.  |
-| `MessageArtifactScanResult`                  | artifact_scanner meta → controller actor       | Delivers the complete effective catalog used by reconciliation.         |
-| `makePlan`                                   | controller actor → controller actor            | Derives the pending records, entries, diff, and next generation.        |
-| `MessageWriteSnapshot`                       | controller actor → snapshot writer meta        | Queues the pending plan.                                                |
-| `Database.Upsert`, `Database.SaveGeneration` | snapshot writer meta → SQLite                  | Persists records and reserves the generation.                           |
-| `Database.SaveSnapshot`                      | snapshot writer meta → SQLite                  | Saves the aggregate snapshot.                                           |
-| `MessageSnapshotWriteResult`                 | snapshot writer meta → controller actor        | Final success lets the actor commit its pending plan and generation.    |
-| `SnapshotUpdate`                             | controller actor → subscriber PID (cluster)    | Pushes the newly committed snapshot to every registered subscriber.     |
+| Message                                      | Direction                                   | Meaning                                                                |
+| -------------------------------------------- | ------------------------------------------- | ---------------------------------------------------------------------- |
+| `SubscribeRequest`/`Response`                | reader actor ↔ controller actor (cluster)   | Registers a subscriber PID and returns the current committed snapshot. |
+| `MessageArtifactScanResult`                  | artifact_scanner meta → controller actor    | Delivers the complete effective catalog used by reconciliation.        |
+| `makePlan`                                   | controller actor → controller actor         | Derives the pending records, entries, diff, and next generation.       |
+| `MessageWriteSnapshot`                       | controller actor → snapshot writer meta     | Queues the pending plan.                                               |
+| `Database.Upsert`, `Database.SaveGeneration` | snapshot writer meta → SQLite               | Persists records and reserves the generation.                          |
+| `Database.SaveSnapshot`                      | snapshot writer meta → SQLite               | Saves the aggregate snapshot.                                          |
+| `MessageSnapshotWriteResult`                 | snapshot writer meta → controller actor     | Final success lets the actor commit its pending plan and generation.   |
+| `SnapshotUpdate`                             | controller actor → subscriber PID (cluster) | Pushes the newly committed snapshot to every registered subscriber.    |
 
 - The actor commits its in-memory generation only on final SQLite success, then calls `notifySubscribers` to push it. A subscriber applies a pushed (or initial `SubscribeResponse`) snapshot only if its generation is strictly newer than the last one it published - so a redundant or duplicate push, or a `SubscribeResponse.Current` the subscriber already has, is a no-op. Backwards generations never happen: SQLite is the only writer of the generation counter.
 - Readiness needs a complete artifact_scanner result and a loaded, ready writer.
@@ -73,7 +73,7 @@ sequenceDiagram
 ```
 
 | Message                  | Direction                             | Meaning                                                                        |
-| ------------------------ | ---------------------------------------- | ------------------------------------------------------------------------------------ |
+| ------------------------ | ------------------------------------- | ------------------------------------------------------------------------------ |
 | `Reader.ReadBatch`       | event topic → event_matcher           | Fetches one input batch.                                                       |
 | `ProjectionClient.State` | event_matcher → rule snapshot actors  | Reads the committed rule projection for that batch.                            |
 | `Application.State`      | event_matcher → matcher plugin actors | Reads the committed matcher projection for that batch.                         |
@@ -82,7 +82,7 @@ sequenceDiagram
 | `Writer.WriteMessages`   | event_matcher → `ExecMessage` topic   | Writes a keyed `ExecMessage` for eligible rules.                               |
 | `Writer.WriteMessages`   | event_matcher → matcher DLQ topic     | Writes a keyed DLQ envelope for malformed, unavailable, or exhausted matching. |
 | `prepare`                | event_matcher → event_matcher         | Assigns `terminalDrop` when no candidate or rule is eligible.                  |
-| `Reader.CommitMessages`  | event_matcher → event topic           | Commits the batch only after every input has a terminal result.               |
+| `Reader.CommitMessages`  | event_matcher → event topic           | Commits the batch only after every input has a terminal result.                |
 
 ### Admission and routing
 
@@ -95,7 +95,7 @@ Candidates come from the committed rule projection by `log_type`. Candidates sha
 Each fetched input reaches exactly one terminal state before its offset is eligible to commit:
 
 | Terminal      | Cause                                                                                | Broker action                                                            |
-| ------------- | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| ------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------ |
 | `ExecMessage` | Eligible rule IDs remain                                                             | Write protobuf output with the original input key.                       |
 | DLQ           | Invalid input, invalid matcher reference, unavailable matcher, or exhausted matching | Write a source-faithful DLQ envelope with the original key.              |
 | Drop          | No candidate or no eligible rule; or an output/DLQ encoding failure                  | No output. Encoding failures drop to prevent deterministic replay loops. |

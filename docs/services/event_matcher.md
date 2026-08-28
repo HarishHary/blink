@@ -9,7 +9,8 @@
 ```text
 process
 ├── Ergo node
-│   └── application: event-matcher-runtime-application
+│   ├── application: radar (RADAR_HOST:RADAR_PORT, 0.0.0.0:9090) - blink_plugin_*/blink_snapshot_* on /metrics
+│   └── application: plugin-matcher-application
 │       ├── matcher plugin runtime
 │       │   └── generic snapshot supervisor, external projection commit
 │       └── rule snapshot supervisor, direct projection commit

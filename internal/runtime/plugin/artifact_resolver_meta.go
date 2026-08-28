@@ -33,16 +33,14 @@ type artifactResolverMetaState struct {
 	status  artifactResolverMetaStatus
 }
 
-// artifactResolverMetaStatus is owned by reconcilerActor because the
-// actor owns resolver generations, restart policy, and alias monitoring.
+// artifactResolverMetaStatus is owned by reconcilerActor, which owns generations and restart policy.
 type artifactResolverMetaStatus struct {
 	lifecycle    ArtifactResolverMetaLifecycle
 	availability runtime.Availability
 }
 
-// artifactResolverMeta owns one resolver instance. It performs filesystem
-// readiness checks and binary checksums for complete snapshot-resolution
-// requests. The parent actor owns restart policy and fences results by alias.
+// artifactResolverMeta owns one resolver, checking filesystem readiness and binary checksums for a
+// whole snapshot; its parent fences results by alias.
 type artifactResolverMeta struct {
 	gen.MetaProcess
 	directory string
@@ -133,7 +131,7 @@ func (m *artifactResolverMeta) HandleCall(_ gen.PID, _ gen.Ref, request any) (an
 	return fmt.Errorf("unsupported artifact resolver call %T", request), nil
 }
 
-// HandleInspect exposes the resolver's directory and job queue depth (capacity 1, so this is effectively whether a resolution is already queued or running)
+// HandleInspect exposes the resolver's directory and job queue depth, which is 0 or 1.
 func (m *artifactResolverMeta) HandleInspect(gen.PID, ...string) map[string]string {
 	return map[string]string{
 		"resolver:directory": m.directory,

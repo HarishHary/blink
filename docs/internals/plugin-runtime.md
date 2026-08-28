@@ -35,25 +35,25 @@ The runtime supervisor's RestForOne child order is snapshot, reconciler, catalog
 
 ## Messages
 
-| Message                     | Direction                                                                               | Meaning                                                                                        |
-| --------------------------- | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| Admission and invocation    | caller → application → runtime supervisor → catalog → router → manager → plugin process | Carries an admitted production or shadow invocation to one plugin process.                     |
-| Desired-state promotion     | reconciler → runtime supervisor → catalog → router                                      | Moves a resolved desired revision through the drain, freshness, and projection-commit barrier. |
-| Status and readiness        | child/meta/plugin process → parent owner                                                | Aggregates fenced lifecycle, activity, and availability facts upward.                          |
-| Drain                       | application → runtime supervisor → catalog → router → manager                           | Stops admission and drains dynamically owned work from the top down.                           |
+| Message                     | Direction                                                                                                                       | Meaning                                                                                        |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Admission and invocation    | caller → application → runtime supervisor → catalog → router → manager → plugin process                                         | Carries an admitted production or shadow invocation to one plugin process.                     |
+| Desired-state promotion     | reconciler → runtime supervisor → catalog → router                                                                              | Moves a resolved desired revision through the drain, freshness, and projection-commit barrier. |
+| Status and readiness        | child/meta/plugin process → parent owner                                                                                        | Aggregates fenced lifecycle, activity, and availability facts upward.                          |
+| Drain                       | application → runtime supervisor → catalog → router → manager                                                                   | Stops admission and drains dynamically owned work from the top down.                           |
 | Completion and cancellation | plugin process → manager → router → catalog → runtime supervisor; application → runtime supervisor → catalog → router → manager | Completes one result idempotently or follows the fenced accepted/pending path to cancel it.    |
 
 ## Roles
 
 | Role                   | Default name or identity                             | Owner                  | Responsibility                                                                        |
 | ---------------------- | ---------------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------- |
-| Plugin Application     | `<runtime-name>-application` application name        | Ergo application group | Caller lifecycle, production/shadow admission, and async-result ownership.            |
-| Runtime Supervisor     | configured `<runtime-name>` (registered)             | Plugin Application     | Coordinates snapshot, reconciler, catalog, desired-state promotion, and drain.        |
-| Snapshot Supervisor    | configured `<runtime-name>-snapshot` (registered)    | Runtime Supervisor     | Supplies reader/projection state with external projection commit.                     |
-| Reconciler Actor       | `<runtime-name>-desired-state-reconciler` child name | Runtime Supervisor     | Resolves snapshot and local artifacts into desired router state.                      |
+| Plugin Application     | `plugin-<namespace>-application` application name    | Ergo application group | Caller lifecycle, production/shadow admission, and async-result ownership.            |
+| Runtime Supervisor     | `plugin-<namespace>-supervisor` (registered)         | Plugin Application     | Coordinates snapshot, reconciler, catalog, desired-state promotion, and drain.        |
+| Snapshot Supervisor    | `snapshot-<namespace>-supervisor` (registered)       | Runtime Supervisor     | Supplies reader/projection state with external projection commit.                     |
+| Reconciler Actor       | `plugin-<namespace>-reconciler` child name           | Runtime Supervisor     | Resolves snapshot and local artifacts into desired router state.                      |
 | Artifact Resolver Meta | dynamic `gen.Alias`                                  | Reconciler Actor       | Resolves locally valid artifacts and desired routes.                                  |
 | Artifact Watcher Meta  | dynamic `gen.Alias`                                  | Reconciler Actor       | Reports artifact-directory watch/poll drift.                                          |
-| Catalog Actor          | `<runtime-name>-catalog` child name                  | Runtime Supervisor     | Owns router incarnations and aggregates router status.                                |
+| Catalog Actor          | `plugin-<namespace>-catalog` child name              | Runtime Supervisor     | Owns router incarnations and aggregates router status.                                |
 | Router Actor           | dynamic PID/generation/epoch per plugin              | Catalog Actor          | Selects rollout routes and owns dynamic deployment routes.                            |
 | Deployment Route       | stable SHA-256-derived atom per `DeploymentRouteKey` | Router Actor           | Creates, respawns, drains, and removes one manager route.                             |
 | Deployment Manager     | dynamic route process PID                            | Deployment Route       | Owns bounded queueing, capacity-aware dispatch, scaling, process recovery, and drain. |
@@ -61,7 +61,7 @@ The runtime supervisor's RestForOne child order is snapshot, reconciler, catalog
 | Plugin Meta            | dynamic `gen.Alias`                                  | Plugin Process         | Owns one plugin subprocess and RPC session.                                           |
 | Invocation             | `callID` and one `runtime.Invocation` handle         | caller                 | Its `AsyncResult` remains owned by the application/runtime tree.                      |
 
-The runtime and snapshot supervisors are registered. Every other name above is a child or dynamic identity.
+The runtime and snapshot supervisors are registered. Every other name above is a child or dynamic identity. `ApplicationOptions.Namespace` is required and is the only name configured anywhere in the subtree: `ApplicationName`, `SupervisorName`, `ReconcilerActorName`, and `CatalogActorName` all derive from it, so an operator addresses any of them knowing only the namespace. The supervisor is handed it rather than configuring its own, and it names the snapshot subtree the runtime builds too, so `SnapshotReader` configures the subscription alone.
 
 ## Readiness
 
@@ -103,12 +103,12 @@ The per-plugin share stops one saturated plugin from consuming the shared budget
 
 Because the share rejects rather than waits, it is sized from the widest fan-out one caller batch can produce:
 
-| Budget                                | Size                                                    | Why                                                                                                  |
-| ------------------------------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `MaxOutstandingInvocationsPerPlugin`  | `min(MaxBatchSize, MaxDeploymentProcs+1) * MaxConcurrentCalls` | One call is at most one shard per process a deployment may run, or the batch's own event count. |
-| `MaxOutstandingInvocations`           | `perPlugin * MaxConcurrentCalls`                        | Nothing here knows how many plugins a batch touches; it only blocks, so it is a process-wide ceiling. |
-| Shadow budget                         | a sixteenth of the shared one                           | Best-effort work must not be sized like production work.                                             |
-| `QueueSize` (deployment manager)      | rises with the per-plugin share                         | One plugin's whole fan-out lands on one manager, and everything past its capacity waits there.       |
+| Budget                               | Size                                                           | Why                                                                                                   |
+| ------------------------------------ | -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `MaxOutstandingInvocationsPerPlugin` | `min(MaxBatchSize, MaxDeploymentProcs+1) * MaxConcurrentCalls` | One call is at most one shard per process a deployment may run, or the batch's own event count.       |
+| `MaxOutstandingInvocations`          | `perPlugin * MaxConcurrentCalls`                               | Nothing here knows how many plugins a batch touches; it only blocks, so it is a process-wide ceiling. |
+| Shadow budget                        | a sixteenth of the shared one                                  | Best-effort work must not be sized like production work.                                              |
+| `QueueSize` (deployment manager)     | rises with the per-plugin share                                | One plugin's whole fan-out lands on one manager, and everything past its capacity waits there.        |
 
 `MaxDeploymentProcs + 1` sits above both the process count and the two routing groups a batch can split into. A caller that declares no `MaxBatchSize` is sized for the widest fan-out one call is allowed. Callers ask for the smaller of the share and their deployment's declared capacity (`Application.CallBudget`), so a deployment declaring more than the share spends the rest over further calls.
 
@@ -416,11 +416,11 @@ The manager owns its plugin processes directly. Each is spawned with `LinkParent
 
 What the manager owns is a set of process slots. A slot is a stable identity that outlives the PIDs filling it, and holds what its current process reported, the invocations assigned to it, and the retry budget that owes it the next process.
 
-| Field       | Holds                                                        |
-| ----------- | ------------------------------------------------------------ |
-| `processes` | slot state by monotonic slot id                              |
-| `order`     | slot ids in the sequence they were opened                    |
-| `byPID`     | a child's PID resolved back to the slot it fills             |
+| Field       | Holds                                            |
+| ----------- | ------------------------------------------------ |
+| `processes` | slot state by monotonic slot id                  |
+| `order`     | slot ids in the sequence they were opened        |
+| `byPID`     | a child's PID resolved back to the slot it fills |
 
 A process dying empties its slot instead of dropping it, which is what gives each slot its own retry budget. The deployment's processes are interchangeable and have no natural name to key that budget under, so a counted id stands in for one, as the router keys its children by plugin id. The ids are counted rather than positional because a restart message names the slot it is for and positions shift as slots are released; ids only grow, so the newest slot is the highest id.
 
@@ -430,10 +430,10 @@ Dispatch is capacity-aware rather than one-worker-per-call. Committed capacity i
 
 Scaling reasons in demand rather than in processes. Demand is active plus dispatching plus queued invocations, and `requiredProcs` is `ceil(demand / callsPerProcess)` clamped to `MinProcs..max(1, MaxProcs)`. One process carries `callsPerProcess` of that demand, so the count a queue needs falls as declared capacity rises.
 
-| Direction | Conditions                                                                                              | Step                                          |
-| --------- | ------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
-| Growth    | every ready process at capacity, a call still waiting, every desired process ready, 1 s scale cooldown   | straight to the required count in one pass    |
-| Shrink    | required below desired, queue empty, nothing dispatching, 30 s idle, a process holding no invocation     | one process per cooldown, arming the next pass |
+| Direction | Conditions                                                                                             | Step                                           |
+| --------- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------- |
+| Growth    | every ready process at capacity, a call still waiting, every desired process ready, 1 s scale cooldown | straight to the required count in one pass     |
+| Shrink    | required below desired, queue empty, nothing dispatching, 30 s idle, a process holding no invocation   | one process per cooldown, arming the next pass |
 
 Growth goes to the required count at once so a wide `calls_per_process` does not ramp a second at a time. Shrink arms its own next pass because nothing else reconciles a deployment that has gone quiet, and it gives back only an empty process - demand counts active calls, so the deployment stays at the count those calls need. At a zero minimum the last process goes too and the deployment sleeps holding nothing.
 
@@ -473,7 +473,7 @@ stateDiagram-v2
 | `MessageDrain`                             | router → deployment manager                                                       | Stops new work, cancels recovery/scale activity, and starts graceful drain.                                                    |
 | `MessageInvokePlugin`                      | deployment manager → plugin process                                               | Dispatches one queued call to the least-loaded ready process.                                                                  |
 | `MessageStop`                              | deployment manager → plugin process                                               | Asks a retired process to finish once its last invocation completes.                                                           |
-| `MessagePluginProcessStatusChanged`        | plugin process → deployment manager                                               | Drives capacity, availability, dispatch, and scaling; a process reaching ready resets its own slot's budget.                  |
+| `MessagePluginProcessStatusChanged`        | plugin process → deployment manager                                               | Drives capacity, availability, dispatch, and scaling; a process reaching ready resets its own slot's budget.                   |
 | `MessageInvocationStarted`                 | plugin process → deployment manager                                               | Clears the dispatch deadline and marks the call active.                                                                        |
 | `MessageInvocationFinished`                | plugin process → deployment manager                                               | Returns the invocation result and frees that much of the process's capacity.                                                   |
 | `MessagePluginProcessRestartExhausted`     | plugin process → deployment manager                                               | Retires only the spent process and owes it a backoff-paced replacement.                                                        |
@@ -490,10 +490,10 @@ stateDiagram-v2
 
 Two recovery budgets are independent:
 
-| Budget                              | Paces                                          | Owner  |
-| ----------------------------------- | ---------------------------------------------- | ------ |
-| `ProcessOptions.RetryMin/RetryMax`  | one process restarting its own subprocess      | process |
-| manager `RetryMin/RetryMax`         | refilling a slot whose process the manager lost | slot   |
+| Budget                             | Paces                                           | Owner   |
+| ---------------------------------- | ----------------------------------------------- | ------- |
+| `ProcessOptions.RetryMin/RetryMax` | one process restarting its own subprocess       | process |
+| manager `RetryMin/RetryMax`        | refilling a slot whose process the manager lost | slot    |
 
 Each slot owns one manager budget, so a deployment that loses a different process now and then never spends a single shared one, and a slot waiting on its backoff does not hold back the others. A process reporting ready resets its own slot's budget, so a deployment that loses one process a day does not eventually open its circuit for a fault it recovers from every time.
 
@@ -656,6 +656,38 @@ Submission requires a running application and a runtime whose expected generatio
 
 Call IDs bind one supervisor, catalog, router, manager, and plugin-process path. PID/alias plus generation/epoch checks reject stale completion, status, and recovery facts, and the manager accepts an invocation fact only from the process it dispatched that call to.
 
+## Telemetry
+
+Every layer publishes into the node's radar application, labelled by `namespace` - the controller namespace this runtime follows, the same value the controller's and the snapshot subtree's series carry, so all three sides join on one label. The plumbing is `internal/runtime/telemetry`, shared with the controller and snapshot runtimes; only the names and their specs live here.
+
+| Layer              | Registers       | Publishes through | Notes                                                                                                                                                                   |
+| ------------------ | --------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Runtime Supervisor | every collector | itself            | Registers through `gen.Node` so no child's exit deletes a collector, and publishes every gauge, since it is the one process holding the status of the subtree below it. |
+| Reconciler Actor   | -               | itself            | Resolution outcomes, retries, and artifact meta restarts; it carries a copy of the supervisor's `telemetry.Labels`.                                                     |
+| Catalog Actor      | -               | itself            | Router starts, restarts, and terminations.                                                                                                                              |
+| Router Actor       | -               | itself            | The rollout target one invocation took, and the ones with no route or no manager acknowledgement.                                                                       |
+| Deployment Manager | -               | itself            | Queue rejects, dispatch timeouts, plugin process churn, circuit opens, scaling, and the invocation histogram.                                                           |
+
+| Metric                                                                                                                                                                                          | Published by       | Meaning                                                                                                                                                   |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `blink_plugin_supervisor_lifecycle`, `blink_plugin_availability`, `blink_plugin_transition`                                                                                                     | runtime supervisor | 0 starting / 1 running / 2 draining; 0 unavailable / 1 degraded / 2 ready; and 0 idle / 1 preparing / 2 awaiting freshness / 3 awaiting projection.       |
+| `blink_plugin_desired_revision`, `blink_plugin_projection_ready_generation`, `blink_plugin_projection_committed_generation`                                                                     | runtime supervisor | The revision the subtree is moving to, the generation it admits calls against, and the one it asked the snapshot subtree to commit.                       |
+| `blink_plugin_in_flight_calls`, `blink_plugin_invocations_total{result}`, `blink_plugin_invocations_rejected_total{reason}`                                                                     | runtime supervisor | Calls a transition waits on, completions by result, and admissions refused as `closed` or `context`.                                                      |
+| `blink_plugin_reconciler_availability`, `blink_plugin_reconciler_generation`, `blink_plugin_reconciler_revision`, `blink_plugin_catalog_availability`                                           | runtime supervisor | Each child's own readiness, and how far the reconciler has resolved, as the supervisor sees them.                                                         |
+| `blink_plugin_routers_desired`, `blink_plugin_routers_routable`, `blink_plugin_routers_settled`, `blink_plugin_routers_unavailable`                                                             | runtime supervisor | Plugins the revision asks for, against the routers accepting work, done moving, and serving nothing.                                                      |
+| `blink_plugin_processes_ready`, `blink_plugin_processes_desired`, `blink_plugin_queue_depth`, `blink_plugin_active_calls`                                                                       | runtime supervisor | Summed over every route on both sides of a rollout: one router publishing its own would overwrite the others'.                                            |
+| `blink_plugin_projection_commits_total{result}`, `blink_plugin_desired_state_promotions_total`, `blink_plugin_child_starts_total{child}`, `blink_plugin_child_terminations_total{child,reason}` | runtime supervisor | Commit requests, revisions promoted into the catalog, and snapshot/reconciler/catalog churn under a supervisor that outlives them.                        |
+| `blink_plugin_resolutions_total{result}`, `blink_plugin_resolution_retries_total`, `blink_plugin_artifact_worker_restarts_total{worker}`                                                        | reconciler actor   | A resolution is `proposed`, `unchanged`, `deferred`, or `stale`; retries are the deferred ones coming back, and the workers are `resolver` and `watcher`. |
+| `blink_plugin_router_starts_total`, `blink_plugin_router_restarts_total`, `blink_plugin_router_terminations_total{reason}`                                                                      | catalog actor      | Router incarnations spawned, replacements scheduled after a loss, and exits by reason.                                                                    |
+| `blink_plugin_routed_total{target}`, `blink_plugin_unroutable_total`, `blink_plugin_acceptance_timeouts_total`                                                                                  | router actor       | The rollout decision - `primary`, `candidate`, or `shadow` - against calls with no active route and routed calls no manager acknowledged.                 |
+| `blink_plugin_queue_rejects_total`, `blink_plugin_dispatch_timeouts_total`, `blink_plugin_circuit_opens_total`, `blink_plugin_scale_events_total{direction}`                                    | deployment manager | A full queue, a dispatch no process started, a spent restart budget, and autoscaling `up` or `down`.                                                      |
+| `blink_plugin_process_starts_total`, `blink_plugin_process_restarts_total`, `blink_plugin_process_terminations_total{reason}`                                                                   | deployment manager | Plugin process churn against the slot retry budget the circuit opens on.                                                                                  |
+| `blink_plugin_invocation_seconds`                                                                                                                                                               | deployment manager | Accept to completion, queueing included. A rejected call was never accepted, so it contributes no sample.                                                 |
+
+`MessageRadarTick` drives registration: sent to itself from `Init` so collectors exist before a child emits, then retried every `telemetry.RadarTickInterval` (30 s) until radar accepts them. Registration goes through `gen.Node` because radar deletes a dead registrant's metrics, and the supervisor monitors `radar_metrics` so a radar restart re-registers on the next tick.
+
+Every layer emits best-effort: an unreachable radar produces a discarded `Send` error, and a zero `telemetry.Labels` stays silent, since a label count that does not match the registered collector panics radar's metrics actor. Counters are incremented only once the operation they name has happened, so a failed attempt is not counted as an event. Gauges are republished on every supervisor state change and on the radar tick, so a converged runtime still reports fresh series.
+
 ## References
 
 - [`internal/runtime/plugin/runtime_application.go`](../../internal/runtime/plugin/runtime_application.go) - application lifecycle, admission, State, submit, completion.
@@ -664,3 +696,5 @@ Call IDs bind one supervisor, catalog, router, manager, and plugin-process path.
 - [`internal/runtime/plugin/catalog_actor.go`](../../internal/runtime/plugin/catalog_actor.go) and [`router_actor.go`](../../internal/runtime/plugin/router_actor.go) - router ownership, route lifecycle, rollout, and fences.
 - [`internal/runtime/plugin/deployment_manager.go`](../../internal/runtime/plugin/deployment_manager.go), [`process_budget.go`](../../internal/runtime/plugin/process_budget.go), [`plugin_process.go`](../../internal/runtime/plugin/plugin_process.go), and [`plugin_process_meta.go`](../../internal/runtime/plugin/plugin_process_meta.go) - queue, capacity-aware dispatch, plugin processes, subprocess, recovery, and drain.
 - [`internal/runtime/invocation.go`](../../internal/runtime/invocation.go) and [`internal/runtime/backoff.go`](../../internal/runtime/backoff.go) - one-shot completion and shared scheduled backoff.
+- [`internal/runtime/plugin/metrics.go`](../../internal/runtime/plugin/metrics.go) and [`internal/runtime/telemetry/metrics.go`](../../internal/runtime/telemetry/metrics.go) - the `blink_plugin_*` specs and gauge publishing, over the radar plumbing shared with the controller and snapshot runtimes.
+- [`internal/runtime/plugin/defaults.go`](../../internal/runtime/plugin/defaults.go) - the namespace-derived subtree names and the option defaults every layer is sized by.

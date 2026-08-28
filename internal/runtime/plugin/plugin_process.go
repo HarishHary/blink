@@ -32,7 +32,8 @@ type pluginProcessStatus struct {
 	meta         pluginMetaStatus
 }
 
-// pluginProcessCall is one invocation this process handed to its meta-process and is still waiting for, recording the incarnation that took it so a later answer from a replaced subprocess reads as stale, and the handles that end it early: the context the plugin sees and the backstop timer.
+// pluginProcessCall is one in-flight invocation, tagged with the incarnation that took it so a
+// replaced subprocess's answer reads as stale.
 type pluginProcessCall struct {
 	manager    gen.PID
 	generation uint64
@@ -51,7 +52,8 @@ type pluginProcess[T Artifact] struct {
 	calls      map[uint64]*pluginProcessCall
 }
 
-// pluginMetaInvokeSlack pads the backstop timer below so it never fires on a meta-process still within its own cancellation grace: both live on timers the scheduler may run late, and the only wrong answer here is calling a healthy subprocess hung.
+// pluginMetaInvokeSlack pads the backstop timer so a late-scheduled timer never calls a subprocess
+// still inside its cancellation grace hung.
 const pluginMetaInvokeSlack = time.Second
 
 // ---------------------------------------------------------------------------
@@ -83,7 +85,8 @@ type MessageInvocationFinished struct {
 	err    error
 }
 
-// MessagePluginMetaInvokeTimeout reports that a meta-process never answered an invocation; the call id is fence enough, since a completed call is no longer tracked and an id is never reused.
+// MessagePluginMetaInvokeTimeout reports an unanswered invocation; the call id fences it, since ids
+// are never reused.
 type MessagePluginMetaInvokeTimeout struct {
 	callID uint64
 }
@@ -125,7 +128,8 @@ func (p *pluginProcess[T]) Init(...any) error {
 	return p.startPluginMeta()
 }
 
-// Terminate cancels scheduled recovery, releases in-flight calls, and notifies the manager of shutdown; cancelling is what tells the subprocess to stop working on calls nobody will collect, and the manager fails those calls itself as soon as it sees this process stop.
+// Terminate cancels recovery, releases in-flight calls so the subprocess stops working on answers
+// nobody will collect, and tells the manager, which fails those calls itself.
 func (p *pluginProcess[T]) Terminate(error) {
 	p.pluginMeta.restart.CancelScheduled(false)
 	p.pluginMeta.healthRestart.CancelScheduled(false)
@@ -149,16 +153,17 @@ func (p *pluginProcess[T]) HandleMessage(from gen.PID, message any) error {
 	case pluginMetaInvokeResult:
 		entry, ok := p.calls[msg.callID]
 		if !ok || entry.generation != msg.generation {
-			// Either the call is already accounted for or the incarnation that ran it is gone and its calls were failed with it, so there is nothing left to report.
+			// Already accounted for, or its incarnation is gone and its calls failed with it.
 			return nil
 		}
 		err := msg.err
 		if err == nil && entry.context.Err() != nil {
-			// The call finished as its caller went away, so report the caller's own reason rather than a success nobody is waiting for; the meta already decided whether the subprocess survives, and a withdrawn caller is no evidence that it should not.
+			// The caller went away, so report its reason rather than a success nobody awaits.
 			err = entry.context.Err()
 		}
 		if msg.recycle && msg.alias == p.pluginMeta.alias {
-			// The manager dispatches from its own copy of this process's availability, one message behind, and completing this call is what frees the slot that makes it dispatch again, so the copy has to be corrected first: the completion below provokes that dispatch, so with one process the next pending call has nowhere else to go and would be rejected the moment it lands.
+			// Correct the manager's copy of availability first: the completion below frees the slot that
+			// makes it dispatch again, and with one process the next call has nowhere else to go.
 			p.reportUnavailable(err)
 		}
 		// Complete before retiring so this call reports the failure that caused the recycle and only its siblings inherit the generic one.
@@ -273,9 +278,7 @@ func (p *pluginProcess[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, e
 	return fmt.Errorf("unsupported plugin process call %T", request), nil
 }
 
-// HandleInspect exposes concise plugin process operational state: the subprocess meta's own
-// lifecycle/availability/activity plus the two independent restart tracks (a normal failure and a
-// health-check failure use separate backoffs) and in-flight call depth.
+// HandleInspect exposes the meta's lifecycle, both restart tracks, and in-flight call depth.
 func (p *pluginProcess[T]) HandleInspect(gen.PID, ...string) map[string]string {
 	return map[string]string{
 		"process:meta_lifecycle":         string(p.pluginMeta.status.lifecycle),
@@ -294,7 +297,8 @@ func (p *pluginProcess[T]) HandleInspect(gen.PID, ...string) map[string]string {
 // Invocation handling
 // ---------------------------------------------------------------------------
 
-// invoke accepts one invocation and hands it to the active meta-process without waiting for it: the answer arrives later as a pluginMetaInvokeResult, so this actor keeps taking messages while the plugin works.
+// invoke hands one invocation to the active meta-process without waiting; the answer arrives later as
+// a pluginMetaInvokeResult.
 func (p *pluginProcess[T]) invoke(manager gen.PID, call MessageInvokePlugin[T]) {
 	_ = p.SendWithPriority(manager, MessageInvocationStarted{callID: call.CallID}, gen.MessagePriorityHigh)
 	base := call.Context
@@ -354,7 +358,8 @@ func (p *pluginProcess[T]) invoke(manager gen.PID, call MessageInvokePlugin[T]) 
 	p.refreshActivity()
 }
 
-// invokeBackstop is how long to wait for an answer that never came: the meta-process answers a cancelled or expired call within its cancellation grace, so this waits that long past the caller's own deadline, since firing classifies a hung subprocess and racing the meta-process would retire one that honoured cancellation.
+// invokeBackstop waits the cancellation grace past the caller's deadline, since firing classifies a
+// hung subprocess and racing the meta-process would retire one that honoured cancellation.
 func (p *pluginProcess[T]) invokeBackstop(ctx context.Context) time.Duration {
 	remaining := p.options.InvocationTimeout
 	if deadline, ok := ctx.Deadline(); ok {
@@ -385,7 +390,8 @@ func (p *pluginProcess[T]) completeInvocation(callID uint64, err error) {
 	p.refreshActivity()
 }
 
-// failGenerationCalls completes every call still owed by a meta-process incarnation that is gone, since their answers can never arrive and a recycle one call caused is charged to its siblings, which learn the reason rather than waiting for a deadline.
+// failGenerationCalls completes every call owed by a gone incarnation, whose answers can never arrive,
+// so siblings learn the reason instead of waiting for a deadline.
 func (p *pluginProcess[T]) failGenerationCalls(generation uint64, cause error) {
 	for callID, entry := range p.calls {
 		if entry.generation != generation {
@@ -407,7 +413,8 @@ func (p *pluginProcess[T]) releaseCall(entry *pluginProcessCall) {
 	entry.cancel()
 }
 
-// refreshActivity records how loaded the subprocess is and republishes only when that crosses between idle, busy, and saturated: the count moves with every invocation and the manager schedules from its own assignments, so the three labels are the only changes something above this process can act on and the count rides along with them.
+// refreshActivity republishes only on a crossing between idle, busy, and saturated, the only load
+// changes anything above this process can act on; the in-flight count rides along.
 func (p *pluginProcess[T]) refreshActivity() {
 	if p.pluginMeta.status.availability != runtime.AvailabilityReady {
 		return
@@ -562,7 +569,8 @@ func (p *pluginProcess[T]) cancelHealthCheck() {
 // Status projection
 // ---------------------------------------------------------------------------
 
-// reportUnavailable records a recoverable meta-process failure, idempotently: the recycle path reports unavailability before completing the call that caused it and then retires the meta-process, which reports it again, and that second report says nothing the manager has not been told while publishing it would cost a reconcile per recycle.
+// reportUnavailable records a recoverable meta-process failure, idempotently: the recycle path reports
+// it twice, and republishing the second would cost a reconcile per recycle.
 func (p *pluginProcess[T]) reportUnavailable(err error) {
 	status := pluginMetaStatus{
 		lifecycle:    PluginMetaRestarting,
@@ -594,7 +602,8 @@ func (p *pluginProcess[T]) reportStatus(lifecycle PluginProcessLifecycle) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-// samePluginProcessStatus compares process status snapshots for publish deduplication, excluding the sampled load on purpose: the count changes with every invocation, the capacity never changes at all, and the activity label already carries the crossings that matter (see pluginMetaStatus).
+// samePluginProcessStatus dedups status publishes, ignoring sampled load: the activity label already
+// carries the crossings that matter (see pluginMetaStatus).
 func samePluginProcessStatus(left, right pluginProcessStatus) bool {
 	return left.lifecycle == right.lifecycle && left.availability == right.availability &&
 		samePluginMetaStatus(left.meta, right.meta)
