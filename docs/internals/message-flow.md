@@ -1,6 +1,6 @@
 # Message flow
 
-Two services are documented here. The controller publishes desired-state snapshots. `event_matcher` consumes events against matcher and rule runtime state. Process configuration is in the [services index](../services/README.md), [controller service](../services/controller.md), and [event_matcher service](event_matcher.md).
+Two services are documented here. The controller publishes desired-state snapshots. `event_matcher` consumes events against matcher and rule runtime state. Process configuration is in the [services index](../services/README.md), [controller service](../services/controller.md), and [event_matcher service](../services/event_matcher.md).
 
 ## Controller publication and distribution
 
@@ -106,4 +106,4 @@ Output acknowledgement and source-offset commit are separate, so delivery is at 
 
 The downstream record preserves the input Kafka key and contains the source event plus eligible rule IDs. DLQ envelopes preserve the input key and include the original payload, source, stage, reason, attempts, and timestamp. A record that cannot be encoded as either normal or DLQ output is dropped to prevent an infinite replay loop.
 
-Service lifecycle, probes, configuration, and source maps: [event_matcher](event_matcher.md). Two-service overview: [Blink services](../services/README.md).
+Service lifecycle, probes, configuration, and source maps: [event_matcher](../services/event_matcher.md). Two-service overview: [Blink services](../services/README.md).

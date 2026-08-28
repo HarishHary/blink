@@ -33,11 +33,21 @@ type NodeOptions struct {
 	Env             string
 	ShutdownTimeout time.Duration
 	Applications    []gen.ApplicationBehavior
-	Observer        bool
+	Observer        ObserverOptions
 	// Cluster nil leaves the node single-process; Radar nil keeps radar's own localhost:9090.
 	Cluster *ClusterOptions
 	Radar   *RadarOptions
 }
+
+// ObserverOptions binds Ergo's observer UI. Enabled is separate because Env == "dev" enables it anyway
+type ObserverOptions struct {
+	Enabled bool
+	Host    string
+	Port    uint16
+}
+
+// defaultObserverPort is what an empty ObserverOptions.Port binds.
+const defaultObserverPort = 9911
 
 // RadarOptions binds radar's health and Prometheus endpoints. Radar defaults to localhost, which no
 // scraper outside the process can reach, so an empty Host binds all interfaces; an empty Port keeps 9090.
@@ -110,8 +120,12 @@ func Start(opts NodeOptions) (*NodeHost, error) {
 		applications = append(applications, mcp.CreateApp(mcp.Options{Port: 9922}))
 		logLevel = gen.LogLevelDebug
 	}
-	if opts.Env == "dev" || opts.Observer {
-		applications = append(applications, observer.CreateApp(observer.Options{Port: 9911}))
+	if opts.Env == "dev" || opts.Observer.Enabled {
+		observerOptions := observer.Options{Host: opts.Observer.Host, Port: opts.Observer.Port}
+		if observerOptions.Port == 0 {
+			observerOptions.Port = defaultObserverPort
+		}
+		applications = append(applications, observer.CreateApp(observerOptions))
 	}
 	applications = append(applications, opts.Applications...)
 

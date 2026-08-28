@@ -1,6 +1,6 @@
 # Blink Ergo runtime
 
-The runtime is local to each service process, but every process joins one native Ergo cluster: `NodeHost` starts one Ergo node with cluster networking enabled, backed by etcd for node discovery, and snapshot distribution between the controller and executors is direct actor-to-actor messaging over that cluster - not a broker. Kafka remains the transport for the primary event/alert pipeline (matcher → executor → merger → tuner → enricher → formatter → dispatcher), which this page does not cover. Radar is installed on every node. `ENVIRONMENT=dev` also enables the local observer and MCP applications.
+The runtime is local to each service process, but every process joins one native Ergo cluster: `NodeHost` starts one Ergo node with cluster networking enabled, backed by etcd for node discovery, and snapshot distribution between the controller and executors is direct actor-to-actor messaging over that cluster - not a broker. Kafka remains the transport for the primary event/alert pipeline (matcher → executor → merger → tuner → enricher → formatter → dispatcher), which this page does not cover. Radar is installed on every node. `ENVIRONMENT=dev` also enables the local observer and MCP applications; `OBSERVER_ENABLED` turns the observer on at any `ENVIRONMENT`, and `OBSERVER_HOST`/`OBSERVER_PORT` bind it, defaulting to `localhost:9911` because it is unauthenticated.
 
 ## Composition
 
@@ -28,7 +28,7 @@ The controller artifact_scanner reads sidecars and binaries, reconciles desired 
 ## References
 
 - [Controller service](../services/controller.md)
-- [Event matcher service](event_matcher.md)
+- [Event matcher service](../services/event_matcher.md)
 - [Message flow](message-flow.md)
 - [Concurrency knobs](concurrency-knobs.md)
 - [Schema reference](schemas/README.md)

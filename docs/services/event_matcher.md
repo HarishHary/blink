@@ -1,6 +1,6 @@
 # event_matcher
 
-`event_matcher` consumes raw JSON events, selects rules whose matchers pass, and publishes protobuf `execpb.ExecMessage` records for downstream consumers. It has no executor or process-pool: matcher execution is owned by the actor runtime described in [plugin-runtime.md](plugin-runtime.md).
+`event_matcher` consumes raw JSON events, selects rules whose matchers pass, and publishes protobuf `execpb.ExecMessage` records for downstream consumers. It has no executor or process-pool: matcher execution is owned by the actor runtime described in [plugin-runtime.md](../internals/plugin-runtime.md).
 
 ## Outer composition
 
@@ -35,7 +35,7 @@ stateDiagram-v2
 | Message                  | Direction                                | Meaning                                                       |
 | ------------------------ | ---------------------------------------- | ------------------------------------------------------------- |
 | `ProjectionStateRequest` | matcher service → snapshot projections   | Gates consumption on both projections being ready with rules. |
-| `ApplicationWait`        | `main` → Ergo node                       | Ends the process when the matcher application stops.          |
+| `Application.Wait`       | `main` → matcher application             | Ends the process when the matcher application stops.          |
 | `ctx.Done()`             | Runner/service context → matcher service | Ends the attempt with the fetched batch uncommitted.          |
 
 ## Readiness and admission
@@ -44,7 +44,7 @@ stateDiagram-v2
 
 Before creating the consumer-group reader, startup additionally requires both projections to be `Ready` with at least one primary, and the matcher runtime's own status to be `Ready` as well. The two are not the same condition: a projection says which matchers are committed, while the runtime status says whether the deployments serving them are routable, and a call routed at a matcher whose route is still starting is rejected outright as unavailable rather than queued. Waiting on the projections alone would leave the first batch racing a subprocess launch. No such wait exists on the rule side, because this service reads rule metadata to decide where an event is forwarded and never invokes a rule, so there is no rule deployment to wait on. A later degraded rule projection remains routable on its last committed generation but is not ready; an unavailable rule projection fails the attempt rather than silently dropping all events. Matcher runtime state reads wait through `ErrPluginUnavailable` for at most `MATCHER_TIMEOUT_SEC + 1s`; other errors fail the attempt.
 
-The service limits concurrent calls into the matcher application with `MAX_CONCURRENT_CALLS`. `MAX_BATCH_SIZE` and `MAX_CONCURRENT_CALLS` are also passed to the runtime as its `MaxBatchSize` and `MaxConcurrentCalls`, which size the admission budgets: a per-plugin budget below `MAX_CONCURRENT_CALLS` `Match` fan-outs would reject a legitimate batch, since that layer rejects rather than waits, and a shared budget below that many again would serialise matcher calls the service is already limiting. One fan-out is bounded by the batch's own size and by the widest invocation capacity a matcher may declare, and a caller never asks for more of a declared capacity than that budget was sized for. Plugin processes are subprocesses rather than calls, so they are budgeted separately: the runtime lets the process grow `GOMAXPROCS x 2` plugin processes past every deployment's `min_procs`. Runtime admission, route queues, plugin processes, rollout, and subprocess ownership are internal details; see [plugin-runtime.md](plugin-runtime.md#invocation), and [concurrency-knobs.md](concurrency-knobs.md) for what every knob raises, lowers, and queues.
+The service limits concurrent calls into the matcher application with `MAX_CONCURRENT_CALLS`. `MAX_BATCH_SIZE` and `MAX_CONCURRENT_CALLS` are also passed to the runtime as its `MaxBatchSize` and `MaxConcurrentCalls`, which size the admission budgets: a per-plugin budget below `MAX_CONCURRENT_CALLS` `Match` fan-outs would reject a legitimate batch, since that layer rejects rather than waits, and a shared budget below that many again would serialise matcher calls the service is already limiting. One fan-out is bounded by the batch's own size and by the widest invocation capacity a matcher may declare, and a caller never asks for more of a declared capacity than that budget was sized for. Plugin processes are subprocesses rather than calls, so they are budgeted separately: the runtime lets the process grow `GOMAXPROCS x 2` plugin processes past every deployment's `min_procs`. Runtime admission, route queues, plugin processes, rollout, and subprocess ownership are internal details; see [plugin-runtime.md](../internals/plugin-runtime.md#invocation), and [concurrency-knobs.md](../internals/concurrency-knobs.md) for what every knob raises, lowers, and queues.
 
 ## Kafka batch contract
 
@@ -104,5 +104,5 @@ The matcher application splits a batch only where its routing differs, which is 
 
 ## Internals
 
-- [Snapshot runtime](snapshot-runtime.md) - cluster-subscription reader and typed projection lifecycle used twice above.
-- [Plugin runtime](plugin-runtime.md) - desired state, deployment routing, plugin processes, subprocesses, retries, fencing, and shutdown.
+- [Snapshot runtime](../internals/snapshot-runtime.md) - cluster-subscription reader and typed projection lifecycle used twice above.
+- [Plugin runtime](../internals/plugin-runtime.md) - desired state, deployment routing, plugin processes, subprocesses, retries, fencing, and shutdown.

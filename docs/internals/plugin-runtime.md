@@ -97,7 +97,7 @@ stateDiagram-v2
 
 ### Readiness
 
-Admission takes two permits. `Submit` first reserves the plugin's own share, `MaxOutstandingInvocationsPerPlugin`, and rejects with `ErrQueueFull` when that share is full. Only then does it acquire the blocking application-wide `MaxOutstandingInvocations` permit, which includes queue waiters. `SubmitShadow` uses a separate non-blocking budget and returns `ErrShadowDropped` when full.
+Admission takes two permits. `Submit` first reserves the plugin's own share, `maxOutstandingInvocationsPerPlugin`, and rejects with `ErrQueueFull` when that share is full. Only then does it acquire the blocking application-wide `maxOutstandingInvocations` permit, which includes queue waiters. `SubmitShadow` uses a separate non-blocking budget and returns `ErrShadowDropped` when full.
 
 The per-plugin share stops one saturated plugin from consuming the shared budget and blocking every other plugin's caller until that caller's deadline expires. It fails its own calls fast instead.
 
@@ -105,8 +105,8 @@ Because the share rejects rather than waits, it is sized from the widest fan-out
 
 | Budget                               | Size                                                           | Why                                                                                                   |
 | ------------------------------------ | -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `MaxOutstandingInvocationsPerPlugin` | `min(MaxBatchSize, MaxDeploymentProcs+1) * MaxConcurrentCalls` | One call is at most one shard per process a deployment may run, or the batch's own event count.       |
-| `MaxOutstandingInvocations`          | `perPlugin * MaxConcurrentCalls`                               | Nothing here knows how many plugins a batch touches; it only blocks, so it is a process-wide ceiling. |
+| `maxOutstandingInvocationsPerPlugin` | `min(MaxBatchSize, MaxDeploymentProcs+1) * MaxConcurrentCalls` | One call is at most one shard per process a deployment may run, or the batch's own event count.       |
+| `maxOutstandingInvocations`          | `perPlugin * MaxConcurrentCalls`                               | Nothing here knows how many plugins a batch touches; it only blocks, so it is a process-wide ceiling. |
 | Shadow budget                        | a sixteenth of the shared one                                  | Best-effort work must not be sized like production work.                                              |
 | `QueueSize` (deployment manager)     | rises with the per-plugin share                                | One plugin's whole fan-out lands on one manager, and everything past its capacity waits there.        |
 
