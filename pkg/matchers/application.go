@@ -19,7 +19,7 @@ type Application struct {
 }
 
 // NewApplication creates a matcher plugin application.
-func NewApplication(opts plugin.Options, logger *logger.Logger) *Application {
+func NewApplication(opts plugin.ApplicationOptions, logger *logger.Logger) *Application {
 	return &Application{Application: plugin.NewApplication(opts, NewAdapter(), Loader{}, logger)}
 }
 
