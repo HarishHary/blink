@@ -9,11 +9,11 @@ import (
 // SupervisorOptions configures a raw reader and its typed projection sibling. Namespace is the
 // subtree's own: it names every process here, labels its series, and is the controller namespace the
 // reader follows. It never crosses the cluster. Name overrides the registered supervisor name only;
-// both children's names are derived from the namespace.
-type SupervisorOptions[T any] struct {
+// both children's names are derived from the namespace. The loader is a dependency, not an option:
+// NewSupervisor takes it directly, as the plugin runtime takes its own.
+type SupervisorOptions struct {
 	Name               gen.Atom
 	Namespace          string
-	Loader             Loader[T]
 	ProjectionMode     ProjectionCommitMode
 	Stopped            chan<- error
 	ReaderActorOptions ReaderActorOptions

@@ -123,6 +123,11 @@ type projectionActor[T any] struct {
 	labels             telemetry.Labels
 }
 
+// newProjectionActor constructs the projection actor for one subtree's typed view.
+func newProjectionActor[T any](events Events, loader Loader[T], mode ProjectionCommitMode, labels telemetry.Labels) gen.ProcessBehavior {
+	return &projectionActor[T]{events: events, loader: loader, mode: mode, labels: labels}
+}
+
 // --- messages ---
 
 // ProjectionStateRequest reads the current immutable projection state.

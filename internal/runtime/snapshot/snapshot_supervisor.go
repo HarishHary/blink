@@ -69,7 +69,8 @@ type SupervisorState struct {
 // Rest-for-one restarts the projection whenever its reader restarts.
 type Supervisor[T any] struct {
 	act.Supervisor
-	opts                 SupervisorOptions[T]
+	opts                 SupervisorOptions
+	loader               Loader[T]
 	lifecycle            SupervisorLifecycle
 	readerActor          readerActorState
 	projectionActor      projectionActorState
@@ -112,9 +113,9 @@ type MessageExecutorReportTick struct{}
 type MessageRadarTick struct{}
 
 // NewSupervisor creates a reader/projection supervisor named after the namespace it follows.
-func NewSupervisor[T any](opts SupervisorOptions[T]) *Supervisor[T] {
+func NewSupervisor[T any](opts SupervisorOptions, loader Loader[T]) *Supervisor[T] {
 	normalized := supervisorOptionsWithDefaults(opts)
-	return &Supervisor[T]{opts: normalized, labels: telemetry.NewLabels(normalized.Namespace)}
+	return &Supervisor[T]{opts: normalized, loader: loader, labels: telemetry.NewLabels(normalized.Namespace)}
 }
 
 // Init validates options and configures the supervised reader and projection actors.
@@ -126,7 +127,7 @@ func (s *Supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 	if s.opts.Namespace == "" || s.opts.ReaderActorOptions.Endpoint.Name == "" || s.opts.ReaderActorOptions.ExecutorID == "" {
 		return act.SupervisorSpec{}, fmt.Errorf("actor snapshot: namespace, endpoint, and executor ID are required")
 	}
-	if s.opts.Loader == nil {
+	if s.loader == nil {
 		return act.SupervisorSpec{}, fmt.Errorf("snapshot projection: loader is required")
 	}
 	if s.opts.ProjectionMode != ProjectionCommitDirect && s.opts.ProjectionMode != ProjectionCommitExternal {
@@ -185,7 +186,7 @@ func (s *Supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 			{
 				Name: ProjectionActorName(s.opts.Namespace),
 				Factory: func() gen.ProcessBehavior {
-					return &projectionActor[T]{events: s.events, loader: s.opts.Loader, mode: s.opts.ProjectionMode, labels: s.labels}
+					return newProjectionActor(s.events, s.loader, s.opts.ProjectionMode, s.labels)
 				},
 			},
 		},

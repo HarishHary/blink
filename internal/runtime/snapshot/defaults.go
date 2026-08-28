@@ -30,7 +30,7 @@ func subtreeName(namespace, suffix string) gen.Atom {
 }
 
 // supervisorOptionsWithDefaults fills reader supervisor option defaults.
-func supervisorOptionsWithDefaults[T any](opts SupervisorOptions[T]) SupervisorOptions[T] {
+func supervisorOptionsWithDefaults(opts SupervisorOptions) SupervisorOptions {
 	if opts.Name == "" {
 		opts.Name = SupervisorName(opts.Namespace)
 	}
