@@ -1,6 +1,5 @@
-// Package telemetry is the radar plumbing every runtime layer shares: collector specs, one subject's
-// bound label values, and a readiness signal. Metric names and their specs stay with the layer that
-// publishes them.
+// Package telemetry is the radar plumbing every runtime layer shares: collector specs, bound label
+// values, and a readiness signal. Metric names stay with the layer that publishes them.
 package telemetry
 
 import (

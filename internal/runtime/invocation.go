@@ -5,10 +5,8 @@ import (
 	"sync"
 )
 
-// asyncResult is the one-shot completion channel shared by Runtime and
-// runtimeSupervisor for one submitted invocation. Completion is idempotent so
-// send failures, child termination, cancellation, and normal completion may
-// race without blocking or double-completing the caller.
+// AsyncResult is one invocation's one-shot completion channel, idempotent so a send failure, a child
+// termination, cancellation, and normal completion may race without double-completing the caller.
 type AsyncResult struct {
 	Once sync.Once
 	Ch   chan error
@@ -57,9 +55,8 @@ func (i Invocation) Err() error {
 	return i.State.err
 }
 
-// Cancel requests cancellation of this invocation. Cancellation is idempotent;
-// the invocation completes only when the runtime acknowledges a terminal
-// result through the normal completion path.
+// Cancel idempotently requests cancellation; the invocation completes only once the runtime
+// acknowledges a terminal result through the normal path.
 func (i Invocation) Cancel(err error) {
 	if i.State == nil {
 		return

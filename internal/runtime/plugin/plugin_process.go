@@ -166,7 +166,8 @@ func (p *pluginProcess[T]) HandleMessage(from gen.PID, message any) error {
 			// makes it dispatch again, and with one process the next call has nowhere else to go.
 			p.reportUnavailable(err)
 		}
-		// Complete before retiring so this call reports the failure that caused the recycle and only its siblings inherit the generic one.
+		// Complete before retiring so this call reports the failure that caused the recycle and only its
+		// siblings inherit the generic one.
 		p.completeInvocation(msg.callID, err)
 		if msg.recycle {
 			p.retirePluginMeta(msg.alias, err, true)
@@ -177,7 +178,8 @@ func (p *pluginProcess[T]) HandleMessage(from gen.PID, message any) error {
 		if !ok {
 			return nil
 		}
-		// The meta-process had the caller's whole deadline plus its cancellation grace and still has not answered, which is the one case the policy calls a hung subprocess.
+		// The meta-process had the caller's whole deadline plus its cancellation grace and still has not
+		// answered, which is the one case the policy calls a hung subprocess.
 		err := fmt.Errorf("%w: plugin process did not answer within its cancellation grace", context.DeadlineExceeded)
 		generation := entry.generation
 		p.completeInvocation(msg.callID, err)
@@ -322,7 +324,8 @@ func (p *pluginProcess[T]) invoke(manager gen.PID, call MessageInvokePlugin[T]) 
 		return
 	}
 	if len(p.calls) >= p.deployment.CapacityPerProcess() {
-		// The manager dispatches within the capacity it published, so reaching this means its view of this process is stale; refusing is cheap and keeps the subprocess's contract intact.
+		// The manager dispatches within the capacity it published, so its view is stale; refusing is
+		// cheap and keeps the subprocess's contract intact.
 		p.rejectInvocation(manager, call.CallID, runtime.ErrQueueFull)
 		return
 	}
@@ -465,7 +468,8 @@ func (p *pluginProcess[T]) startPluginMeta() error {
 		p.reportUnavailable(fmt.Errorf("monitor plugin meta: %w", err))
 		return p.schedulePluginMetaRestart(false)
 	}
-	// A fresh incarnation gets a fresh generation, which is what lets a late answer from the previous one read as stale instead of completing a call this one now owns.
+	// A fresh incarnation gets a fresh generation, which is what lets a late answer from the previous
+	// one read as stale instead of completing a call this one now owns.
 	p.pluginMeta.generation++
 	p.pluginMeta.alias = alias
 	return nil
@@ -609,7 +613,8 @@ func samePluginProcessStatus(left, right pluginProcessStatus) bool {
 		samePluginMetaStatus(left.meta, right.meta)
 }
 
-// samePluginMetaStatus compares meta-process status snapshots on the same terms and for the same reason: it decides whether a status is worth publishing.
+// samePluginMetaStatus compares meta-process status snapshots on the same terms and for the same
+// reason: it decides whether a status is worth publishing.
 func samePluginMetaStatus(left, right pluginMetaStatus) bool {
 	return left.lifecycle == right.lifecycle && left.availability == right.availability &&
 		left.activity == right.activity && errorText(left.lastError) == errorText(right.lastError)

@@ -654,7 +654,8 @@ func (a *catalogActor[T]) reconcileStatus() {
 	})
 }
 
-// HandleInspect exposes concise catalog operational state: aggregate router health plus the desired-vs-actual router count and in-flight call depth a Ready status alone doesn't distinguish.
+// HandleInspect exposes aggregate router health plus the desired-vs-actual router count and call depth
+// a Ready status alone does not distinguish.
 func (a *catalogActor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 	status := a.status()
 	return map[string]string{

@@ -99,16 +99,19 @@ type MessageWriteSnapshot struct {
 	tombstones []string
 }
 
-// StatusRequest asks for a snapshot of every tracked executor, for the controller's own /status endpoint; it never crosses the cluster, so it stays local instead of living in the wire vocabulary.
+// StatusRequest asks for a snapshot of every tracked executor for the /status endpoint; it never
+// crosses the cluster, so it stays out of the wire vocabulary.
 type StatusRequest struct{}
 
-// StatusResponse answers StatusRequest with only what the actor knows - the caller already knows which namespace it queried.
+// StatusResponse answers StatusRequest with only what the actor knows - the caller already knows
+// which namespace it queried.
 type StatusResponse struct {
 	Generation int64
 	Executors  []ExecutorStatus
 }
 
-// ExecutorStatus is one executor's last-known convergence state, tracked per namespace controller actor; local for the same reason as StatusRequest.
+// ExecutorStatus is one executor's last-known convergence state, tracked per namespace controller
+// actor; local for the same reason as StatusRequest.
 type ExecutorStatus struct {
 	ExecutorID          string
 	LastSeen            time.Time
@@ -144,7 +147,8 @@ const writeUnavailableThreshold = writeRetryAttemptBudget
 const (
 	// executorDriftCheckInterval is how often the actor re-evaluates every registered executor.
 	executorDriftCheckInterval = 30 * time.Second
-	// executorStaleThreshold is how long an executor may go without a report before drift evaluation excludes it.
+	// executorStaleThreshold is how long an executor may go without a report before drift evaluation
+	// excludes it.
 	executorStaleThreshold = 2 * time.Minute
 	// executorDriftGrace is how long an executor may lag before it's flagged as drifting.
 	executorDriftGrace = 2 * time.Minute
@@ -654,7 +658,8 @@ func (a *actor[T]) actorGauges() actorGauges {
 	}
 }
 
-// status computes the controller's current publishable status, shared by reconcileStatus (to the supervisor) and HandleInspect (to an operator).
+// status computes the controller's current publishable status, shared by reconcileStatus (to the
+// supervisor) and HandleInspect (to an operator).
 func (a *actor[T]) status() actorStatus {
 	return actorStatus{Lifecycle: a.lifecycle, Availability: a.availability(), Generation: a.generation}
 }
@@ -670,9 +675,8 @@ func (a *actor[T]) availability() runtime.Availability {
 	return runtime.AvailabilityDegraded
 }
 
-// HandleInspect exposes concise controller operational state: lifecycle and generation, the
-// scanner and writer workers' own health, and the executor/subscriber counts that health doesn't
-// capture - a controller can be Ready while still drifting behind on executor convergence.
+// HandleInspect exposes lifecycle, generation, both workers' health, and the executor and subscriber
+// counts health misses, since a Ready controller can still be drifting.
 func (a *actor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 	drifting := a.actorGauges().drifting
 	upserts, tombstones := 0, 0
@@ -791,7 +795,8 @@ func (a *actor[T]) HandleCall(from gen.PID, _ gen.Ref, request any) (any, error)
 	return fmt.Errorf("controller actor: unsupported call %T", request), nil
 }
 
-// committedUpserts returns every committed entry as an upsert, for a fresh subscriber's initial burst (nil prior in ClassifyChanges makes each one ChangeAdded).
+// committedUpserts returns every committed entry as an upsert, for a fresh subscriber's initial burst
+// (nil prior in ClassifyChanges makes each one ChangeAdded).
 func (a *actor[T]) committedUpserts() []snapshot.EffectiveEntry {
 	if a.committed == nil {
 		return nil
@@ -799,7 +804,8 @@ func (a *actor[T]) committedUpserts() []snapshot.EffectiveEntry {
 	return snapshot.CloneEntries(a.committed.Entries)
 }
 
-// notifySubscribers pushes a new commit to every subscriber PID; a failed SendImportant is logged but doesn't unregister it - MonitorPID's MessageDownPID is the actual removal path.
+// notifySubscribers pushes a new commit to every subscriber PID; a failed send is logged, not
+// unregistered, since MonitorPID's MessageDownPID is the removal path.
 func (a *actor[T]) notifySubscribers(update snapshot.SnapshotUpdate) {
 	for id, pid := range a.subscribers {
 		if err := a.SendImportant(pid, update); err != nil {
@@ -808,7 +814,8 @@ func (a *actor[T]) notifySubscribers(update snapshot.SnapshotUpdate) {
 	}
 }
 
-// checkExecutorDrift updates DriftSince for every tracked executor against the committed generation, skipping a stale one (no report inside executorStaleThreshold) since silence is a liveness problem, not drift evidence.
+// checkExecutorDrift updates DriftSince against the committed generation, skipping executors silent
+// past executorStaleThreshold, since silence is a liveness problem rather than drift evidence.
 func (a *actor[T]) checkExecutorDrift() {
 	now := time.Now()
 	for id, status := range a.executors {

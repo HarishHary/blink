@@ -37,34 +37,39 @@ type MessageReaderActorActivate struct{}
 
 type MessageReaderActorStatusChanged struct{ status ReaderActorStatus }
 
-// SubscribeRequest asks for the current committed snapshot and registers the caller (its own PID, delivered as HandleCall's "from", not a field here) for future pushed SnapshotUpdate commits.
+// SubscribeRequest asks for the committed snapshot and registers the caller for pushed SnapshotUpdate
+// commits; its PID arrives as HandleCall's "from" rather than a field here.
 type SubscribeRequest struct {
 	ExecutorID      string
 	KnownGeneration int64
 }
 
-// SubscribeResponse answers SubscribeRequest; ControllerPID lets the caller Monitor it without a second lookup, and future commits arrive as pushed SnapshotUpdate messages since a channel can't cross the cluster.
+// SubscribeResponse answers SubscribeRequest; ControllerPID saves the caller a lookup before it
+// monitors, and later commits arrive as messages since a channel cannot cross the cluster.
 type SubscribeResponse struct {
 	Current       *Snapshot
 	Changes       []EntryChange
 	ControllerPID gen.PID
 }
 
-// SnapshotUpdate is one commit's full state, pushed to every subscriber; Changes/Tombstones are for observability only - applying it just needs Snapshot (see readerActor).
+// SnapshotUpdate is one commit's full state, pushed to every subscriber; Changes/Tombstones are for
+// observability only - applying it just needs Snapshot (see readerActor).
 type SnapshotUpdate struct {
 	Snapshot   *Snapshot
 	Changes    []EntryChange
 	Tombstones []string
 }
 
-// UnsubscribeRequest stops future pushes to ExecutorID; best-effort only - MonitorPID on the executor's PID is the authoritative removal path.
+// UnsubscribeRequest stops future pushes to ExecutorID; best-effort only - MonitorPID on the
+// executor's PID is the authoritative removal path.
 type UnsubscribeRequest struct{ ExecutorID string }
 
 type MessageSubscribeRestart struct{ token uint64 }
 
 // --- messages ---
 
-// readerActor issues one bounded Call to subscribe, then passively receives pushed SnapshotUpdate messages - Ergo remote delivery is push-based, so there's no read loop or meta process to supervise.
+// readerActor makes one bounded Call to subscribe and then receives pushed SnapshotUpdate messages;
+// Ergo remote delivery is push-based, so there is no read loop or meta to supervise.
 type readerActor struct {
 	act.Actor
 	opts           ReaderActorOptions
@@ -252,7 +257,8 @@ func (a *readerActor) reconcileStatus() {
 	_ = a.Send(a.Parent(), MessageReaderActorStatusChanged{status: next})
 }
 
-// status derives the reader's current publishable status, shared by reconcileStatus (to the supervisor) and HandleInspect (to an operator).
+// status derives the reader's current publishable status, shared by reconcileStatus (to the
+// supervisor) and HandleInspect (to an operator).
 func (a *readerActor) status() ReaderActorStatus {
 	availability := runtime.AvailabilityUnavailable
 	if a.subscribed {

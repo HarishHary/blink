@@ -253,11 +253,8 @@ func (m *artifactScannerMeta[T]) scan() ([]snapshot.EffectiveEntry, []string, bo
 		}
 		name := file.Name()
 		path := filepath.Join(m.directory, name)
-		// Size and modification time identify a file well enough to skip re-reading it: a
-		// spec rewrite that preserves both keeps the last parsed generation, and a binary
-		// rewrite that preserves both stalls that rollout instead of deploying something
-		// unverified, because the plugin runtime re-checksums against the published digest
-		// before it launches.
+		// Size and modification time identify a file well enough to skip re-reading it; a binary
+		// rewrite preserving both stalls its rollout, since the runtime re-checksums the digest.
 		info, infoErr := file.Info()
 		if isYAML(name) {
 			seenParsed[path] = struct{}{}

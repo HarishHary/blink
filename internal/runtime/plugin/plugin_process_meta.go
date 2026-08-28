@@ -49,8 +49,7 @@ const (
 const pluginMetaPingTimeout = 10 * time.Second
 
 // pluginMetaCancelGrace is how long a cancelled invocation may take to return before the subprocess is
-// hung: a plugin honouring its context unwinds well within it and stays call-local, while one that
-// ignores cancellation is only stopped by a kill that ends its siblings too (see failGenerationCalls).
+// hung; one that ignores cancellation is only stopped by a kill that ends its siblings too.
 const pluginMetaCancelGrace = time.Second
 
 // pluginMetaState tracks one plugin process actor's replaceable meta-process.
@@ -120,7 +119,8 @@ type pluginMetaInvoke[T Artifact] struct {
 	fn         func(context.Context, T) error
 }
 
-// pluginMetaInvokeResult reports one invocation's outcome and recycle decision to the owning process actor, echoing the call and the incarnation that ran it.
+// pluginMetaInvokeResult reports one invocation's outcome and recycle decision to the owning process
+// actor, echoing the call and the incarnation that ran it.
 type pluginMetaInvokeResult struct {
 	alias      gen.Alias
 	callID     uint64
@@ -223,7 +223,8 @@ func (m *pluginProcessMeta[T]) HandleMessage(from gen.PID, message any) error {
 	return nil
 }
 
-// HandleCall rejects unsupported synchronous meta-process calls; invocations arrive as messages so that running one never blocks this meta-process.
+// HandleCall rejects unsupported synchronous meta-process calls; invocations arrive as messages so
+// that running one never blocks this meta-process.
 func (m *pluginProcessMeta[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
 	return fmt.Errorf("unsupported plugin meta call %T", request), nil
 }

@@ -49,7 +49,8 @@ type BaseLoader[U any, T interface {
 	Clone() T
 }] struct{}
 
-// named is satisfied by metadata that embeds *PluginMetadata; unexported because name injection is a loader concern, not a runtime one.
+// named is satisfied by metadata that embeds *PluginMetadata; unexported because name injection is a
+// loader concern, not a runtime one.
 type named interface{ SetName(string) }
 
 // Parse reads a YAML sidecar into its metadata type.

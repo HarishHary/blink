@@ -47,20 +47,18 @@ type RouterOptions struct {
 	DeploymentManagerOptions DeploymentManagerOptions // handed straight to each spawned manager
 }
 
-// DeploymentManagerOptions configures one deployment manager.
+// DeploymentManagerOptions configures one deployment manager. RetryMin and RetryMax pace replacing a
+// lost plugin process and are the budget the circuit opens on; ProcessBudget is shared by every manager
+// in the process and bounds their combined scale-up past min_procs, nil leaving each to its max_procs.
 type DeploymentManagerOptions struct {
-	QueueSize       int
-	DispatchTimeout time.Duration
-	ScaleCooldown   time.Duration
-	IdleTimeout     time.Duration
-	DrainTimeout    time.Duration
-	CircuitCooldown time.Duration // how long an open circuit waits before admitting calls again
-	// RetryMin and RetryMax pace replacing a lost plugin process, and their budget is what the circuit
-	// above opens on; process recovery is the manager's own job.
-	RetryMin time.Duration
-	RetryMax time.Duration
-	// ProcessBudget is shared by every manager in the process and bounds their combined
-	// scale-up past min_procs; nil leaves each manager bounded only by its own max_procs.
+	QueueSize            int
+	DispatchTimeout      time.Duration
+	ScaleCooldown        time.Duration
+	IdleTimeout          time.Duration
+	DrainTimeout         time.Duration
+	CircuitCooldown      time.Duration // how long an open circuit waits before admitting calls again
+	RetryMin             time.Duration
+	RetryMax             time.Duration
 	ProcessBudget        *ProcessBudget
 	PluginProcessOptions PluginProcessOptions // handed to each spawned plugin process
 }

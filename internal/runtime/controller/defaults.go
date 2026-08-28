@@ -12,8 +12,8 @@ const (
 	DefaultRestartMax = 5 * time.Second
 )
 
-// Every process in a namespace's subtree is named from that namespace, so a caller addresses one
-// without being told what it was called.
+// Every name below derives from the namespace, so a caller never has to be told one.
+
 // ApplicationName is the controller application's registered name.
 func ApplicationName(namespace string) gen.Atom { return subtreeName(namespace, "application") }
 

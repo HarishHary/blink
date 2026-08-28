@@ -7,9 +7,11 @@ import (
 )
 
 const (
-	// DefaultDeploymentCallsPerProcess is what a process serves undeclared; above 1 the plugin has to be concurrency-safe.
+	// DefaultDeploymentCallsPerProcess is what a process serves undeclared; above 1 the plugin has to be
+	// concurrency-safe.
 	DefaultDeploymentCallsPerProcess = 32
-	// MaxDeploymentCallsPerProcess is the most one process may declare, each a goroutine and a stream in a subprocess Blink cannot size.
+	// MaxDeploymentCallsPerProcess is the most one process may declare, each a goroutine and a stream in
+	// a subprocess Blink cannot size.
 	MaxDeploymentCallsPerProcess = 64
 	// DefaultMaxDeploymentProcs is what a deployment scales to when it declares nothing.
 	DefaultMaxDeploymentProcs = 1
@@ -81,13 +83,15 @@ func runtimeOptionsWithDefaults(opts ApplicationOptions) ApplicationOptions {
 	// The shared budget only blocks, so it sits that many shares above one plugin's share.
 	opts.maxOutstandingInvocations = opts.maxOutstandingInvocationsPerPlugin * opts.MaxConcurrentCalls
 	opts.shadowMaxOutstandingInvocations = max(1, opts.maxOutstandingInvocations/DefaultRuntimeShadowAdmissionShare)
-	// One plugin's whole fan-out lands on one manager, so a queue under its share would move the same rejection a layer down.
+	// One plugin's whole fan-out lands on one manager, so a queue under its share would move the same
+	// rejection a layer down.
 	if opts.SupervisorOptions.CatalogOptions.RouterOptions.DeploymentManagerOptions.QueueSize <= 0 &&
 		opts.maxOutstandingInvocationsPerPlugin > DefaultDeploymentManagerQueueSize {
 		opts.SupervisorOptions.CatalogOptions.RouterOptions.DeploymentManagerOptions.QueueSize = opts.maxOutstandingInvocationsPerPlugin
 	}
 
-	// Growth past a deployment's min_procs: see processBudgetFromResources for why this is sized from CPU and memory together
+	// Growth past a deployment's min_procs: see processBudgetFromResources for why this is sized from
+	// CPU and memory together
 	if opts.SupervisorOptions.CatalogOptions.RouterOptions.DeploymentManagerOptions.ProcessBudget == nil {
 		opts.SupervisorOptions.CatalogOptions.RouterOptions.DeploymentManagerOptions.ProcessBudget = NewProcessBudget(processBudgetFromResources())
 	}

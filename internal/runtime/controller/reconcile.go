@@ -8,7 +8,8 @@ import (
 	"go.yaml.in/yaml/v4"
 )
 
-// CatalogGroup holds all YAML entries sharing a logical plugin ID (healthy: one BG Primary + at most one CN/SH Candidate).
+// CatalogGroup holds all YAML entries sharing a logical plugin ID (healthy: one BG Primary + at most
+// one CN/SH Candidate).
 type CatalogGroup[T plugin.Artifact] struct {
 	Id      string
 	Entries []T
@@ -154,7 +155,8 @@ func ClassifyChanges[T plugin.Artifact](loader plugin.Loader[T], prior *snapshot
 	return changes
 }
 
-// artifactRefIdentity reports whether two refs name the same artifact, ignoring spec content and rollout mode.
+// artifactRefIdentity reports whether two refs name the same artifact, ignoring spec content and
+// rollout mode.
 func artifactRefIdentity(left, right *snapshot.ArtifactRef) bool {
 	if (left == nil) != (right == nil) {
 		return false

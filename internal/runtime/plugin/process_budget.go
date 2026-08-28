@@ -14,9 +14,8 @@ const (
 	DefaultProcessBudgetHardCap         = 512       // sanity ceiling regardless of memory available
 )
 
-// processBudgetFromResources sizes the default ProcessBudget from CPU and memory together, since these
-// subprocesses spend more time on a gRPC round trip than on CPU: memory is the binding constraint,
-// because passing the container's limit OOMs the pod however idle each subprocess is.
+// processBudgetFromResources sizes the default ProcessBudget from CPU and memory together: these
+// subprocesses idle on gRPC round trips, so the container's memory limit binds before its cores do.
 func processBudgetFromResources() int {
 	cpuFloor := goruntime.GOMAXPROCS(0) * DefaultRuntimeProcessGrowthPerProc
 	limit, ok := cgroupMemoryLimitBytes()
@@ -61,7 +60,8 @@ type ProcessBudget struct {
 	reserved atomic.Int64
 }
 
-// NewProcessBudget returns a budget allowing limit plugin processes past the reservations, and none below one.
+// NewProcessBudget returns a budget allowing limit plugin processes past the reservations, and none
+// below one.
 func NewProcessBudget(limit int) *ProcessBudget {
 	return &ProcessBudget{max: int64(max(0, limit))}
 }
@@ -74,7 +74,8 @@ func (b *ProcessBudget) limit() int {
 	return int(b.max)
 }
 
-// acquire takes one plugin process from the budget and reports whether it had room; a nil budget is unbounded.
+// acquire takes one plugin process from the budget and reports whether it had room; a nil budget is
+// unbounded.
 func (b *ProcessBudget) acquire() bool {
 	if b == nil {
 		return true

@@ -819,7 +819,8 @@ func (s *supervisor[P, M]) mergeCatalogStatus(status catalogActorStatus) {
 	state.status = next
 }
 
-// status computes the current publishable runtime status, shared by refreshStatus (which caches it as liveStatus) and HandleInspect (to an operator).
+// status computes the current publishable runtime status, shared by refreshStatus (which caches it as
+// liveStatus) and HandleInspect (to an operator).
 func (s *supervisor[P, M]) status() SupervisorStatus {
 	lifecycle := s.lifecycle
 	if lifecycle == "" {

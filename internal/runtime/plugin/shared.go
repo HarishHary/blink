@@ -18,14 +18,16 @@ type Deployment struct {
 	RolloutPct float64
 	MinProcs   int
 	MaxProcs   int
-	// MaxConcurrentCallsPerProcess is one process's throughput, where MinProcs and MaxProcs bound the subprocesses; above 1 the plugin has to be concurrency-safe.
+	// MaxConcurrentCallsPerProcess is one process's throughput, where MinProcs and MaxProcs bound the
+	// subprocesses; above 1 the plugin has to be concurrency-safe.
 	MaxConcurrentCallsPerProcess int
 	Path                         string
 	Hash                         string
 	Spec                         []byte
 }
 
-// DeploymentRouteKey identifies one concrete deployment: its artifact plus what the runtime cannot change under running processes, so altering any of it replaces them.
+// DeploymentRouteKey identifies one concrete deployment: its artifact plus what the runtime cannot
+// change under running processes, so altering any of it replaces them.
 type DeploymentRouteKey struct {
 	runtime.ArtifactKey
 	MinProcs     int
@@ -58,12 +60,14 @@ func (d *Deployment) CapacityPerProcess() int {
 	return d.MaxConcurrentCallsPerProcess
 }
 
-// MaxInvocationCapacity is the deployment's own ceiling on concurrent invocations, not a promise: running processes and the shared budget decide what exists.
+// MaxInvocationCapacity is the deployment's own ceiling on concurrent invocations, not a promise:
+// running processes and the shared budget decide what exists.
 func (d *Deployment) MaxInvocationCapacity() int {
 	return d.ProcessCountLimit() * d.CapacityPerProcess()
 }
 
-// sameDeployment reports whether two deployments are field-for-field equal; a field added above belongs here too, or a real change reads as no change.
+// sameDeployment reports whether two deployments are field-for-field equal; a field added above
+// belongs here too, or a real change reads as no change.
 func sameDeployment(left, right *Deployment) bool {
 	if left == nil || right == nil {
 		return left == right

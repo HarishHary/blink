@@ -39,9 +39,8 @@ type NodeOptions struct {
 	Radar   *RadarOptions
 }
 
-// RadarOptions binds radar's health and Prometheus endpoints. Radar's own default is localhost,
-// which no scraper or probe outside the process can reach, so an empty Host binds all interfaces
-// instead; an empty Port keeps radar's 9090.
+// RadarOptions binds radar's health and Prometheus endpoints. Radar defaults to localhost, which no
+// scraper outside the process can reach, so an empty Host binds all interfaces; an empty Port keeps 9090.
 type RadarOptions struct {
 	Host string
 	Port uint16

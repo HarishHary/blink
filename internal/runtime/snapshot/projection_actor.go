@@ -73,7 +73,8 @@ type ProjectionData[T any] struct {
 	RolloutByID map[string]Rollout
 }
 
-// Rollout is what a generation says about one plugin id's rollout; its zero value describes an id it does not carry.
+// Rollout is what a generation says about one plugin id's rollout; its zero value describes an id it
+// does not carry.
 type Rollout struct {
 	MaxProcs        int
 	CallsPerProcess int
@@ -81,7 +82,8 @@ type Rollout struct {
 	Shadow          bool
 }
 
-// Capacity is the invocations this id's deployment can run at once: the two bounds multiplied, a ceiling not a promise.
+// Capacity is the invocations this id's deployment can run at once: the two bounds multiplied, a
+// ceiling not a promise.
 func (r Rollout) Capacity() int {
 	return max(1, r.MaxProcs) * max(1, r.CallsPerProcess)
 }
@@ -135,7 +137,8 @@ func newProjectionActor[T any](snapshotEvent, statusEvent gen.Event, loader Load
 // ProjectionStateRequest reads the current immutable projection state.
 type ProjectionStateRequest struct{}
 
-// MessageProjectionActorStatusChanged reports projection status, with a zero PID from the child and stamped by Supervisor.
+// MessageProjectionActorStatusChanged reports projection status, with a zero PID from the child and
+// stamped by Supervisor.
 type MessageProjectionActorStatusChanged struct {
 	Status        ProjectionActorStatus
 	ProjectionPID gen.PID
@@ -154,7 +157,8 @@ type MessageProjectionCommitResult struct {
 	Err           error
 }
 
-// MessageProjectionActorActivate tells a projection child its parent recorded its PID and it may monitor snapshot events.
+// MessageProjectionActorActivate tells a projection child its parent recorded its PID and it may
+// monitor snapshot events.
 type MessageProjectionActorActivate struct{}
 
 // --- messages ---
@@ -255,7 +259,8 @@ func (a *projectionActor[T]) applyEvent(event gen.MessageEvent) error {
 			a.labels.Add(a, metricParseFailures, float64(parsed.failures))
 		}
 		a.lastError = err
-		// Nothing parsed leaves the previous generation standing; a partial one serves what parsed and stays degraded.
+		// Nothing parsed leaves the previous generation standing; a partial one serves what parsed and
+		// stays degraded.
 		if err != nil && len(parsed.data.ByFileName) == 0 {
 			return nil
 		}
@@ -334,7 +339,8 @@ type parsedProjection[T any] struct {
 	failures   int
 }
 
-// parseResult grades a parse: a generation that lost some specs still serves, one that lost all of them does not.
+// parseResult grades a parse: a generation that lost some specs still serves, one that lost all of
+// them does not.
 func parseResult(err error, parsed int) string {
 	switch {
 	case err == nil:
@@ -346,7 +352,8 @@ func parseResult(err error, parsed int) string {
 	}
 }
 
-// newParsedProjection converts a snapshot into owned typed data, skipping and joining specs that fail so one break costs itself.
+// newParsedProjection converts a snapshot into owned typed data, skipping and joining specs that fail
+// so one break costs itself.
 func newParsedProjection[T any](snap *Snapshot, loader Loader[T]) (parsedProjection[T], error) {
 	data := ProjectionData[T]{
 		ByFileName:  make(map[string]T),
@@ -366,7 +373,8 @@ func newParsedProjection[T any](snap *Snapshot, loader Loader[T]) (parsedProject
 			value = loader.Clone(value)
 			data.ByFileName[ref.Name] = loader.Clone(value)
 			rollout := data.RolloutByID[entry.Id]
-			// Primary and candidate may declare different bounds and a call routes to either, so the id carries the larger.
+			// Primary and candidate may declare different bounds and a call routes to either, so the id
+			// carries the larger.
 			rollout.MaxProcs = max(rollout.MaxProcs, 1, loader.MaxProcs(value))
 			rollout.CallsPerProcess = max(rollout.CallsPerProcess, 1, loader.CallsPerProcess(value))
 			if index == 0 {

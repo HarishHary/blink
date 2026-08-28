@@ -24,7 +24,8 @@ type Application[T plugin.Artifact] struct {
 	labels   telemetry.Labels
 }
 
-// NewApplication creates an unloaded application for one plugin type, with the loader its actor parses artifacts through.
+// NewApplication creates an unloaded application for one plugin type, with the loader its actor
+// parses artifacts through.
 func NewApplication[T plugin.Artifact](opts ApplicationOptions, loader plugin.Loader[T]) *Application[T] {
 	normalized := applicationOptionsWithDefaults(opts)
 	return &Application[T]{
@@ -100,7 +101,8 @@ func (a *Application[T]) Load(_ ...any) (gen.ApplicationSpec, error) {
 	}, nil
 }
 
-// registerMetrics creates every controller collector on radar's registry through the node, which owns them for the node's lifetime.
+// registerMetrics creates every controller collector on radar's registry through the node, which owns
+// them for the node's lifetime.
 func (a *Application[T]) registerMetrics() {
 	node := a.Node()
 	if node == nil {

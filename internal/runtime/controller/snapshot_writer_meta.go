@@ -226,9 +226,8 @@ func (m *snapshotWriterMeta) Terminate(error) {
 	}
 }
 
-// write persists records and, when changed, the new committed snapshot and generation.
-// Subscribers learn of the change via the controller actor's own notifySubscribers push - this
-// meta only owns durable persistence, not distribution.
+// write persists records and, when changed, the new committed snapshot and generation; this meta owns
+// durable persistence, not distribution, which is notifySubscribers' job.
 func (m *snapshotWriterMeta) write(job MessageWriteSnapshot) error {
 	if err := m.database.Upsert(m.runCtx, job.records); err != nil {
 		return fmt.Errorf("%w: upsert records: %w", runtime.ErrSnapshotWrite, err)

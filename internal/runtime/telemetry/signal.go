@@ -7,9 +7,8 @@ import (
 	"ergo.services/ergo/gen"
 )
 
-// RadarTickInterval paces a layer's radar session: retrying a registration radar was not up to
-// accept, and beating a registered signal. SignalTimeout is radar's deadline for a missed beat, three
-// ticks so one missed beat does not flip readiness.
+// RadarTickInterval paces a layer's radar session, retrying registration and beating the signal;
+// SignalTimeout is three ticks, so one missed beat does not flip readiness.
 const (
 	RadarTickInterval = 30 * time.Second
 	SignalTimeout     = 3 * RadarTickInterval

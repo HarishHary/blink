@@ -852,7 +852,8 @@ func (a *routerActor[T]) routeAvailability() (deploymentRouteStatus, deploymentR
 	return primaryStatus, candidateStatus, normalRoutable, shadowRoutable, availability
 }
 
-// status computes the router's current publishable status, shared by reconcileStatus (to the catalog) and HandleInspect (to an operator).
+// status computes the router's current publishable status, shared by reconcileStatus (to the catalog)
+// and HandleInspect (to an operator).
 func (a *routerActor[T]) status() routerActorStatus {
 	primaryStatus, candidateStatus, normalRoutable, shadowRoutable, availability := a.routeAvailability()
 	return routerActorStatus{lifecycle: a.lifecycle, availability: availability, revision: a.desiredRevision,

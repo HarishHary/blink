@@ -41,7 +41,8 @@ type reconcilerActorStatus struct {
 	revision           uint64
 }
 
-// reconcilerActor subscribes to the buffered snapshot event and owns the snapshot, revisions, coalescing, and retry policy, replacing its resolver and watcher metas independently so an I/O failure discards neither that state nor the subscription.
+// reconcilerActor subscribes to the buffered snapshot event and owns the snapshot, revisions,
+// coalescing, and retry policy, replacing its metas independently so an I/O failure discards neither.
 type reconcilerActor struct {
 	act.Actor
 	directory        string
@@ -56,7 +57,8 @@ type reconcilerActor struct {
 	resolving        bool
 	dirty            bool
 	deferred         bool
-	// The last state this incarnation proposed and the generation it proposed it at, so a re-resolution reproducing it is a no-op; nil until it proposes, which is why a replacement proposes once on its revision base.
+	// What this incarnation last proposed, so a re-resolution reproducing it is a no-op; nil until it
+	// proposes, which is why a replacement proposes once on its revision base.
 	proposed           map[string]routerDesiredState
 	proposedGeneration int64
 	lastStatus         reconcilerActorStatus
@@ -227,7 +229,8 @@ func (a *reconcilerActor) HandleMessage(from gen.PID, message any) error {
 			return a.requestResolve()
 		}
 
-		// A filesystem or snapshot change arrived mid-resolution, so this result may be stale: resolve again from the current snapshot and filesystem.
+		// A filesystem or snapshot change arrived mid-resolution, so this result may be stale: resolve
+		// again from the current snapshot and filesystem.
 		if a.dirty {
 			a.labels.Count(a, metricResolutions, "stale")
 			return a.requestResolve()
@@ -271,7 +274,8 @@ func (a *reconcilerActor) HandleMessage(from gen.PID, message any) error {
 			return nil
 		}
 		a.dirty = true
-		// A concrete filesystem change is a useful immediate retry signal, so cancel the delayed timer but keep the backoff progression until a complete resolution resets it.
+		// A concrete filesystem change is a useful immediate retry signal, so cancel the delayed timer but
+		// keep the backoff progression until a complete resolution resets it.
 		a.resolutionRetry.CancelScheduled(false)
 		return a.requestResolve()
 
