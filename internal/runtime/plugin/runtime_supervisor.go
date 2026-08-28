@@ -10,6 +10,7 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/harishhary/blink/internal/runtime"
 	"github.com/harishhary/blink/internal/runtime/snapshot"
+	"github.com/harishhary/blink/internal/runtime/telemetry"
 )
 
 // ---------------------------------------------------------------------------
@@ -59,24 +60,6 @@ func (s SupervisorStatus) clone() SupervisorStatus {
 }
 
 // ---------------------------------------------------------------------------
-// Runtime Events
-// ---------------------------------------------------------------------------
-
-// RuntimeEvents identifies the stable buffered events owned by one runtime
-// supervisor subtree.
-type RuntimeEvents struct {
-	Status gen.Event
-}
-
-// RuntimeEventsFor derives the public event names from the runtime name in the
-// same way that actorsnapshot.EventsFor derives snapshot-reader events.
-func RuntimeEventsFor(node gen.Node, name gen.Atom) RuntimeEvents {
-	return RuntimeEvents{
-		Status: gen.Event{Name: gen.Atom(string(name) + "-status"), Node: node.Name()},
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Supervisor Configuration
 // ---------------------------------------------------------------------------
 
@@ -111,6 +94,9 @@ type SupervisorStateRequest struct{}
 // SupervisorStateResponse contains the ready runtime generation.
 type SupervisorStateResponse struct{ Generation int64 }
 
+// MessageRadarTick drives the supervisor's periodic radar reconcile.
+type MessageRadarTick struct{}
+
 // MessageProjectionCommitRetry triggers a deferred projection commit retry.
 type MessageProjectionCommitRetry struct{ token uint64 }
 
@@ -140,13 +126,12 @@ type runtimeCall struct {
 type supervisor[P Artifact, M any] struct {
 	act.Supervisor
 	opts                 SupervisorOptions
+	namespace            string
 	adapter              *Adapter[P]
 	lifecycle            SupervisorLifecycle
 	transition           SupervisorTransitionPhase
 	liveStatus           SupervisorStatus
 	loader               snapshot.Loader[M]
-	events               RuntimeEvents
-	statusToken          gen.Ref
 	reconciler           reconcilerActorState
 	catalog              catalogActorState
 	snapshot             snapshot.SupervisorState
@@ -156,6 +141,9 @@ type supervisor[P Artifact, M any] struct {
 	inFlightCalls        map[uint64]runtimeCall
 	drainWaiters         []runtimeDrainWaiter
 	transitionGeneration int64
+	labels               telemetry.Labels
+	collectorsRegistered bool
+	radarLogged          bool
 }
 
 // ---------------------------------------------------------------------------
@@ -184,31 +172,34 @@ type MessageSubmitInvocation[T Artifact] struct {
 // ---------------------------------------------------------------------------
 
 // newRuntimeSupervisor creates a runtime supervisor process behavior.
-func newRuntimeSupervisor[P Artifact, M any](opts SupervisorOptions, adapter *Adapter[P], loader snapshot.Loader[M]) gen.ProcessBehavior {
+func newRuntimeSupervisor[P Artifact, M any](namespace string, opts SupervisorOptions, adapter *Adapter[P], loader snapshot.Loader[M]) gen.ProcessBehavior {
 	return &supervisor[P, M]{
-		opts:    opts,
-		adapter: adapter,
-		loader:  loader,
+		namespace: namespace,
+		opts:      opts,
+		adapter:   adapter,
+		loader:    loader,
 	}
 }
 
 // Init validates and initializes the runtime supervisor subtree.
 func (s *supervisor[P, M]) Init(...any) (act.SupervisorSpec, error) {
 	s.opts = supervisorOptionsWithDefaults(s.opts)
-	if s.opts.Name == "" ||
+	// Namespace is required: every process name in this subtree, and every metric label, comes from it.
+	if s.namespace == "" ||
 		s.adapter == nil ||
 		s.opts.Directory == "" ||
-		s.opts.SnapshotReader.Namespace == "" || s.opts.SnapshotReader.Endpoint.Name == "" ||
+		s.opts.SnapshotReader.Endpoint.Name == "" ||
 		s.opts.SnapshotReader.ExecutorID == "" || s.loader == nil {
 		return act.SupervisorSpec{}, fmt.Errorf(
-			"name, adapter, reader options, projection, and directory are required",
+			"namespace, adapter, reader options, projection, and directory are required",
 		)
 	}
-	if err := s.RegisterName(s.opts.Name); err != nil {
-		return act.SupervisorSpec{}, fmt.Errorf("register runtime supervisor %q: %w", s.opts.Name, err)
+	s.labels = telemetry.NewLabels(s.namespace)
+	name := SupervisorName(s.namespace)
+	if err := s.RegisterName(name); err != nil {
+		return act.SupervisorSpec{}, fmt.Errorf("register runtime supervisor %q: %w", name, err)
 	}
 
-	s.events = RuntimeEventsFor(s.Node(), s.opts.Name)
 	s.inFlightCalls = make(map[uint64]runtimeCall)
 	s.lifecycle = SupervisorStarting
 	s.catalog.status = newCatalogStatus(nil)
@@ -218,17 +209,11 @@ func (s *supervisor[P, M]) Init(...any) (act.SupervisorSpec, error) {
 		availability: runtime.AvailabilityUnavailable,
 	}
 	s.refreshStatus()
-
-	token, err := s.RegisterEvent(s.events.Status.Name, gen.EventOptions{Buffer: 1})
-	if err != nil {
-		return act.SupervisorSpec{}, fmt.Errorf(
-			"register runtime status event %s: %w",
-			s.events.Status.Name,
-			err,
-		)
+	// A message, not an inline call: collectors must exist before a child emits, but radar must not
+	// delay the spec.
+	if err := s.Send(s.PID(), MessageRadarTick{}); err != nil {
+		return act.SupervisorSpec{}, fmt.Errorf("schedule radar tick: %w", err)
 	}
-	s.statusToken = token
-	s.publishStatus()
 
 	return act.SupervisorSpec{
 		Type:                act.SupervisorTypeRestForOne,
@@ -243,29 +228,30 @@ func (s *supervisor[P, M]) Init(...any) (act.SupervisorSpec, error) {
 			{
 				Name: s.snapshotSupervisorName(),
 				Factory: func() gen.ProcessBehavior {
-					return snapshot.NewSupervisor(snapshot.SupervisorOptions[M]{
+					return snapshot.NewSupervisor(snapshot.SupervisorOptions{
+						Namespace:          s.namespace,
 						ReaderActorOptions: s.opts.SnapshotReader,
-						Loader:             s.loader,
 						ProjectionMode:     snapshot.ProjectionCommitExternal,
-					})
+					}, s.loader)
 				},
 			},
 			{
 				Name: s.reconcilerActorName(),
 				Factory: func() gen.ProcessBehavior {
-					events := snapshot.EventsFor(s.Node(), s.opts.SnapshotReader.Namespace)
 					return newReconcilerActor(
-						events,
+						snapshot.ArtifactsEventFor(s.Node(), s.namespace),
+						snapshot.ReaderActorStatusEventFor(s.Node(), s.namespace),
 						s.opts.Directory,
 						s.opts.RetryMin,
 						s.opts.RetryMax,
+						s.labels,
 					)
 				},
 			},
 			{
 				Name: s.catalogActorName(),
 				Factory: func() gen.ProcessBehavior {
-					return newCatalogActor(s.opts.CatalogOptions, s.adapter)
+					return newCatalogActor(s.opts.CatalogOptions, s.adapter, s.labels)
 				},
 				Options: gen.ProcessOptions{},
 			},
@@ -280,6 +266,7 @@ func (s *supervisor[P, M]) Init(...any) (act.SupervisorSpec, error) {
 // HandleCall remains control-plane only. Plugin execution enters through
 // MessageSubmitInvocation in HandleMessage and never blocks an Ergo Call callback.
 func (s *supervisor[P, M]) HandleCall(from gen.PID, ref gen.Ref, request any) (any, error) {
+	defer s.publishState()
 	switch request.(type) {
 	case DrainRequest:
 		s.drainWaiters = append(s.drainWaiters, runtimeDrainWaiter{pid: from, ref: ref})
@@ -290,7 +277,6 @@ func (s *supervisor[P, M]) HandleCall(from gen.PID, ref gen.Ref, request any) (a
 		s.lifecycle = SupervisorDraining
 		s.cancelProjectionDeadline()
 		s.refreshStatus()
-		s.publishStatus()
 		if s.catalog.pid != (gen.PID{}) {
 			_ = s.Send(s.catalog.pid, MessageDrain{})
 		}
@@ -312,13 +298,35 @@ func (s *supervisor[P, M]) HandleCall(from gen.PID, ref gen.Ref, request any) (a
 
 // HandleMessage processes runtime control and child-actor messages.
 func (s *supervisor[P, M]) HandleMessage(from gen.PID, message any) error {
+	defer s.publishState()
 	switch m := message.(type) {
+	case MessageRadarTick:
+		if from != s.PID() {
+			return nil
+		}
+		s.reconcileRadar()
+		if _, err := s.SendAfter(s.PID(), MessageRadarTick{}, telemetry.RadarTickInterval); err != nil {
+			return fmt.Errorf("reschedule radar tick: %w", err)
+		}
+		return nil
+
+	case gen.MessageDownProcessID:
+		// Forget what a restarted radar lost so the next tick registers it again.
+		if m.ProcessID.Name != telemetry.MetricsProcess {
+			return nil
+		}
+		s.collectorsRegistered = false
+		s.Log().Debug("radar process down, re-registering on next tick: namespace=%q", s.namespace)
+		return nil
+
 	case MessageSubmitInvocation[P]:
 		if !s.acceptsSubmission(m.expectedGeneration) {
+			s.labels.Count(s, metricInvocationsRejected, "closed")
 			m.result.Complete(runtime.ErrPluginUnavailable)
 			return nil
 		}
 		if err := m.context.Err(); err != nil {
+			s.labels.Count(s, metricInvocationsRejected, "context")
 			m.result.Complete(err)
 			return nil
 		}
@@ -361,7 +369,6 @@ func (s *supervisor[P, M]) HandleMessage(from gen.PID, message any) error {
 		s.completeDesiredStateTransition()
 		s.finishDesiredStateTransition()
 		s.refreshStatus()
-		s.publishStatus()
 
 	case MessageDesiredStateFreshness:
 		if from != s.reconciler.pid ||
@@ -377,14 +384,12 @@ func (s *supervisor[P, M]) HandleMessage(from gen.PID, message any) error {
 			s.projection.CommittedGeneration == m.snapshotGeneration {
 			s.finishDesiredStateTransition()
 			s.refreshStatus()
-			s.publishStatus()
 			return nil
 		}
 		s.projection.CommittedGeneration = m.snapshotGeneration
 		s.projection.ReadyGeneration = 0
 		err := s.requestProjectionCommit()
 		s.refreshStatus()
-		s.publishStatus()
 		return err
 
 	case snapshot.MessageProjectionActorStatusChanged:
@@ -437,7 +442,6 @@ func (s *supervisor[P, M]) HandleMessage(from gen.PID, message any) error {
 		s.pendingDesiredState = m.desired
 		if !s.pendingProjectionReady() {
 			s.refreshStatus()
-			s.publishStatus()
 			return nil
 		}
 		return s.beginPendingDesiredStateTransition()
@@ -471,7 +475,6 @@ func (s *supervisor[P, M]) HandleMessage(from gen.PID, message any) error {
 		s.completeDesiredStateTransition()
 		s.finishDesiredStateTransition()
 		s.refreshStatus()
-		s.publishStatus()
 
 	case MessageCatalogDrained:
 		if s.lifecycle != SupervisorDraining ||
@@ -500,14 +503,18 @@ func (s *supervisor[P, M]) HandleMessage(from gen.PID, message any) error {
 
 // HandleChildStart records a child actor incarnation.
 func (s *supervisor[P, M]) HandleChildStart(name gen.Atom, pid gen.PID) error {
+	defer s.publishState()
 	switch name {
 	case s.snapshotSupervisorName():
+		s.labels.Count(s, metricChildStarts, "snapshot")
 		s.startSnapshotSupervisor(pid)
 
 	case s.reconcilerActorName():
+		s.labels.Count(s, metricChildStarts, "reconciler")
 		return s.startReconcilerActor(pid)
 
 	case s.catalogActorName():
+		s.labels.Count(s, metricChildStarts, "catalog")
 		return s.startCatalogActor(pid)
 	}
 	return nil
@@ -515,27 +522,31 @@ func (s *supervisor[P, M]) HandleChildStart(name gen.Atom, pid gen.PID) error {
 
 // HandleChildTerminate retires a terminated child actor incarnation.
 func (s *supervisor[P, M]) HandleChildTerminate(name gen.Atom, pid gen.PID, reason error) error {
+	defer s.publishState()
 	switch name {
 	case s.snapshotSupervisorName():
+		s.labels.Count(s, metricChildTerminations, "snapshot", telemetry.TerminationReason(reason))
 		if s.snapshot.Pid == pid {
 			s.snapshot.Pid = gen.PID{}
 			s.projection.ReadyGeneration = 0
 		}
 
 	case s.reconcilerActorName():
+		s.labels.Count(s, metricChildTerminations, "reconciler", telemetry.TerminationReason(reason))
 		s.retireReconcilerActor(pid)
 
 	case s.catalogActorName():
+		s.labels.Count(s, metricChildTerminations, "catalog", telemetry.TerminationReason(reason))
 		s.retireCatalogActor(pid, reason)
 	}
 
 	s.refreshStatus()
-	s.publishStatus()
 	return nil
 }
 
 // Terminate stops the runtime supervisor and completes outstanding calls.
 func (s *supervisor[P, M]) Terminate(reason error) {
+	defer s.publishState()
 	s.lifecycle = SupervisorDraining
 	s.cancelProjectionCommitRetry(false)
 	s.cancelProjectionDeadline()
@@ -566,7 +577,6 @@ func (s *supervisor[P, M]) startSnapshotSupervisor(pid gen.PID) {
 	s.cancelProjectionCommitRetry(false)
 	s.cancelProjectionDeadline()
 	s.refreshStatus()
-	s.publishStatus()
 }
 
 // startReconcilerActor initializes a desired-state reconciler incarnation.
@@ -581,7 +591,6 @@ func (s *supervisor[P, M]) startReconcilerActor(pid gen.PID) error {
 		availability: runtime.AvailabilityUnavailable,
 	}
 	s.refreshStatus()
-	s.publishStatus()
 
 	revisionBase := s.desiredState.desiredRevision
 	if s.pendingDesiredState.desiredRevision > revisionBase {
@@ -603,7 +612,6 @@ func (s *supervisor[P, M]) startCatalogActor(pid gen.PID) error {
 	state.lastEpoch = 0
 	state.status = newCatalogStatus(state.status.lastError)
 	s.refreshStatus()
-	s.publishStatus()
 
 	if err := s.Send(pid, MessageCatalogActivate{}); err != nil {
 		_ = s.Node().SendExit(pid, fmt.Errorf("activate catalog: %w", err))
@@ -675,6 +683,7 @@ func (s *supervisor[P, M]) finishCall(callID uint64, err error) {
 	if call.cancel != nil {
 		call.cancel()
 	}
+	s.labels.Count(s, metricInvocations, telemetry.Result(err))
 	call.result.Complete(err)
 	_ = s.promotePendingDesiredState()
 }
@@ -692,6 +701,7 @@ func (s *supervisor[P, M]) promotePendingDesiredState() error {
 	}
 	s.desiredState = s.pendingDesiredState
 	s.pendingDesiredState = MessageApplyCatalogDesiredState{}
+	s.labels.Count(s, metricPromotions)
 	if s.catalog.pid != (gen.PID{}) {
 		if err := s.Send(s.catalog.pid, s.desiredState); err != nil {
 			_ = s.Node().SendExit(
@@ -702,7 +712,6 @@ func (s *supervisor[P, M]) promotePendingDesiredState() error {
 	}
 	s.completeDesiredStateTransition()
 	s.refreshStatus()
-	s.publishStatus()
 	return nil
 }
 
@@ -719,7 +728,6 @@ func (s *supervisor[P, M]) beginPendingDesiredStateTransition() error {
 	s.projection.PendingGeneration = 0
 	s.projection.PendingPID = gen.PID{}
 	s.refreshStatus()
-	s.publishStatus()
 	return s.promotePendingDesiredState()
 }
 
@@ -833,19 +841,73 @@ func (s *supervisor[P, M]) status() SupervisorStatus {
 }
 
 // refreshStatus recomputes and caches liveStatus, unconditionally - unlike the reconcileStatus
-// used elsewhere in this codebase, this neither dedups nor sends by itself: liveStatus must stay
-// current for HandleCall's independent SupervisorStatusRequest reads, and publishStatus (always
-// called right after, at every call site) is what actually emits it.
+// used elsewhere in this codebase, this neither dedups nor sends: liveStatus is read directly by
+// HandleCall's SupervisorStatusRequest, so it must stay current after every state change.
 func (s *supervisor[P, M]) refreshStatus() {
 	s.liveStatus = s.status()
 }
 
-// publishStatus emits the current runtime status event.
-func (s *supervisor[P, M]) publishStatus() {
-	if s.events.Status.Name == "" || s.statusToken == (gen.Ref{}) {
+// publishState reports every gauge this runtime owns; the supervisor publishes all of them because
+// it is the one process holding the reconciler's and the catalog's status.
+func (s *supervisor[P, M]) publishState() {
+	status := s.status()
+	processesReady, processesDesired, queueDepth, activeCalls := s.routeTotals()
+	runtimeGauges{
+		lifecycle:              status.Lifecycle,
+		availability:           status.Availability,
+		transition:             status.Transition,
+		desiredRevision:        status.DesiredRevision,
+		readyGeneration:        s.projection.ReadyGeneration,
+		committedGeneration:    s.projection.CommittedGeneration,
+		inFlightCalls:          len(s.inFlightCalls),
+		reconcilerAvailability: status.Reconciler.availability,
+		reconcilerGeneration:   status.Reconciler.snapshotGeneration,
+		reconcilerRevision:     status.Reconciler.revision,
+		catalogAvailability:    status.Catalog.availability,
+		routersDesired:         status.Catalog.desiredRouters,
+		routersRoutable:        status.Catalog.routableRouters,
+		routersSettled:         status.Catalog.settledRouters,
+		routersUnavailable:     status.Catalog.unavailableRouters,
+		processesReady:         processesReady,
+		processesDesired:       processesDesired,
+		queueDepth:             queueDepth,
+		activeCalls:            activeCalls,
+	}.publish(s.labels, s)
+}
+
+// routeTotals sums what every route under every router reports, since a gauge labelled by namespace
+// alone is published once for the whole runtime rather than once per deployment.
+func (s *supervisor[P, M]) routeTotals() (ready, desired, queued, active int) {
+	for _, router := range s.catalog.status.routers {
+		for _, route := range []deploymentRouteStatus{router.primary, router.candidate} {
+			ready += route.readyProcs
+			desired += route.desiredProcesses
+			queued += route.queueDepth
+			active += route.activeCalls
+		}
+	}
+	return ready, desired, queued, active
+}
+
+// reconcileRadar registers this runtime's collectors, retried on every tick until radar accepts them.
+func (s *supervisor[P, M]) reconcileRadar() {
+	if s.collectorsRegistered {
 		return
 	}
-	_ = s.SendEvent(s.events.Status.Name, s.statusToken, s.liveStatus.clone())
+	// Registered through the node: radar deletes a dead registrant's metrics.
+	if err := telemetry.Register(s.Node(), runtimeMetrics); err != nil {
+		if !s.radarLogged {
+			s.radarLogged = true
+			s.Log().Debug("radar telemetry unavailable: namespace=%q error=%v", s.namespace, err)
+		}
+		return
+	}
+	s.collectorsRegistered, s.radarLogged = true, false
+	// Monitored so a radar restart does not leave this runtime publishing into collectors that no
+	// longer exist.
+	if err := s.MonitorProcessID(gen.ProcessID{Name: telemetry.MetricsProcess, Node: s.Node().Name()}); err != nil {
+		s.Log().Debug("radar monitor unavailable: namespace=%q error=%v", s.namespace, err)
+	}
 }
 
 // HandleInspect exposes concise runtime operational state: lifecycle/availability/desired
@@ -946,7 +1008,6 @@ func (s *supervisor[P, M]) handleProjectionStatus(status snapshot.ProjectionActo
 		s.projection.ReadyGeneration = 0
 		s.projection.Status = status
 		s.refreshStatus()
-		s.publishStatus()
 		return s.beginPendingDesiredStateTransition()
 	}
 	if !pidChanged && status.Lifecycle == snapshot.ProjectionActorRunning &&
@@ -956,7 +1017,6 @@ func (s *supervisor[P, M]) handleProjectionStatus(status snapshot.ProjectionActo
 		s.projection.Status = status
 		s.finishDesiredStateTransition()
 		s.refreshStatus()
-		s.publishStatus()
 		return s.beginPendingDesiredStateTransition()
 	}
 	s.projection.Status = status
@@ -969,7 +1029,6 @@ func (s *supervisor[P, M]) handleProjectionStatus(status snapshot.ProjectionActo
 	s.cancelProjectionCommitRetry(false)
 	s.cancelProjectionDeadline()
 	s.refreshStatus()
-	s.publishStatus()
 	if err := s.beginPendingDesiredStateTransition(); err != nil {
 		return err
 	}
@@ -981,12 +1040,12 @@ func (s *supervisor[P, M]) handleProjectionStatus(status snapshot.ProjectionActo
 
 // handleProjectionCommitResult processes a projection commit acknowledgement.
 func (s *supervisor[P, M]) handleProjectionCommitResult(m snapshot.MessageProjectionCommitResult) error {
+	s.labels.Count(s, metricProjectionCommits, telemetry.Result(m.Err))
 	if m.Err != nil {
 		if s.adoptAuthoritativeProjectionPID(m.ProjectionPID) {
 			s.cancelProjectionDeadline()
 			s.cancelProjectionCommitRetry(false)
 			s.refreshStatus()
-			s.publishStatus()
 			return s.requestProjectionCommit()
 		}
 		if m.ProjectionPID != s.projection.PendingPID || m.ProjectionPID != s.projection.Pid {
@@ -1013,7 +1072,6 @@ func (s *supervisor[P, M]) handleProjectionCommitResult(m snapshot.MessageProjec
 		return err
 	}
 	s.refreshStatus()
-	s.publishStatus()
 	return nil
 }
 
@@ -1106,18 +1164,18 @@ func (s *supervisor[P, M]) cancelProjectionDeadline() {
 
 // reconcilerActorName returns the desired-state reconciler actor name.
 func (s *supervisor[P, M]) reconcilerActorName() gen.Atom {
-	return gen.Atom(string(s.opts.Name) + "-reconciler")
+	return ReconcilerActorName(s.namespace)
 }
 
 // snapshotSupervisorName returns the snapshot supervisor name, which the snapshot package derives
 // from the namespace this runtime follows rather than from this runtime's own name.
 func (s *supervisor[P, M]) snapshotSupervisorName() gen.Atom {
-	return snapshot.SupervisorName(s.opts.SnapshotReader.Namespace)
+	return snapshot.SupervisorName(s.namespace)
 }
 
 // catalogActorName returns the catalog actor name.
 func (s *supervisor[P, M]) catalogActorName() gen.Atom {
-	return gen.Atom(string(s.opts.Name) + "-catalog")
+	return CatalogActorName(s.namespace)
 }
 
 // supervisorStateReader reports whether the runtime state is ready for callers. A catalog

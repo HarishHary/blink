@@ -30,14 +30,6 @@ const (
 	SupervisorStopping SupervisorLifecycle = "stopping"
 )
 
-// Events identifies the buffered snapshot and status events produced by a snapshot supervisor. Each
-// retains only its latest value. Snapshot carries *snapshot.Snapshot; Status carries ReaderStatus.
-// Identities only: both are derivable on either side, so a monitor needs nothing else.
-type Events struct {
-	Snapshot gen.Event
-	Status   gen.Event
-}
-
 // eventPublication is one registered event and the token SendEvent requires to publish through it:
 // the pair the supervisor keeps for what it publishes itself, and hands to the child that publishes
 // in its place.
@@ -49,13 +41,17 @@ type eventPublication struct {
 // registered reports whether the event was registered and its token handed over.
 func (p eventPublication) registered() bool { return p.token != (gen.Ref{}) }
 
-// EventsFor returns the stable event identifiers for a namespace's snapshot subtree. Both are
-// node-local and derived on either side, so neither name is configurable.
-func EventsFor(node gen.Node, namespace string) Events {
-	return Events{
-		Snapshot: gen.Event{Name: subtreeName(namespace, "artifacts"), Node: node.Name()},
-		Status:   gen.Event{Name: subtreeName(namespace, "reader-actor-status"), Node: node.Name()},
-	}
+// ArtifactsEventFor names the buffered event a namespace's reader publishes committed snapshots
+// through; it retains only the latest and carries *Snapshot. Node-local and derived on either side,
+// so the name is not configurable.
+func ArtifactsEventFor(node gen.Node, namespace string) gen.Event {
+	return gen.Event{Name: subtreeName(namespace, "artifacts"), Node: node.Name()}
+}
+
+// ReaderActorStatusEventFor names the buffered event a namespace's snapshot supervisor publishes
+// ReaderActorStatus through, derived the same way.
+func ReaderActorStatusEventFor(node gen.Node, namespace string) gen.Event {
+	return gen.Event{Name: subtreeName(namespace, "reader-actor-status"), Node: node.Name()}
 }
 
 type readerActorState struct {
@@ -153,18 +149,19 @@ func (s *Supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 		return act.SupervisorSpec{}, fmt.Errorf("snapshot supervisor registered as %q, want %q", s.Name(), name)
 	}
 
-	events := EventsFor(s.Node(), s.opts.Namespace)
+	artifactsEvent := ArtifactsEventFor(s.Node(), s.opts.Namespace)
+	statusEvent := ReaderActorStatusEventFor(s.Node(), s.opts.Namespace)
 	// Keep only the latest snapshot available to a restarted projection.
-	snapshotToken, err := s.RegisterEvent(events.Snapshot.Name, gen.EventOptions{Buffer: 1})
+	snapshotToken, err := s.RegisterEvent(artifactsEvent.Name, gen.EventOptions{Buffer: 1})
 	if err != nil {
 		return act.SupervisorSpec{}, fmt.Errorf("register snapshot event: %w", err)
 	}
-	s.snapshotEvent = eventPublication{name: events.Snapshot.Name, token: snapshotToken}
-	statusToken, err := s.RegisterEvent(events.Status.Name, gen.EventOptions{Buffer: 1})
+	s.snapshotEvent = eventPublication{name: artifactsEvent.Name, token: snapshotToken}
+	statusToken, err := s.RegisterEvent(statusEvent.Name, gen.EventOptions{Buffer: 1})
 	if err != nil {
 		return act.SupervisorSpec{}, fmt.Errorf("register snapshot status event: %w", err)
 	}
-	s.statusEvent = eventPublication{name: events.Status.Name, token: statusToken}
+	s.statusEvent = eventPublication{name: statusEvent.Name, token: statusToken}
 	s.lifecycle = SupervisorStarting
 	s.readerActor.status = newReaderActorStatus()
 	s.projectionActor.status = newProjectionActorStatus()
@@ -198,7 +195,7 @@ func (s *Supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 			{
 				Name: ProjectionActorName(s.opts.Namespace),
 				Factory: func() gen.ProcessBehavior {
-					return newProjectionActor(events.Snapshot, events.Status, s.loader, s.opts.ProjectionMode, s.labels)
+					return newProjectionActor(artifactsEvent, statusEvent, s.loader, s.opts.ProjectionMode, s.labels)
 				},
 			},
 		},
