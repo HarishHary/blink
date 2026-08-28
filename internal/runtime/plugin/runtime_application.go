@@ -38,8 +38,7 @@ type runtimeCompletion struct {
 	err  error
 }
 
-// Application bridges external Go callers and snapshot updates into one
-// runtimeSupervisor application member on a shared, process-owned Ergo node.
+// Application bridges Go callers and snapshot updates into one runtime supervisor on a shared node.
 type Application[P Artifact, M any] struct {
 	app.Application
 	opts                ApplicationOptions
@@ -242,8 +241,7 @@ func (a *Application[P, M]) Status(ctx context.Context) (SupervisorStatus, error
 
 	response, err := callPIDWithContext(ctx, n, supervisor, SupervisorStatusRequest{}, a.opts.SupervisorOptions.ControlTimeout)
 	if err != nil {
-		// The supervisor may have terminated between the liveness check and the
-		// request. Prefer the runtime-level terminal error over a transport error.
+		// The supervisor may have terminated since the liveness check; prefer its terminal error.
 		select {
 		case <-done:
 			return SupervisorStatus{}, runtime.ErrRuntimeStopped
@@ -262,8 +260,7 @@ func (a *Application[P, M]) Status(ctx context.Context) (SupervisorStatus, error
 	return status.Status, nil
 }
 
-// State returns the typed snapshot state only after this runtime has committed
-// and admitted the same generation to its catalog.
+// State returns the typed snapshot state once this runtime committed and admitted that generation.
 func (a *Application[P, M]) State(ctx context.Context) (snapshot.ProjectionState[M], error) {
 	if err := ctx.Err(); err != nil {
 		return snapshot.ProjectionState[M]{}, err
@@ -311,12 +308,11 @@ func (a *Application[P, M]) State(ctx context.Context) (snapshot.ProjectionState
 // Invocation admission
 // ---------------------------------------------------------------------------
 
-// ErrShadowDropped means best-effort shadow admission was full. Production is
-// unaffected and the shadow invocation was not sent into the actor tree.
+// ErrShadowDropped means shadow admission was full; production is unaffected and nothing was sent.
 var ErrShadowDropped = errors.New("shadow invocation dropped")
 
-// CallBudget is how many invocations one caller call may split itself into for this rollout: the
-// capacity the deployment declared, under the width the per-plugin admission share was built to hold.
+// CallBudget is how many invocations one call may split into: declared capacity under the admission
+// share's width.
 func (a *Application[P, M]) CallBudget(rollout snapshot.Rollout) int {
 	return min(rollout.Capacity(), max(1, a.opts.callFanOut))
 }
@@ -336,9 +332,8 @@ func (a *Application[P, M]) Submit(ctx context.Context, pluginID string, rollout
 	if err := a.checkAccepting(); err != nil {
 		return runtime.Invocation{}, err
 	}
-	// Reserve this plugin's share before the shared budget: a plugin whose processes are
-	// stalled must fail its own calls fast instead of blocking every other plugin's
-	// caller on the global semaphore until that caller's own deadline expires.
+	// Reserve this plugin's share before the shared budget, so one stalled plugin fails its own calls
+	// fast rather than holding the global semaphore against every other caller.
 	a.mu.Lock()
 	if a.calls.byPlugin[pluginID] >= a.opts.maxOutstandingInvocationsPerPlugin {
 		a.mu.Unlock()
@@ -363,10 +358,8 @@ func (a *Application[P, M]) Submit(ctx context.Context, pluginID string, rollout
 	})
 }
 
-// SubmitShadow uses an independent, non-blocking admission budget. When the
-// shadow budget is full, the newest shadow invocation is dropped immediately.
-// This prevents a slow experimental candidate from consuming production
-// admission capacity or creating unbounded detached work.
+// SubmitShadow admits against an independent non-blocking budget, dropping the newest invocation when
+// it is full, so a slow candidate cannot consume production capacity.
 func (a *Application[P, M]) SubmitShadow(ctx context.Context, pluginID string, expectedGeneration int64, fn func(context.Context, P) error) (runtime.Invocation, error) {
 	if err := ctx.Err(); err != nil {
 		return runtime.Invocation{}, err

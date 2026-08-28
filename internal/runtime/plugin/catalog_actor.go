@@ -32,9 +32,8 @@ type catalogActorState struct {
 	status    catalogActorStatus
 }
 
-// catalogActorStatus is owned by catalogActor, except for LastError, which is
-// owned by runtimeSupervisor because the supervisor replaces catalog actor
-// incarnations.
+// catalogActorStatus is owned by catalogActor, except LastError, which the supervisor owns because
+// it replaces incarnations.
 type catalogActorStatus struct {
 	lifecycle          CatalogActorLifecycle
 	availability       runtime.Availability
@@ -566,7 +565,7 @@ func (a *catalogActor[T]) finishTrackedCall(callID uint64, err error) {
 // Status projection
 // ---------------------------------------------------------------------------
 
-// status computes the current aggregate catalog status from desired and router state, shared by reconcileStatus (to the supervisor) and HandleInspect (to an operator).
+// status computes the aggregate catalog status, shared by reconcileStatus and HandleInspect.
 func (a *catalogActor[T]) status() catalogActorStatus {
 	routers := make(map[string]routerActorStatus, len(a.desired))
 	routable := 0
@@ -671,11 +670,8 @@ func (a *catalogActor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 	}
 }
 
-// routerSettled reports whether a router is done moving toward revision: it reached that
-// revision and either routes or has failed for good. Failed counts as done because a route
-// that has spent its restart budget never recovers on its own, so a caller waiting for the
-// whole catalog to be healthy would wait forever on it. Starting and restarting still may
-// go either way, so they are not settled.
+// routerSettled reports whether a router reached revision and either routes or failed for good; a
+// route that spent its restart budget never recovers, so waiting on it would wait forever.
 func routerSettled(status routerActorStatus, revision uint64) bool {
 	if status.revision != revision {
 		return false
