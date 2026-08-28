@@ -1,8 +1,16 @@
 package snapshot
 
 import (
+	"ergo.services/ergo/gen"
+
 	"github.com/harishhary/blink/internal/runtime"
 )
+
+// ControllerActorName is the registered name a namespace's controller actor answers on, the address
+// this vocabulary is spoken to.
+func ControllerActorName(namespace string) gen.Atom {
+	return gen.Atom("controller-" + namespace + "-actor")
+}
 
 // NetworkTypes registers the wire vocabulary defined in snapshot_reader_actor.go - the messages a
 // controller actor and a subscribing executor's readerActor exchange over the Ergo cluster.

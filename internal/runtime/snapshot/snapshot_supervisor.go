@@ -114,7 +114,7 @@ type MessageRadarTick struct{}
 // NewSupervisor creates a reader/projection supervisor named after the namespace it follows.
 func NewSupervisor[T any](opts SupervisorOptions[T]) *Supervisor[T] {
 	normalized := supervisorOptionsWithDefaults(opts)
-	return &Supervisor[T]{opts: normalized, labels: telemetry.NewLabels(normalized.ReaderActorOptions.Namespace)}
+	return &Supervisor[T]{opts: normalized, labels: telemetry.NewLabels(normalized.Namespace)}
 }
 
 // Init validates options and configures the supervised reader and projection actors.
@@ -123,7 +123,7 @@ func (s *Supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 	defer s.publishState()
 
 	// Namespace is required: every process name in this subtree, and every metric label, comes from it.
-	if s.opts.ReaderActorOptions.Namespace == "" || s.opts.ReaderActorOptions.Endpoint.Name == "" || s.opts.ReaderActorOptions.ExecutorID == "" {
+	if s.opts.Namespace == "" || s.opts.ReaderActorOptions.Endpoint.Name == "" || s.opts.ReaderActorOptions.ExecutorID == "" {
 		return act.SupervisorSpec{}, fmt.Errorf("actor snapshot: namespace, endpoint, and executor ID are required")
 	}
 	if s.opts.Loader == nil {
@@ -140,7 +140,7 @@ func (s *Supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 		return act.SupervisorSpec{}, fmt.Errorf("snapshot supervisor registered as %q, want %q", s.Name(), s.opts.Name)
 	}
 
-	s.events = EventsFor(s.Node(), s.opts.ReaderActorOptions.Namespace)
+	s.events = EventsFor(s.Node(), s.opts.Namespace)
 	// Keep only the latest snapshot available to a restarted projection.
 	snapshotToken, err := s.RegisterEvent(s.events.Snapshot.Name, gen.EventOptions{Buffer: 1})
 	if err != nil {
@@ -177,13 +177,13 @@ func (s *Supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 		},
 		Children: []act.SupervisorChildSpec{
 			{
-				Name: s.opts.ReaderActorOptions.Name,
+				Name: ReaderActorName(s.opts.Namespace),
 				Factory: func() gen.ProcessBehavior {
 					return newReaderActor(s.opts.ReaderActorOptions, s.labels)
 				},
 			},
 			{
-				Name: ProjectionActorName(s.opts.ReaderActorOptions.Namespace),
+				Name: ProjectionActorName(s.opts.Namespace),
 				Factory: func() gen.ProcessBehavior {
 					return &projectionActor[T]{events: s.events, loader: s.opts.Loader, mode: s.opts.ProjectionMode, labels: s.labels}
 				},
@@ -196,7 +196,7 @@ func (s *Supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 func (s *Supervisor[T]) HandleChildStart(name gen.Atom, pid gen.PID) error {
 	defer s.publishState()
 	switch name {
-	case ProjectionActorName(s.opts.ReaderActorOptions.Namespace):
+	case ProjectionActorName(s.opts.Namespace):
 		if s.projectionActor.pid != (gen.PID{}) {
 			return nil
 		}
@@ -207,7 +207,7 @@ func (s *Supervisor[T]) HandleChildStart(name gen.Atom, pid gen.PID) error {
 		// Stale child-start callbacks may race a replacement and fail to send.
 		_ = s.Send(pid, MessageProjectionActorActivate{})
 		return nil
-	case s.opts.ReaderActorOptions.Name:
+	case ReaderActorName(s.opts.Namespace):
 		if s.readerActor.pid != (gen.PID{}) {
 			return nil
 		}
@@ -290,7 +290,7 @@ func (s *Supervisor[T]) HandleMessage(from gen.PID, message any) error {
 			return nil
 		}
 		s.collectorsRegistered = false
-		s.Log().Debug("radar process down, re-registering on next tick: namespace=%q", s.opts.ReaderActorOptions.Namespace)
+		s.Log().Debug("radar process down, re-registering on next tick: namespace=%q", s.opts.Namespace)
 		return nil
 	case MessageReaderActorStatusChanged:
 		if from == s.readerActor.pid {
@@ -460,7 +460,7 @@ func (s *Supervisor[T]) reconcileRadar() {
 	if err := telemetry.Register(s.Node(), subtreeMetrics); err != nil {
 		if !s.radarLogged {
 			s.radarLogged = true
-			s.Log().Debug("radar telemetry unavailable: namespace=%q error=%v", s.opts.ReaderActorOptions.Namespace, err)
+			s.Log().Debug("radar telemetry unavailable: namespace=%q error=%v", s.opts.Namespace, err)
 		}
 		return
 	}
@@ -468,7 +468,7 @@ func (s *Supervisor[T]) reconcileRadar() {
 	// Registered through the node so no child's exit deletes them, monitored so a radar restart does
 	// not leave this subtree publishing into collectors that no longer exist.
 	if err := s.MonitorProcessID(gen.ProcessID{Name: telemetry.MetricsProcess, Node: s.Node().Name()}); err != nil {
-		s.Log().Debug("radar monitor unavailable: namespace=%q error=%v", s.opts.ReaderActorOptions.Namespace, err)
+		s.Log().Debug("radar monitor unavailable: namespace=%q error=%v", s.opts.Namespace, err)
 	}
 }
 
