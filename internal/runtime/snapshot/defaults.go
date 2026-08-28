@@ -1,14 +1,39 @@
 package snapshot
 
-import "time"
+import (
+	"time"
+
+	"ergo.services/ergo/gen"
+)
 
 const (
 	DefaultRestartMin = 100 * time.Millisecond
 	DefaultRestartMax = 5 * time.Second
 )
 
-// optionsWithDefaults fills reader supervisor option defaults.
-func optionsWithDefaults[T any](opts SupervisorOptions[T]) SupervisorOptions[T] {
+// Every process in a namespace's subtree is named from that namespace, mirroring the controller's
+// controller-<namespace>-* names, so a caller addresses one without being told what it was called.
+func SupervisorName(namespace string) gen.Atom {
+	return subtreeName(namespace, "supervisor")
+}
+
+func ReaderActorName(namespace string) gen.Atom {
+	return subtreeName(namespace, "reader-actor")
+}
+
+func ProjectionActorName(namespace string) gen.Atom {
+	return subtreeName(namespace, "projection-actor")
+}
+
+func subtreeName(namespace, suffix string) gen.Atom {
+	return gen.Atom("snapshot-" + namespace + "-" + suffix)
+}
+
+// supervisorOptionsWithDefaults fills reader supervisor option defaults.
+func supervisorOptionsWithDefaults[T any](opts SupervisorOptions[T]) SupervisorOptions[T] {
+	if opts.Name == "" {
+		opts.Name = SupervisorName(opts.ReaderActorOptions.Namespace)
+	}
 	opts.ReaderActorOptions = readerOptionsWithDefaults(opts.ReaderActorOptions)
 	return opts
 }
@@ -16,7 +41,7 @@ func optionsWithDefaults[T any](opts SupervisorOptions[T]) SupervisorOptions[T] 
 // readerOptionsWithDefaults fills reader actor option defaults.
 func readerOptionsWithDefaults(opts ReaderActorOptions) ReaderActorOptions {
 	if opts.Name == "" {
-		opts.Name = "snapshot-reader"
+		opts.Name = ReaderActorName(opts.Namespace)
 	}
 	if opts.RestartMin <= 0 {
 		opts.RestartMin = DefaultRestartMin

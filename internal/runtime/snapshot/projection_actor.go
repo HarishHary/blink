@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"time"
 
 	"ergo.services/ergo/act"
 	"ergo.services/ergo/gen"
 	"github.com/harishhary/blink/internal/runtime"
+	"github.com/harishhary/blink/internal/runtime/telemetry"
 )
 
 var (
@@ -118,6 +120,7 @@ type projectionActor[T any] struct {
 	prepared           *parsedProjection[T]
 	lastError          error
 	lastStatus         ProjectionActorStatus
+	labels             telemetry.Labels
 }
 
 // --- messages ---
@@ -195,6 +198,7 @@ func (a *projectionActor[T]) HandleMessage(from gen.PID, message any) error {
 				a.lastError = nil
 			}
 		}
+		a.labels.Count(a, metricCommits, telemetry.Result(err))
 		a.reconcileStatus()
 		return a.Send(a.Parent(), MessageProjectionCommitResult{Generation: m.Generation, ProjectionPID: m.ProjectionPID, Err: err})
 	case gen.MessageDownEvent:
@@ -236,7 +240,13 @@ func (a *projectionActor[T]) applyEvent(event gen.MessageEvent) error {
 		}
 		a.observedGeneration = snap.Generation
 		a.prepared = nil
+		start := time.Now()
 		parsed, err := newParsedProjection(snap, a.loader)
+		a.labels.Observe(a, metricParseTime, time.Since(start).Seconds())
+		a.labels.Count(a, metricParses, parseResult(err, len(parsed.data.ByFileName)))
+		if parsed.failures != 0 {
+			a.labels.Add(a, metricParseFailures, float64(parsed.failures))
+		}
 		a.lastError = err
 		// Nothing parsed leaves the previous generation standing; a partial one serves what parsed and stays degraded.
 		if err != nil && len(parsed.data.ByFileName) == 0 {
@@ -316,6 +326,19 @@ func (a *projectionActor[T]) HandleInspect(gen.PID, ...string) map[string]string
 type parsedProjection[T any] struct {
 	generation int64
 	data       ProjectionData[T]
+	failures   int
+}
+
+// parseResult grades a parse: a generation that lost some specs still serves, one that lost all of them does not.
+func parseResult(err error, parsed int) string {
+	switch {
+	case err == nil:
+		return "ok"
+	case parsed != 0:
+		return "partial"
+	default:
+		return "failed"
+	}
 }
 
 // newParsedProjection converts a snapshot into owned typed data, skipping and joining specs that fail so one break costs itself.
@@ -353,7 +376,7 @@ func newParsedProjection[T any](snap *Snapshot, loader Loader[T]) (parsedProject
 			data.RolloutByID[entry.Id] = rollout
 		}
 	}
-	return parsedProjection[T]{generation: snap.Generation, data: data}, errors.Join(parseErrs...)
+	return parsedProjection[T]{generation: snap.Generation, data: data, failures: len(parseErrs)}, errors.Join(parseErrs...)
 }
 
 // ProjectionClient performs bounded reads against the stable projection endpoint.
@@ -362,11 +385,11 @@ type ProjectionClient[T any] struct {
 	endpoint gen.ProcessID
 }
 
-// NewProjectionClient creates a client for name's supervised projection child.
-func NewProjectionClient[T any](node gen.Node, name gen.Atom) *ProjectionClient[T] {
+// NewProjectionClient creates a client for the projection child of a namespace's subtree.
+func NewProjectionClient[T any](node gen.Node, namespace string) *ProjectionClient[T] {
 	return &ProjectionClient[T]{
 		node:     node,
-		endpoint: gen.ProcessID{Name: projectionActorName(name), Node: node.Name()},
+		endpoint: gen.ProcessID{Name: ProjectionActorName(namespace), Node: node.Name()},
 	}
 }
 

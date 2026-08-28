@@ -43,7 +43,6 @@ type MessageReaderActorStatusChanged struct{ status ReaderActorStatus }
 type SubscribeRequest struct {
 	ExecutorID      string
 	KnownGeneration int64
-	Role            string
 }
 
 // SubscribeResponse answers SubscribeRequest; ControllerPID lets the caller Monitor it without a second lookup, and future commits arrive as pushed SnapshotUpdate messages since a channel can't cross the cluster.
@@ -168,7 +167,6 @@ func (a *readerActor) subscribe() error {
 	request := SubscribeRequest{
 		ExecutorID:      a.opts.ExecutorID,
 		KnownGeneration: a.lastGeneration,
-		Role:            a.opts.Role,
 	}
 	response, err := a.CallProcessID(a.opts.Endpoint, request, subscribeTimeoutSeconds)
 	if err != nil {
