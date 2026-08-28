@@ -47,6 +47,7 @@ type writerMetaState struct {
 	status              snapshotWriterMetaStatus
 	activeIO            map[gen.Alias]struct{}
 	replacementPending  bool
+	writeDispatchedAt   time.Time // when the in-flight write was queued, for the write-latency histogram
 }
 
 type reconcilePlan struct {
@@ -73,6 +74,7 @@ type actor[T plugin.Artifact] struct {
 	subscribers         map[string]gen.PID
 	executors           map[string]ExecutorStatus
 	lastStatus          actorStatus
+	scope               metricScope
 }
 
 // newActor constructs the controller actor with normalized options.
@@ -154,6 +156,7 @@ func (a *actor[T]) Init(...any) error {
 	a.records = make(map[string]backends.ControllerRecord)
 	a.subscribers = make(map[string]gen.PID)
 	a.executors = make(map[string]ExecutorStatus)
+	a.scope = newMetricScope(a.opts.Namespace)
 	a.scanner = scannerMetaState{
 		restart: runtime.NewScheduledBackoff(a.opts.RestartMin, a.opts.RestartMax),
 		status: artifactScannerMetaStatus{
@@ -210,6 +213,7 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 		if _, err := a.SendAfter(a.PID(), MessageExecutorDriftCheck{}, executorDriftCheckInterval); err != nil {
 			return fmt.Errorf("schedule executor drift check: %w", err)
 		}
+		a.scope.publishState(a, a.actorGauges())
 		a.Log().Info("controller activated: name=%s scanner_alias=%s writer_alias=%s", a.opts.Name, a.scanner.alias, a.writer.alias)
 		return nil
 	case snapshot.MessageExecutorReport:
@@ -217,6 +221,7 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 		return nil
 	case MessageExecutorDriftCheck:
 		a.checkExecutorDrift()
+		a.scope.publishState(a, a.actorGauges())
 		if a.lifecycle == ActorRunning {
 			if _, err := a.SendAfter(a.PID(), MessageExecutorDriftCheck{}, executorDriftCheckInterval); err != nil {
 				return fmt.Errorf("reschedule executor drift check: %w", err)
@@ -232,6 +237,7 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 			a.scanner.status.Complete = false
 			a.scanner.status.Availability = runtime.AvailabilityUnavailable
 			a.scanner.status.LastError = m.err
+			a.scope.count(a, metricArtifactScans, "incomplete")
 			return nil
 		}
 		a.scanner.restart.CancelScheduled(true)
@@ -239,9 +245,11 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 		if m.err != nil {
 			a.scanner.status.Availability = runtime.AvailabilityDegraded
 			a.scanner.status.LastError = m.err
+			a.scope.count(a, metricArtifactScans, "degraded")
 		} else {
 			a.scanner.status.Availability = runtime.AvailabilityReady
 			a.scanner.status.LastError = nil
+			a.scope.count(a, metricArtifactScans, "ok")
 		}
 		a.scanner.entries = snapshot.CloneEntries(m.entries)
 		a.scanner.presentIDs = append([]string(nil), m.presentIDs...)
@@ -289,15 +297,21 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 		}
 		if m.err != nil {
 			a.recordWriteFailure(m.err)
+			a.scope.count(a, metricSnapshotWrites, "error")
 			return nil
 		}
 		a.writer.status.Writing = false
+		a.scope.count(a, metricSnapshotWrites, "ok")
+		if seconds, timed := elapsedSeconds(a.writer.writeDispatchedAt); timed {
+			a.scope.observe(a, metricSnapshotWriteTime, seconds)
+		}
 		changed := a.pending.next.Generation != a.generation
 		priorCommitted := a.committed
 		a.committed = a.pending.next.Clone()
 		a.generation = a.pending.next.Generation
 		a.fullRewriteRequired = false
 		if changed {
+			a.scope.count(a, metricSnapshotCommits)
 			a.Log().Info("snapshot committed: name=%s generation=%d upserts=%d tombstones=%d", a.opts.Name, a.pending.next.Generation, len(a.pending.entryUpserts), len(a.pending.tombstones))
 			a.notifySubscribers(snapshot.SnapshotUpdate{
 				Snapshot:   a.committed.Clone(),
@@ -412,7 +426,7 @@ func (a *actor[T]) startScanner() error {
 		return nil
 	}
 	a.scanner.status = artifactScannerMetaStatus{Lifecycle: ArtifactScannerMetaStarting, Availability: runtime.AvailabilityUnavailable}
-	alias, err := a.SpawnMeta(&artifactScannerMeta[T]{directory: a.opts.Directory, loader: a.opts.Loader}, gen.MetaOptions{})
+	alias, err := a.SpawnMeta(&artifactScannerMeta[T]{directory: a.opts.Directory, loader: a.opts.Loader, scope: a.scope}, gen.MetaOptions{})
 	if err != nil {
 		a.scanner.status.LastError = fmt.Errorf("spawn artifact scanner meta: %w", err)
 		a.Log().Error("artifact scanner meta spawn failed: name=%s error=%v", a.opts.Name, a.scanner.status.LastError)
@@ -441,6 +455,7 @@ func (a *actor[T]) startWriter() error {
 	alias, err := a.SpawnMeta(&snapshotWriterMeta{
 		database:   a.database,
 		barrier:    a.barrier,
+		scope:      a.scope,
 		supervisor: a.Parent(),
 		retryMin:   a.opts.RetryMin,
 		retryMax:   a.opts.RetryMax,
@@ -502,6 +517,7 @@ func (a *actor[T]) scheduleScannerRestart() error {
 	a.scanner.restart.Pending = true
 	a.scanner.restart.Cancel = cancel
 	a.scanner.status.Lifecycle = ArtifactScannerMetaRestarting
+	a.scope.count(a, metricWorkerRestarts, "scanner")
 	a.Log().Debug("artifact scanner restart scheduled: name=%s delay=%s token=%d", a.opts.Name, delay, token)
 	return nil
 }
@@ -524,6 +540,7 @@ func (a *actor[T]) scheduleWriterRestart() error {
 	a.writer.restart.Pending = true
 	a.writer.restart.Cancel = cancel
 	a.writer.status.Lifecycle = SnapshotWriterMetaRestarting
+	a.scope.count(a, metricWorkerRestarts, "writer")
 	a.Log().Debug("snapshot writer restart scheduled: name=%s delay=%s token=%d", a.opts.Name, delay, token)
 	return nil
 }
@@ -544,6 +561,7 @@ func (a *actor[T]) sendPending() error {
 		return nil
 	}
 	a.writer.status.Writing = true
+	a.writer.writeDispatchedAt = time.Now()
 	message := MessageWriteSnapshot{
 		records:    append([]backends.ControllerRecord(nil), a.pending.recordUpserts...),
 		next:       *a.pending.next.Clone(),
@@ -611,7 +629,27 @@ func (a *actor[T]) reconcileStatus() {
 		return
 	}
 	a.lastStatus = next
+	a.scope.publishState(a, a.actorGauges())
 	_ = a.Send(a.Parent(), MessageActorStatusChanged{status: next})
+}
+
+// actorGauges collects the current gauge values; the drift-check tick republishes them so a
+// namespace whose status is steady still reports fresh series.
+func (a *actor[T]) actorGauges() actorGauges {
+	drifting := 0
+	for _, status := range a.executors {
+		if !status.DriftSince.IsZero() {
+			drifting++
+		}
+	}
+	return actorGauges{
+		availability: a.availability(),
+		generation:   a.generation,
+		records:      len(a.records),
+		subscribers:  len(a.subscribers),
+		executors:    len(a.executors),
+		drifting:     drifting,
+	}
 }
 
 // status computes the controller's current publishable status, shared by reconcileStatus (to the supervisor) and HandleInspect (to an operator).
@@ -634,12 +672,7 @@ func (a *actor[T]) availability() runtime.Availability {
 // scanner and writer workers' own health, and the executor/subscriber counts that health doesn't
 // capture - a controller can be Ready while still drifting behind on executor convergence.
 func (a *actor[T]) HandleInspect(gen.PID, ...string) map[string]string {
-	drifting := 0
-	for _, status := range a.executors {
-		if !status.DriftSince.IsZero() {
-			drifting++
-		}
-	}
+	drifting := a.actorGauges().drifting
 	upserts, tombstones := 0, 0
 	if a.pending != nil {
 		upserts, tombstones = len(a.pending.entryUpserts), len(a.pending.tombstones)
@@ -778,6 +811,13 @@ func (a *actor[T]) checkExecutorDrift() {
 	now := time.Now()
 	for id, status := range a.executors {
 		stale := now.Sub(status.LastSeen) > executorStaleThreshold
+		// A stale executor holding no subscription is gone: its ID is its pod name, so that ID never
+		// returns, and keeping it would inflate the executor gauge for the life of the controller.
+		if _, subscribed := a.subscribers[id]; stale && !subscribed {
+			delete(a.executors, id)
+			a.Log().Debug("executor forgotten: name=%s executor_id=%s last_seen=%s", a.opts.Name, id, status.LastSeen)
+			continue
+		}
 		behind := status.ReadyGeneration < a.generation
 		switch {
 		case stale || !behind:
