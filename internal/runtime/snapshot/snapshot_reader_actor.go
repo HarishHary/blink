@@ -32,9 +32,8 @@ type ReaderActorStatus struct {
 
 // --- messages ---
 
-type MessageReaderActorActivate struct {
-	snapshotEvent runtime.EventPublication
-}
+// MessageReaderActorActivate tells the reader child its parent recorded its PID and it may subscribe.
+type MessageReaderActorActivate struct{}
 
 type MessageReaderActorStatusChanged struct{ status ReaderActorStatus }
 
@@ -70,7 +69,8 @@ type readerActor struct {
 	act.Actor
 	opts           ReaderActorOptions
 	labels         telemetry.Labels
-	snapshotEvent  runtime.EventPublication
+	snapshotEvent  eventPublication
+	activated      bool
 	controllerPID  gen.PID
 	subscribed     bool
 	lastGeneration int64
@@ -79,13 +79,17 @@ type readerActor struct {
 	lastStatus     ReaderActorStatus
 }
 
-// newReaderActor constructs the reader actor for one subscription.
-func newReaderActor(opts ReaderActorOptions, labels telemetry.Labels) gen.ProcessBehavior {
-	return &readerActor{opts: opts, labels: labels}
+// newReaderActor constructs the reader actor for one subscription. It publishes every snapshot it
+// receives, so it takes the publication its supervisor registered on its behalf.
+func newReaderActor(opts ReaderActorOptions, labels telemetry.Labels, snapshotEvent eventPublication) gen.ProcessBehavior {
+	return &readerActor{opts: opts, labels: labels, snapshotEvent: snapshotEvent}
 }
 
-// Init initializes the resubscribe backoff.
+// Init validates the snapshot publication and initializes the resubscribe backoff.
 func (a *readerActor) Init(...any) error {
+	if !a.snapshotEvent.registered() {
+		return fmt.Errorf("snapshot reader: a registered snapshot event is required")
+	}
 	a.restart = runtime.NewScheduledBackoff(a.opts.RestartMin, a.opts.RestartMax)
 	return nil
 }
@@ -95,10 +99,10 @@ func (a *readerActor) HandleMessage(from gen.PID, message any) error {
 	defer a.reconcileStatus()
 	switch m := message.(type) {
 	case MessageReaderActorActivate:
-		if from != a.Parent() || a.snapshotEvent.Registered() {
+		if from != a.Parent() || a.activated {
 			return nil
 		}
-		a.snapshotEvent = m.snapshotEvent
+		a.activated = true
 		return a.subscribe()
 	case SnapshotUpdate:
 		if reason := a.updateRejection(from, m); reason != "" {
@@ -232,15 +236,12 @@ func (a *readerActor) scheduleSubscribeRestart() error {
 
 // publishSnapshot sends the received snapshot to subscribers.
 func (a *readerActor) publishSnapshot(snap *Snapshot) {
-	if !a.snapshotEvent.Registered() {
-		return
-	}
-	_ = a.SendEvent(a.snapshotEvent.Name, a.snapshotEvent.Token, snap.Clone())
+	_ = a.SendEvent(a.snapshotEvent.name, a.snapshotEvent.token, snap.Clone())
 }
 
 // reconcileStatus recomputes and, on change, sends the current reader status to the supervisor.
 func (a *readerActor) reconcileStatus() {
-	if !a.snapshotEvent.Registered() {
+	if !a.activated {
 		return
 	}
 	next := a.status()

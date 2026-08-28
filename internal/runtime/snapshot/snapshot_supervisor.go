@@ -40,14 +40,25 @@ type Events struct {
 	statusToken   gen.Ref
 }
 
+// eventPublication is one registered event and the token SendEvent requires to publish through it:
+// the pair the supervisor keeps for what it publishes itself, and hands to the child that publishes
+// in its place.
+type eventPublication struct {
+	name  gen.Atom
+	token gen.Ref
+}
+
+// registered reports whether the event was registered and its token handed over.
+func (p eventPublication) registered() bool { return p.token != (gen.Ref{}) }
+
 // snapshotPublication is what the reader actor publishes committed snapshots through.
-func (e Events) snapshotPublication() runtime.EventPublication {
-	return runtime.EventPublication{Name: e.Snapshot.Name, Token: e.snapshotToken}
+func (e Events) snapshotPublication() eventPublication {
+	return eventPublication{name: e.Snapshot.Name, token: e.snapshotToken}
 }
 
 // statusPublication is what the supervisor publishes reader status through, keeping it itself.
-func (e Events) statusPublication() runtime.EventPublication {
-	return runtime.EventPublication{Name: e.Status.Name, Token: e.statusToken}
+func (e Events) statusPublication() eventPublication {
+	return eventPublication{name: e.Status.Name, token: e.statusToken}
 }
 
 // EventsFor returns the stable event identifiers for a namespace's snapshot subtree. Both are
@@ -192,13 +203,13 @@ func (s *Supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 			{
 				Name: ReaderActorName(s.opts.Namespace),
 				Factory: func() gen.ProcessBehavior {
-					return newReaderActor(s.opts.ReaderActorOptions, s.labels)
+					return newReaderActor(s.opts.ReaderActorOptions, s.labels, s.events.snapshotPublication())
 				},
 			},
 			{
 				Name: ProjectionActorName(s.opts.Namespace),
 				Factory: func() gen.ProcessBehavior {
-					return newProjectionActor(s.events, s.loader, s.opts.ProjectionMode, s.labels)
+					return newProjectionActor(s.events.Snapshot, s.events.Status, s.loader, s.opts.ProjectionMode, s.labels)
 				},
 			},
 		},
@@ -231,9 +242,7 @@ func (s *Supervisor[T]) HandleChildStart(name gen.Atom, pid gen.PID) error {
 			s.readerActor.status = status
 			s.publishStatus()
 		}
-		return s.Send(pid, MessageReaderActorActivate{
-			snapshotEvent: s.events.snapshotPublication(),
-		})
+		return s.Send(pid, MessageReaderActorActivate{})
 	default:
 		return nil
 	}
@@ -496,8 +505,8 @@ func (s *Supervisor[T]) executorAvailability() runtime.Availability {
 
 // publishStatus publishes the reader actor's current status.
 func (s *Supervisor[T]) publishStatus() {
-	if status := s.events.statusPublication(); status.Registered() {
-		_ = s.SendEvent(status.Name, status.Token, s.readerActor.status)
+	if status := s.events.statusPublication(); status.registered() {
+		_ = s.SendEvent(status.name, status.token, s.readerActor.status)
 	}
 }
 
