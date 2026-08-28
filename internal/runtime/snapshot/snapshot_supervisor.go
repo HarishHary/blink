@@ -2,6 +2,7 @@ package snapshot
 
 import (
 	"fmt"
+	"time"
 
 	"ergo.services/ergo/act"
 	"ergo.services/ergo/gen"
@@ -12,6 +13,11 @@ const (
 	readerActorRestartIntensity uint16 = 5
 	readerActorRestartPeriod    uint16 = 10
 )
+
+// executorReportInterval is how often this executor reports convergence to its controller: a
+// quarter of the controller's staleness threshold, so three consecutive lost reports still don't
+// read as a dead executor.
+const executorReportInterval = 30 * time.Second
 
 // Events identifies the buffered snapshot and status events produced
 // by a snapshot supervisor. Each retains only its latest value. Snapshot carries
@@ -56,7 +62,36 @@ type Supervisor[T any] struct {
 	readerActor     readerActorState
 	projectionActor projectionActorState
 	events          Events
+	reportCancel    gen.CancelFunc
 }
+
+// ExecutorHeartbeat is this executor's periodic liveness/generation report to the controller.
+type ExecutorHeartbeat struct {
+	CommittedGeneration int64
+	ReadyGeneration     int64
+	Availability        string
+}
+
+// ExecutorAppliedGeneration reports that a generation went live on this executor: the projection
+// committed it, which in external mode means the owning plugin runtime admitted it first.
+type ExecutorAppliedGeneration struct {
+	Generation int64
+	Admitted   bool
+}
+
+// MessageExecutorReport carries one executor's convergence report (Heartbeat and/or Applied, either
+// may be nil), sent fire-and-forget to the controller actor by the snapshot supervisor. LastError is
+// text, not an error: it is rendered into /status and never compared, and EDF reduces an
+// unregistered error to its message anyway.
+type MessageExecutorReport struct {
+	ExecutorID string
+	Heartbeat  *ExecutorHeartbeat
+	Applied    *ExecutorAppliedGeneration
+	LastError  string
+}
+
+// MessageExecutorReportTick drives the periodic convergence report to the controller.
+type MessageExecutorReportTick struct{}
 
 // NewSupervisor creates a reader/projection supervisor with stable child names.
 func NewSupervisor[T any](opts SupervisorOptions[T]) *Supervisor[T] {
@@ -98,6 +133,11 @@ func (s *Supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 	s.events.statusToken = statusToken
 	s.readerActor.status = newReaderActorStatus()
 	s.projectionActor.status = newProjectionActorStatus()
+	// Delayed, not immediate: the first report is worth sending only once the reader has had its
+	// chance to subscribe, and every state change reports on its own before then.
+	if err := s.scheduleExecutorReport(); err != nil {
+		return act.SupervisorSpec{}, err
+	}
 
 	return act.SupervisorSpec{
 		Type:                act.SupervisorTypeRestForOne,
@@ -180,8 +220,12 @@ func (s *Supervisor[T]) HandleChildTerminate(_ gen.Atom, pid gen.PID, reason err
 		status := s.readerActor.status
 		status.Lifecycle = ReaderActorRestarting
 		status.Availability = runtime.AvailabilityUnavailable
+		if reason != nil {
+			status.LastError = reason.Error()
+		}
 		s.readerActor.status = status
 		s.publishStatus()
+		s.reportExecutor(nil)
 		return nil
 	default:
 		return nil
@@ -191,16 +235,33 @@ func (s *Supervisor[T]) HandleChildTerminate(_ gen.Atom, pid gen.PID, reason err
 // HandleMessage routes child status and external projection commit messages.
 func (s *Supervisor[T]) HandleMessage(from gen.PID, message any) error {
 	switch message := message.(type) {
+	case MessageExecutorReportTick:
+		if from != s.PID() {
+			return nil
+		}
+		s.reportExecutor(nil)
+		return s.scheduleExecutorReport()
 	case MessageReaderActorStatusChanged:
 		if from == s.readerActor.pid {
 			if s.readerActor.status != message.status {
+				attached := s.readerActor.status.Availability != message.status.Availability
 				s.readerActor.status = message.status
 				s.publishStatus()
+				if attached {
+					s.reportExecutor(nil)
+				}
 			}
 		}
 	case MessageProjectionActorStatusChanged:
 		if from == s.projectionActor.pid {
+			applied := message.Status.CommittedGeneration > s.projectionActor.status.CommittedGeneration
 			s.projectionActor.status = message.Status
+			if applied {
+				s.reportExecutor(&ExecutorAppliedGeneration{
+					Generation: message.Status.CommittedGeneration,
+					Admitted:   message.Status.Availability == runtime.AvailabilityReady,
+				})
+			}
 			if s.opts.ProjectionMode == ProjectionCommitExternal {
 				message.ProjectionPID = s.projectionActor.pid
 				_ = s.Send(s.Parent(), message)
@@ -245,6 +306,8 @@ func (s *Supervisor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 		"supervisor:reader_lifecycle":                string(s.readerActor.status.Lifecycle),
 		"supervisor:reader_availability":             string(s.readerActor.status.Availability),
 		"supervisor:reader_generation":               fmt.Sprintf("%d", s.readerActor.status.Generation),
+		"supervisor:reader_last_error":               s.readerActor.status.LastError,
+		"supervisor:reported_availability":           string(s.executorAvailability()),
 		"supervisor:projection":                      fmt.Sprintf("%s", s.projectionActor.pid),
 		"supervisor:projection_lifecycle":            string(s.projectionActor.status.Lifecycle),
 		"supervisor:projection_availability":         string(s.projectionActor.status.Availability),
@@ -256,6 +319,7 @@ func (s *Supervisor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 // Terminate marks children stopped and reports the shutdown reason.
 func (s *Supervisor[T]) Terminate(reason error) {
 	defer s.publishStatus()
+	s.cancelExecutorReport()
 	s.projectionActor.status.Lifecycle = ProjectionActorStopped
 	s.projectionActor.status.Availability = runtime.AvailabilityUnavailable
 	s.readerActor.status.Lifecycle = ReaderActorStopped
@@ -266,6 +330,53 @@ func (s *Supervisor[T]) Terminate(reason error) {
 		default:
 		}
 	}
+}
+
+// reportExecutor sends this executor's convergence report to its controller, fire-and-forget: the
+// controller keeps it for observability only, and the next report supersedes a lost one. The
+// supervisor is the one process that sees both halves - the generation the controller pushed to the
+// reader, and the generation the projection actually holds live, which in external commit mode is
+// the older of the two until the owning runtime admits the new one.
+func (s *Supervisor[T]) reportExecutor(applied *ExecutorAppliedGeneration) {
+	_ = s.SendProcessID(s.opts.ReaderActorOptions.Endpoint, MessageExecutorReport{
+		ExecutorID: s.opts.ReaderActorOptions.ExecutorID,
+		Heartbeat: &ExecutorHeartbeat{
+			CommittedGeneration: s.readerActor.status.Generation,
+			ReadyGeneration:     s.projectionActor.status.CommittedGeneration,
+			Availability:        string(s.executorAvailability()),
+		},
+		Applied:   applied,
+		LastError: s.readerActor.status.LastError,
+	})
+}
+
+// scheduleExecutorReport arms the next periodic report, replacing any already scheduled.
+func (s *Supervisor[T]) scheduleExecutorReport() error {
+	s.cancelExecutorReport()
+	cancel, err := s.SendAfter(s.PID(), MessageExecutorReportTick{}, executorReportInterval)
+	if err != nil {
+		return fmt.Errorf("schedule executor report: %w", err)
+	}
+	s.reportCancel = cancel
+	return nil
+}
+
+// cancelExecutorReport drops any scheduled report.
+func (s *Supervisor[T]) cancelExecutorReport() {
+	if s.reportCancel != nil {
+		s.reportCancel()
+		s.reportCancel = nil
+	}
+}
+
+// executorAvailability is what the controller needs to know about this executor: the projection's
+// own health, capped at degraded while the reader cannot receive the next generation.
+func (s *Supervisor[T]) executorAvailability() runtime.Availability {
+	availability := s.projectionActor.status.Availability
+	if availability == runtime.AvailabilityReady && s.readerActor.status.Availability != runtime.AvailabilityReady {
+		return runtime.AvailabilityDegraded
+	}
+	return availability
 }
 
 // publishStatus publishes the reader actor's current status.
