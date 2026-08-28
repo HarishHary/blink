@@ -16,7 +16,8 @@ import (
 // Types & state
 // ---------------------------------------------------------------------------
 
-// ReconcilerActorLifecycle describes the stable actor that projects control-plane snapshots and local artifacts into runtime desired state.
+// ReconcilerActorLifecycle describes the actor projecting snapshots and local artifacts into desired
+// state.
 type ReconcilerActorLifecycle string
 
 const (
@@ -66,7 +67,8 @@ type reconcilerActor struct {
 // Messages
 // ---------------------------------------------------------------------------
 
-// MessageReconcilerActorActivate gives a replacement reconciler a revision base newer than the last state its supervisor accepted.
+// MessageReconcilerActorActivate gives a replacement reconciler a revision base past the last
+// accepted state.
 type MessageReconcilerActorActivate struct{ revisionBase uint64 }
 
 // MessageReconcilerActorStatusChanged publishes the reconciler status to its supervisor.
@@ -588,7 +590,7 @@ func (a *reconcilerActor) scheduleWatcherRestart() error {
 // Status projection
 // ---------------------------------------------------------------------------
 
-// status computes the reconciler's current publishable status, shared by reconcileStatus (to the supervisor) and HandleInspect (to an operator).
+// status computes the reconciler's publishable status, shared by reconcileStatus and HandleInspect.
 func (a *reconcilerActor) status() reconcilerActorStatus {
 	availability := runtime.AvailabilityReady
 	switch {
@@ -627,9 +629,7 @@ func (a *reconcilerActor) reconcileStatus() {
 	_ = a.Send(a.Parent(), MessageReconcilerActorStatusChanged{status: next})
 }
 
-// HandleInspect exposes concise reconciler operational state: lifecycle/availability plus the
-// resolver/watcher sub-workers' own health and the dirty/resolving/deferred gates that decide
-// when a re-resolution is proposed.
+// HandleInspect exposes lifecycle, both sub-workers' health, and the gates deciding a re-resolution.
 func (a *reconcilerActor) HandleInspect(gen.PID, ...string) map[string]string {
 	status := a.status()
 	return map[string]string{

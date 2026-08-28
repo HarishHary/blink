@@ -40,21 +40,15 @@ type artifactWatcherMetaState struct {
 	status  artifactWatcherMetaStatus
 }
 
-// artifactWatcherMetaStatus is owned by reconcilerActor. The watcher
-// meta-process reports directory facts; the actor derives lifecycle and
-// availability and owns restart state.
+// artifactWatcherMetaStatus is owned by reconcilerActor: the watcher reports directory facts, the
+// actor derives lifecycle and availability.
 type artifactWatcherMetaStatus struct {
 	lifecycle    ArtifactWatcherMetaLifecycle
 	availability runtime.Availability
 }
 
-// artifactWatcherMeta owns one watcher instance. fsnotify provides
-// low-latency notifications and the periodic metadata fingerprint is a fallback
-// for filesystems or mount implementations that miss an event. A temporarily
-// absent directory is treated as artifact drift, not as a fatal watcher error;
-// the meta-process keeps polling and reattaches fsnotify when the directory
-// returns. The parent actor owns restart policy and fences notifications by
-// alias.
+// artifactWatcherMeta owns one watcher: fsnotify for latency, a periodic fingerprint for the events
+// it misses, and polling through an absent directory, which is drift rather than a fatal error.
 type artifactWatcherMeta struct {
 	gen.MetaProcess
 	directory string
@@ -110,8 +104,7 @@ func (m *artifactWatcherMeta) Start() error {
 	defer watcher.Close()
 	state := artifactWatcherRunState{watcher: watcher}
 
-	// Directory availability is external. Keep polling when the mount or
-	// directory is temporarily absent instead of failing this process.
+	// Directory availability is external: keep polling rather than failing this process.
 	if err := m.tryAttachWatch(&state); err != nil {
 		m.Log().Warning("artifact watcher unavailable: directory=%q alias=%s error=%v", m.directory, m.ID(), err)
 	}
@@ -187,8 +180,7 @@ func (m *artifactWatcherMeta) Start() error {
 			return fmt.Errorf("%w: %w", runtime.ErrArtifactWatch, err)
 
 		case <-debounceC:
-			// An fsnotify event says to look, not what to conclude: executing a plugin binary
-			// produces one on macOS, so the fingerprint decides as it does on a poll tick.
+			// An event says to look, not what to conclude; the fingerprint decides, as on a poll tick.
 			debounceC = nil
 			if err := m.notifyOnDirectoryChange(&state); err != nil {
 				return err
@@ -233,8 +225,8 @@ func (m *artifactWatcherMeta) HandleInspect(gen.PID, ...string) map[string]strin
 // Watcher operations
 // ---------------------------------------------------------------------------
 
-// notifyOnDirectoryChange republishes watcher state and notifies the reconciler only when the
-// directory fingerprint moved. Both change-detection paths decide here so they cannot diverge.
+// notifyOnDirectoryChange notifies the reconciler only when the fingerprint moved, for both
+// change-detection paths, so they cannot diverge.
 func (m *artifactWatcherMeta) notifyOnDirectoryChange(state *artifactWatcherRunState) error {
 	fingerprint, err := artifactDirectoryFingerprint(m.directory)
 	if err != nil {
@@ -320,9 +312,8 @@ func (m *artifactWatcherMeta) publishWatchState(state *artifactWatcherRunState) 
 // Helpers
 // ---------------------------------------------------------------------------
 
-// artifactDirectoryFingerprint intentionally hashes metadata rather than file
-// contents. It is only a change detector; artifactResolverMeta performs the
-// authoritative SHA-256 content verification before a deployment is applied.
+// artifactDirectoryFingerprint hashes metadata, not contents: it only detects change, while
+// artifactResolverMeta verifies content before a deployment is applied.
 func artifactDirectoryFingerprint(directory string) ([sha256.Size]byte, error) {
 	entries, err := os.ReadDir(directory)
 	if err != nil {
