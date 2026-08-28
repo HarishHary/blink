@@ -5,13 +5,11 @@ import (
 	"github.com/harishhary/blink/internal/runtime/telemetry"
 )
 
-// Radar metric names by publishing layer. The namespace label carries the controller namespace this
-// runtime follows, the same value the controller's and the snapshot subtree's series carry, so all
-// three sides join on it.
+// Radar metric names by publishing layer. The namespace label is the controller namespace this runtime
+// follows, so its series join the controller's and the snapshot subtree's.
 
-// Supervisor series: every gauge, since the supervisor is the one process holding what the
-// reconciler, the catalog, and every route below it report. A gauge labelled by namespace alone
-// published from a router or a manager too would be overwritten by whichever one sampled last.
+// Supervisor series: every gauge, since it holds what the reconciler, catalog, and routes report and a
+// namespace-labelled gauge published from below too would be overwritten by whoever sampled last.
 const (
 	metricSupervisorLifecycle    = "blink_plugin_supervisor_lifecycle"
 	metricAvailability           = "blink_plugin_availability"

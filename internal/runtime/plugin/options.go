@@ -7,8 +7,7 @@ import (
 )
 
 // ApplicationOptions configures one plugin actor subtree on a process-owned Ergo node. Namespace is
-// configured here alone: the application hands it to the supervisor, which names the whole subtree
-// and labels every series from it.
+// configured here alone, and names the whole subtree and every series from it.
 type ApplicationOptions struct {
 	Namespace          string
 	MaxBatchSize       int
@@ -56,9 +55,8 @@ type DeploymentManagerOptions struct {
 	IdleTimeout     time.Duration
 	DrainTimeout    time.Duration
 	CircuitCooldown time.Duration // how long an open circuit waits before admitting calls again
-	// RetryMin and RetryMax pace replacing a plugin process the manager lost, and their budget is
-	// what the circuit above opens on: process recovery is the manager's own job now that nothing
-	// sits between it and the processes it owns.
+	// RetryMin and RetryMax pace replacing a lost plugin process, and their budget is what the circuit
+	// above opens on; process recovery is the manager's own job.
 	RetryMin time.Duration
 	RetryMax time.Duration
 	// ProcessBudget is shared by every manager in the process and bounds their combined

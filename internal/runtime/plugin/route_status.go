@@ -23,9 +23,8 @@ const (
 	DeploymentRouteStopped    DeploymentRouteLifecycle = "stopped"
 )
 
-// deploymentRouteStatus is what one deployment route reports upward. It is a projection of a
-// deployment manager's own status, not a separate actor's: the router keeps a route per plugin
-// version, and the catalog and supervisor read process counts and queue depth from here.
+// deploymentRouteStatus is what one route reports upward, a projection of its deployment manager's own
+// status rather than a separate actor's; the router keeps one per plugin version.
 type deploymentRouteStatus struct {
 	lifecycle        DeploymentRouteLifecycle
 	availability     runtime.Availability

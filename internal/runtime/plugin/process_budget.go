@@ -14,11 +14,9 @@ const (
 	DefaultProcessBudgetHardCap         = 512       // sanity ceiling regardless of memory available
 )
 
-// processBudgetFromResources sizes the default ProcessBudget from CPU and memory together.
-// GOMAXPROCS alone undercounts it for the common case here: small, mostly-idle plugin
-// subprocesses (a matcher's whole job can be one comparison) that spend far more time on a gRPC
-// round trip than on CPU, so cores are not the binding constraint - memory is, since running past
-// the container's limit OOMs the pod regardless of how idle each subprocess is.
+// processBudgetFromResources sizes the default ProcessBudget from CPU and memory together, since these
+// subprocesses spend more time on a gRPC round trip than on CPU: memory is the binding constraint,
+// because passing the container's limit OOMs the pod however idle each subprocess is.
 func processBudgetFromResources() int {
 	cpuFloor := goruntime.GOMAXPROCS(0) * DefaultRuntimeProcessGrowthPerProc
 	limit, ok := cgroupMemoryLimitBytes()

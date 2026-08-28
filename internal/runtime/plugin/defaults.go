@@ -46,8 +46,9 @@ const (
 	DefaultRouterRetryMax                   = DefaultRetryMax
 )
 
-// Every process in a namespace's subtree is named from that namespace, mirroring the controller's
-// controller-<namespace>-* names, so a caller addresses one without being told what it was called.
+// Every name below derives from the namespace, mirroring the controller's controller-<namespace>-*
+// names, so a caller never has to be told one.
+
 // ApplicationName is the runtime application's registered name.
 func ApplicationName(namespace string) gen.Atom { return subtreeName(namespace, "application") }
 
