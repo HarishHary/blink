@@ -12,28 +12,35 @@ const (
 	DefaultRestartMax = 5 * time.Second
 )
 
-// optionsWithDefaults fills application option defaults.
-func optionsWithDefaults[T plugin.Artifact](opts Options[T]) Options[T] {
+// applicationOptionsWithDefaults fills application option defaults.
+func applicationOptionsWithDefaults[T plugin.Artifact](opts ApplicationOptions[T]) ApplicationOptions[T] {
+	name := gen.Atom("controller-" + opts.Namespace)
 	if opts.Name == "" {
-		opts.Name = gen.Atom("controller-" + opts.Namespace)
+		opts.Name = name + "-application"
 	}
-	opts.SupervisorOptions = supervisorOptionsWithDefaults(opts.Name, opts.SupervisorOptions)
+	if opts.SupervisorOptions.Namespace == "" {
+		opts.SupervisorOptions.Namespace = opts.Namespace
+	}
+	opts.SupervisorOptions = supervisorOptionsWithDefaults(name, opts.SupervisorOptions)
 	return opts
 }
 
 // supervisorOptionsWithDefaults fills supervisor option defaults.
-func supervisorOptionsWithDefaults[T plugin.Artifact](applicationName gen.Atom, opts SupervisorOptions[T]) SupervisorOptions[T] {
+func supervisorOptionsWithDefaults[T plugin.Artifact](supervisorName gen.Atom, opts SupervisorOptions[T]) SupervisorOptions[T] {
 	if opts.Name == "" {
-		opts.Name = applicationName + "-supervisor"
+		opts.Name = supervisorName + "-supervisor"
 	}
-	opts.ActorOptions = actorOptionsWithDefaults(applicationName, opts.ActorOptions)
+	if opts.ActorOptions.Namespace == "" {
+		opts.ActorOptions.Namespace = opts.Namespace
+	}
+	opts.ActorOptions = actorOptionsWithDefaults(supervisorName, opts.ActorOptions)
 	return opts
 }
 
 // actorOptionsWithDefaults fills actor names and timing defaults.
-func actorOptionsWithDefaults[T plugin.Artifact](applicationName gen.Atom, opts ActorOptions[T]) ActorOptions[T] {
+func actorOptionsWithDefaults[T plugin.Artifact](actorName gen.Atom, opts ActorOptions[T]) ActorOptions[T] {
 	if opts.Name == "" {
-		opts.Name = applicationName + "-actor"
+		opts.Name = actorName + "-actor"
 	}
 	if opts.RestartMin <= 0 {
 		opts.RestartMin = DefaultRestartMin

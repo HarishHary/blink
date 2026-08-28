@@ -42,6 +42,7 @@ type snapshotWriterMeta struct {
 	retryMin   time.Duration
 	retryMax   time.Duration
 	jobs       chan MessageWriteSnapshot
+	scope      metricScope
 }
 
 // --- messages ---
@@ -101,6 +102,7 @@ func (m *snapshotWriterMeta) Start() (runErr error) {
 
 	m.Log().Debug("snapshot writer loading persisted state: alias=%s", m.ID())
 
+	loadStarted := time.Now()
 	records, err := m.database.LoadAll(m.runCtx)
 	var generation int64
 	var saved *snapshot.Snapshot
@@ -111,6 +113,8 @@ func (m *snapshotWriterMeta) Start() (runErr error) {
 	} else if saved, err = m.database.LoadSnapshot(m.runCtx); err != nil {
 		err = fmt.Errorf("%w: snapshot: %w", runtime.ErrSnapshotLoad, err)
 	}
+	m.scope.observe(m, metricSnapshotLoadTime, time.Since(loadStarted).Seconds())
+	m.scope.count(m, metricSnapshotLoads, metricResult(err))
 	records = append([]backends.ControllerRecord(nil), records...)
 	for i := range records {
 		records[i] = records[i].Clone()
@@ -139,6 +143,7 @@ func (m *snapshotWriterMeta) Start() (runErr error) {
 		case <-m.runCtx.Done():
 			return nil
 		case job := <-m.jobs:
+			m.scope.set(m, metricWriteQueue, float64(len(m.jobs)))
 			m.Log().Debug("snapshot write started: alias=%s generation=%d changed=%t upserts=%d tombstones=%d", m.ID(), job.next.Generation, job.changed, len(job.upserts), len(job.tombstones))
 			retry := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(
 				backoff.WithInitialInterval(m.retryMin),
@@ -151,6 +156,7 @@ func (m *snapshotWriterMeta) Start() (runErr error) {
 			err := backoff.Retry(func() error {
 				attempt++
 				writeErr := m.write(job)
+				m.scope.count(m, metricWriteAttempts, metricResult(writeErr))
 				if writeErr == nil {
 					return nil
 				}
@@ -188,9 +194,11 @@ func (m *snapshotWriterMeta) HandleMessage(_ gen.PID, message any) error {
 	case MessageWriteSnapshot:
 		select {
 		case m.jobs <- message:
+			m.scope.set(m, metricWriteQueue, float64(len(m.jobs)))
 			m.Log().Debug("snapshot write queued: alias=%s generation=%d", m.ID(), message.next.Generation)
 			return nil
 		default:
+			m.scope.count(m, metricWriteQueueRejects)
 			m.Log().Warning("snapshot write queue full: alias=%s generation=%d", m.ID(), message.next.Generation)
 			return fmt.Errorf("%w: already queued", runtime.ErrSnapshotWrite)
 		}

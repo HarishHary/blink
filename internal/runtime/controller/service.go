@@ -17,12 +17,12 @@ const serviceShutdownTimeout = 45 * time.Second
 type Service[T plugin.Artifact] struct {
 	node            gen.Node
 	name            string
-	opts            Options[T]
+	opts            ApplicationOptions[T]
 	shutdownTimeout time.Duration
 }
 
 // NewService creates a service that constructs a fresh application per Run.
-func NewService[T plugin.Artifact](node gen.Node, name string, opts Options[T]) *Service[T] {
+func NewService[T plugin.Artifact](node gen.Node, name string, opts ApplicationOptions[T]) *Service[T] {
 	return &Service[T]{node: node, name: name, opts: opts, shutdownTimeout: serviceShutdownTimeout}
 }
 

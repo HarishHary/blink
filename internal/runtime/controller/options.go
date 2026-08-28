@@ -7,23 +7,25 @@ import (
 	"github.com/harishhary/blink/internal/runtime/plugin"
 )
 
-// Options configures one plugin-type controller application.
-type Options[T plugin.Artifact] struct {
-	// Names default to controller-<namespace>, <name>-supervisor, and <name>-actor.
+// ApplicationOptions configures one plugin-type controller application.
+type ApplicationOptions[T plugin.Artifact] struct {
 	Name              gen.Atom
 	DatabaseDSN       string
 	Namespace         string
 	SupervisorOptions SupervisorOptions[T]
 }
 
+// SupervisorOptions configures one plugin-type controller supervisor.
 type SupervisorOptions[T plugin.Artifact] struct {
 	Name         gen.Atom
+	Namespace    string
 	ActorOptions ActorOptions[T]
 }
 
-// ActorOptions configures the controller actor.
+// ActorOptions configures one plugin-type controller actor.
 type ActorOptions[T plugin.Artifact] struct {
 	Name       gen.Atom
+	Namespace  string
 	Directory  string
 	Loader     plugin.Loader[T]
 	RestartMin time.Duration
