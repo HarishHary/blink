@@ -42,7 +42,7 @@ type runtimeCompletion struct {
 // runtimeSupervisor application member on a shared, process-owned Ergo node.
 type Application[P Artifact, M any] struct {
 	app.Application
-	opts                Options
+	opts                ApplicationOptions
 	logger              *logger.Logger
 	lifecycle           applicationLifecycle
 	supervisor          gen.PID
@@ -67,7 +67,7 @@ type outstandingCalls struct {
 // ---------------------------------------------------------------------------
 
 // NewApplication creates an unloaded plugin application.
-func NewApplication[P Artifact, M any](opts Options, adapter *Adapter[P], loader Loader[M], logger *logger.Logger) *Application[P, M] {
+func NewApplication[P Artifact, M any](opts ApplicationOptions, adapter *Adapter[P], loader Loader[M], logger *logger.Logger) *Application[P, M] {
 	opts = runtimeOptionsWithDefaults(opts)
 	return &Application[P, M]{
 		opts:                opts,
@@ -85,34 +85,34 @@ func NewApplication[P Artifact, M any](opts Options, adapter *Adapter[P], loader
 	}
 }
 
-// Name returns the distinct application name derived from the supervisor name.
+// Name returns the distinct application name derived from the namespace this runtime follows.
 func (a *Application[P, M]) Name() gen.Atom {
-	return gen.Atom(string(a.opts.SupervisorOptions.Name) + "-application")
+	return ApplicationName(a.opts.Namespace)
 }
 
-// SupervisorName returns the registered root supervisor name.
-func (a *Application[P, M]) SupervisorName() gen.Atom { return a.opts.SupervisorOptions.Name }
+// SupervisorName returns the registered root supervisor name, derived the same way.
+func (a *Application[P, M]) SupervisorName() gen.Atom { return SupervisorName(a.opts.Namespace) }
 
 // Load describes the root runtime supervisor managed by Ergo.
 func (a *Application[P, M]) Load(...any) (gen.ApplicationSpec, error) {
 	supervisorOpts := a.opts.SupervisorOptions
-	readerSet := supervisorOpts.SnapshotReader.Namespace != "" && supervisorOpts.SnapshotReader.Endpoint.Name != "" && supervisorOpts.SnapshotReader.ExecutorID != ""
-	if supervisorOpts.Name == "" || a.adapter == nil || a.logger == nil || supervisorOpts.Directory == "" || !readerSet || a.loader == nil || isNilLoader(a.loader) {
-		return gen.ApplicationSpec{}, fmt.Errorf("name, directory, reader options, loader, adapter, and logger are required")
+	readerSet := supervisorOpts.SnapshotReader.Endpoint.Name != "" && supervisorOpts.SnapshotReader.ExecutorID != ""
+	if a.opts.Namespace == "" || a.adapter == nil || a.logger == nil || supervisorOpts.Directory == "" || !readerSet || a.loader == nil || isNilLoader(a.loader) {
+		return gen.ApplicationSpec{}, fmt.Errorf("namespace, directory, reader options, loader, adapter, and logger are required")
 	}
 	a.logger = a.logger.With("component", "plugin_runtime")
 	return gen.ApplicationSpec{
 		Name:        a.Name(),
-		Description: fmt.Sprintf("Blink plugin runtime %s", supervisorOpts.Name),
+		Description: fmt.Sprintf("Blink plugin runtime %s", a.SupervisorName()),
 		Mode:        gen.ApplicationModePermanent,
 		StopTimeout: a.opts.CloseTimeout,
 		Network:     gen.ApplicationNetwork{RegisterTypes: snapshot.NetworkTypes()},
 		Group: []gen.ApplicationMemberSpec{{
 			Factory: func() gen.ProcessBehavior {
-				return newRuntimeSupervisor(supervisorOpts, a.adapter, a.loader)
+				return newRuntimeSupervisor(a.opts.Namespace, supervisorOpts, a.adapter, a.loader)
 			},
 		}},
-		Map: map[string]gen.Atom{"supervisor": supervisorOpts.Name},
+		Map: map[string]gen.Atom{"supervisor": a.SupervisorName()},
 	}, nil
 }
 
@@ -292,7 +292,7 @@ func (a *Application[P, M]) State(ctx context.Context) (snapshot.ProjectionState
 	if !ok {
 		return snapshot.ProjectionState[M]{}, fmt.Errorf("unexpected state response %T", response)
 	}
-	state, err := snapshot.NewProjectionClient[M](n, a.opts.SupervisorOptions.SnapshotReader.Namespace).State(ctx)
+	state, err := snapshot.NewProjectionClient[M](n, a.opts.Namespace).State(ctx)
 	if err != nil {
 		select {
 		case <-done:
