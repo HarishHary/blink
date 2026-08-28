@@ -110,7 +110,8 @@ func cloneValues[T any](values []T, clone func(T) T) []T {
 
 type projectionActor[T any] struct {
 	act.Actor
-	events             Events
+	snapshotEvent      gen.Event
+	statusEvent        gen.Event
 	loader             Loader[T]
 	mode               ProjectionCommitMode
 	readerActorReady   bool
@@ -123,9 +124,10 @@ type projectionActor[T any] struct {
 	labels             telemetry.Labels
 }
 
-// newProjectionActor constructs the projection actor for one subtree's typed view.
-func newProjectionActor[T any](events Events, loader Loader[T], mode ProjectionCommitMode, labels telemetry.Labels) gen.ProcessBehavior {
-	return &projectionActor[T]{events: events, loader: loader, mode: mode, labels: labels}
+// newProjectionActor constructs the projection actor for one subtree's typed view. It monitors both
+// events and publishes through neither, so it takes the names and no token.
+func newProjectionActor[T any](snapshotEvent, statusEvent gen.Event, loader Loader[T], mode ProjectionCommitMode, labels telemetry.Labels) gen.ProcessBehavior {
+	return &projectionActor[T]{snapshotEvent: snapshotEvent, statusEvent: statusEvent, loader: loader, mode: mode, labels: labels}
 }
 
 // --- messages ---
@@ -159,7 +161,7 @@ type MessageProjectionActorActivate struct{}
 
 // Init validates the projection actor's required events.
 func (a *projectionActor[T]) Init(...any) error {
-	if a.events.Snapshot.Name == "" || a.events.Status.Name == "" {
+	if a.snapshotEvent.Name == "" || a.statusEvent.Name == "" {
 		return fmt.Errorf("snapshot projection: snapshot events are required")
 	}
 	return nil
@@ -172,7 +174,7 @@ func (a *projectionActor[T]) HandleMessage(from gen.PID, message any) error {
 		if from != a.Parent() {
 			return nil
 		}
-		for _, event := range []gen.Event{a.events.Snapshot, a.events.Status} {
+		for _, event := range []gen.Event{a.snapshotEvent, a.statusEvent} {
 			buffered, err := a.MonitorEvent(event)
 			if err != nil {
 				return fmt.Errorf("monitor snapshot projection event %q: %w", event.Name, err)
@@ -207,7 +209,7 @@ func (a *projectionActor[T]) HandleMessage(from gen.PID, message any) error {
 		a.reconcileStatus()
 		return a.Send(a.Parent(), MessageProjectionCommitResult{Generation: m.Generation, ProjectionPID: m.ProjectionPID, Err: err})
 	case gen.MessageDownEvent:
-		if m.Event == a.events.Snapshot || m.Event == a.events.Status {
+		if m.Event == a.snapshotEvent || m.Event == a.statusEvent {
 			return fmt.Errorf("snapshot projection event terminated: %w", m.Reason)
 		}
 	}
@@ -218,7 +220,7 @@ func (a *projectionActor[T]) HandleMessage(from gen.PID, message any) error {
 func (a *projectionActor[T]) HandleEvent(event gen.MessageEvent) error {
 	previousGeneration := a.observedGeneration
 	err := a.applyEvent(event)
-	if event.Event == a.events.Snapshot && a.observedGeneration > previousGeneration && a.lastError != nil {
+	if event.Event == a.snapshotEvent && a.observedGeneration > previousGeneration && a.lastError != nil {
 		a.Log().Error("snapshot projection parse failed: generation=%d error=%v", a.observedGeneration, a.lastError)
 	}
 	a.reconcileStatus()
@@ -238,7 +240,7 @@ func (a *projectionActor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any,
 // applyEvent updates projection state from a monitored event.
 func (a *projectionActor[T]) applyEvent(event gen.MessageEvent) error {
 	switch event.Event {
-	case a.events.Snapshot:
+	case a.snapshotEvent:
 		snap, ok := event.Message.(*Snapshot)
 		if !ok || snap == nil || snap.Generation <= a.observedGeneration {
 			return nil
@@ -262,7 +264,7 @@ func (a *projectionActor[T]) applyEvent(event gen.MessageEvent) error {
 		} else {
 			a.committed = &parsed
 		}
-	case a.events.Status:
+	case a.statusEvent:
 		status, ok := event.Message.(ReaderActorStatus)
 		if ok {
 			a.readerActorReady = status.Availability == runtime.AvailabilityReady
