@@ -110,7 +110,7 @@ func main() {
 	host, err := plugin.Start(plugin.NodeOptions{
 		Name:            nodeName,
 		Env:             cfg.Env,
-		Observer:        cfg.Observer,
+		Observer:        plugin.ObserverOptions{Enabled: cfg.Observer, Host: cfg.ObserverHost, Port: cfg.ObserverPort},
 		ShutdownTimeout: runtimeShutdownTimeout,
 		Applications:    []gen.ApplicationBehavior{app},
 		Cluster:         cluster,
