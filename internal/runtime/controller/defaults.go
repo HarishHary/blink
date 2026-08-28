@@ -12,35 +12,44 @@ const (
 	DefaultRestartMax = 5 * time.Second
 )
 
+// Every process in a namespace's subtree is named from that namespace, so a caller addresses one
+// without being told what it was called.
+func ApplicationName(namespace string) gen.Atom { return subtreeName(namespace, "application") }
+func SupervisorName(namespace string) gen.Atom  { return subtreeName(namespace, "supervisor") }
+func ActorName(namespace string) gen.Atom       { return subtreeName(namespace, "actor") }
+
+func subtreeName(namespace, suffix string) gen.Atom {
+	return gen.Atom("controller-" + namespace + "-" + suffix)
+}
+
 // applicationOptionsWithDefaults fills application option defaults.
 func applicationOptionsWithDefaults[T plugin.Artifact](opts ApplicationOptions[T]) ApplicationOptions[T] {
-	name := gen.Atom("controller-" + opts.Namespace)
 	if opts.Name == "" {
-		opts.Name = name + "-application"
+		opts.Name = ApplicationName(opts.Namespace)
 	}
 	if opts.SupervisorOptions.Namespace == "" {
 		opts.SupervisorOptions.Namespace = opts.Namespace
 	}
-	opts.SupervisorOptions = supervisorOptionsWithDefaults(name, opts.SupervisorOptions)
+	opts.SupervisorOptions = supervisorOptionsWithDefaults(opts.SupervisorOptions)
 	return opts
 }
 
 // supervisorOptionsWithDefaults fills supervisor option defaults.
-func supervisorOptionsWithDefaults[T plugin.Artifact](supervisorName gen.Atom, opts SupervisorOptions[T]) SupervisorOptions[T] {
+func supervisorOptionsWithDefaults[T plugin.Artifact](opts SupervisorOptions[T]) SupervisorOptions[T] {
 	if opts.Name == "" {
-		opts.Name = supervisorName + "-supervisor"
+		opts.Name = SupervisorName(opts.Namespace)
 	}
 	if opts.ActorOptions.Namespace == "" {
 		opts.ActorOptions.Namespace = opts.Namespace
 	}
-	opts.ActorOptions = actorOptionsWithDefaults(supervisorName, opts.ActorOptions)
+	opts.ActorOptions = actorOptionsWithDefaults(opts.ActorOptions)
 	return opts
 }
 
 // actorOptionsWithDefaults fills actor names and timing defaults.
-func actorOptionsWithDefaults[T plugin.Artifact](actorName gen.Atom, opts ActorOptions[T]) ActorOptions[T] {
+func actorOptionsWithDefaults[T plugin.Artifact](opts ActorOptions[T]) ActorOptions[T] {
 	if opts.Name == "" {
-		opts.Name = actorName + "-actor"
+		opts.Name = ActorName(opts.Namespace)
 	}
 	if opts.RestartMin <= 0 {
 		opts.RestartMin = DefaultRestartMin

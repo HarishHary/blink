@@ -80,7 +80,7 @@ type actor[T plugin.Artifact] struct {
 
 // newActor constructs the controller actor with normalized options.
 func newActor[T plugin.Artifact](opts ActorOptions[T], database backends.Database, barrier *writerIOBarrier) gen.ProcessBehavior {
-	return &actor[T]{opts: actorOptionsWithDefaults("", opts), database: database, barrier: barrier}
+	return &actor[T]{opts: actorOptionsWithDefaults(opts), database: database, barrier: barrier}
 }
 
 // --- messages ---
@@ -150,8 +150,9 @@ const (
 
 // Init validates dependencies and initializes controller state.
 func (a *actor[T]) Init(...any) error {
-	if a.opts.Directory == "" || a.opts.Loader == nil || a.database == nil || a.barrier == nil {
-		return fmt.Errorf("controller actor: directory, loader, database, and barrier are required")
+	// Namespace is required: this actor's name and every metric label come from it.
+	if a.opts.Namespace == "" || a.opts.Directory == "" || a.opts.Loader == nil || a.database == nil || a.barrier == nil {
+		return fmt.Errorf("controller actor: namespace, directory, loader, database, and barrier are required")
 	}
 	a.lifecycle = ActorStarting
 	a.records = make(map[string]backends.ControllerRecord)

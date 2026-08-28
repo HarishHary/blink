@@ -7,6 +7,7 @@ import (
 	"ergo.services/ergo/gen"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/harishhary/blink/internal/runtime"
+	"github.com/harishhary/blink/internal/runtime/telemetry"
 )
 
 const subscribeTimeoutSeconds = 5
@@ -69,7 +70,8 @@ type MessageSubscribeRestart struct{ token uint64 }
 // readerActor issues one bounded Call to subscribe, then passively receives pushed SnapshotUpdate messages - Ergo remote delivery is push-based, so there's no read loop or meta process to supervise.
 type readerActor struct {
 	act.Actor
-	opts ReaderActorOptions
+	opts   ReaderActorOptions
+	labels telemetry.Labels
 
 	snapshotEventName  gen.Atom
 	snapshotEventToken gen.Ref
@@ -83,8 +85,8 @@ type readerActor struct {
 }
 
 // newReaderActor constructs the reader actor for one subscription.
-func newReaderActor(opts ReaderActorOptions) gen.ProcessBehavior {
-	return &readerActor{opts: opts}
+func newReaderActor(opts ReaderActorOptions, labels telemetry.Labels) gen.ProcessBehavior {
+	return &readerActor{opts: opts, labels: labels}
 }
 
 // Init initializes the resubscribe backoff.
@@ -105,9 +107,11 @@ func (a *readerActor) HandleMessage(from gen.PID, message any) error {
 		a.snapshotEventToken = m.snapshotEventToken
 		return a.subscribe()
 	case SnapshotUpdate:
-		if !a.subscribed || from != a.controllerPID || m.Snapshot == nil || m.Snapshot.Generation <= a.lastGeneration {
+		if reason := a.updateRejection(from, m); reason != "" {
+			a.labels.Count(a, metricUpdatesIgnored, reason)
 			return nil
 		}
+		a.labels.Count(a, metricUpdates)
 		a.lastGeneration = m.Snapshot.Generation
 		a.lastError = nil
 		a.publishSnapshot(m.Snapshot)
@@ -123,6 +127,7 @@ func (a *readerActor) HandleMessage(from gen.PID, message any) error {
 		if !a.subscribed || m.PID != a.controllerPID {
 			return nil
 		}
+		a.labels.Count(a, metricControllerDown, "process")
 		a.controllerPID = gen.PID{}
 		a.subscribed = false
 		a.lastError = m.Reason
@@ -132,6 +137,7 @@ func (a *readerActor) HandleMessage(from gen.PID, message any) error {
 		if !a.subscribed || m.Name != a.opts.Endpoint.Node {
 			return nil
 		}
+		a.labels.Count(a, metricControllerDown, "node")
 		a.controllerPID = gen.PID{}
 		a.subscribed = false
 		a.lastError = fmt.Errorf("controller node %s down", m.Name)
@@ -166,20 +172,24 @@ func (a *readerActor) subscribe() error {
 	}
 	response, err := a.CallProcessID(a.opts.Endpoint, request, subscribeTimeoutSeconds)
 	if err != nil {
+		a.labels.Count(a, metricSubscribeAttempts, "unreachable")
 		a.lastError = fmt.Errorf("%w: subscribe: %w", runtime.ErrSnapshotSubscribe, err)
 		return a.scheduleSubscribeRestart()
 	}
 	sub, ok := response.(SubscribeResponse)
 	if !ok {
+		a.labels.Count(a, metricSubscribeAttempts, "bad_response")
 		a.lastError = fmt.Errorf("%w: subscribe: unexpected response %T", runtime.ErrSnapshotSubscribe, response)
 		return a.scheduleSubscribeRestart()
 	}
 	if err := a.MonitorPID(sub.ControllerPID); err != nil {
+		a.labels.Count(a, metricSubscribeAttempts, "unmonitorable")
 		a.lastError = fmt.Errorf("%w: monitor controller: %w", runtime.ErrSnapshotSubscribe, err)
 		return a.scheduleSubscribeRestart()
 	}
 	_ = a.MonitorNode(a.opts.Endpoint.Node)
 
+	a.labels.Count(a, metricSubscribeAttempts, "ok")
 	a.restart.CancelScheduled(true)
 	a.controllerPID = sub.ControllerPID
 	a.subscribed = true
@@ -189,6 +199,22 @@ func (a *readerActor) subscribe() error {
 		a.publishSnapshot(sub.Current)
 	}
 	return nil
+}
+
+// updateRejection names why a pushed update was not applied, empty when it was.
+func (a *readerActor) updateRejection(from gen.PID, update SnapshotUpdate) string {
+	switch {
+	case !a.subscribed:
+		return "unsubscribed"
+	case from != a.controllerPID:
+		return "wrong_sender"
+	case update.Snapshot == nil:
+		return "empty"
+	case update.Snapshot.Generation <= a.lastGeneration:
+		return "stale"
+	default:
+		return ""
+	}
 }
 
 // scheduleSubscribeRestart schedules a backoff-delayed resubscribe.

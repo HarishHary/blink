@@ -48,7 +48,7 @@ type supervisor[T plugin.Artifact] struct {
 
 // newSupervisor constructs the controller supervisor with normalized options.
 func newSupervisor[T plugin.Artifact](opts SupervisorOptions[T], database backends.Database, barrier *writerIOBarrier) gen.ProcessBehavior {
-	normalized := supervisorOptionsWithDefaults("", opts)
+	normalized := supervisorOptionsWithDefaults(opts)
 	return &supervisor[T]{
 		opts:     normalized,
 		database: database,
@@ -71,8 +71,9 @@ type MessageRadarTick struct{}
 
 // Init configures the supervised controller actor and opens this namespace's radar session.
 func (s *supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
-	if s.opts.ActorOptions.Name == "" {
-		return act.SupervisorSpec{}, fmt.Errorf("controller supervisor: actor name is required")
+	// Namespace is required: every process name in this subtree, and every metric label, comes from it.
+	if s.opts.Namespace == "" {
+		return act.SupervisorSpec{}, fmt.Errorf("controller supervisor: namespace is required")
 	}
 	s.actor.status = actorStatus{
 		Lifecycle:    ActorStarting,
