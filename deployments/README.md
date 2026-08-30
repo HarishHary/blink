@@ -95,24 +95,24 @@ The Blink chart defaults to `localhost`, `latest`, and `image.pullPolicy: Never`
 
 `workloads.yaml` renders one Deployment per `global.stages` key plus `global.controller`, all from the same template. Adding a stage adds a workload; no template edit.
 
-| Workload           | Values key          | Plugin volume | Radar | Notes                                                                     |
-| ------------------ | ------------------- | ------------- | ----- | ------------------------------------------------------------------------- |
-| `blink-controller` | `global.controller` | yes           | yes   | One replica only; mounts controller state at `/var/lib/blink/controller`. |
-| `event-matcher`    | `stages.matcher`    | yes           | yes   |                                                                           |
-| `rule-executor`    | `stages.executor`   | yes           | yes   |                                                                           |
-| `alert-merger`     | `stages.merger`     | no            | no    | Runs no Ergo node, so both are set `false`.                               |
-| `rule-tuner`       | `stages.tuner`      | yes           | yes   |                                                                           |
-| `alert-enricher`   | `stages.enricher`   | yes           | yes   |                                                                           |
-| `alert-formatter`  | `stages.formatter`  | yes           | yes   |                                                                           |
-| `alert-dispatcher` | `stages.dispatcher` | yes           | yes   | No `cmd/` binary builds this image yet.                                   |
+| Workload           | Values key          | Plugin volume | Ergo node | Notes                                                                     |
+| ------------------ | ------------------- | ------------- | --------- | ------------------------------------------------------------------------- |
+| `blink-controller` | `global.controller` | yes           | yes       | One replica only; mounts controller state at `/var/lib/blink/controller`. |
+| `event-matcher`    | `stages.matcher`    | yes           | yes       |                                                                           |
+| `rule-executor`    | `stages.executor`   | yes           | yes       |                                                                           |
+| `alert-merger`     | `stages.merger`     | no            | no        | Runs no Ergo node, so both are set `false`.                               |
+| `rule-tuner`       | `stages.tuner`      | yes           | yes       |                                                                           |
+| `alert-enricher`   | `stages.enricher`   | yes           | yes       |                                                                           |
+| `alert-formatter`  | `stages.formatter`  | yes           | yes       |                                                                           |
+| `alert-dispatcher` | `stages.dispatcher` | yes           | yes       | No `cmd/` binary builds this image yet.                                   |
 
-Each `workload` map carries `name`, `container`, `replicas`, `image`, `resources`, and `environment`. `plugins` and `radar` default to `true`, `observer` to `false`. Snake-case keys in `environment` render as uppercase environment variables, so a stage's topics, consumer group, DLQ, and plugin directory are all configured there.
+Each `workload` map carries `name`, `container`, `replicas`, `image`, `resources`, and `environment`. `plugins`, `node`, and `radar` default to `true`; `observer` and `mcp` to `false`. Snake-case keys in `environment` render as uppercase environment variables, so a stage's topics, consumer group, DLQ, and plugin directory are all configured there.
 
 Three constraints the template enforces, failing the render rather than deploying something broken:
 
 - the controller at any replica count other than 1, until publication leader election exists;
 - `controllerState` with no PVC and no `controllerState.existingClaim`;
-- `observer: true` on a workload with `radar: false`, which runs no node to observe.
+- any of `radar`, `observer`, or `mcp` on a workload with `node: false`, which runs no node to serve them.
 
 Every workload running an Ergo node joins one cluster: `etcd.yaml` deploys a dedicated 3-member etcd for node discovery, and `cluster.cookie` authenticates node-to-node connections. Both are Blink's own, not shared infrastructure. This is the only path for snapshot distribution - no Kafka topic is involved.
 
@@ -132,7 +132,7 @@ kubectl rollout status deployment/event-matcher --namespace blink --timeout=120s
 Every workload serves `/health/live`, `/health/ready`, and `/metrics` on port 8080. Readiness is per service - see [services](../docs/services/README.md); `event-matcher` for instance waits on both projections before it consumes.
 
 Every workload that runs an Ergo node additionally serves radar on port 9090 (`radar.port`, `RADAR_HOST`/`RADAR_PORT`): `/metrics` for its per-namespace control-plane series and `/health/ready`,
-which reports 503 while any namespace on that node is not ready. Alert merger runs no node and sets `radar: false`, so it has neither the port nor the scrape annotation. The kubelet probes stay on 8080 on purpose - the controller Service is how executors resolve the Ergo cluster port, so a degraded namespace must not remove the pod from it.
+which reports 503 while any namespace on that node is not ready. Alert merger runs no node and sets `node: false`, so it has neither the port nor the scrape annotation. The kubelet probes stay on 8080 on purpose - the controller Service is how executors resolve the Ergo cluster port, so a degraded namespace must not remove the pod from it.
 
 ```bash
 kubectl port-forward deployment/blink-controller 9090:9090 --namespace blink
@@ -143,9 +143,9 @@ kubectl port-forward deployment/rule-executor 9090:9090 --namespace blink
 curl -s localhost:9090/metrics | grep blink_plugin_
 ```
 
-### Observer
+### Observer and MCP
 
-Ergo's observer UI inspects a live node's processes, supervision tree, and mailboxes. It is off everywhere by default; `observer: true` on one workload adds the port, Service entry, and `OBSERVER_*` variables. Setting `environment: dev` chart-wide enables it on every node instead, and adds MCP on 9922, but also drops every service to debug logging.
+Ergo's observer UI (9911, `observer.port`) inspects a live node's processes, supervision tree, and mailboxes; its MCP server (9922, `mcp.port`) exposes the same to an agent. Both are off everywhere by default and enabled the same way radar is - `observer: true` or `mcp: true` on one workload adds that port, its Service entry, and its `OBSERVER_*`/`MCP_*` variables. Nothing about `environment` changes this.
 
 ```bash
 helm upgrade --install blink deployments/helm/blink --namespace blink -f deployments/helm/values.yaml \
@@ -154,7 +154,9 @@ kubectl port-forward deployment/event-matcher 9911:9911 --namespace blink
 open http://localhost:9911
 ```
 
-Leave it off in shared clusters: the UI is unauthenticated and can send messages to live processes.
+Leave both off in shared clusters: neither is authenticated, and both can send messages to live processes.
+
+Debug logging is chart-wide, not per workload: `--set debug=true` puts `DEBUG=true` in `blink-config`, raising both Blink's logger and every Ergo node to debug level.
 
 ## Monitoring
 

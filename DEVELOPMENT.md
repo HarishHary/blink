@@ -35,7 +35,7 @@ The focused test commands cover the two composition roots and their current acto
 
 ## Required environment
 
-All processes require `KAFKA_BROKERS`; `ENVIRONMENT` is optional and selects logging/runtime diagnostics (`dev` enables the local Ergo observer and MCP applications).
+All processes require `KAFKA_BROKERS`. `ENVIRONMENT` is optional and only names the Ergo cluster (`blink-<env>`). `DEBUG=true` raises logging to debug level; `RADAR_ENABLED`, `OBSERVER_ENABLED`, and `MCP_ENABLED` each turn on one node endpoint.
 
 | Process         | Required service-specific variables                                                                                                                                                                                                                                                                     |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
