@@ -30,35 +30,45 @@ type NodeHost struct {
 // NodeOptions configures a NodeHost.
 type NodeOptions struct {
 	Name            gen.Atom
-	Env             string
 	ShutdownTimeout time.Duration
+	Debug           bool
 	Applications    []gen.ApplicationBehavior
-	Observer        ObserverOptions
-	// Cluster nil leaves the node single-process; Radar nil keeps radar's own localhost:9090.
-	Cluster *ClusterOptions
-	Radar   *RadarOptions
+	Radar           EndpointOptions
+	Observer        EndpointOptions
+	MCP             EndpointOptions
+	Cluster         *ClusterOptions
 }
 
-// ObserverOptions binds Ergo's observer UI. Enabled is separate because Env == "dev" enables it anyway
-type ObserverOptions struct {
+// EndpointOptions binds one of the node's HTTP endpoints: radar's metrics and readiness, Ergo's
+// observer UI, or its MCP server. Each is off unless Enabled, independent of the others.
+type EndpointOptions struct {
 	Enabled bool
 	Host    string
 	Port    uint16
 }
 
-// defaultObserverPort is what an empty ObserverOptions.Port binds.
-const defaultObserverPort = 9911
+// Ports an empty EndpointOptions.Port binds, matching each app's own default.
+const (
+	defaultRadarPort    = 9090
+	defaultObserverPort = 9911
+	defaultMCPPort      = 9922
+)
 
-// RadarOptions binds radar's health and Prometheus endpoints. Radar defaults to localhost, which no
-// scraper outside the process can reach, so an empty Host binds all interfaces; an empty Port keeps 9090.
-type RadarOptions struct {
-	Host string
-	Port uint16
+// defaultEndpointHost is what an empty EndpointOptions.Host binds: every app defaults to localhost,
+// which nothing outside the process can reach, and an enabled endpoint is meant to be reached.
+const defaultEndpointHost = "0.0.0.0"
+
+// binding resolves an endpoint's host and port, substituting the defaults for empty values.
+func (o EndpointOptions) binding(defaultPort uint16) (string, uint16) {
+	host, port := o.Host, o.Port
+	if host == "" {
+		host = defaultEndpointHost
+	}
+	if port == 0 {
+		port = defaultPort
+	}
+	return host, port
 }
-
-// defaultRadarHost is what an empty RadarOptions.Host binds: passing the options at all means the
-// endpoint is meant to be reachable from outside the pod.
-const defaultRadarHost = "0.0.0.0"
 
 // ClusterOptions enables and configures Ergo cluster networking for a node. Port zero uses
 // clusterAcceptorPort, pinned rather than port-scanned; nil Registrar is Ergo's dev-only one.
@@ -66,8 +76,7 @@ type ClusterOptions struct {
 	Cookie    string
 	Port      uint16
 	Registrar gen.Registrar
-	// Flags must come from DefaultClusterFlags(): setting Enable in a bare literal zeroes the rest.
-	Flags gen.NetworkFlags
+	Flags     gen.NetworkFlags
 }
 
 // DefaultClusterFlags returns the safe base for customizing cluster network flags.
@@ -107,27 +116,25 @@ func Start(opts NodeOptions) (*NodeHost, error) {
 	if opts.ShutdownTimeout <= 0 {
 		opts.ShutdownTimeout = gen.DefaultShutdownTimeout
 	}
-	radarOptions := radar.Options{}
-	if opts.Radar != nil {
-		radarOptions.Host, radarOptions.Port = opts.Radar.Host, opts.Radar.Port
-		if radarOptions.Host == "" {
-			radarOptions.Host = defaultRadarHost
-		}
+	applications := []gen.ApplicationBehavior{}
+	if opts.Radar.Enabled {
+		host, port := opts.Radar.binding(defaultRadarPort)
+		applications = append(applications, radar.CreateApp(radar.Options{Host: host, Port: port}))
 	}
-	applications := []gen.ApplicationBehavior{radar.CreateApp(radarOptions)}
-	logLevel := gen.LogLevelInfo
-	if opts.Env == "dev" {
-		applications = append(applications, mcp.CreateApp(mcp.Options{Port: 9922}))
-		logLevel = gen.LogLevelDebug
+	if opts.Observer.Enabled {
+		host, port := opts.Observer.binding(defaultObserverPort)
+		applications = append(applications, observer.CreateApp(observer.Options{Host: host, Port: port}))
 	}
-	if opts.Env == "dev" || opts.Observer.Enabled {
-		observerOptions := observer.Options{Host: opts.Observer.Host, Port: opts.Observer.Port}
-		if observerOptions.Port == 0 {
-			observerOptions.Port = defaultObserverPort
-		}
-		applications = append(applications, observer.CreateApp(observerOptions))
+	if opts.MCP.Enabled {
+		host, port := opts.MCP.binding(defaultMCPPort)
+		applications = append(applications, mcp.CreateApp(mcp.Options{Host: host, Port: port}))
 	}
 	applications = append(applications, opts.Applications...)
+
+	logLevel := gen.LogLevelInfo
+	if opts.Debug {
+		logLevel = gen.LogLevelDebug
+	}
 
 	network := gen.NetworkOptions{Mode: gen.NetworkModeDisabled}
 	if opts.Cluster != nil {

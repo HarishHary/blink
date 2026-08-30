@@ -26,7 +26,7 @@ func decodeRecords(t *testing.T, output *bytes.Buffer) []map[string]any {
 
 func TestLoggerUsesJSONAndPreservesChildContext(t *testing.T) {
 	var output bytes.Buffer
-	root := newLogger(&output, "controller", "dev")
+	root := newLogger(&output, "controller", true)
 	child := root.With("plugin_type", "rules", "component", "local_reader")
 
 	child.Debug("loaded %d plugins", 2)
@@ -45,22 +45,25 @@ func TestLoggerUsesJSONAndPreservesChildContext(t *testing.T) {
 }
 
 func TestLoggerLevelsAndErrors(t *testing.T) {
-	for _, environment := range []string{"dev", "integration", "staging", "prod"} {
-		t.Run(environment, func(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		debug bool
+		want  int
+	}{
+		{name: "debug", debug: true, want: 4},
+		{name: "default", debug: false, want: 3},
+	} {
+		t.Run(test.name, func(t *testing.T) {
 			var output bytes.Buffer
-			log := newLogger(&output, "test", environment)
+			log := newLogger(&output, "test", test.debug)
 			log.Debug("debug")
 			log.Info("info")
 			log.Error(errors.NewF("error"))
 			log.ErrorF("error %d", 2)
 
 			records := decodeRecords(t, &output)
-			want := 3
-			if environment == "dev" {
-				want = 4
-			}
-			if len(records) != want {
-				t.Fatalf("want %d records, got %d", want, len(records))
+			if len(records) != test.want {
+				t.Fatalf("want %d records, got %d", test.want, len(records))
 			}
 			if records[len(records)-1]["level"] != "ERROR" || records[len(records)-1]["msg"] != "error 2" {
 				t.Fatalf("ErrorF record was not preserved: %#v", records[len(records)-1])
@@ -89,6 +92,6 @@ func TestLoggerFatalF(t *testing.T) {
 
 func TestLoggerFatalFHelper(t *testing.T) {
 	if os.Getenv("LOGGER_FATALF_HELPER") == "1" {
-		newLogger(os.Stdout, "test", "dev").FatalF("fatal %d", 1)
+		newLogger(os.Stdout, "test", true).FatalF("fatal %d", 1)
 	}
 }

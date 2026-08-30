@@ -15,13 +15,14 @@ type Logger struct {
 	logger *slog.Logger
 }
 
-func New(service string, environment string) *Logger {
-	return newLogger(os.Stdout, service, environment)
+// New returns the process's root logger, at debug level when debug is set (the DEBUG env var).
+func New(service string, debug bool) *Logger {
+	return newLogger(os.Stdout, service, debug)
 }
 
-func newLogger(output io.Writer, service string, environment string) *Logger {
+func newLogger(output io.Writer, service string, debug bool) *Logger {
 	level := slog.LevelInfo
-	if environment == "dev" {
+	if debug {
 		level = slog.LevelDebug
 	}
 	return &Logger{
