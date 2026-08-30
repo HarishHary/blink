@@ -54,7 +54,7 @@ type artifactScannerMeta[T plugin.Artifact] struct {
 	labels    telemetry.Labels
 }
 
-// fileIndex is something derived from a file — a parsed spec, or a binary's checksum — and
+// fileIndex is something derived from a file - a parsed spec, or a binary's checksum - and
 // the file identity it was derived from, so a poll only re-reads what changed.
 type fileIndex[T any] struct {
 	value   T

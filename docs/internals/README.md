@@ -38,7 +38,6 @@ Actor state machines live in the pages below, not in this index.
 - [Snapshot runtime](snapshot-runtime.md)
 - [Message flow](message-flow.md)
 - [Concurrency knobs](concurrency-knobs.md)
-- [Concurrency benchmarks](concurrency-benchmarks.md)
 - [Schema reference](schemas/README.md)
 - [Controller service](../services/controller.md)
 - [Event matcher service](../services/event_matcher.md)
