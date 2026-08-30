@@ -1,14 +1,12 @@
 # Blink services
 
-This index contains only the services currently documented for the Ergo actor runtime.
-
-| Service                           | Input                                           | Output                                                                     | Responsibility                                                                                                    |
-| ------------------------------------ | --------------------------------------------------- | -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| [controller](controller.md)       | Plugin sidecars, binaries, and SQLite state     | `SnapshotUpdate` pushed to subscribers over the Ergo cluster, five namespaces | Runs one control application per plugin type and distributes effective desired state directly to executors.       |
-| [event_matcher](event_matcher.md) | Raw JSON events plus matcher and rule snapshots | Protobuf `ExecMessage` records, terminal matcher DLQ records, or no output | Selects candidate rules by `log_type`, evaluates required matcher plugins, and preserves the input key on output. |
+| Service                           | Input                                       | Output                                                          | Responsibility                                                                            |
+| --------------------------------- | ------------------------------------------- | --------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| [Controller](controller.md)       | Plugin sidecars, binaries, SQLite state     | `SnapshotUpdate` pushed to cluster subscribers, five namespaces | One control application per plugin type; distributes desired state to executors.          |
+| [Event matcher](event_matcher.md) | Raw JSON events, matcher and rule snapshots | Protobuf `ExecMessage` records, matcher DLQ records, or none    | Selects rules by `log_type`, evaluates required matcher plugins, preserves the input key. |
 
 ## Runtime relationship
 
-The controller is the snapshot distributor. Event matcher is a subscriber: its attempt-owned matcher application subscribes to the matcher namespace's controller actor and its separate projection subscribes to the rule namespace's. Both use local Ergo actors; the native Ergo cluster (backed by etcd for node discovery) is their only cross-process connection - Kafka carries the primary event/alert pipeline, not this.
+The controller distributes snapshots. Event matcher subscribes: its matcher application to the matcher namespace's controller actor, a separate projection to the rule namespace's. Both use local Ergo actors; the Ergo cluster (etcd for discovery) is their only cross-process connection. Kafka carries the event and alert pipeline.
 
-For actor composition and snapshot ownership, see the [runtime overview](../internals/README.md). For wire contracts, see [message flow](../internals/message-flow.md).
+See the [runtime overview](../internals/README.md) for actor composition, and [message flow](../internals/message-flow.md) for wire contracts.
