@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,15 +13,16 @@ import (
 	"ergo.services/application/radar"
 	"ergo.services/ergo"
 	"ergo.services/ergo/gen"
+	"ergo.services/registrar/etcd"
 )
 
-// Host owns the single Ergo node for one Blink process.
-//
-// Actor runtimes attach supervisor subtrees to this node. They must never stop
-// the node themselves; only Host owns the node-wide shutdown boundary.
-type NodeHost struct {
-	node gen.Node
+// clusterAcceptorPort is the fallback when ClusterOptions.Port is zero; the controller's Helm
+// cluster.port must match whatever this resolves to.
+const clusterAcceptorPort = 11144
 
+// NodeHost owns the single Ergo node for one Blink process; attached subtrees must never stop it.
+type NodeHost struct {
+	node     gen.Node
 	stopOnce sync.Once
 	stopped  chan struct{}
 }
@@ -31,35 +33,123 @@ type NodeOptions struct {
 	Env             string
 	ShutdownTimeout time.Duration
 	Applications    []gen.ApplicationBehavior
+	Observer        ObserverOptions
+	// Cluster nil leaves the node single-process; Radar nil keeps radar's own localhost:9090.
+	Cluster *ClusterOptions
+	Radar   *RadarOptions
+}
+
+// ObserverOptions binds Ergo's observer UI. Enabled is separate because Env == "dev" enables it anyway
+type ObserverOptions struct {
+	Enabled bool
+	Host    string
+	Port    uint16
+}
+
+// defaultObserverPort is what an empty ObserverOptions.Port binds.
+const defaultObserverPort = 9911
+
+// RadarOptions binds radar's health and Prometheus endpoints. Radar defaults to localhost, which no
+// scraper outside the process can reach, so an empty Host binds all interfaces; an empty Port keeps 9090.
+type RadarOptions struct {
+	Host string
+	Port uint16
+}
+
+// defaultRadarHost is what an empty RadarOptions.Host binds: passing the options at all means the
+// endpoint is meant to be reachable from outside the pod.
+const defaultRadarHost = "0.0.0.0"
+
+// ClusterOptions enables and configures Ergo cluster networking for a node. Port zero uses
+// clusterAcceptorPort, pinned rather than port-scanned; nil Registrar is Ergo's dev-only one.
+type ClusterOptions struct {
+	Cookie    string
+	Port      uint16
+	Registrar gen.Registrar
+	// Flags must come from DefaultClusterFlags(): setting Enable in a bare literal zeroes the rest.
+	Flags gen.NetworkFlags
+}
+
+// DefaultClusterFlags returns the safe base for customizing cluster network flags.
+func DefaultClusterFlags() gen.NetworkFlags { return gen.DefaultNetworkFlags }
+
+// EtcdClusterConfig configures the etcd-backed registrar every binary uses to join the Ergo
+// cluster. Endpoints is comma-separated.
+type EtcdClusterConfig struct {
+	Endpoints   string `env:"ETCD_ENDPOINTS"`
+	Cookie      string `env:"CLUSTER_COOKIE"`
+	Port        uint16 `env:"CLUSTER_PORT,optional"`
+	Username    string `env:"ETCD_USERNAME,optional"`
+	Password    string `env:"ETCD_PASSWORD,optional"`
+	ClusterName string `env:"ETCD_CLUSTER,optional"`
+}
+
+// NewEtcdRegistrar builds the production registrar, namespaced blink-<env> unless ClusterName
+// overrides it, never etcd's shared "default".
+func NewEtcdRegistrar(cfg EtcdClusterConfig, env string) (gen.Registrar, error) {
+	cluster := cfg.ClusterName
+	if cluster == "" {
+		cluster = "blink-" + env
+	}
+	return etcd.Create(etcd.Options{
+		Cluster:   cluster,
+		Endpoints: strings.Split(cfg.Endpoints, ","),
+		Username:  cfg.Username,
+		Password:  cfg.Password,
+	})
 }
 
 // Start creates a node whose lifecycle is owned by the returned host.
 func Start(opts NodeOptions) (*NodeHost, error) {
 	if opts.Name == "" {
-		return nil, errors.New("actornode: name is required")
+		return nil, errors.New("node: name is required")
 	}
 	if opts.ShutdownTimeout <= 0 {
 		opts.ShutdownTimeout = gen.DefaultShutdownTimeout
 	}
-	applications := []gen.ApplicationBehavior{radar.CreateApp(radar.Options{})}
+	radarOptions := radar.Options{}
+	if opts.Radar != nil {
+		radarOptions.Host, radarOptions.Port = opts.Radar.Host, opts.Radar.Port
+		if radarOptions.Host == "" {
+			radarOptions.Host = defaultRadarHost
+		}
+	}
+	applications := []gen.ApplicationBehavior{radar.CreateApp(radarOptions)}
 	logLevel := gen.LogLevelInfo
 	if opts.Env == "dev" {
-		applications = append(applications,
-			observer.CreateApp(observer.Options{Port: 9911}),
-			mcp.CreateApp(mcp.Options{Port: 9922}),
-		)
+		applications = append(applications, mcp.CreateApp(mcp.Options{Port: 9922}))
 		logLevel = gen.LogLevelDebug
 	}
+	if opts.Env == "dev" || opts.Observer.Enabled {
+		observerOptions := observer.Options{Host: opts.Observer.Host, Port: opts.Observer.Port}
+		if observerOptions.Port == 0 {
+			observerOptions.Port = defaultObserverPort
+		}
+		applications = append(applications, observer.CreateApp(observerOptions))
+	}
 	applications = append(applications, opts.Applications...)
+
+	network := gen.NetworkOptions{Mode: gen.NetworkModeDisabled}
+	if opts.Cluster != nil {
+		port := opts.Cluster.Port
+		if port == 0 {
+			port = clusterAcceptorPort
+		}
+		network = gen.NetworkOptions{
+			Mode:      gen.NetworkModeEnabled,
+			Cookie:    opts.Cluster.Cookie,
+			Registrar: opts.Cluster.Registrar,
+			Flags:     opts.Cluster.Flags,
+			Acceptors: []gen.AcceptorOptions{{Host: "0.0.0.0", Port: port, PortRange: 1}},
+		}
+	}
 
 	n, err := ergo.StartNode(
 		opts.Name,
 		gen.NodeOptions{
 			ShutdownTimeout: opts.ShutdownTimeout,
 			Applications:    applications,
-			Network: gen.NetworkOptions{
-				Mode: gen.NetworkModeDisabled,
-			},
+			Network:         network,
 			Log: gen.LogOptions{
 				Level: logLevel,
 				DefaultLogger: gen.DefaultLoggerOptions{
@@ -113,7 +203,7 @@ func (h *NodeHost) Close(ctx context.Context) error {
 		}()
 	})
 
-	// Another caller already initiated shutdown. This caller is only a waiter.
+	// Another caller already initiated shutdown; this one only waits.
 	if !initiator {
 		return h.waitForStop(ctx)
 	}
@@ -129,8 +219,7 @@ func (h *NodeHost) Close(ctx context.Context) error {
 			return nil
 		default:
 		}
-		// The node's configured ShutdownTimeout owns escalation. StopForce cannot
-		// replace a graceful Stop that is already in progress.
+		// ShutdownTimeout owns escalation: StopForce cannot replace a Stop already in progress.
 		return fmt.Errorf("stop Ergo node: %w", ctx.Err())
 	}
 }

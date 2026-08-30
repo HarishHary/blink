@@ -2,10 +2,12 @@ package snapshot
 
 import (
 	"fmt"
+	"time"
 
 	"ergo.services/ergo/act"
 	"ergo.services/ergo/gen"
 	"github.com/harishhary/blink/internal/runtime"
+	"github.com/harishhary/blink/internal/runtime/telemetry"
 )
 
 const (
@@ -13,22 +15,39 @@ const (
 	readerActorRestartPeriod    uint16 = 10
 )
 
-// Events identifies the buffered snapshot and status events produced
-// by a snapshot supervisor. Each retains only its latest value. Snapshot carries
-// *snapshot.Snapshot; Status carries ReaderStatus.
-type Events struct {
-	Snapshot      gen.Event
-	Status        gen.Event
-	snapshotToken gen.Ref
-	statusToken   gen.Ref
+// executorReportInterval is a quarter of the controller's staleness threshold, so three lost
+// reports still do not read as a dead executor.
+const executorReportInterval = 30 * time.Second
+
+// SupervisorLifecycle describes the subtree as a whole; no child holds I/O a stop must wait out, so
+// there is no draining stage.
+type SupervisorLifecycle string
+
+const (
+	SupervisorStarting SupervisorLifecycle = "starting"
+	SupervisorRunning  SupervisorLifecycle = "running"
+	SupervisorStopping SupervisorLifecycle = "stopping"
+)
+
+// eventPublication is one registered event and the token SendEvent requires to publish through it.
+type eventPublication struct {
+	name  gen.Atom
+	token gen.Ref
 }
 
-// EventsFor returns the stable event identifiers for a snapshot subtree.
-func EventsFor(node gen.Node, name gen.Atom) Events {
-	return Events{
-		Snapshot: gen.Event{Name: gen.Atom(string(name) + "-snapshot"), Node: node.Name()},
-		Status:   gen.Event{Name: gen.Atom(string(name) + "-status"), Node: node.Name()},
-	}
+// registered reports whether the event was registered and its token handed over.
+func (p eventPublication) registered() bool { return p.token != (gen.Ref{}) }
+
+// ArtifactsEventFor names the buffered event a namespace's reader publishes *Snapshot through,
+// derived on either side rather than configured.
+func ArtifactsEventFor(node gen.Node, namespace string) gen.Event {
+	return gen.Event{Name: subtreeName(namespace, "artifacts"), Node: node.Name()}
+}
+
+// ReaderActorStatusEventFor names the buffered event the supervisor publishes ReaderActorStatus
+// through, derived the same way.
+func ReaderActorStatusEventFor(node gen.Node, namespace string) gen.Event {
+	return gen.Event{Name: subtreeName(namespace, "reader-actor-status"), Node: node.Name()}
 }
 
 type readerActorState struct {
@@ -42,62 +61,112 @@ type projectionActorState struct {
 	status           ProjectionActorStatus
 }
 
-// runtimeSnapshotState tracks the snapshot supervisor incarnation.
+// SupervisorState identifies one snapshot supervisor incarnation.
 type SupervisorState struct {
 	Pid   gen.PID
 	Epoch uint64
 }
 
-// Supervisor owns a reader followed by a typed projection actor.
-// Rest-for-one restarts the projection whenever its reader restarts.
+// Supervisor owns a reader followed by a typed projection actor, rest-for-one so a reader restart
+// restarts the projection with it.
 type Supervisor[T any] struct {
 	act.Supervisor
-	opts            SupervisorOptions[T]
-	readerActor     readerActorState
-	projectionActor projectionActorState
-	events          Events
+	opts                 SupervisorOptions
+	loader               Loader[T]
+	lifecycle            SupervisorLifecycle
+	readerActor          readerActorState
+	projectionActor      projectionActorState
+	snapshotEvent        eventPublication
+	statusEvent          eventPublication
+	reportCancel         gen.CancelFunc
+	labels               telemetry.Labels
+	collectorsRegistered bool
+	radarLogged          bool
 }
 
-// NewSupervisor creates a reader/projection supervisor with stable child names.
-func NewSupervisor[T any](opts SupervisorOptions[T]) *Supervisor[T] {
-	return &Supervisor[T]{opts: optionsWithDefaults(opts)}
+// ExecutorHeartbeat is this executor's periodic liveness/generation report to the controller.
+type ExecutorHeartbeat struct {
+	CommittedGeneration int64
+	ReadyGeneration     int64
+	Availability        string
+}
+
+// ExecutorAppliedGeneration reports that the projection committed a generation, which in external
+// mode means the owning runtime admitted it first.
+type ExecutorAppliedGeneration struct {
+	Generation int64
+	Admitted   bool
+}
+
+// MessageExecutorReport carries one executor's convergence report, either half nil, sent
+// fire-and-forget to the controller actor; LastError is text because EDF reduces it to that anyway.
+type MessageExecutorReport struct {
+	ExecutorID string
+	Heartbeat  *ExecutorHeartbeat
+	Applied    *ExecutorAppliedGeneration
+	LastError  string
+}
+
+// MessageExecutorReportTick drives the periodic convergence report to the controller.
+type MessageExecutorReportTick struct{}
+
+// MessageRadarTick drives the supervisor's periodic radar reconcile.
+type MessageRadarTick struct{}
+
+// NewSupervisor creates a reader/projection supervisor named after the namespace it follows.
+func NewSupervisor[T any](opts SupervisorOptions, loader Loader[T]) *Supervisor[T] {
+	normalized := supervisorOptionsWithDefaults(opts)
+	return &Supervisor[T]{opts: normalized, loader: loader, labels: telemetry.NewLabels(normalized.Namespace)}
 }
 
 // Init validates options and configures the supervised reader and projection actors.
 func (s *Supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
-	defer s.reportStatus()
+	defer s.publishStatus()
+	defer s.publishState()
 
-	if s.opts.Name == "" || s.opts.ReaderFactory == nil {
-		return act.SupervisorSpec{}, fmt.Errorf("actor snapshot: name and reader factory are required")
+	// Namespace is required: every process name in this subtree, and every metric label, comes from it.
+	if s.opts.Namespace == "" || s.opts.ReaderActorOptions.Endpoint.Name == "" || s.opts.ReaderActorOptions.ExecutorID == "" {
+		return act.SupervisorSpec{}, fmt.Errorf("actor snapshot: namespace, endpoint, and executor ID are required")
 	}
-	if s.opts.Loader == nil {
+	if s.loader == nil {
 		return act.SupervisorSpec{}, fmt.Errorf("snapshot projection: loader is required")
 	}
 	if s.opts.ProjectionMode != ProjectionCommitDirect && s.opts.ProjectionMode != ProjectionCommitExternal {
 		return act.SupervisorSpec{}, fmt.Errorf("snapshot projection: invalid commit mode")
 	}
+	name := SupervisorName(s.opts.Namespace)
 	if s.Name() == "" {
-		if err := s.RegisterName(s.opts.Name); err != nil {
-			return act.SupervisorSpec{}, fmt.Errorf("register snapshot supervisor %q: %w", s.opts.Name, err)
+		if err := s.RegisterName(name); err != nil {
+			return act.SupervisorSpec{}, fmt.Errorf("register snapshot supervisor %q: %w", name, err)
 		}
-	} else if s.Name() != s.opts.Name {
-		return act.SupervisorSpec{}, fmt.Errorf("snapshot supervisor registered as %q, want %q", s.Name(), s.opts.Name)
+	} else if s.Name() != name {
+		return act.SupervisorSpec{}, fmt.Errorf("snapshot supervisor registered as %q, want %q", s.Name(), name)
 	}
 
-	s.events = EventsFor(s.Node(), s.opts.Name)
+	artifactsEvent := ArtifactsEventFor(s.Node(), s.opts.Namespace)
+	statusEvent := ReaderActorStatusEventFor(s.Node(), s.opts.Namespace)
 	// Keep only the latest snapshot available to a restarted projection.
-	snapshotToken, err := s.RegisterEvent(s.events.Snapshot.Name, gen.EventOptions{Buffer: 1})
+	snapshotToken, err := s.RegisterEvent(artifactsEvent.Name, gen.EventOptions{Buffer: 1})
 	if err != nil {
 		return act.SupervisorSpec{}, fmt.Errorf("register snapshot event: %w", err)
 	}
-	s.events.snapshotToken = snapshotToken
-	statusToken, err := s.RegisterEvent(s.events.Status.Name, gen.EventOptions{Buffer: 1})
+	s.snapshotEvent = eventPublication{name: artifactsEvent.Name, token: snapshotToken}
+	statusToken, err := s.RegisterEvent(statusEvent.Name, gen.EventOptions{Buffer: 1})
 	if err != nil {
 		return act.SupervisorSpec{}, fmt.Errorf("register snapshot status event: %w", err)
 	}
-	s.events.statusToken = statusToken
+	s.statusEvent = eventPublication{name: statusEvent.Name, token: statusToken}
+	s.lifecycle = SupervisorStarting
 	s.readerActor.status = newReaderActorStatus()
 	s.projectionActor.status = newProjectionActorStatus()
+	// Delayed: the first report is worth sending only once the reader has had its chance to subscribe.
+	if err := s.scheduleExecutorReport(); err != nil {
+		return act.SupervisorSpec{}, err
+	}
+	// A message, not an inline call: radar must not delay the spec.
+	if err := s.Send(s.PID(), MessageRadarTick{}); err != nil {
+		return act.SupervisorSpec{}, fmt.Errorf("snapshot supervisor: schedule radar tick: %w", err)
+	}
 
 	return act.SupervisorSpec{
 		Type:                act.SupervisorTypeRestForOne,
@@ -110,15 +179,15 @@ func (s *Supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 		},
 		Children: []act.SupervisorChildSpec{
 			{
-				Name: readerActorName(s.opts.Name),
+				Name: ReaderActorName(s.opts.Namespace),
 				Factory: func() gen.ProcessBehavior {
-					return &readerActor{opts: s.opts.ReaderActorOptions}
+					return newReaderActor(s.opts.ReaderActorOptions, s.labels, s.snapshotEvent)
 				},
 			},
 			{
-				Name: projectionActorName(s.opts.Name),
+				Name: ProjectionActorName(s.opts.Namespace),
 				Factory: func() gen.ProcessBehavior {
-					return &projectionActor[T]{events: s.events, loader: s.opts.Loader, mode: s.opts.ProjectionMode}
+					return newProjectionActor(artifactsEvent, statusEvent, s.loader, s.opts.ProjectionMode, s.labels)
 				},
 			},
 		},
@@ -127,31 +196,31 @@ func (s *Supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 
 // HandleChildStart tracks and activates a started reader or projection child.
 func (s *Supervisor[T]) HandleChildStart(name gen.Atom, pid gen.PID) error {
+	defer s.publishState()
 	switch name {
-	case projectionActorName(s.opts.Name):
+	case ProjectionActorName(s.opts.Namespace):
 		if s.projectionActor.pid != (gen.PID{}) {
 			return nil
 		}
+		s.labels.Count(s, metricChildStarts, "projection")
 		s.projectionActor.pid = pid
 		s.projectionActor.commitGeneration = 0
 		s.projectionActor.status = newProjectionActorStatus()
 		// Stale child-start callbacks may race a replacement and fail to send.
 		_ = s.Send(pid, MessageProjectionActorActivate{})
 		return nil
-	case readerActorName(s.opts.Name):
+	case ReaderActorName(s.opts.Namespace):
 		if s.readerActor.pid != (gen.PID{}) {
 			return nil
 		}
+		s.labels.Count(s, metricChildStarts, "reader")
 		s.readerActor.pid = pid
 		status := newReaderActorStatus()
 		if s.readerActor.status != status {
 			s.readerActor.status = status
-			s.reportStatus()
+			s.publishStatus()
 		}
-		return s.Send(pid, MessageReaderActorActivate{
-			snapshotEventName:  s.events.Snapshot.Name,
-			snapshotEventToken: s.events.snapshotToken,
-		})
+		return s.Send(pid, MessageReaderActorActivate{})
 	default:
 		return nil
 	}
@@ -159,8 +228,10 @@ func (s *Supervisor[T]) HandleChildStart(name gen.Atom, pid gen.PID) error {
 
 // HandleChildTerminate records a terminated child and reports external commit failures.
 func (s *Supervisor[T]) HandleChildTerminate(_ gen.Atom, pid gen.PID, reason error) error {
+	defer s.publishState()
 	switch pid {
 	case s.projectionActor.pid:
+		s.labels.Count(s, metricChildTerminations, "projection", telemetry.TerminationReason(reason))
 		s.projectionActor.pid = gen.PID{}
 		s.projectionActor.status.Lifecycle = ProjectionActorRestarting
 		s.projectionActor.status.Availability = runtime.AvailabilityUnavailable
@@ -176,12 +247,17 @@ func (s *Supervisor[T]) HandleChildTerminate(_ gen.Atom, pid gen.PID, reason err
 		}
 		return nil
 	case s.readerActor.pid:
+		s.labels.Count(s, metricChildTerminations, "reader", telemetry.TerminationReason(reason))
 		s.readerActor.pid = gen.PID{}
 		status := s.readerActor.status
 		status.Lifecycle = ReaderActorRestarting
 		status.Availability = runtime.AvailabilityUnavailable
+		if reason != nil {
+			status.LastError = reason.Error()
+		}
 		s.readerActor.status = status
-		s.reportStatus()
+		s.publishStatus()
+		s.reportExecutor(nil)
 		return nil
 	default:
 		return nil
@@ -190,17 +266,52 @@ func (s *Supervisor[T]) HandleChildTerminate(_ gen.Atom, pid gen.PID, reason err
 
 // HandleMessage routes child status and external projection commit messages.
 func (s *Supervisor[T]) HandleMessage(from gen.PID, message any) error {
+	defer s.publishState()
 	switch message := message.(type) {
+	case MessageExecutorReportTick:
+		if from != s.PID() {
+			return nil
+		}
+		s.reportExecutor(nil)
+		return s.scheduleExecutorReport()
+	case MessageRadarTick:
+		if from != s.PID() {
+			return nil
+		}
+		s.reconcileRadar()
+		if _, err := s.SendAfter(s.PID(), MessageRadarTick{}, telemetry.RadarTickInterval); err != nil {
+			return fmt.Errorf("reschedule radar tick: %w", err)
+		}
+		return nil
+	case gen.MessageDownProcessID:
+		// Forget what a restarted radar lost so the next tick registers it again.
+		if message.ProcessID.Name != telemetry.MetricsProcess {
+			return nil
+		}
+		s.collectorsRegistered = false
+		s.Log().Debug("radar process down, re-registering on next tick: namespace=%q", s.opts.Namespace)
+		return nil
 	case MessageReaderActorStatusChanged:
 		if from == s.readerActor.pid {
 			if s.readerActor.status != message.status {
+				attached := s.readerActor.status.Availability != message.status.Availability
 				s.readerActor.status = message.status
-				s.reportStatus()
+				s.publishStatus()
+				if attached {
+					s.reportExecutor(nil)
+				}
 			}
 		}
 	case MessageProjectionActorStatusChanged:
 		if from == s.projectionActor.pid {
+			applied := message.Status.CommittedGeneration > s.projectionActor.status.CommittedGeneration
 			s.projectionActor.status = message.Status
+			if applied {
+				s.reportExecutor(&ExecutorAppliedGeneration{
+					Generation: message.Status.CommittedGeneration,
+					Admitted:   message.Status.Availability == runtime.AvailabilityReady,
+				})
+			}
 			if s.opts.ProjectionMode == ProjectionCommitExternal {
 				message.ProjectionPID = s.projectionActor.pid
 				_ = s.Send(s.Parent(), message)
@@ -237,9 +348,30 @@ func (s *Supervisor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, erro
 	return fmt.Errorf("snapshot supervisor: unsupported call %T", request), nil
 }
 
+// HandleInspect exposes both children's identity and last-reported status plus any in-flight commit.
+func (s *Supervisor[T]) HandleInspect(gen.PID, ...string) map[string]string {
+	return map[string]string{
+		"supervisor:lifecycle":                       string(s.lifecycle),
+		"supervisor:reader":                          fmt.Sprintf("%s", s.readerActor.pid),
+		"supervisor:reader_lifecycle":                string(s.readerActor.status.Lifecycle),
+		"supervisor:reader_availability":             string(s.readerActor.status.Availability),
+		"supervisor:reader_generation":               fmt.Sprintf("%d", s.readerActor.status.Generation),
+		"supervisor:reader_last_error":               s.readerActor.status.LastError,
+		"supervisor:reported_availability":           string(s.executorAvailability()),
+		"supervisor:projection":                      fmt.Sprintf("%s", s.projectionActor.pid),
+		"supervisor:projection_lifecycle":            string(s.projectionActor.status.Lifecycle),
+		"supervisor:projection_availability":         string(s.projectionActor.status.Availability),
+		"supervisor:projection_committed_generation": fmt.Sprintf("%d", s.projectionActor.status.CommittedGeneration),
+		"supervisor:commit_pending":                  fmt.Sprintf("%d", s.projectionActor.commitGeneration),
+	}
+}
+
 // Terminate marks children stopped and reports the shutdown reason.
 func (s *Supervisor[T]) Terminate(reason error) {
-	defer s.reportStatus()
+	defer s.publishStatus()
+	defer s.publishState()
+	s.lifecycle = SupervisorStopping
+	s.cancelExecutorReport()
 	s.projectionActor.status.Lifecycle = ProjectionActorStopped
 	s.projectionActor.status.Availability = runtime.AvailabilityUnavailable
 	s.readerActor.status.Lifecycle = ReaderActorStopped
@@ -252,21 +384,100 @@ func (s *Supervisor[T]) Terminate(reason error) {
 	}
 }
 
-// reportStatus publishes the reader actor's current status.
-func (s *Supervisor[T]) reportStatus() {
-	if s.events.statusToken != (gen.Ref{}) {
-		_ = s.SendEvent(s.events.Status.Name, s.events.statusToken, s.readerActor.status)
+// reportExecutor sends this executor's convergence report fire-and-forget; the supervisor is the one
+// process that sees both the pushed generation and the one the projection holds live.
+func (s *Supervisor[T]) reportExecutor(applied *ExecutorAppliedGeneration) {
+	s.labels.Count(s, metricExecutorReports)
+	_ = s.SendProcessID(s.opts.ReaderActorOptions.Endpoint, MessageExecutorReport{
+		ExecutorID: s.opts.ReaderActorOptions.ExecutorID,
+		Heartbeat: &ExecutorHeartbeat{
+			CommittedGeneration: s.readerActor.status.Generation,
+			ReadyGeneration:     s.projectionActor.status.CommittedGeneration,
+			Availability:        string(s.executorAvailability()),
+		},
+		Applied:   applied,
+		LastError: s.readerActor.status.LastError,
+	})
+}
+
+// scheduleExecutorReport arms the next periodic report, replacing any already scheduled.
+func (s *Supervisor[T]) scheduleExecutorReport() error {
+	s.cancelExecutorReport()
+	cancel, err := s.SendAfter(s.PID(), MessageExecutorReportTick{}, executorReportInterval)
+	if err != nil {
+		return fmt.Errorf("schedule executor report: %w", err)
+	}
+	s.reportCancel = cancel
+	return nil
+}
+
+// cancelExecutorReport drops any scheduled report.
+func (s *Supervisor[T]) cancelExecutorReport() {
+	if s.reportCancel != nil {
+		s.reportCancel()
+		s.reportCancel = nil
 	}
 }
 
-// readerActorName returns the stable reader child name.
-func readerActorName(name gen.Atom) gen.Atom {
-	return gen.Atom(string(name) + "-reader")
+// publishState reports every gauge this subtree owns, from the one process holding both statuses.
+func (s *Supervisor[T]) publishState() {
+	// Both children up promotes the subtree once, and a rest-for-one restart never demotes it.
+	if s.lifecycle == SupervisorStarting && s.readerActor.pid != (gen.PID{}) && s.projectionActor.pid != (gen.PID{}) {
+		s.lifecycle = SupervisorRunning
+	}
+	subtreeGauges{
+		lifecycle:              s.lifecycle,
+		readerAvailability:     s.readerActor.status.Availability,
+		readerGeneration:       s.readerActor.status.Generation,
+		projectionAvailability: s.projectionActor.status.Availability,
+		committedGeneration:    s.projectionActor.status.CommittedGeneration,
+		preparedGeneration:     s.projectionActor.status.PreparedGeneration,
+		reportedAvailability:   s.executorAvailability(),
+		generationLag:          s.generationLag(),
+		commitPending:          s.projectionActor.commitGeneration,
+	}.publish(s.labels, s)
 }
 
-// projectionActorName returns the stable projection child name.
-func projectionActorName(name gen.Atom) gen.Atom {
-	return gen.Atom(string(name) + "-projection")
+// generationLag is what the controller delivered but this executor does not serve yet, floored at
+// zero for a restarted reader.
+func (s *Supervisor[T]) generationLag() int64 {
+	return max(0, s.readerActor.status.Generation-s.projectionActor.status.CommittedGeneration)
+}
+
+// reconcileRadar registers this subtree's collectors, retried on every tick until radar accepts them.
+func (s *Supervisor[T]) reconcileRadar() {
+	if s.collectorsRegistered {
+		return
+	}
+	// Registered through the node: radar deletes a dead registrant's metrics.
+	if err := telemetry.Register(s.Node(), subtreeMetrics); err != nil {
+		if !s.radarLogged {
+			s.radarLogged = true
+			s.Log().Debug("radar telemetry unavailable: namespace=%q error=%v", s.opts.Namespace, err)
+		}
+		return
+	}
+	s.collectorsRegistered, s.radarLogged = true, false
+	// Monitored so a radar restart does not leave this subtree publishing into dropped collectors.
+	if err := s.MonitorProcessID(gen.ProcessID{Name: telemetry.MetricsProcess, Node: s.Node().Name()}); err != nil {
+		s.Log().Debug("radar monitor unavailable: namespace=%q error=%v", s.opts.Namespace, err)
+	}
+}
+
+// executorAvailability is the projection's health, capped at degraded while the reader is detached.
+func (s *Supervisor[T]) executorAvailability() runtime.Availability {
+	availability := s.projectionActor.status.Availability
+	if availability == runtime.AvailabilityReady && s.readerActor.status.Availability != runtime.AvailabilityReady {
+		return runtime.AvailabilityDegraded
+	}
+	return availability
+}
+
+// publishStatus publishes the reader actor's current status.
+func (s *Supervisor[T]) publishStatus() {
+	if s.statusEvent.registered() {
+		_ = s.SendEvent(s.statusEvent.name, s.statusEvent.token, s.readerActor.status)
+	}
 }
 
 // newReaderActorStatus returns the initial unavailable reader status.

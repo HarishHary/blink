@@ -27,6 +27,7 @@ type Spec struct {
 	CallsPerProcess int                 `yaml:"calls_per_process"`
 }
 
+// Spec returns the embedded spec, satisfying the specced constraint.
 func (s Spec) Spec() Spec { return s }
 
 // Metadata returns the plugin metadata.

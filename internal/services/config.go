@@ -11,4 +11,15 @@ type Common struct {
 	// Env selects log verbosity (dev|staging|integration|prod); see logger.New. Optional: an
 	// empty value defaults to integration (Debug off), which is the prod-safe default.
 	Env string `env:"ENVIRONMENT,optional"`
+	// Observer independently enables Ergo's observer app (see NodeOptions.Observer) - Env == "dev"
+	// still implies it, so a prod-level Env can opt in without dropping to debug logging. ObserverHost
+	// and ObserverPort bind it; empty values keep observer's own localhost:9911, which a port-forward
+	// reaches and nothing else does.
+	Observer     bool   `env:"OBSERVER_ENABLED,optional"`
+	ObserverHost string `env:"OBSERVER_HOST,optional"`
+	ObserverPort uint16 `env:"OBSERVER_PORT,optional"`
+	// RadarHost and RadarPort bind the node's radar endpoint, which serves Prometheus metrics and
+	// readiness signals; empty values keep plugin.RadarOptions' pod-reachable defaults.
+	RadarHost string `env:"RADAR_HOST,optional"`
+	RadarPort uint16 `env:"RADAR_PORT,optional"`
 }

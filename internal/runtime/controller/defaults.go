@@ -4,7 +4,7 @@ import (
 	"time"
 
 	"ergo.services/ergo/gen"
-	"github.com/harishhary/blink/internal/runtime/plugin"
+	"github.com/harishhary/blink/internal/runtime/snapshot"
 )
 
 const (
@@ -12,29 +12,37 @@ const (
 	DefaultRestartMax = 5 * time.Second
 )
 
-// optionsWithDefaults fills application option defaults.
-func optionsWithDefaults[T plugin.Artifact](opts Options[T]) Options[T] {
-	if opts.Name == "" {
-		opts.Name = gen.Atom("controller-" + opts.Namespace)
-	}
-	opts.SupervisorOptions = supervisorOptionsWithDefaults(opts.Name, opts.SupervisorOptions)
+// Every name below derives from the namespace, so a caller never has to be told one.
+
+// ApplicationName is the controller application's registered name.
+func ApplicationName(namespace string) gen.Atom { return subtreeName(namespace, "application") }
+
+// SupervisorName is the controller supervisor's registered name.
+func SupervisorName(namespace string) gen.Atom { return subtreeName(namespace, "supervisor") }
+
+// ActorName is the one name that crosses the cluster - executors subscribe to it - so it is defined
+// with the wire vocabulary they share and only re-exported here.
+func ActorName(namespace string) gen.Atom { return snapshot.ControllerActorName(namespace) }
+
+// subtreeName builds one controller subtree name from its namespace.
+func subtreeName(namespace, suffix string) gen.Atom {
+	return gen.Atom("controller-" + namespace + "-" + suffix)
+}
+
+// applicationOptionsWithDefaults fills application option defaults.
+func applicationOptionsWithDefaults(opts ApplicationOptions) ApplicationOptions {
+	opts.SupervisorOptions = supervisorOptionsWithDefaults(opts.SupervisorOptions)
 	return opts
 }
 
 // supervisorOptionsWithDefaults fills supervisor option defaults.
-func supervisorOptionsWithDefaults[T plugin.Artifact](applicationName gen.Atom, opts SupervisorOptions[T]) SupervisorOptions[T] {
-	if opts.Name == "" {
-		opts.Name = applicationName + "-supervisor"
-	}
-	opts.ActorOptions = actorOptionsWithDefaults(applicationName, opts.ActorOptions)
+func supervisorOptionsWithDefaults(opts SupervisorOptions) SupervisorOptions {
+	opts.ActorOptions = actorOptionsWithDefaults(opts.ActorOptions)
 	return opts
 }
 
-// actorOptionsWithDefaults fills actor names and timing defaults.
-func actorOptionsWithDefaults[T plugin.Artifact](applicationName gen.Atom, opts ActorOptions[T]) ActorOptions[T] {
-	if opts.Name == "" {
-		opts.Name = applicationName + "-actor"
-	}
+// actorOptionsWithDefaults fills actor timing defaults.
+func actorOptionsWithDefaults(opts ActorOptions) ActorOptions {
 	if opts.RestartMin <= 0 {
 		opts.RestartMin = DefaultRestartMin
 	}

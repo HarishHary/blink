@@ -10,6 +10,7 @@ import (
 	"ergo.services/ergo/gen"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/harishhary/blink/internal/runtime"
+	"github.com/harishhary/blink/internal/runtime/telemetry"
 )
 
 // ---------------------------------------------------------------------------
@@ -66,9 +67,11 @@ type deploymentManagerCall[T Artifact] struct {
 	completed     bool
 	queued        bool                      // linked into the manager's pending queue
 	prev, next    *deploymentManagerCall[T] // pending queue links, valid while queued
+	accepted      time.Time                 // when the manager took the call, for the invocation histogram
 }
 
-// pendingQueue is the manager's FIFO of accepted invocations waiting for process capacity, linking the call entries themselves so unlinking one costs the same wherever it sits: the queue runs thousands of entries deep and callers cancel invocations nowhere near the head.
+// pendingQueue is the manager's FIFO of accepted invocations waiting for capacity, linked through the
+// call entries so unlinking one costs the same wherever it sits.
 type pendingQueue[T Artifact] struct {
 	head, tail *deploymentManagerCall[T]
 	length     int
@@ -97,7 +100,8 @@ func (q *pendingQueue[T]) pop() *deploymentManagerCall[T] {
 	return entry
 }
 
-// remove unlinks one invocation, leaving an unqueued entry alone so every caller that drops a call can remove it without knowing which phase the call reached.
+// remove unlinks one invocation, leaving an unqueued entry alone so every caller that drops a call
+// can remove it without knowing which phase the call reached.
 func (q *pendingQueue[T]) remove(entry *deploymentManagerCall[T]) {
 	if !entry.queued {
 		return
@@ -120,18 +124,17 @@ func (q *pendingQueue[T]) remove(entry *deploymentManagerCall[T]) {
 // Process State
 // ---------------------------------------------------------------------------
 
-// pluginProcessState is one process slot of this deployment: a stable identity that outlives the PIDs filling it, holding what the current process reported, what the manager decided about it, and the backoff that owns its next start.
+// pluginProcessState is one process slot: a stable identity that outlives the PIDs filling it, what the
+// current process reported, and the backoff that owns its next start. A zero pid waits on that backoff,
+// assigned is the outstanding invocation count the manager schedules from, retiring stops a process once
+// its calls finish, and replace refills the slot, separating a failure from a deliberate shrink.
 type pluginProcessState struct {
-	// pid is the process filling this slot, zero while the slot waits on its own backoff to start one.
-	pid     gen.PID
-	restart *runtime.ScheduledBackoff
-	status  pluginProcessStatus
-	// assigned counts the invocations handed to this process and not yet completed, which is the number the manager schedules from since only it knows which process is free.
+	pid      gen.PID
+	restart  *runtime.ScheduledBackoff
+	status   pluginProcessStatus
 	assigned int
-	// retiring marks a process the manager has decided to stop: it is offered no further invocations and stops once the ones it holds finish, so shrinking a deployment and replacing a broken process never cancel running work.
 	retiring bool
-	// replace records that the slot is to be refilled once this process is gone, separating a slot the deployment shrank away from one whose process failed underneath it.
-	replace bool
+	replace  bool
 }
 
 // ---------------------------------------------------------------------------
@@ -147,16 +150,18 @@ type deploymentManager[T Artifact] struct {
 	drained    bool
 	deployment Deployment
 	route      gen.Atom
-	// processes are this deployment's slots by id, order records the ids in the sequence they were opened so shrinking retires the newest rather than whichever one a map iteration reached first, and byPID resolves a child's own facts back to the slot it fills.
+	// processes are this deployment's slots by id, order records the sequence they were opened in so
+	// shrinking retires the newest, and byPID resolves a child's facts back to its slot.
 	processes map[int]*pluginProcessState
 	order     []int
 	byPID     map[gen.PID]int
 	nextSlot  int
-	// desiredProcs is how many processes the manager wants running: min_procs at rest, one more per scale-up, and none for an idle deployment that reserves none.
+	// desiredProcs is how many processes the manager wants running: min_procs at rest, one more per
+	// scale-up, and none for an idle deployment that reserves none.
 	desiredProcs   int
 	inFlightCalls  map[uint64]*deploymentManagerCall[T]
 	pendingCalls   pendingQueue[T]
-	liveStatus     deploymentManagerStatus
+	lastStatus     deploymentManagerStatus
 	statusEpoch    uint64
 	circuitOpen    bool
 	circuitToken   uint64
@@ -167,6 +172,7 @@ type deploymentManager[T Artifact] struct {
 	lastScale      time.Time
 	lastError      error
 	growthProcs    int // processes held from the process budget, above this deployment's reservation
+	labels         telemetry.Labels
 }
 
 // ---------------------------------------------------------------------------
@@ -243,7 +249,8 @@ func (m *deploymentManager[T]) Init(...any) error {
 	m.inFlightCalls = make(map[uint64]*deploymentManagerCall[T])
 	m.processes = make(map[int]*pluginProcessState)
 	m.byPID = make(map[gen.PID]int)
-	// A route always gets its own processes up to min_procs, or one for a MinProcs=0 route that a call wakes, whatever the process budget holds - desired state is not negotiable, and those reservations are only reported against the budget so an operator learns of oversubscription before scaling makes it worse.
+	// A route always gets its reservation whatever the budget holds - desired state is not negotiable, and
+	// oversubscription is reported so an operator sees it before scaling makes it worse.
 	reservation := max(1, m.deployment.MinProcs)
 	if reserved, limit := m.options.ProcessBudget.reserve(reservation), m.options.ProcessBudget.limit(); reserved > limit && reserved-reservation <= limit {
 		m.Log().Warning("reserved plugin processes exceed the process budget: reserved=%d budget=%d route=%s", reserved, limit, m.route)
@@ -313,7 +320,7 @@ func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 		}
 		wasReady := process.status.availability == runtime.AvailabilityReady
 		process.status = msg.status
-		// A process that came up is the only evidence recovery works: without this its slot's budget only ever shrinks, and a deployment losing one process a day eventually opens its circuit for a fault it recovered from every time.
+		// A process that came up is the only evidence recovery works; without this a slot's budget only shrinks.
 		if !wasReady && process.status.availability == runtime.AvailabilityReady {
 			process.restart.Strategy.Reset()
 		}
@@ -324,7 +331,8 @@ func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 		if process == nil || m.circuitOpen {
 			return nil
 		}
-		// The process gave up on its own subprocess, so this incarnation is spent and only its slot is refilled: the deployment's other processes keep serving the calls they hold.
+		// The process gave up on its own subprocess, so this incarnation is spent and only its slot is
+		// refilled: the deployment's other processes keep serving the calls they hold.
 		m.lastError = msg.err
 		m.retireSlot(slot, true, fmt.Errorf("plugin process restart exhausted: %w", msg.err))
 		m.reconcile()
@@ -353,7 +361,8 @@ func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 		if _, process := m.slotFor(msg.process); process == nil || from != msg.process {
 			return nil
 		}
-		// The process is on its way out and its DOWN will follow, so failing its calls here rather than waiting means a caller learns as soon as the process itself knows.
+		// The process is on its way out and its DOWN will follow, so failing its calls here rather than
+		// waiting means a caller learns as soon as the process itself knows.
 		m.failProcessCalls(msg.process, runtime.ErrPluginUnavailable)
 		m.reconcile()
 
@@ -362,7 +371,9 @@ func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 		if process == nil {
 			return nil
 		}
-		// The slot outlives the PID that filled it, so it is emptied rather than dropped: nothing it reported is true of anything now, and a retirement ends with the process it retired, leaving a slot the deployment either refills or is done with. Only its retry budget carries over, since a slot whose processes keep dying is what that budget is counting.
+		m.labels.Count(m, metricProcessTerminations, telemetry.TerminationReason(msg.Reason))
+		// The slot outlives the PID that filled it, so it is emptied rather than dropped; only its retry budget
+		// carries over, since a slot whose processes keep dying is what that budget counts.
 		retiring, replace := process.retiring, process.replace
 		delete(m.byPID, msg.PID)
 		*process = pluginProcessState{
@@ -370,16 +381,20 @@ func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 			status:  pluginProcessStatus{lifecycle: PluginProcessRestarting, availability: runtime.AvailabilityUnavailable},
 		}
 		m.failProcessCalls(msg.PID, runtime.ErrPluginUnavailable)
+		m.Log().Warning("plugin process down: slot=%d route=%s retiring=%v replace=%v reason=%v", slot, m.route, retiring, replace, msg.Reason)
 		switch {
 		case retiring && !replace:
 			m.releaseSlot(slot)
-			// A deployment that shrank to nothing on purpose is healthy, and a stale error would otherwise keep it reporting unavailable for as long as it stays idle.
+			// A deployment that shrank to nothing on purpose is healthy, and a stale error would otherwise
+			// keep it reporting unavailable for as long as it stays idle.
 			if len(m.processes) == 0 && m.desiredProcs == 0 {
 				m.lastError = nil
 			}
 		case !m.draining:
-			// Every unexpected process incarnation consumes its own slot's finite budget, including an idle MinProcs=0 one whose committed calls just failed.
+			// Every unexpected process incarnation consumes its own slot's finite budget, including an idle
+			// MinProcs=0 one whose committed calls just failed.
 			m.lastError = msg.Reason
+			m.Log().Info("scheduling plugin process restart: slot=%d route=%s", slot, m.route)
 			m.schedulePluginProcessRestart(slot)
 		default:
 			m.releaseSlot(slot)
@@ -391,6 +406,7 @@ func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 		if entry == nil || entry.phase != deploymentManagerDispatching || entry.dispatchToken != msg.token {
 			return nil
 		}
+		m.labels.Count(m, metricDispatchTimeouts)
 		if entry.call.Cancel != nil {
 			entry.call.Cancel()
 		}
@@ -400,8 +416,10 @@ func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 	case MessageDeploymentManagerRestart:
 		process := m.processes[msg.slot]
 		if process == nil || !process.restart.Pending || msg.token != process.restart.Token {
+			m.Log().Warning("plugin process restart message dropped: slot=%d route=%s nilProcess=%v msgToken=%d", msg.slot, m.route, process == nil, msg.token)
 			return nil
 		}
+		m.Log().Info("plugin process restart firing: slot=%d route=%s token=%d", msg.slot, m.route, msg.token)
 		process.restart.Pending, process.restart.Cancel = false, nil
 		m.reconcile()
 
@@ -456,7 +474,8 @@ func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 // HandleInspect exposes concise operational manager metrics.
 func (m *deploymentManager[T]) HandleInspect(_ gen.PID, _ ...string) map[string]string {
 	status := m.status()
-	// Processes and calls are reported apart because one no longer implies the other: an operator reading a saturated deployment needs to know whether it is short of processes or of the capacity each one was given, and which its own configuration allows it to raise.
+	// Processes and calls are reported apart: a saturated deployment may be short of processes or of the
+	// capacity each one was given, and only one of those is its own to raise.
 	return map[string]string{
 		"deployment:availability":      string(status.availability),
 		"deployment:current":           fmt.Sprintf("%d", status.currentProcs),
@@ -493,10 +512,11 @@ func (m *deploymentManager[T]) acceptInvocation(call MessageInvokePlugin[T]) {
 		return
 	}
 	if m.pendingCalls.length >= m.options.QueueSize {
+		m.labels.Count(m, metricQueueRejects)
 		m.completeInvocation(&deploymentManagerCall[T]{call: call}, runtime.ErrQueueFull)
 		return
 	}
-	entry := &deploymentManagerCall[T]{call: call, phase: deploymentManagerPending}
+	entry := &deploymentManagerCall[T]{call: call, phase: deploymentManagerPending, accepted: time.Now()}
 	m.inFlightCalls[call.CallID] = entry
 	m.pendingCalls.push(entry)
 	m.reconcile()
@@ -535,7 +555,8 @@ func (m *deploymentManager[T]) dispatchInvocation() {
 	}
 }
 
-// selectProcess returns the slot whose ready process holds the fewest invocations, or nil when none has spare capacity; least-loaded rather than round-robin, since a process serving several calls finishes them at different times and stacking the next call behind a busy one while a quiet process waits is latency the deployment already paid for.
+// selectProcess returns the ready slot holding the fewest invocations, or nil when none has spare
+// capacity; least-loaded, since stacking a call behind a busy process is latency already paid for.
 func (m *deploymentManager[T]) selectProcess() (int, *pluginProcessState) {
 	selected, best := 0, (*pluginProcessState)(nil)
 	for _, slot := range m.order {
@@ -558,7 +579,7 @@ func (m *deploymentManager[T]) selectProcess() (int, *pluginProcessState) {
 // reconcile advances drain, process lifecycle, dispatch, scaling, and status publication.
 func (m *deploymentManager[T]) reconcile() {
 	if m.draining || m.circuitOpen {
-		m.publishStatus()
+		m.reconcileStatus()
 		if m.draining && !m.drained && len(m.inFlightCalls) == 0 {
 			m.reportDrained()
 		}
@@ -574,21 +595,24 @@ func (m *deploymentManager[T]) reconcile() {
 	m.reconcileProcesses()
 	m.dispatchInvocation()
 	m.reconcileScale()
-	m.publishStatus()
+	m.reconcileStatus()
 }
 
-// reconcileProcesses moves the deployment's slots toward the desired count and fills the empty ones, one pass at a time.
+// reconcileProcesses moves the deployment's slots toward the desired count and fills the empty ones,
+// one pass at a time.
 func (m *deploymentManager[T]) reconcileProcesses() {
 	if m.draining || m.circuitOpen {
 		return
 	}
-	// A deployment that reserves no process still has to answer the call that just arrived, so the first queued invocation is what wakes one.
+	// A deployment that reserves no process still has to answer the call that just arrived, so the first
+	// queued invocation is what wakes one.
 	if m.desiredProcs < 1 && m.pendingCalls.length > 0 {
 		m.desiredProcs = 1
 	}
 	running := m.runningProcs()
 	for i := len(m.order) - 1; i >= 0 && running > m.desiredProcs; i-- {
-		// The newest slot holding nothing, rather than simply the newest: a process serves several invocations at once, so retiring one that still holds calls would stop offering it work while those calls run, and one left above the desired count is retired by the reconciliation its next completion triggers.
+		// The newest slot holding nothing, not simply the newest: retiring one that still holds calls would
+		// stop offering it work while they run, and its next completion retires it anyway.
 		if process := m.processes[m.order[i]]; process != nil && !process.retiring && process.assigned == 0 {
 			m.retireSlot(m.order[i], false, nil)
 			running--
@@ -599,7 +623,8 @@ func (m *deploymentManager[T]) reconcileProcesses() {
 		if process == nil || process.pid != (gen.PID{}) || process.retiring {
 			continue
 		}
-		// An empty slot waiting on its own backoff is left there: filling it now would skip the delay that budget exists to impose, and only this slot is held back by it.
+		// An empty slot waiting on its own backoff is left there: filling it now would skip the delay that
+		// budget exists to impose, and only this slot is held back by it.
 		if process.restart.Pending {
 			continue
 		}
@@ -614,7 +639,8 @@ func (m *deploymentManager[T]) reconcileProcesses() {
 	}
 }
 
-// reconcileScale moves the desired process count toward the one this deployment's demand needs, at most one scaling decision per cooldown.
+// reconcileScale moves the desired process count toward the one this deployment's demand needs, at
+// most one scaling decision per cooldown.
 func (m *deploymentManager[T]) reconcileScale() {
 	if m.draining || m.circuitOpen {
 		return
@@ -626,7 +652,8 @@ func (m *deploymentManager[T]) reconcileScale() {
 	required := m.requiredProcs()
 	if required > m.desiredProcs && m.pendingCalls.length > 0 &&
 		m.readyProcs() >= m.desiredProcs && m.activeCalls()+m.dispatchingCalls() >= m.committedCapacity() {
-		// Growth starts only once every ready process is at capacity and a call is still waiting, and then goes to what the queue needs rather than one process per cooldown, since a wide capacity per process would otherwise ramp toward a count it could size in one pass; max_procs is this deployment's own ceiling, already applied by requiredProcs, while the budget applied here is the process one, and denied growth is not an error - the calls keep waiting and the cooldown paces the next attempt.
+		// Growth starts only once every ready process is at capacity with a call still waiting, and then goes
+		// to what the queue needs; denied growth is not an error, the cooldown paces the next attempt.
 		grown := false
 		for m.desiredProcs < required && m.options.ProcessBudget.acquire() {
 			m.growthProcs++
@@ -638,6 +665,7 @@ func (m *deploymentManager[T]) reconcileScale() {
 			m.scheduleScaleReconcile()
 			return
 		}
+		m.labels.Count(m, metricScaleEvents, "up")
 		m.reconcileProcesses()
 		return
 	}
@@ -646,16 +674,19 @@ func (m *deploymentManager[T]) reconcileScale() {
 			m.scheduleScaleReconcile()
 			return
 		}
-		// A process still running invocations is not surplus whatever the aggregate capacity says, so a deployment only gives back one that holds nothing: its completion reconciles this manager again, so waiting costs one more idle period rather than the call.
+		// A process still running invocations is not surplus whatever the aggregate capacity says, so only one
+		// holding nothing is given back; its completion reconciles this manager again.
 		if !m.idleProcs() {
 			m.scheduleScaleReconcile()
 			return
 		}
 		m.desiredProcs--
 		m.lastScale = time.Now()
+		m.labels.Count(m, metricScaleEvents, "down")
 		m.syncGrowthProcs()
 		m.reconcileProcesses()
-		// One process per cooldown on the way down, and nothing else will reconcile a deployment that has gone quiet, so the next step is armed here or a shrunk deployment stops halfway.
+		// One process per cooldown down, and nothing else reconciles a quiet deployment, so the next
+		// step is armed here or the shrink stops halfway.
 		m.scheduleScaleReconcile()
 	}
 }
@@ -687,7 +718,8 @@ func (m *deploymentManager[T]) scheduleScaleReconcile() {
 	}
 }
 
-// requiredProcs converts the invocations this deployment owes - executing, handed to a process and not yet started, and still queued - into the process count that would serve them, a process carrying its whole declared capacity of them rather than one invocation, never below the reservation the deployment keeps running anyway nor above its own ceiling.
+// requiredProcs converts the invocations this deployment owes into the process count that would serve
+// them, each carrying its whole declared capacity, floored at the reservation and capped at max_procs.
 func (m *deploymentManager[T]) requiredProcs() int {
 	capacity := m.deployment.CapacityPerProcess()
 	demand := m.activeCalls() + m.dispatchingCalls() + m.pendingCalls.length
@@ -695,7 +727,8 @@ func (m *deploymentManager[T]) requiredProcs() int {
 	return min(max(required, m.deployment.MinProcs), m.deployment.ProcessCountLimit())
 }
 
-// syncGrowthProcs follows the budget down to the process count this deployment now wants, so a process it gave up is available to whichever deployment needs it next.
+// syncGrowthProcs follows the budget down to the process count this deployment now wants, so a
+// process it gave up is available to whichever deployment needs it next.
 func (m *deploymentManager[T]) syncGrowthProcs() {
 	if held := max(0, m.desiredProcs-max(1, m.deployment.MinProcs)); held < m.growthProcs {
 		m.options.ProcessBudget.release(m.growthProcs - held)
@@ -733,18 +766,21 @@ func (m *deploymentManager[T]) openSlot() bool {
 			availability: runtime.AvailabilityUnavailable,
 		},
 	}
-	// Slot ids come from a counter rather than a position, since a restart message carries the id it is for and positions shift as slots are released; they also grow, so the newest slot is still the highest id after one in the middle goes.
+	// Slot ids come from a counter rather than a position: a restart message carries the id it is for, and
+	// ids grow, so the newest slot is still the highest after one in the middle goes.
 	m.order = append(m.order, slot)
 	return m.startPluginProcess(slot)
 }
 
-// retireSlot takes one slot's process out of service, with reason set when it must stop at once rather than after the invocations it still holds, and replace set when the slot is to be refilled.
+// retireSlot takes one slot's process out of service - reason set when it must stop at once rather than
+// after the calls it holds, replace set when the slot is to be refilled.
 func (m *deploymentManager[T]) retireSlot(slot int, replace bool, reason error) {
 	process := m.processes[slot]
 	if process == nil || process.retiring {
 		return
 	}
-	// An empty slot has no process to retire and no DOWN coming for one, so it is decided here: refilled by its pending restart, or dropped outright.
+	// An empty slot has no process to retire and no DOWN coming for one, so it is decided here: refilled
+	// by its pending restart, or dropped outright.
 	if process.pid == (gen.PID{}) {
 		if !replace {
 			m.releaseSlot(slot)
@@ -753,12 +789,15 @@ func (m *deploymentManager[T]) retireSlot(slot int, replace bool, reason error) 
 	}
 	process.retiring, process.replace = true, replace
 	if reason != nil {
+		m.Log().Warning("retiring plugin process slot: slot=%d replace=%v reason=%v route=%s", slot, replace, reason, m.route)
 		_ = m.Node().SendExit(process.pid, reason)
 		return
 	}
-	// MessageStop lets a process holding nothing finish on its own terms, and a send that fails means it cannot be asked, so the signal it cannot refuse is the fallback.
+	// MessageStop lets a process holding nothing finish on its own terms, and a send that fails means it
+	// cannot be asked, so the signal it cannot refuse is the fallback.
 	if process.assigned == 0 {
 		if err := m.Send(process.pid, MessageStop{}); err != nil {
+			m.Log().Warning("retiring plugin process slot via forced exit: slot=%d route=%s sendErr=%v", slot, m.route, err)
 			_ = m.Node().SendExit(process.pid, gen.TerminateReasonShutdown)
 		}
 	}
@@ -778,17 +817,19 @@ func (m *deploymentManager[T]) releaseSlot(slot int) {
 	m.order = slices.DeleteFunc(m.order, func(id int) bool { return id == slot })
 }
 
-// startPluginProcess spawns and monitors the process for one empty slot, reporting whether the slot was filled.
+// startPluginProcess spawns and monitors the process for one empty slot, reporting whether the slot
+// was filled.
 func (m *deploymentManager[T]) startPluginProcess(slot int) bool {
 	process := m.processes[slot]
 	if process == nil {
 		return false
 	}
-	// LinkParent only propagates manager termination downward, so a process that dies on its own never takes the manager with it; the monitor below is what reports that death back.
+	// LinkParent only propagates manager termination downward, so a process that dies on its own never
+	// takes the manager with it; the monitor below is what reports that death back.
 	pid, err := m.Spawn(func() gen.ProcessBehavior {
 		return &pluginProcess[T]{
 			adapter:    m.adapter,
-			options:    m.options.ProcessOptions,
+			options:    m.options.PluginProcessOptions,
 			deployment: m.deployment,
 		}
 	}, gen.ProcessOptions{LinkParent: true})
@@ -809,37 +850,46 @@ func (m *deploymentManager[T]) startPluginProcess(slot int) bool {
 		availability: runtime.AvailabilityUnavailable,
 	}
 	m.byPID[pid] = slot
+	m.labels.Count(m, metricProcessStarts)
 	return true
 }
 
-// schedulePluginProcessRestart consumes one slot's finite retry budget, opening the deployment's circuit when that slot has spent it.
+// schedulePluginProcessRestart consumes one slot's finite retry budget, opening the deployment's
+// circuit when that slot has spent it.
 func (m *deploymentManager[T]) schedulePluginProcessRestart(slot int) {
 	process := m.processes[slot]
 	if process == nil || process.restart.Pending {
+		m.Log().Warning("plugin process restart already pending or slot missing: slot=%d route=%s nilProcess=%v", slot, m.route, process == nil)
 		return
 	}
 	delay := process.restart.Strategy.NextBackOff()
 	if delay == backoff.Stop {
+		m.Log().Warning("plugin process restart budget exhausted, opening circuit: slot=%d route=%s", slot, m.route)
 		m.openCircuit(fmt.Errorf("plugin process restart budget: %w", runtime.ErrBackoffStopped))
 		return
 	}
 	process.restart.Token++
+	m.Log().Info("plugin process restart scheduled: slot=%d route=%s delay=%s token=%d", slot, m.route, delay, process.restart.Token)
 	cancel, err := m.SendAfter(m.PID(), MessageDeploymentManagerRestart{slot: slot, token: process.restart.Token}, delay)
 	if err != nil {
+		m.Log().Error("plugin process restart schedule failed: slot=%d route=%s err=%v", slot, m.route, err)
 		m.openCircuit(fmt.Errorf("schedule plugin process restart: %w", err))
 		return
 	}
 	process.restart.Pending, process.restart.Cancel = true, cancel
+	m.labels.Count(m, metricProcessRestarts)
 }
 
-// cancelPluginProcessRestarts drops every slot's pending start, resetting the budgets when the deployment is being given a clean one.
+// cancelPluginProcessRestarts drops every slot's pending start, resetting the budgets when the
+// deployment is being given a clean one.
 func (m *deploymentManager[T]) cancelPluginProcessRestarts(reset bool) {
 	for _, process := range m.processes {
 		process.restart.CancelScheduled(reset)
 	}
 }
 
-// runningProcs counts the slots the manager still means to keep, an empty one waiting on its own restart included: its next process is what that backoff owes, so a slot whose process failed is not immediately joined by another opened for the same shortfall.
+// runningProcs counts the slots the manager still means to keep, an empty one waiting on its restart
+// included, so a failed slot is not immediately joined by another opened for the same shortfall.
 func (m *deploymentManager[T]) runningProcs() int {
 	count := 0
 	for _, process := range m.processes {
@@ -850,7 +900,8 @@ func (m *deploymentManager[T]) runningProcs() int {
 	return count
 }
 
-// restartingProcs reports whether any slot is waiting on its own backoff, which is what paces the next scaling decision.
+// restartingProcs reports whether any slot is waiting on its own backoff, which is what paces the
+// next scaling decision.
 func (m *deploymentManager[T]) restartingProcs() bool {
 	for _, process := range m.processes {
 		if process.restart.Pending {
@@ -871,7 +922,8 @@ func (m *deploymentManager[T]) readyProcs() int {
 	return count
 }
 
-// idleProcs reports whether the manager holds a process it could give back right now: one it has not already retired and that is running no invocation.
+// idleProcs reports whether the manager holds a process it could give back right now: one it has not
+// already retired and that is running no invocation.
 func (m *deploymentManager[T]) idleProcs() bool {
 	for _, process := range m.processes {
 		if !process.retiring && process.assigned == 0 {
@@ -891,22 +943,25 @@ func (m *deploymentManager[T]) openCircuit(err error) {
 		return
 	}
 	m.circuitOpen, m.lastError = true, err
+	m.labels.Count(m, metricCircuitOpens)
 	m.cancelPluginProcessRestarts(false)
 	for callID := range m.inFlightCalls {
 		m.removeCall(callID, runtime.ErrPluginUnavailable)
 	}
-	// The deployment answers nothing while its circuit is open, so the slots it kept are only cost: they go, whatever it had grown to is not running any more either, and the cooldown below opens a fresh set if the deployment can run at all.
+	// The deployment answers nothing while its circuit is open, so its slots are only cost; the cooldown
+	// below opens a fresh set if it can run at all.
 	m.desiredProcs = m.deployment.MinProcs
 	m.releaseGrowthProcs()
 	for _, slot := range slices.Clone(m.order) {
 		m.retireSlot(slot, false, gen.TerminateReasonShutdown)
 	}
-	// Nothing else clears the circuit, so a deployment broken by a transient host problem would stay dead until an operator noticed; the cooldown gives the deployment fresh slots with fresh budgets instead, and a genuinely broken deployment just re-opens the circuit.
+	// Nothing else clears the circuit, so the cooldown gives the deployment fresh slots with fresh budgets
+	// and a genuinely broken one just re-opens it.
 	m.cancelCircuitCooldown()
 	if cancel, sendErr := m.SendAfter(m.PID(), MessageDeploymentManagerCircuitCooldown{token: m.circuitToken}, m.options.CircuitCooldown); sendErr == nil {
 		m.circuitStop = cancel
 	}
-	m.publishStatus()
+	m.reconcileStatus()
 }
 
 // closeCircuit reopens admission, resetting the retry budget of any slot that outlived the circuit opening.
@@ -954,7 +1009,8 @@ func (m *deploymentManager[T]) removeCall(callID uint64, err error) {
 	m.pendingCalls.remove(entry)
 	delete(m.inFlightCalls, callID)
 	if _, process := m.slotFor(entry.process); process != nil && entry.phase != deploymentManagerPending {
-		// The capacity this call held returns to the process that held it, and a retiring one that just finished its last call is free to stop.
+		// The capacity this call held returns to the process that held it, and a retiring one that just
+		// finished its last call is free to stop.
 		if process.assigned > 0 {
 			process.assigned--
 		}
@@ -973,6 +1029,10 @@ func (m *deploymentManager[T]) completeInvocation(entry *deploymentManagerCall[T
 		return
 	}
 	entry.completed = true
+	// A rejected call was never accepted, so it has no duration to report.
+	if elapsed, ok := telemetry.ElapsedSeconds(entry.accepted); ok {
+		m.labels.Observe(m, metricInvocationTime, elapsed)
+	}
 	_ = m.SendWithPriority(m.Parent(), MessageInvocationCompleted{
 		CallID: entry.call.CallID,
 		Err:    err, Route: m.route, Manager: m.PID(),
@@ -988,14 +1048,15 @@ func (m *deploymentManager[T]) reportDrained() {
 	_ = m.SendWithPriority(m.Parent(), MessageDeploymentManagerDrained{
 		route: m.route, manager: m.PID(),
 	}, gen.MessagePriorityHigh)
-	m.publishStatus()
+	m.reconcileStatus()
 }
 
 // ---------------------------------------------------------------------------
 // Status Reporting
 // ---------------------------------------------------------------------------
 
-// committedCapacity returns the invocations this deployment can execute at once, counting only ready processes so the manager never dispatches into capacity that does not exist yet, and each of them for the calls it can serve rather than the single call a process used to mean; the figure per process is the one the deployment declared, which is also the one each process enforces, so nothing between the spec and the dispatcher quietly reduces it.
+// committedCapacity is what this deployment can execute at once, counting only ready processes and each
+// for the calls it can serve; the per-process figure is the declared one every process enforces.
 func (m *deploymentManager[T]) committedCapacity() int {
 	return m.readyProcs() * m.deployment.CapacityPerProcess()
 }
@@ -1022,7 +1083,8 @@ func (m *deploymentManager[T]) activeCalls() int {
 	return count
 }
 
-// processStatuses snapshots what each owned process last reported, keyed by PID since that is what an operator sees, and skipping a slot standing empty between two of them.
+// processStatuses snapshots what each owned process last reported, keyed by PID since that is what an
+// operator sees, and skipping a slot standing empty between two of them.
 func (m *deploymentManager[T]) processStatuses() map[gen.PID]pluginProcessStatus {
 	statuses := make(map[gen.PID]pluginProcessStatus, len(m.processes))
 	for _, process := range m.processes {
@@ -1035,7 +1097,8 @@ func (m *deploymentManager[T]) processStatuses() map[gen.PID]pluginProcessStatus
 
 // status derives the manager's public snapshot from owned state.
 func (m *deploymentManager[T]) status() deploymentManagerStatus {
-	// A deployment that reserves nothing and is doing nothing is not broken, it is asleep: it holds no slot, owes no call, and is waiting on neither a retry nor an error.
+	// A deployment that reserves nothing and is doing nothing is not broken, it is asleep: it holds no
+	// slot, owes no call, and is waiting on neither a retry nor an error.
 	idleAtZero := m.desiredProcs == 0 && len(m.processes) == 0 && len(m.inFlightCalls) == 0 &&
 		!m.restartingProcs() && m.lastError == nil
 	availability := runtime.AvailabilityUnavailable
@@ -1073,7 +1136,8 @@ func (m *deploymentManager[T]) status() deploymentManagerStatus {
 	}
 }
 
-// sameDeploymentManagerStatus reports whether two snapshots describe the same deployment health, for publish deduplication, excluding the per-invocation counters on purpose (see deploymentManagerStatus).
+// sameDeploymentManagerStatus reports whether two snapshots describe the same health, for publish
+// deduplication, excluding the per-invocation counters (see deploymentManagerStatus).
 func sameDeploymentManagerStatus(left, right deploymentManagerStatus) bool {
 	if left.lifecycle != right.lifecycle ||
 		left.availability != right.availability ||
@@ -1094,13 +1158,14 @@ func sameDeploymentManagerStatus(left, right deploymentManagerStatus) bool {
 	return true
 }
 
-// publishStatus sends the latest manager snapshot to its Router parent, skipping one the Router already has: every accepted, dispatched, and completed invocation reconciles this manager, and the Router recomputes its own status - and the catalog and supervisor above it - for each fact it receives, so republishing an unchanged status would walk that whole chain twice per call.
-func (m *deploymentManager[T]) publishStatus() {
+// reconcileStatus recomputes and, on change, sends the latest snapshot to its Router parent; every
+// invocation reconciles this manager, and an unchanged status would walk the whole chain twice.
+func (m *deploymentManager[T]) reconcileStatus() {
 	next := m.status()
-	if m.statusEpoch != 0 && sameDeploymentManagerStatus(m.liveStatus, next) {
+	if m.statusEpoch != 0 && sameDeploymentManagerStatus(m.lastStatus, next) {
 		return
 	}
-	m.statusEpoch, m.liveStatus = m.statusEpoch+1, next
+	m.statusEpoch, m.lastStatus = m.statusEpoch+1, next
 	_ = m.SendWithPriority(m.Parent(), MessageDeploymentManagerStatusChanged{
 		route: m.route, manager: m.PID(),
 		status: next,

@@ -1,0 +1,452 @@
+{
+  "uid": "blink-snapshot",
+  "title": "Blink Snapshot Runtime",
+  "description": "Per-namespace snapshot subtree on every executor: the cluster subscription to its controller, the generations it parses and serves, and the convergence it reports back.",
+  "tags": ["blink", "snapshot"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "namespace",
+        "label": "Snapshot namespace",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+        "query": "label_values(blink_snapshot_reader_availability, namespace)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Reader availability",
+      "description": "The subscription to this namespace's controller actor; worst pod in the namespace.",
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "min by (namespace) (blink_snapshot_reader_availability{namespace=~\"$namespace\"})",
+          "legendFormat": "{{namespace}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": { "text": "unavailable", "index": 0 },
+                "1": { "text": "degraded", "index": 1 },
+                "2": { "text": "ready", "index": 2 }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "green", "value": 2 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Projection availability",
+      "description": "Degraded serves the last committed generation; unavailable serves nothing.",
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "min by (namespace) (blink_snapshot_projection_availability{namespace=~\"$namespace\"})",
+          "legendFormat": "{{namespace}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": { "text": "unavailable", "index": 0 },
+                "1": { "text": "degraded", "index": 1 },
+                "2": { "text": "ready", "index": 2 }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "green", "value": 2 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Reported availability",
+      "description": "What this executor tells its controller, which is the local half of controller-side drift.",
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "min by (namespace) (blink_snapshot_reported_availability{namespace=~\"$namespace\"})",
+          "legendFormat": "{{namespace}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": { "text": "unavailable", "index": 0 },
+                "1": { "text": "degraded", "index": 1 },
+                "2": { "text": "ready", "index": 2 }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "green", "value": 2 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Supervisor lifecycle",
+      "description": "One process holds both children, so it stays up while either restarts.",
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (namespace) (blink_snapshot_supervisor_lifecycle{namespace=~\"$namespace\"})",
+          "legendFormat": "{{namespace}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": { "text": "starting", "index": 0 },
+                "1": { "text": "running", "index": 1 },
+                "2": { "text": "stopping", "index": 2 }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "orange", "value": null },
+              { "color": "green", "value": 1 },
+              { "color": "orange", "value": 2 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Generations",
+      "description": "Delivered leads what the projection serves; prepared is non-zero only in external-commit mode, waiting on the runtime to commit it.",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "blink_snapshot_reader_generation{namespace=~\"$namespace\"}",
+          "legendFormat": "{{namespace}} delivered"
+        },
+        {
+          "refId": "B",
+          "expr": "blink_snapshot_projection_committed_generation{namespace=~\"$namespace\"}",
+          "legendFormat": "{{namespace}} serving"
+        },
+        {
+          "refId": "C",
+          "expr": "blink_snapshot_projection_prepared_generation{namespace=~\"$namespace\"}",
+          "legendFormat": "{{namespace}} prepared"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 1, "fillOpacity": 0, "showPoints": "never" } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Generation lag and pending commit",
+      "description": "Lag that does not return to zero is what the controller eventually counts as a drifting executor.",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "blink_snapshot_generation_lag{namespace=~\"$namespace\"}",
+          "legendFormat": "{{namespace}} lag"
+        },
+        {
+          "refId": "B",
+          "expr": "blink_snapshot_commit_pending{namespace=~\"$namespace\"}",
+          "legendFormat": "{{namespace}} commit in flight"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" } },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": ".*lag.*" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Subscription attempts and controller losses",
+      "description": "Repeated attempts mean the controller node is unreachable; scope says whether the actor or the whole node went down.",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 13 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (namespace, result) (increase(blink_snapshot_subscribe_attempts_total{namespace=~\"$namespace\"}[1h]))",
+          "legendFormat": "{{namespace}} subscribe {{result}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (namespace, scope) (increase(blink_snapshot_controller_down_total{namespace=~\"$namespace\"}[1h]))",
+          "legendFormat": "{{namespace}} down {{scope}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Pushed updates",
+      "description": "Ignored updates are the ones the reader dropped rather than parsed - a stale generation or a namespace mismatch.",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 13 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (namespace) (increase(blink_snapshot_updates_total{namespace=~\"$namespace\"}[1h]))",
+          "legendFormat": "{{namespace}} accepted"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (namespace, reason) (increase(blink_snapshot_updates_ignored_total{namespace=~\"$namespace\"}[1h]))",
+          "legendFormat": "{{namespace}} ignored {{reason}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Parses and spec failures",
+      "description": "A partial parse still commits, so per-spec failures are the only signal that an authored spec is being ignored.",
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (namespace, result) (increase(blink_snapshot_parses_total{namespace=~\"$namespace\"}[1h]))",
+          "legendFormat": "{{namespace}} {{result}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (namespace) (increase(blink_snapshot_parse_failures_total{namespace=~\"$namespace\"}[1h]))",
+          "legendFormat": "{{namespace}} spec failures"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" } },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": ".*(failed|spec failures).*" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Parse latency",
+      "description": "In-process work on one received generation, so this scales with catalog size rather than with I/O.",
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (namespace, le) (rate(blink_snapshot_parse_seconds_bucket{namespace=~\"$namespace\"}[1h])))",
+          "legendFormat": "{{namespace}} p95"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.5, sum by (namespace, le) (rate(blink_snapshot_parse_seconds_bucket{namespace=~\"$namespace\"}[1h])))",
+          "legendFormat": "{{namespace}} p50"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "lineWidth": 1, "fillOpacity": 0, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "External commits",
+      "description": "Only external-mode projections commit on request - the plugin runtime's, gated on its own rollout.",
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (namespace, result) (increase(blink_snapshot_commits_total{namespace=~\"$namespace\"}[1h]))",
+          "legendFormat": "{{namespace}} {{result}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Executor reports and child churn",
+      "description": "Reports are the tick the controller counts convergence from; a repeating child is what stalls them.",
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 27 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (namespace) (rate(blink_snapshot_executor_reports_total{namespace=~\"$namespace\"}[5m]))",
+          "legendFormat": "{{namespace}} reports/s"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (namespace, child) (increase(blink_snapshot_child_starts_total{namespace=~\"$namespace\"}[1h]))",
+          "legendFormat": "{{namespace}} {{child}} starts"
+        },
+        {
+          "refId": "C",
+          "expr": "sum by (namespace, child, reason) (increase(blink_snapshot_child_terminations_total{namespace=~\"$namespace\"}[1h]))",
+          "legendFormat": "{{namespace}} {{child}} exit {{reason}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    }
+  ]
+}

@@ -12,6 +12,7 @@ import (
 	"ergo.services/ergo/gen"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/harishhary/blink/internal/runtime"
+	"github.com/harishhary/blink/internal/runtime/telemetry"
 )
 
 // ---------------------------------------------------------------------------
@@ -90,7 +91,7 @@ type routerActor[T Artifact] struct {
 	act.Router
 	opts             RouterOptions
 	lifecycle        RouterActorLifecycle
-	liveStatus       routerActorStatus
+	lastStatus       routerActorStatus
 	pluginID         string
 	generation       uint64
 	desiredRevision  uint64
@@ -103,6 +104,7 @@ type routerActor[T Artifact] struct {
 	desiredCandidate *Deployment
 	activePrimary    *Deployment
 	activeCandidate  *Deployment
+	labels           telemetry.Labels
 }
 
 // ---------------------------------------------------------------------------
@@ -201,13 +203,14 @@ func (a *routerActor[T]) Terminate(error) {
 // Message handling
 // ---------------------------------------------------------------------------
 
-// RouteMessage is the only normal-priority ingress path. Timers are normal too,
-// so their expiration is consumed here rather than forwarded to a route.
+// RouteMessage is the only normal-priority ingress path, timers included, so an expiry is consumed
+// here rather than forwarded to a route.
 func (a *routerActor[T]) RouteMessage(_ gen.PID, message any) gen.Atom {
 	switch m := message.(type) {
 	case MessageInvocationTimedOut:
 		call := a.inFlightCalls[m.callID]
 		if call != nil && !call.accepted && call.ackToken == m.token {
+			a.labels.Count(a, metricAcceptanceTimeouts)
 			a.finishTrackedCall(m.callID, runtime.ErrPluginUnavailable)
 		}
 		return act.RouteDiscard
@@ -224,8 +227,7 @@ func (a *routerActor[T]) RouteMessage(_ gen.PID, message any) gen.Atom {
 // RouteCall discards synchronous calls; the router serves none over the route path.
 func (a *routerActor[T]) RouteCall(_ gen.PID, _ gen.Ref, _ any) gen.Atom { return act.RouteDiscard }
 
-// HandleMessage receives all router administration and route lifecycle facts at
-// High/Max priority, plus Ergo's routed-send failure sentinel.
+// HandleMessage receives every administration and route-lifecycle fact at High/Max priority.
 func (a *routerActor[T]) HandleMessage(from gen.PID, message any) error {
 	switch m := message.(type) {
 	case MessageRouterActivate:
@@ -497,10 +499,11 @@ func (a *routerActor[T]) newDeploymentManager(ref *deploymentRouteState) *deploy
 	}
 	return &deploymentManager[T]{
 		adapter:    a.adapter,
-		options:    a.opts.ManagerOptions,
+		options:    a.opts.DeploymentManagerOptions,
 		deployment: ref.deployment,
 		route:      ref.name,
 		draining:   ref.phase >= deploymentRouteDraining || a.isDraining(),
+		labels:     a.labels,
 	}
 }
 
@@ -546,27 +549,30 @@ func (a *routerActor[T]) currentManager(route gen.Atom, from, manager gen.PID) (
 // routeInvocation selects the rollout target route and tracks the call awaiting acceptance.
 func (a *routerActor[T]) routeInvocation(call MessageInvokePlugin[T]) gen.Atom {
 	if a.isDraining() {
+		a.labels.Count(a, metricUnroutable)
 		_ = a.SendWithPriority(a.Parent(), MessageInvocationCompleted{CallID: call.CallID, Err: runtime.ErrPluginUnavailable}, gen.MessagePriorityHigh)
 		return act.RouteDiscard
 	}
-	// Rollout routing decision: shadow -> shadow candidate; else primary,
-	// unless a canary candidate wins this call's rollout bucket.
+	// Shadow goes to the shadow candidate; else primary, unless a canary wins this call's bucket.
 	var ref *deploymentRouteState
+	target := "shadow"
 	if call.Shadow {
 		if a.activeCandidate != nil && a.activeCandidate.Mode == runtime.RolloutModeShadow {
 			ref = a.routesByKey[a.activeCandidate.RouteKey()]
 		}
 	} else {
-		target := a.activePrimary
+		deployment := a.activePrimary
+		target = "primary"
 		if a.activeCandidate != nil && a.activeCandidate.Mode == runtime.RolloutModeCanary &&
 			float64(runtime.RolloutBucket(call.RolloutKey)) <= a.activeCandidate.RolloutPct {
-			target = a.activeCandidate
+			deployment, target = a.activeCandidate, "candidate"
 		}
-		if target != nil {
-			ref = a.routesByKey[target.RouteKey()]
+		if deployment != nil {
+			ref = a.routesByKey[deployment.RouteKey()]
 		}
 	}
 	if ref == nil || ref.phase != deploymentRouteActive || a.refreshRoutePID(ref) == (gen.PID{}) {
+		a.labels.Count(a, metricUnroutable)
 		_ = a.SendWithPriority(a.Parent(), MessageInvocationCompleted{CallID: call.CallID, Err: runtime.ErrPluginUnavailable}, gen.MessagePriorityHigh)
 		return act.RouteDiscard
 	}
@@ -574,17 +580,19 @@ func (a *routerActor[T]) routeInvocation(call MessageInvokePlugin[T]) gen.Atom {
 		return act.RouteDiscard
 	}
 	tracked := &routerInvocation{route: ref.name, ackToken: 1}
-	timeout := a.opts.ManagerOptions.DispatchTimeout
+	timeout := a.opts.DeploymentManagerOptions.DispatchTimeout
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
 	cancel, err := a.SendAfter(a.PID(), MessageInvocationTimedOut{callID: call.CallID, token: tracked.ackToken}, timeout)
 	if err != nil {
+		a.labels.Count(a, metricUnroutable)
 		_ = a.SendWithPriority(a.Parent(), MessageInvocationCompleted{CallID: call.CallID, Err: runtime.ErrPluginUnavailable}, gen.MessagePriorityHigh)
 		return act.RouteDiscard
 	}
 	tracked.ackStop = cancel
 	a.inFlightCalls[call.CallID] = tracked
+	a.labels.Count(a, metricRouted, target)
 	return ref.name
 }
 
@@ -711,14 +719,12 @@ func (a *routerActor[T]) drainRoute(ref *deploymentRouteState) {
 		_ = a.Send(pid, MessageDrain{})
 		return
 	}
-	// No live manager: respawn one (it starts already draining, per
-	// newDeploymentManager) so it can run the drain protocol to completion.
+	// No live manager: respawn one, already draining, so it can finish the drain protocol.
 	if err := a.RespawnRoute(ref.name); err != nil {
 		_ = a.scheduleRouteStep(ref)
 		return
 	}
-	// Respawn may not have registered the PID yet; drain it if it is live,
-	// otherwise reschedule to retry the drain once it appears.
+	// Respawn may not have registered the PID yet; retry the drain once it appears.
 	if pid := a.refreshRoutePID(ref); pid != (gen.PID{}) {
 		_ = a.Send(pid, MessageDrain{})
 		return
@@ -822,8 +828,8 @@ func (a *routerActor[T]) activeRouteAvailable(deployment *Deployment) bool {
 	return ref != nil && ref.phase == deploymentRouteActive && a.refreshRoutePID(ref) != (gen.PID{})
 }
 
-// reconcileStatus recomputes router status and publishes an epoch-tagged update on change.
-func (a *routerActor[T]) reconcileStatus() {
+// routeAvailability computes route status and routability from desired/active deployments
+func (a *routerActor[T]) routeAvailability() (deploymentRouteStatus, deploymentRouteStatus, bool, bool, runtime.Availability) {
 	primaryStatus, candidateStatus := a.deploymentStatusFor(a.desiredPrimary), a.deploymentStatusFor(a.desiredCandidate)
 	primaryRoutable, candidateRoutable := a.activeRouteAvailable(a.activePrimary), a.activeRouteAvailable(a.activeCandidate)
 	shadowRoutable := candidateRoutable && a.activeCandidate != nil && a.activeCandidate.Mode == runtime.RolloutModeShadow
@@ -834,9 +840,6 @@ func (a *routerActor[T]) reconcileStatus() {
 			fullNormalCoverage = true
 		}
 	}
-	if normalRoutable && a.lifecycle == RouterActorStarting {
-		a.lifecycle = RouterActorRunning
-	}
 	primaryHealthy := a.desiredPrimary == nil || (primaryStatus.lifecycle == DeploymentRouteRunning && primaryStatus.availability == runtime.AvailabilityReady)
 	candidateHealthy := a.desiredCandidate == nil || (candidateStatus.lifecycle == DeploymentRouteRunning && candidateStatus.availability == runtime.AvailabilityReady)
 	availability := runtime.AvailabilityUnavailable
@@ -846,14 +849,48 @@ func (a *routerActor[T]) reconcileStatus() {
 	case normalRoutable || shadowRoutable:
 		availability = runtime.AvailabilityDegraded
 	}
-	next := routerActorStatus{lifecycle: a.lifecycle, availability: availability, revision: a.desiredRevision,
+	return primaryStatus, candidateStatus, normalRoutable, shadowRoutable, availability
+}
+
+// status computes the router's current publishable status, shared by reconcileStatus (to the catalog)
+// and HandleInspect (to an operator).
+func (a *routerActor[T]) status() routerActorStatus {
+	primaryStatus, candidateStatus, normalRoutable, shadowRoutable, availability := a.routeAvailability()
+	return routerActorStatus{lifecycle: a.lifecycle, availability: availability, revision: a.desiredRevision,
 		normalRoutable: normalRoutable, shadowRoutable: shadowRoutable, primary: primaryStatus, candidate: candidateStatus}
-	if sameRouterStatus(a.liveStatus, next) && a.statusEpoch != 0 {
+}
+
+// reconcileStatus recomputes router status and publishes an epoch-tagged update on change.
+func (a *routerActor[T]) reconcileStatus() {
+	if _, _, normalRoutable, _, _ := a.routeAvailability(); normalRoutable && a.lifecycle == RouterActorStarting {
+		a.lifecycle = RouterActorRunning
+	}
+	next := a.status()
+	if sameRouterStatus(a.lastStatus, next) && a.statusEpoch != 0 {
 		return
 	}
-	a.statusEpoch, a.liveStatus = a.statusEpoch+1, next
+	a.statusEpoch, a.lastStatus = a.statusEpoch+1, next
 	if a.generation != 0 {
 		_ = a.SendWithPriority(a.Parent(), MessageRouterStatusChanged{pluginID: a.pluginID, pid: a.PID(), generation: a.generation, epoch: a.statusEpoch, status: next.clone()}, gen.MessagePriorityHigh)
+	}
+}
+
+// HandleInspect exposes lifecycle and availability plus each route's own health, which a Ready
+// router status alone does not distinguish.
+func (a *routerActor[T]) HandleInspect(gen.PID, ...string) map[string]string {
+	status := a.status()
+	return map[string]string{
+		"router:lifecycle":              string(status.lifecycle),
+		"router:availability":           string(status.availability),
+		"router:revision":               fmt.Sprintf("%d", status.revision),
+		"router:normal_routable":        fmt.Sprintf("%t", status.normalRoutable),
+		"router:shadow_routable":        fmt.Sprintf("%t", status.shadowRoutable),
+		"router:routes":                 fmt.Sprintf("%d", len(a.routesByKey)),
+		"router:in_flight_calls":        fmt.Sprintf("%d", len(a.inFlightCalls)),
+		"router:primary:lifecycle":      string(status.primary.lifecycle),
+		"router:primary:availability":   string(status.primary.availability),
+		"router:candidate:lifecycle":    string(status.candidate.lifecycle),
+		"router:candidate:availability": string(status.candidate.availability),
 	}
 }
 

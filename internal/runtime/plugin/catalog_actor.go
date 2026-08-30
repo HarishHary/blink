@@ -7,6 +7,7 @@ import (
 	"ergo.services/ergo/gen"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/harishhary/blink/internal/runtime"
+	"github.com/harishhary/blink/internal/runtime/telemetry"
 )
 
 // ---------------------------------------------------------------------------
@@ -31,9 +32,8 @@ type catalogActorState struct {
 	status    catalogActorStatus
 }
 
-// catalogActorStatus is owned by catalogActor, except for LastError, which is
-// owned by runtimeSupervisor because the supervisor replaces catalog actor
-// incarnations.
+// catalogActorStatus is owned by catalogActor, except LastError, which the supervisor owns because
+// it replaces incarnations.
 type catalogActorStatus struct {
 	lifecycle          CatalogActorLifecycle
 	availability       runtime.Availability
@@ -70,11 +70,12 @@ type catalogActor[T Artifact] struct {
 	activated       bool
 	draining        bool
 	drainReported   bool
-	liveStatus      catalogActorStatus
+	lastStatus      catalogActorStatus
 	statusEpoch     uint64
 	routers         map[string]*routerState
 	desired         map[string]routerDesiredState
 	inFlightCalls   map[uint64]gen.PID
+	labels          telemetry.Labels
 }
 
 // ---------------------------------------------------------------------------
@@ -111,8 +112,8 @@ type MessageRouterRestart struct {
 }
 
 // newCatalogActor creates a catalog actor with its runtime options.
-func newCatalogActor[T Artifact](opts CatalogOptions, adapter *Adapter[T]) gen.ProcessBehavior {
-	return &catalogActor[T]{opts: opts, adapter: adapter}
+func newCatalogActor[T Artifact](opts CatalogOptions, adapter *Adapter[T], labels telemetry.Labels) gen.ProcessBehavior {
+	return &catalogActor[T]{opts: opts, adapter: adapter, labels: labels}
 }
 
 // ---------------------------------------------------------------------------
@@ -285,6 +286,7 @@ func (a *catalogActor[T]) HandleMessage(from gen.PID, message any) error {
 				continue
 			}
 
+			a.labels.Count(a, metricRouterTerminations, telemetry.TerminationReason(m.Reason))
 			ref.status.lifecycle = RouterActorRestarting
 			ref.status.availability = runtime.AvailabilityUnavailable
 			ref.status.lastError = m.Reason
@@ -395,6 +397,7 @@ func (a *catalogActor[T]) startRouter(id string) (*routerState, error) {
 			opts:     a.opts.RouterOptions,
 			adapter:  a.adapter,
 			pluginID: id,
+			labels:   a.labels,
 		}
 	}, gen.ProcessOptions{LinkParent: true})
 	if err != nil {
@@ -415,6 +418,7 @@ func (a *catalogActor[T]) startRouter(id string) (*routerState, error) {
 		_ = a.Node().SendExit(pid, fmt.Errorf("activate router: %w", err))
 		return ref, err
 	}
+	a.labels.Count(a, metricRouterStarts)
 	return ref, nil
 }
 
@@ -503,6 +507,7 @@ func (a *catalogActor[T]) scheduleRouterRestart(id string) error {
 	}
 	state.Pending = true
 	state.Cancel = cancel
+	a.labels.Count(a, metricRouterRestarts)
 	if ref := a.routers[id]; ref != nil {
 		ref.status.lifecycle = RouterActorRestarting
 		ref.status.availability = runtime.AvailabilityUnavailable
@@ -560,8 +565,8 @@ func (a *catalogActor[T]) finishTrackedCall(callID uint64, err error) {
 // Status projection
 // ---------------------------------------------------------------------------
 
-// reconcileStatus recomputes and publishes the aggregate catalog status.
-func (a *catalogActor[T]) reconcileStatus() {
+// status computes the aggregate catalog status, shared by reconcileStatus and HandleInspect.
+func (a *catalogActor[T]) status() catalogActorStatus {
 	routers := make(map[string]routerActorStatus, len(a.desired))
 	routable := 0
 	degraded := 0
@@ -617,7 +622,7 @@ func (a *catalogActor[T]) reconcileStatus() {
 		availability = runtime.AvailabilityDegraded
 	}
 
-	next := catalogActorStatus{
+	return catalogActorStatus{
 		lifecycle:          lifecycle,
 		availability:       availability,
 		desiredRevision:    a.desiredRevision,
@@ -628,12 +633,17 @@ func (a *catalogActor[T]) reconcileStatus() {
 		settledRouters:     settled,
 		routers:            routers,
 	}
-	if sameCatalogStatus(a.liveStatus, next) && a.statusEpoch != 0 {
+}
+
+// reconcileStatus recomputes and publishes the aggregate catalog status.
+func (a *catalogActor[T]) reconcileStatus() {
+	next := a.status()
+	if sameCatalogStatus(a.lastStatus, next) && a.statusEpoch != 0 {
 		return
 	}
 
 	a.statusEpoch++
-	a.liveStatus = next
+	a.lastStatus = next
 	if !a.activated {
 		return
 	}
@@ -644,11 +654,25 @@ func (a *catalogActor[T]) reconcileStatus() {
 	})
 }
 
-// routerSettled reports whether a router is done moving toward revision: it reached that
-// revision and either routes or has failed for good. Failed counts as done because a route
-// that has spent its restart budget never recovers on its own, so a caller waiting for the
-// whole catalog to be healthy would wait forever on it. Starting and restarting still may
-// go either way, so they are not settled.
+// HandleInspect exposes aggregate router health plus the desired-vs-actual router count and call depth
+// a Ready status alone does not distinguish.
+func (a *catalogActor[T]) HandleInspect(gen.PID, ...string) map[string]string {
+	status := a.status()
+	return map[string]string{
+		"catalog:lifecycle":        string(status.lifecycle),
+		"catalog:availability":     string(status.availability),
+		"catalog:desired_revision": fmt.Sprintf("%d", status.desiredRevision),
+		"catalog:routers":          fmt.Sprintf("%d/%d", len(a.routers), status.desiredRouters),
+		"catalog:routable":         fmt.Sprintf("%d", status.routableRouters),
+		"catalog:degraded":         fmt.Sprintf("%d", status.degradedRouters),
+		"catalog:unavailable":      fmt.Sprintf("%d", status.unavailableRouters),
+		"catalog:settled":          fmt.Sprintf("%d", status.settledRouters),
+		"catalog:in_flight_calls":  fmt.Sprintf("%d", len(a.inFlightCalls)),
+	}
+}
+
+// routerSettled reports whether a router reached revision and either routes or failed for good; a
+// route that spent its restart budget never recovers, so waiting on it would wait forever.
 func routerSettled(status routerActorStatus, revision uint64) bool {
 	if status.revision != revision {
 		return false

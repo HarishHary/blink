@@ -1,14 +1,17 @@
 package plugin
 
 import (
-	goruntime "runtime"
 	"time"
+
+	"ergo.services/ergo/gen"
 )
 
 const (
-	// DefaultDeploymentCallsPerProcess is what a process serves undeclared; above 1 the plugin has to be concurrency-safe.
+	// DefaultDeploymentCallsPerProcess is what a process serves undeclared; above 1 the plugin has to be
+	// concurrency-safe.
 	DefaultDeploymentCallsPerProcess = 32
-	// MaxDeploymentCallsPerProcess is the most one process may declare, each a goroutine and a stream in a subprocess Blink cannot size.
+	// MaxDeploymentCallsPerProcess is the most one process may declare, each a goroutine and a stream in
+	// a subprocess Blink cannot size.
 	MaxDeploymentCallsPerProcess = 64
 	// DefaultMaxDeploymentProcs is what a deployment scales to when it declares nothing.
 	DefaultMaxDeploymentProcs = 1
@@ -33,7 +36,7 @@ const (
 	DefaultDeploymentManagerRetryMin        = DefaultRetryMin
 	DefaultDeploymentManagerRetryMax        = DefaultRetryMax
 	DefaultPluginProcessInvocationTimeout   = 120 * time.Second
-	DefaultPluginProcessHealthInterval      = 10 * time.Second
+	DefaultPluginProcessHealthInterval      = 20 * time.Second
 	DefaultPluginProcessRetryMin            = DefaultRetryMin
 	DefaultPluginProcessRetryMax            = DefaultRetryMax
 	DefaultSupervisorRetryMin               = DefaultRetryMin
@@ -45,8 +48,28 @@ const (
 	DefaultRouterRetryMax                   = DefaultRetryMax
 )
 
+// Every name below derives from the namespace, mirroring the controller's controller-<namespace>-*
+// names, so a caller never has to be told one.
+
+// ApplicationName is the runtime application's registered name.
+func ApplicationName(namespace string) gen.Atom { return subtreeName(namespace, "application") }
+
+// SupervisorName is the runtime supervisor's registered name.
+func SupervisorName(namespace string) gen.Atom { return subtreeName(namespace, "supervisor") }
+
+// ReconcilerActorName is the reconciler child's registered name.
+func ReconcilerActorName(namespace string) gen.Atom { return subtreeName(namespace, "reconciler") }
+
+// CatalogActorName is the catalog child's registered name.
+func CatalogActorName(namespace string) gen.Atom { return subtreeName(namespace, "catalog") }
+
+// subtreeName builds one plugin runtime name from its namespace.
+func subtreeName(namespace, suffix string) gen.Atom {
+	return gen.Atom("plugin-" + namespace + "-" + suffix)
+}
+
 // runtimeOptionsWithDefaults fills public runtime option defaults.
-func runtimeOptionsWithDefaults(opts Options) Options {
+func runtimeOptionsWithDefaults(opts ApplicationOptions) ApplicationOptions {
 	if opts.MaxConcurrentCalls <= 0 {
 		opts.MaxConcurrentCalls = DefaultRuntimeMaxConcurrentCalls
 	}
@@ -60,19 +83,21 @@ func runtimeOptionsWithDefaults(opts Options) Options {
 	// The shared budget only blocks, so it sits that many shares above one plugin's share.
 	opts.maxOutstandingInvocations = opts.maxOutstandingInvocationsPerPlugin * opts.MaxConcurrentCalls
 	opts.shadowMaxOutstandingInvocations = max(1, opts.maxOutstandingInvocations/DefaultRuntimeShadowAdmissionShare)
-	// One plugin's whole fan-out lands on one manager, so a queue under its share would move the same rejection a layer down.
-	if opts.SupervisorOptions.CatalogOptions.RouterOptions.ManagerOptions.QueueSize <= 0 &&
+	// One plugin's whole fan-out lands on one manager, so a queue under its share would move the same
+	// rejection a layer down.
+	if opts.SupervisorOptions.CatalogOptions.RouterOptions.DeploymentManagerOptions.QueueSize <= 0 &&
 		opts.maxOutstandingInvocationsPerPlugin > DefaultDeploymentManagerQueueSize {
-		opts.SupervisorOptions.CatalogOptions.RouterOptions.ManagerOptions.QueueSize = opts.maxOutstandingInvocationsPerPlugin
+		opts.SupervisorOptions.CatalogOptions.RouterOptions.DeploymentManagerOptions.QueueSize = opts.maxOutstandingInvocationsPerPlugin
 	}
 
-	// Growth past a deployment's min_procs only pays off while a core is free, so GOMAXPROCS bounds it.
-	if opts.SupervisorOptions.CatalogOptions.RouterOptions.ManagerOptions.ProcessBudget == nil {
-		opts.SupervisorOptions.CatalogOptions.RouterOptions.ManagerOptions.ProcessBudget = NewProcessBudget(goruntime.GOMAXPROCS(0) * DefaultRuntimeProcessGrowthPerProc)
+	// Growth past a deployment's min_procs: see processBudgetFromResources for why this is sized from
+	// CPU and memory together
+	if opts.SupervisorOptions.CatalogOptions.RouterOptions.DeploymentManagerOptions.ProcessBudget == nil {
+		opts.SupervisorOptions.CatalogOptions.RouterOptions.DeploymentManagerOptions.ProcessBudget = NewProcessBudget(processBudgetFromResources())
 	}
 	opts.SupervisorOptions = supervisorOptionsWithDefaults(opts.SupervisorOptions)
 	if opts.CloseTimeout <= 0 {
-		opts.CloseTimeout = opts.SupervisorOptions.CatalogOptions.RouterOptions.ManagerOptions.DrainTimeout + DefaultRuntimeCloseGracePeriod
+		opts.CloseTimeout = opts.SupervisorOptions.CatalogOptions.RouterOptions.DeploymentManagerOptions.DrainTimeout + DefaultRuntimeCloseGracePeriod
 	}
 	return opts
 }
@@ -121,7 +146,7 @@ func routerOptionsWithDefaults(opts RouterOptions) RouterOptions {
 	if opts.RetryMax < opts.RetryMin {
 		opts.RetryMax = opts.RetryMin
 	}
-	opts.ManagerOptions = deploymentManagerOptionsWithDefaults(opts.ManagerOptions)
+	opts.DeploymentManagerOptions = deploymentManagerOptionsWithDefaults(opts.DeploymentManagerOptions)
 	return opts
 }
 
@@ -154,7 +179,7 @@ func deploymentManagerOptionsWithDefaults(opts DeploymentManagerOptions) Deploym
 	if opts.RetryMax < opts.RetryMin {
 		opts.RetryMax = opts.RetryMin
 	}
-	opts.ProcessOptions = pluginProcessOptionsWithDefaults(opts.ProcessOptions)
+	opts.PluginProcessOptions = pluginProcessOptionsWithDefaults(opts.PluginProcessOptions)
 	return opts
 }
 

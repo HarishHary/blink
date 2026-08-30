@@ -49,7 +49,8 @@ type BaseLoader[U any, T interface {
 	Clone() T
 }] struct{}
 
-// named is satisfied by metadata that embeds *PluginMetadata; unexported because name injection is a loader concern, not a runtime one.
+// named is satisfied by metadata that embeds *PluginMetadata; unexported because name injection is a
+// loader concern, not a runtime one.
 type named interface{ SetName(string) }
 
 // Parse reads a YAML sidecar into its metadata type.
@@ -106,6 +107,7 @@ func (BaseLoader[U, T]) CallsPerProcess(value T) int {
 // RolloutPct returns the configured share of rollout buckets a canary candidate claims.
 func (BaseLoader[U, T]) RolloutPct(value T) float64 { return value.Metadata().RolloutPct }
 
+// isNilLoader reports whether a loader interface holds a nil value.
 func isNilLoader[T any](loader Loader[T]) bool {
 	value := reflect.ValueOf(loader)
 	switch value.Kind() {

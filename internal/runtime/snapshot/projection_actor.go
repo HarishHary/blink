@@ -5,11 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"time"
 
 	"ergo.services/ergo/act"
 	"ergo.services/ergo/gen"
 	"github.com/harishhary/blink/internal/runtime"
-	"github.com/harishhary/blink/internal/snapshot"
+	"github.com/harishhary/blink/internal/runtime/telemetry"
 )
 
 var (
@@ -64,7 +65,7 @@ type ProjectionState[T any] struct {
 	ProjectionData[T]
 }
 
-// ProjectionData is the independently owned typed data from a snapshot.
+// ProjectionData is the independently owned typed data parsed from a committed snapshot.
 type ProjectionData[T any] struct {
 	Primaries   []T
 	Candidates  []T
@@ -72,7 +73,8 @@ type ProjectionData[T any] struct {
 	RolloutByID map[string]Rollout
 }
 
-// Rollout is what a generation says about one plugin id's rollout; its zero value describes an id it does not carry.
+// Rollout is what a generation says about one plugin id's rollout; its zero value describes an id it
+// does not carry.
 type Rollout struct {
 	MaxProcs        int
 	CallsPerProcess int
@@ -80,7 +82,8 @@ type Rollout struct {
 	Shadow          bool
 }
 
-// Capacity is the invocations this id's deployment can run at once: the two bounds multiplied, a ceiling not a promise.
+// Capacity is the invocations this id's deployment can run at once: the two bounds multiplied, a
+// ceiling not a promise.
 func (r Rollout) Capacity() int {
 	return max(1, r.MaxProcs) * max(1, r.CallsPerProcess)
 }
@@ -109,7 +112,8 @@ func cloneValues[T any](values []T, clone func(T) T) []T {
 
 type projectionActor[T any] struct {
 	act.Actor
-	events             Events
+	snapshotEvent      gen.Event
+	statusEvent        gen.Event
 	loader             Loader[T]
 	mode               ProjectionCommitMode
 	readerActorReady   bool
@@ -118,6 +122,14 @@ type projectionActor[T any] struct {
 	committed          *parsedProjection[T]
 	prepared           *parsedProjection[T]
 	lastError          error
+	lastStatus         ProjectionActorStatus
+	labels             telemetry.Labels
+}
+
+// newProjectionActor constructs one subtree's typed view; it monitors both events and publishes
+// through neither, so it takes names and no token.
+func newProjectionActor[T any](snapshotEvent, statusEvent gen.Event, loader Loader[T], mode ProjectionCommitMode, labels telemetry.Labels) gen.ProcessBehavior {
+	return &projectionActor[T]{snapshotEvent: snapshotEvent, statusEvent: statusEvent, loader: loader, mode: mode, labels: labels}
 }
 
 // --- messages ---
@@ -125,7 +137,8 @@ type projectionActor[T any] struct {
 // ProjectionStateRequest reads the current immutable projection state.
 type ProjectionStateRequest struct{}
 
-// MessageProjectionActorStatusChanged reports projection status, with a zero PID from the child and stamped by Supervisor.
+// MessageProjectionActorStatusChanged reports projection status, with a zero PID from the child and
+// stamped by Supervisor.
 type MessageProjectionActorStatusChanged struct {
 	Status        ProjectionActorStatus
 	ProjectionPID gen.PID
@@ -144,14 +157,15 @@ type MessageProjectionCommitResult struct {
 	Err           error
 }
 
-// MessageProjectionActorActivate tells a projection child its parent recorded its PID and it may monitor snapshot events.
+// MessageProjectionActorActivate tells a projection child its parent recorded its PID and it may
+// monitor snapshot events.
 type MessageProjectionActorActivate struct{}
 
 // --- messages ---
 
 // Init validates the projection actor's required events.
 func (a *projectionActor[T]) Init(...any) error {
-	if a.events.Snapshot.Name == "" || a.events.Status.Name == "" {
+	if a.snapshotEvent.Name == "" || a.statusEvent.Name == "" {
 		return fmt.Errorf("snapshot projection: snapshot events are required")
 	}
 	return nil
@@ -164,7 +178,7 @@ func (a *projectionActor[T]) HandleMessage(from gen.PID, message any) error {
 		if from != a.Parent() {
 			return nil
 		}
-		for _, event := range []gen.Event{a.events.Snapshot, a.events.Status} {
+		for _, event := range []gen.Event{a.snapshotEvent, a.statusEvent} {
 			buffered, err := a.MonitorEvent(event)
 			if err != nil {
 				return fmt.Errorf("monitor snapshot projection event %q: %w", event.Name, err)
@@ -175,7 +189,7 @@ func (a *projectionActor[T]) HandleMessage(from gen.PID, message any) error {
 				}
 			}
 		}
-		a.reportStatus()
+		a.reconcileStatus()
 	case MessageProjectionCommit:
 		if from != a.Parent() {
 			return nil
@@ -195,10 +209,11 @@ func (a *projectionActor[T]) HandleMessage(from gen.PID, message any) error {
 				a.lastError = nil
 			}
 		}
-		a.reportStatus()
+		a.labels.Count(a, metricCommits, telemetry.Result(err))
+		a.reconcileStatus()
 		return a.Send(a.Parent(), MessageProjectionCommitResult{Generation: m.Generation, ProjectionPID: m.ProjectionPID, Err: err})
 	case gen.MessageDownEvent:
-		if m.Event == a.events.Snapshot || m.Event == a.events.Status {
+		if m.Event == a.snapshotEvent || m.Event == a.statusEvent {
 			return fmt.Errorf("snapshot projection event terminated: %w", m.Reason)
 		}
 	}
@@ -209,10 +224,10 @@ func (a *projectionActor[T]) HandleMessage(from gen.PID, message any) error {
 func (a *projectionActor[T]) HandleEvent(event gen.MessageEvent) error {
 	previousGeneration := a.observedGeneration
 	err := a.applyEvent(event)
-	if event.Event == a.events.Snapshot && a.observedGeneration > previousGeneration && a.lastError != nil {
+	if event.Event == a.snapshotEvent && a.observedGeneration > previousGeneration && a.lastError != nil {
 		a.Log().Error("snapshot projection parse failed: generation=%d error=%v", a.observedGeneration, a.lastError)
 	}
-	a.reportStatus()
+	a.reconcileStatus()
 	return err
 }
 
@@ -229,16 +244,23 @@ func (a *projectionActor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any,
 // applyEvent updates projection state from a monitored event.
 func (a *projectionActor[T]) applyEvent(event gen.MessageEvent) error {
 	switch event.Event {
-	case a.events.Snapshot:
-		snap, ok := event.Message.(*snapshot.Snapshot)
+	case a.snapshotEvent:
+		snap, ok := event.Message.(*Snapshot)
 		if !ok || snap == nil || snap.Generation <= a.observedGeneration {
 			return nil
 		}
 		a.observedGeneration = snap.Generation
 		a.prepared = nil
+		start := time.Now()
 		parsed, err := newParsedProjection(snap, a.loader)
+		a.labels.Observe(a, metricParseTime, time.Since(start).Seconds())
+		a.labels.Count(a, metricParses, parseResult(err, len(parsed.data.ByFileName)))
+		if parsed.failures != 0 {
+			a.labels.Add(a, metricParseFailures, float64(parsed.failures))
+		}
 		a.lastError = err
-		// Nothing parsed leaves the previous generation standing; a partial one serves what parsed and stays degraded.
+		// Nothing parsed leaves the previous generation standing; a partial one serves what parsed and
+		// stays degraded.
 		if err != nil && len(parsed.data.ByFileName) == 0 {
 			return nil
 		}
@@ -247,7 +269,7 @@ func (a *projectionActor[T]) applyEvent(event gen.MessageEvent) error {
 		} else {
 			a.committed = &parsed
 		}
-	case a.events.Status:
+	case a.statusEvent:
 		status, ok := event.Message.(ReaderActorStatus)
 		if ok {
 			a.readerActorReady = status.Availability == runtime.AvailabilityReady
@@ -257,8 +279,8 @@ func (a *projectionActor[T]) applyEvent(event gen.MessageEvent) error {
 	return nil
 }
 
-// currentStatus derives the projection actor's current availability.
-func (a *projectionActor[T]) currentStatus() ProjectionActorStatus {
+// status derives the projection actor's current availability.
+func (a *projectionActor[T]) status() ProjectionActorStatus {
 	status := ProjectionActorStatus{Lifecycle: ProjectionActorRunning, Availability: runtime.AvailabilityUnavailable}
 	if a.mode == ProjectionCommitExternal && a.prepared != nil {
 		status.PreparedGeneration = a.prepared.generation
@@ -279,7 +301,7 @@ func (a *projectionActor[T]) currentStatus() ProjectionActorStatus {
 
 // reportState returns an independently owned projection view.
 func (a *projectionActor[T]) reportState() ProjectionState[T] {
-	state := ProjectionState[T]{ProjectionActorStatus: a.currentStatus()}
+	state := ProjectionState[T]{ProjectionActorStatus: a.status()}
 	if a.committed == nil {
 		return state
 	}
@@ -287,25 +309,59 @@ func (a *projectionActor[T]) reportState() ProjectionState[T] {
 	return state
 }
 
-// reportStatus sends the current projection status to the supervisor.
-func (a *projectionActor[T]) reportStatus() {
-	_ = a.Send(a.Parent(), MessageProjectionActorStatusChanged{Status: a.currentStatus()})
+// reconcileStatus recomputes and, on change, sends the current projection status to the supervisor
+func (a *projectionActor[T]) reconcileStatus() {
+	next := a.status()
+	if next == a.lastStatus {
+		return
+	}
+	a.lastStatus = next
+	_ = a.Send(a.Parent(), MessageProjectionActorStatusChanged{Status: next})
+}
+
+// HandleInspect exposes lifecycle and availability plus the generation at each stage.
+func (a *projectionActor[T]) HandleInspect(gen.PID, ...string) map[string]string {
+	status := a.status()
+	return map[string]string{
+		"projection:lifecycle":            string(status.Lifecycle),
+		"projection:availability":         string(status.Availability),
+		"projection:committed_generation": fmt.Sprintf("%d", status.CommittedGeneration),
+		"projection:prepared_generation":  fmt.Sprintf("%d", status.PreparedGeneration),
+		"projection:observed_generation":  fmt.Sprintf("%d", a.observedGeneration),
+		"projection:reader_ready":         fmt.Sprintf("%t", a.readerActorReady),
+		"projection:reader_generation":    fmt.Sprintf("%d", a.readerGeneration),
+	}
 }
 
 type parsedProjection[T any] struct {
 	generation int64
 	data       ProjectionData[T]
+	failures   int
 }
 
-// newParsedProjection converts a snapshot into owned typed data, skipping and joining specs that fail so one break costs itself.
-func newParsedProjection[T any](snap *snapshot.Snapshot, loader Loader[T]) (parsedProjection[T], error) {
+// parseResult grades a parse: a generation that lost some specs still serves, one that lost all of
+// them does not.
+func parseResult(err error, parsed int) string {
+	switch {
+	case err == nil:
+		return "ok"
+	case parsed != 0:
+		return "partial"
+	default:
+		return "failed"
+	}
+}
+
+// newParsedProjection converts a snapshot into owned typed data, skipping and joining specs that fail
+// so one break costs itself.
+func newParsedProjection[T any](snap *Snapshot, loader Loader[T]) (parsedProjection[T], error) {
 	data := ProjectionData[T]{
 		ByFileName:  make(map[string]T),
 		RolloutByID: make(map[string]Rollout),
 	}
 	var parseErrs []error
 	for _, entry := range snap.Entries {
-		for index, ref := range []*snapshot.ArtifactRef{entry.Primary, entry.Candidate} {
+		for index, ref := range []*ArtifactRef{entry.Primary, entry.Candidate} {
 			if ref == nil || len(ref.Spec) == 0 {
 				continue
 			}
@@ -317,7 +373,8 @@ func newParsedProjection[T any](snap *snapshot.Snapshot, loader Loader[T]) (pars
 			value = loader.Clone(value)
 			data.ByFileName[ref.Name] = loader.Clone(value)
 			rollout := data.RolloutByID[entry.Id]
-			// Primary and candidate may declare different bounds and a call routes to either, so the id carries the larger.
+			// Primary and candidate may declare different bounds and a call routes to either, so the id
+			// carries the larger.
 			rollout.MaxProcs = max(rollout.MaxProcs, 1, loader.MaxProcs(value))
 			rollout.CallsPerProcess = max(rollout.CallsPerProcess, 1, loader.CallsPerProcess(value))
 			if index == 0 {
@@ -332,7 +389,7 @@ func newParsedProjection[T any](snap *snapshot.Snapshot, loader Loader[T]) (pars
 			data.RolloutByID[entry.Id] = rollout
 		}
 	}
-	return parsedProjection[T]{generation: snap.Generation, data: data}, errors.Join(parseErrs...)
+	return parsedProjection[T]{generation: snap.Generation, data: data, failures: len(parseErrs)}, errors.Join(parseErrs...)
 }
 
 // ProjectionClient performs bounded reads against the stable projection endpoint.
@@ -341,11 +398,11 @@ type ProjectionClient[T any] struct {
 	endpoint gen.ProcessID
 }
 
-// NewProjectionClient creates a client for name's supervised projection child.
-func NewProjectionClient[T any](node gen.Node, name gen.Atom) *ProjectionClient[T] {
+// NewProjectionClient creates a client for the projection child of a namespace's subtree.
+func NewProjectionClient[T any](node gen.Node, namespace string) *ProjectionClient[T] {
 	return &ProjectionClient[T]{
 		node:     node,
-		endpoint: gen.ProcessID{Name: projectionActorName(name), Node: node.Name()},
+		endpoint: gen.ProcessID{Name: ProjectionActorName(namespace), Node: node.Name()},
 	}
 }
 

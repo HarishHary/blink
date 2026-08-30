@@ -1,0 +1,19 @@
+id: "00000000-0000-0000-0000-000000000003"
+name: "cloud_events"
+display_name: "Cloud Events"
+description: "Fires on any cloud log event. Use for testing only."
+enabled: true
+version: "1.0.0"
+
+severity: "low"
+confidence: "medium"
+
+log_types: ["cloud"]
+matchers: ["cloud-log-type"]
+
+req_subkeys: []
+merge_by_keys: ["source_ip"]
+merge_window_mins: 5
+
+signal: false
+tags: ["testing"]

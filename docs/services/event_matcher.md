@@ -1,54 +1,133 @@
-# event_matcher
+# Event matcher service
 
-`event_matcher` consumes raw JSON events, selects rules whose matchers pass, and publishes protobuf `execpb.ExecMessage` records for downstream consumers. It has no executor or process-pool: matcher execution is owned by the actor runtime described in [plugin-runtime.md](../internals/plugin-runtime.md).
+[Services index](README.md) · [Plugin runtime](../internals/plugin-runtime.md) · [Snapshot runtime](../internals/snapshot-runtime.md) · [Concurrency knobs](../internals/concurrency-knobs.md)
 
-## Outer composition
+`event_matcher` consumes raw JSON events, selects rules whose matchers pass, and publishes protobuf `execpb.ExecMessage` records. Matcher execution belongs to the actor runtime in [plugin-runtime.md](../internals/plugin-runtime.md).
 
-`cmd/event_matcher/main.go` creates one shared Ergo node, a matcher service, a health service, and an `internal/services.Runner`. The Runner starts registered services concurrently; a returned service error restarts that service with its own exponential, jittered backoff (1 s base, 60 s cap). SIGINT/SIGTERM cancels the Runner; node close is bounded to 45 seconds.
+## Process composition
 
-```text
-Runner
-├── matcher.Service (restartable attempt)
-│   └── Ergo application: event-matcher-runtime-application
-│       ├── matcher plugin runtime
-│       │   └── generic snapshot supervisor, external projection commit
-│       └── rule snapshot supervisor, direct projection commit
-└── HealthService (:8080)
+`cmd/event_matcher/main.go` creates one Ergo node with the matcher application loaded, a matcher service, a health service, and an `internal/services.Runner`. The Runner starts services concurrently and restarts a failed one with exponential, jittered backoff (1 s base, 60 s cap). `SIGINT`/`SIGTERM` cancels the Runner; node close is bounded to 45 seconds.
+
+```mermaid
+flowchart TB
+  main[cmd/event_matcher]
+  node[Ergo node]
+  radar[radar :9090]
+  app[plugin-matcher-application\nprocess-owned]
+  runtime[matcher plugin runtime]
+  matcherSnap[matcher snapshot supervisor\nexternal commit]
+  ruleSnap[rule snapshot supervisor\ndirect commit]
+  runner[Runner]
+  svc[Service\nrestartable attempt]
+  health[HealthService :8080]
+  main --> node
+  main --> runner
+  node --> radar
+  node --> app
+  app --> runtime
+  runtime --> matcherSnap
+  app --> ruleSnap
+  runner --> svc
+  runner --> health
+  svc -.->|Match, State, rule projection client| runtime
+  matcherSnap -.->|SubscribeRequest/SnapshotUpdate, cluster| matcherController[controller-matcher-actor]
+  ruleSnap -.->|SubscribeRequest/SnapshotUpdate, cluster| ruleController[controller-rule-actor]
 ```
 
-The matcher application is attempt-owned: `Run` loads and starts it, then on exit stops/drains, waits, and unloads it. The matcher snapshot is read from `KAFKA_TOPIC_MATCHER_SNAPSHOT`; the rule snapshot is read from `KAFKA_TOPIC_EXECUTOR_SNAPSHOT`. Both are broadcast readers. Local matcher artifacts are in `MATCHER_PLUGIN_DIR`; rules are not loaded from a local config directory.
+| Message                                   | Direction                                                               | Meaning                                                                                                  |
+| ----------------------------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `plugin.Start`                            | `main` → Ergo node                                                      | Starts the node with cluster networking and radar, named `event-matcher-<pod>@<pod ip>`.                 |
+| `services.Runner.Register`                | `main` → matcher service, health service                                | Registers the two services.                                                                              |
+| `Application` (`matchers.NewApplication`) | `main` → Ergo node                                                      | Loads the process-owned matcher application and the rule snapshot supervisor member, once at node start. |
+| `SubscribeRequest`/`SnapshotUpdate`       | matcher/rule snapshot supervisor ↔ namespace controller actor (cluster) | Subscribes to `controller-matcher-actor` and `controller-rule-actor`; receives pushed generations.       |
 
-### Matcher service attempt lifecycle
+The matcher application is process-owned, not attempt-owned; the service borrows it through `Match`, `State`, and the rule projection client. A restarted attempt reuses the running runtime; an application that stops cancels the Runner and exits non-zero.
+
+Matcher and rule snapshots come from their own namespace's controller actor over the Ergo cluster, not Kafka. Matcher artifacts live in `MATCHER_PLUGIN_DIR`; rules have no local directory.
+
+## Service lifecycle
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Unloaded
-    Unloaded --> Starting: ApplicationLoad + ApplicationStart
-    Starting --> Waiting: both projections ready and non-empty primaries
-    Waiting --> Consuming: reader created
-    Consuming --> Stopping: context, application stop, or attempt error
-    Stopping --> Unloaded: stop/drain, wait, unload
+    [*] --> Waiting
+    Waiting --> Consuming: both projections ready with primaries, reader created
+    Consuming --> Exited: context, reader error, or attempt error
+    Exited --> Waiting: Runner restarts the attempt
+    Exited --> [*]: context cancelled
 ```
 
-| Message                      | Direction                                | Meaning                                                  |
-| ---------------------------- | ---------------------------------------- | -------------------------------------------------------- |
-| `ApplicationLoad`            | matcher service → Ergo node              | Loads the attempt-owned matcher application.             |
-| `ApplicationStart`           | matcher service → Ergo node              | Starts both snapshot subtrees and plugin runtime.        |
-| `ProjectionStateRequest`     | matcher service → snapshot projection    | Waits for both projections to be ready with primaries.   |
-| `ctx.Done()`                 | Runner/service context → matcher service | Stops consumer work and begins cleanup.                  |
-| `ApplicationStopWithTimeout` | matcher service → Ergo node              | Drains/stops the application before `ApplicationUnload`. |
+| Message                  | Direction                                | Meaning                                                       |
+| ------------------------ | ---------------------------------------- | ------------------------------------------------------------- |
+| `ProjectionStateRequest` | matcher service → snapshot projections   | Gates consumption on both projections being ready with rules. |
+| `Application.Wait`       | `main` → matcher application             | Ends the process when the application stops.                  |
+| `ctx.Done()`             | Runner/service context → matcher service | Ends the attempt with the fetched batch uncommitted.          |
 
-## Readiness and admission
+## Health and readiness
 
-`/health/live` is always 200 while the health server runs. `/health/ready` is a cached matcher-service verdict, refreshed every 500 ms: the attempt must exist and both projections must be `Ready`. An unreadable projection is tolerated for two seconds before readiness falls, avoiding rollout-transition flapping.
+Health server, `:8080`, probed by the kubelet:
 
-Before creating the consumer-group reader, startup additionally requires both projections to be `Ready` with at least one primary. A later degraded rule projection remains routable on its last committed generation but is not ready; an unavailable rule projection fails the attempt rather than silently dropping all events. Matcher runtime state reads wait through `ErrPluginUnavailable` for at most `MATCHER_TIMEOUT_SEC + 1s`; other errors fail the attempt.
+| Endpoint        | Current behavior                                                                                                       |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `/health/live`  | Always HTTP 200 while the health service is serving.                                                                   |
+| `/health/ready` | Cached matcher-service verdict, refreshed every 500 ms: the attempt must be live and both projections must be `Ready`. |
+| `/metrics`      | Prometheus metrics for the matcher service and runner.                                                                 |
 
-The service limits concurrent calls into the matcher application with `MATCHER_CONCURRENCY`. Runtime admission, route queues, workers, rollout, and subprocess ownership are internal details; see [plugin-runtime.md](../internals/plugin-runtime.md#invocation).
+There is no `/status` endpoint: `event_matcher` registers no `statusFn` with `services.NewHealthService`.
+
+Radar, `RADAR_HOST:RADAR_PORT`, default `0.0.0.0:9090`, carried for every service by `services.Common`:
+
+| Endpoint        | Current behavior                                                                                                                                                              |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/health/live`  | Always HTTP 200: no radar readiness signal is registered, and radar reads a signal-less node as healthy.                                                                      |
+| `/health/ready` | Always HTTP 200, for the same reason.                                                                                                                                         |
+| `/metrics`      | `blink_plugin_*` ([plugin runtime](../internals/plugin-runtime.md#telemetry)) and `blink_snapshot_*` ([snapshot runtime](../internals/snapshot-runtime.md#telemetry)) series. |
+
+### Readiness and admission
+
+An unreadable projection is tolerated for 2 seconds before readiness falls. Readiness does not require primaries.
+
+Startup is stricter. Before creating the consumer-group reader it also requires:
+
+- both projections `Ready` with at least one primary;
+- the matcher runtime's own status `Ready`.
+
+The rule side has no such wait. A degraded rule projection stays routable on its last committed generation but is not ready; an unavailable one fails the attempt. Matcher runtime state reads wait through `ErrPluginUnavailable` for at most `MATCHER_TIMEOUT_SEC + 1s`; other errors fail the attempt.
+
+Admission knobs:
+
+- `MAX_CONCURRENT_CALLS` caps concurrent service calls into the matcher application.
+- `MAX_BATCH_SIZE` and `MAX_CONCURRENT_CALLS` also pass to the runtime as `MaxBatchSize` and `MaxConcurrentCalls`, sizing its per-plugin and shared admission budgets, which reject rather than wait.
+- A fan-out is bounded by the batch size and by the widest invocation capacity a matcher may declare.
+- Plugin processes are subprocesses, budgeted separately: up to `GOMAXPROCS x 2` past every deployment's `min_procs`.
+
+See [plugin-runtime.md](../internals/plugin-runtime.md#invocation) and [concurrency-knobs.md](../internals/concurrency-knobs.md).
+
+### Metrics
+
+Two registries. The health server serves the default Go registry; radar serves its own.
+
+| Family                  | Endpoint         | Series                                                         |
+| ----------------------- | ---------------- | -------------------------------------------------------------- |
+| `blink_event_matcher_*` | `:8080/metrics`  | below                                                          |
+| `blink_runner_*`        | `:8080/metrics`  | [shared metrics](README.md#shared-metrics)                     |
+| `blink_plugin_*`        | radar `/metrics` | [plugin runtime](../internals/plugin-runtime.md#telemetry)     |
+| `blink_snapshot_*`      | radar `/metrics` | [snapshot runtime](../internals/snapshot-runtime.md#telemetry) |
+
+The radar series carry a `namespace` label: `matcher` for the plugin runtime and its own catalog projection, `rule` for the standalone rule projection. The `:8080` series carry no `namespace`.
+
+| Metric                                                | Meaning                                                                                 |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `blink_event_matcher_events_in_total`                 | Records that decoded into an event; decode failures excluded.                           |
+| `blink_event_matcher_events_forwarded_total`          | Records written to the output topic; DLQ writes excluded.                               |
+| `blink_event_matcher_read_errors_total`               | Failed group fetches; context cancellation excluded.                                    |
+| `blink_event_matcher_parse_errors_total`              | Input decode or output encode failure. Both DLQ the record rather than failing a batch. |
+| `blink_event_matcher_write_errors_total`              | Failed `WriteMessages` calls, counted per attempt, so retries add.                      |
+| `blink_event_matcher_match_duration_seconds{matcher}` | One matcher call, bounded by `MATCHER_TIMEOUT_SEC`; observed even when the call fails.  |
+| `blink_event_matcher_rules_routed_per_event`          | Eligible rules per event. A zero observation is an event dropped with no rule.          |
 
 ## Kafka batch contract
 
-The group reader fetches up to `MATCHER_BATCH_SIZE` (default 50) from `KAFKA_TOPIC_MATCHER` using `KAFKA_GROUP_MATCHER`. Each batch snapshots matcher and rule state once, then processes input positions independently but publishes non-drop records serially in fetched order. Source offsets are committed only after every record reaches a terminal disposition and every required write is acknowledged. Output writes are synchronous; an acknowledged write followed by a failed commit can be replayed, so delivery is at least once.
+The group reader fetches up to `MAX_BATCH_SIZE` (default 50) from `KAFKA_TOPIC_MATCHER` using `KAFKA_GROUP_MATCHER`. Each batch snapshots matcher and rule state once. Positions are processed independently, but non-drop records are published serially in fetched order. Offsets commit only after every record is terminal and every required write is acknowledged. Writes are synchronous, so delivery is at least once.
 
 ### Kafka batch terminal lifecycle
 
@@ -59,6 +138,7 @@ stateDiagram-v2
     Fetched --> Dropped: no candidate rules
     Fetched --> Matching: candidates grouped by matcher
     Matching --> MatchDLQ: matcher unavailable or retries exhausted
+    Matching --> Fetched: matcher generation moved mid-batch
     Matching --> Dropped: no eligible rules
     Matching --> ExecutorRecord: eligible rule IDs
     DecodeDLQ --> PublishDLQ
@@ -79,27 +159,50 @@ stateDiagram-v2
 | `CommitMessages` | matcher service → Kafka group reader     | Commits offsets only after all required writes succeed.              |
 | `ctx.Done()`     | Runner/service context → matcher service | Exits the attempt with the fetched batch uncommitted.                |
 
-Decode failures and a non-string `log_type` become DLQ records. Missing or disabled matcher references are deterministic matcher DLQ records with zero attempts. A matcher call retries only its failed subset; whole-call and result shape failures retry all pending items. `MATCHER_MAX_ATTEMPTS` (default 3) is the stop condition. Retry delay starts at `MATCHER_RETRY_BASE_MS` (default 100 ms), has
-jitter, and is capped by `MATCHER_RETRY_CAP_MS` (default 5000 ms). After exhaustion, the event is DLQed rather than forwarded. Publication retries under the same attempt limit; publication exhaustion or cancellation exits the service attempt with the fetched batch uncommitted. Redelivery occurs only as a later reader fetch in a later attempt; it is not a `Terminal → Fetched` transition.
+Three inputs DLQ at decode, before any matcher call: a decode failure, a non-string `log_type`, or an event the protobuf cannot represent. Missing or disabled matcher references become deterministic matcher DLQ records with zero attempts.
 
-The downstream record preserves the input Kafka key and contains the source event plus eligible rule IDs. DLQ envelopes preserve the input key and include the original payload, source, stage, reason, attempts, and timestamp. A record that cannot be encoded as either normal or DLQ output is dropped to prevent an infinite replay loop.
+Retry:
+
+- A matcher call retries only its failed subset; whole-call and result-shape failures retry all pending items.
+- `MATCHER_MAX_ATTEMPTS` (default 3) is the stop condition.
+- The delay starts at `MATCHER_RETRY_BASE_MS` (default 100 ms), carries jitter, and is capped by `MATCHER_RETRY_CAP_MS` (default 5000 ms).
+- After exhaustion the event is DLQed.
+
+Publication retries under the same limit; exhaustion or cancellation exits the attempt with the batch uncommitted. A `Terminal` record is redelivered only by a later fetch in a later attempt.
+
+A promotion mid-batch retires the old generation's routers, and those events are rejected unevaluated. On an unavailable rejection the service re-reads runtime state after the batch's calls drain; if the committed generation moved, the batch is re-resolved instead of dead-lettered. Other rejections keep their dead-letters. A plugin that is down leaves the rest of the catalog routable; only a runtime with nothing routable stalls the attempt. `MATCHER_MAX_ATTEMPTS` bounds these replays.
+
+The downstream record preserves the input Kafka key and carries the source event plus eligible rule IDs. DLQ envelopes preserve the key and add the original payload, source, stage, reason, attempts, and timestamp. A record encodable as neither output is dropped.
 
 ## Matching semantics
 
-Candidate rules come from `rules.RulesForLogTypeIn` over the committed rule projection. Each candidate begins eligible. For each event, rules sharing a matcher share one matcher call; a non-match makes all attached candidates ineligible. A rule with several matchers must pass all of them. Per-event failure selection is deterministic (lowest matcher identifier), despite concurrent matcher
-groups.
+Candidate rules come from `rules.RulesForLogTypeIn` over the committed rule projection. Each candidate begins eligible.
 
-The matcher application groups events by tenant rollout bucket, shards each group up to the matcher deployment's configured worker count, preserves input order, and validates result cardinality. Shadow calls use a separate, non-blocking admission budget and are best effort; production calls are not consumed by a full shadow budget.
+- Rules sharing a matcher share one matcher call per event.
+- A non-match makes all attached candidates ineligible.
+- A rule with several matchers must pass all of them.
+- Per-event failure selection is deterministic: lowest matcher identifier.
 
-## Source map
+The matcher application splits a batch at most two ways, and only where routing differs:
 
-- [`cmd/event_matcher/main.go`](../../cmd/event_matcher/main.go) - process wiring, snapshot topics, node and Runner lifecycle.
-- [`cmd/event_matcher/matcher/matcher.go`](../../cmd/event_matcher/matcher/matcher.go) - readiness, batch terminals, retry, publication, commit, and cleanup.
-- [`pkg/matchers/application.go`](../../pkg/matchers/application.go) - ordered batched matching, rollout grouping, shards, and shadow submissions.
-- [`internal/services/runner.go`](../../internal/services/runner.go) - attempt restart policy; [`internal/services/health.go`](../../internal/services/health.go) - probe endpoints.
-- [`internal/brokers/broker.go`](../../internal/brokers/broker.go) - reader and writer commit/ack boundary.
+- with a canary candidate committed, events whose rollout bucket the candidate wins are separated from the rest;
+- otherwise the whole batch is one group.
 
-## Internals
+Each group is then chunked two ways, and the wider cut wins:
 
-- [Snapshot runtime](../internals/snapshot-runtime.md) - compacted-topic reader and typed projection lifecycle used twice above.
-- [Plugin runtime](../internals/plugin-runtime.md) - desired state, deployment routing, workers, subprocesses, retries, fencing, and shutdown.
+- enough chunks to fill the deployment's invocation capacity: process count times concurrent calls per process, divided among the groups;
+- enough that no chunk's payload exceeds what the plugin transport accepts.
+
+The payload cut is exact: each event is encoded once at decode, so the batch carries per-event byte counts and is cut before the event that would cross the limit.
+
+A bounded worker pool runs the chunks, capped by invocation capacity. Chunking preserves input order and validates result cardinality.
+
+Shadow calls go out only when the committed projection carries a shadow candidate, on a separate non-blocking budget, best effort.
+
+## Source references
+
+- [`cmd/event_matcher/main.go`](../../cmd/event_matcher/main.go) - process wiring, subscription endpoints, application ownership, node and Runner lifecycle.
+- [`cmd/event_matcher/matcher.go`](../../cmd/event_matcher/matcher.go) - readiness, batch terminals, retry, publication, commit.
+- [`pkg/matchers/application.go`](../../pkg/matchers/application.go) - ordered matching, rollout grouping, payload/capacity chunking, shadow submissions.
+- [`internal/services/runner.go`](../../internal/services/runner.go) - restart policy; [`internal/services/health.go`](../../internal/services/health.go) - probe endpoints.
+- [`internal/brokers/broker.go`](../../internal/brokers/broker.go) - commit/ack boundary.

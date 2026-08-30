@@ -3,7 +3,7 @@ package backends
 import (
 	"context"
 
-	"github.com/harishhary/blink/internal/snapshot"
+	"github.com/harishhary/blink/internal/runtime/snapshot"
 )
 
 // nopDatabase is a no-op Database for offline development, single-node

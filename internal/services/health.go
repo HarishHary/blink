@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	stderrors "errors"
 	"net"
 	"net/http"
@@ -15,15 +16,16 @@ const healthShutdownTimeout = 5 * time.Second
 
 // HealthService serves metrics, liveness, and readiness until its context is cancelled.
 type HealthService struct {
-	addr    string
-	readyFn func() bool
+	addr     string
+	readyFn  func() bool
+	statusFn func() any
 }
 
-func NewHealthService(addr string, readyFn func() bool) *HealthService {
-	return &HealthService{addr: addr, readyFn: readyFn}
+func NewHealthService(addr string, readyFn func() bool, statusFn func() any) *HealthService {
+	return &HealthService{addr: addr, readyFn: readyFn, statusFn: statusFn}
 }
 
-func (s *HealthService) Name() string { return "health" }
+func (s *HealthService) Name() string { return "health service" }
 
 func (s *HealthService) handler() http.Handler {
 	mux := http.NewServeMux()
@@ -36,6 +38,12 @@ func (s *HealthService) handler() http.Handler {
 		}
 		w.WriteHeader(http.StatusServiceUnavailable)
 	})
+	if s.statusFn != nil {
+		mux.HandleFunc("/status", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(s.statusFn())
+		})
+	}
 	return mux
 }
 

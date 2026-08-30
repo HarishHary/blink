@@ -1,0 +1,103 @@
+{{/* Dedicated 3-member etcd for Blink's own cluster node discovery; every node-running workload needs it. */}}
+{{- $ns := .Release.Namespace }}
+{{- $replicas := .Values.etcd.replicas | default 3 }}
+{{- $initialCluster := list }}
+{{- range $i := until (int $replicas) }}
+{{- $initialCluster = append $initialCluster (printf "blink-etcd-%d=http://blink-etcd-%d.blink-etcd-headless.%s.svc.cluster.local:2380" $i $i $ns) }}
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: blink-etcd-headless
+  namespace: {{ $ns }}
+  labels:
+    app: blink-etcd
+    {{- include "blink.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    app: blink-etcd
+  ports:
+    - name: peer
+      port: 2380
+      targetPort: 2380
+    - name: client
+      port: 2379
+      targetPort: 2379
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: blink-etcd
+  namespace: {{ $ns }}
+  labels:
+    app: blink-etcd
+    {{- include "blink.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: blink-etcd
+  ports:
+    - name: client
+      port: 2379
+      targetPort: 2379
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: blink-etcd
+  namespace: {{ $ns }}
+  labels:
+    app: blink-etcd
+    {{- include "blink.labels" . | nindent 4 }}
+spec:
+  serviceName: blink-etcd-headless
+  replicas: {{ $replicas }}
+  selector:
+    matchLabels:
+      app: blink-etcd
+  template:
+    metadata:
+      labels:
+        app: blink-etcd
+    spec:
+      containers:
+        - name: etcd
+          image: {{ .Values.etcd.image | quote }}
+          ports:
+            - name: peer
+              containerPort: 2380
+            - name: client
+              containerPort: 2379
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          command:
+            - etcd
+            - --name=$(POD_NAME)
+            - --data-dir=/var/lib/etcd
+            - --listen-peer-urls=http://0.0.0.0:2380
+            - --listen-client-urls=http://0.0.0.0:2379
+            - --advertise-client-urls=http://$(POD_NAME).blink-etcd-headless.{{ $ns }}.svc.cluster.local:2379
+            - --initial-advertise-peer-urls=http://$(POD_NAME).blink-etcd-headless.{{ $ns }}.svc.cluster.local:2380
+            - --initial-cluster={{ join "," $initialCluster }}
+            - --initial-cluster-state=new
+            - --initial-cluster-token=blink-etcd
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/etcd
+          resources:
+            {{- toYaml .Values.etcd.resources | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.etcd.size }}
+        {{- if .Values.etcd.storageClassName }}
+        storageClassName: {{ .Values.etcd.storageClassName | quote }}
+        {{- end }}

@@ -72,8 +72,6 @@ func (kb *kafkaBroker) NewWriter(topic string) Writer {
 		Dialer:       &kafka.Dialer{Timeout: kb.dialTimeout},
 		MaxAttempts:  kafkaMaxAttempts,
 		BatchTimeout: kafkaBatchLinger,
-		ReadTimeout:  kafkaIOTimeout,
-		WriteTimeout: kafkaIOTimeout,
 		RequiredAcks: int(kafka.RequireAll),
 		Async:        false,
 	})
@@ -180,6 +178,8 @@ type kafkaWriter struct {
 
 // WriteMessages writes one or more messages to Kafka.
 func (wr *kafkaWriter) WriteMessages(ctx context.Context, msgs ...Message) error {
+	ctx, cancel := context.WithTimeout(ctx, kafkaIOTimeout)
+	defer cancel()
 	var records []kafka.Message
 	for _, m := range msgs {
 		records = append(records, kafka.Message{Key: m.Key, Value: m.Value})

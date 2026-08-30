@@ -1,34 +1,25 @@
 package controller
 
-import (
-	"time"
+import "time"
 
-	"ergo.services/ergo/gen"
-	"github.com/harishhary/blink/internal/brokers"
-	"github.com/harishhary/blink/internal/runtime/plugin"
-)
-
-// Options configures one plugin-type controller application.
-type Options[T plugin.Artifact] struct {
-	// Names default to controller-<namespace>, <name>-supervisor, and <name>-actor.
-	Name              gen.Atom
-	DatabaseDSN       string
+// ApplicationOptions configures one plugin-type controller application. Namespace is the only name it
+// needs; the typed loader is a dependency NewService and NewApplication take directly.
+type ApplicationOptions struct {
 	Namespace         string
-	Topic             string
-	Broker            brokers.Broker
-	SupervisorOptions SupervisorOptions[T]
+	DatabaseDSN       string
+	SupervisorOptions SupervisorOptions
 }
 
-type SupervisorOptions[T plugin.Artifact] struct {
-	Name         gen.Atom
-	ActorOptions ActorOptions[T]
+// SupervisorOptions configures one plugin-type controller supervisor. It carries no namespace: the
+// application configures the only one and hands it to the supervisor.
+type SupervisorOptions struct {
+	ActorOptions ActorOptions
 }
 
-// ActorOptions configures the controller actor.
-type ActorOptions[T plugin.Artifact] struct {
-	Name       gen.Atom
+// ActorOptions configures one plugin-type controller actor. As a supervisor child it carries neither
+// name nor namespace; its supervisor hands it the namespace's labels and the loader.
+type ActorOptions struct {
 	Directory  string
-	Loader     plugin.Loader[T]
 	RestartMin time.Duration
 	RestartMax time.Duration
 	RetryMin   time.Duration

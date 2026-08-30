@@ -1,0 +1,363 @@
+{{/* Grafana and its Prometheus, scraping radar on every node and the default registry on every pod's 8080. Both opt-out. */}}
+{{- if .Values.monitoring.enabled }}
+{{- $ns := .Release.Namespace }}
+{{- $prometheus := .Values.monitoring.prometheus }}
+{{- $grafana := .Values.monitoring.grafana }}
+{{- $datasourceURL := $grafana.datasourceURL | default (printf "http://blink-prometheus:%d" (int $prometheus.port)) }}
+{{- if $prometheus.enabled }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: blink-prometheus
+  namespace: {{ $ns }}
+  labels:
+    app: blink-prometheus
+    {{- include "blink.labels" . | nindent 4 }}
+---
+{{/* Namespaced: scrape jobs discover pods in this release's namespace only. */}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: blink-prometheus
+  namespace: {{ $ns }}
+  labels:
+    app: blink-prometheus
+    {{- include "blink.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "endpoints"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: blink-prometheus
+  namespace: {{ $ns }}
+  labels:
+    app: blink-prometheus
+    {{- include "blink.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: blink-prometheus
+subjects:
+  - kind: ServiceAccount
+    name: blink-prometheus
+    namespace: {{ $ns }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: blink-prometheus-config
+  namespace: {{ $ns }}
+  labels:
+    app: blink-prometheus
+    {{- include "blink.labels" . | nindent 4 }}
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: {{ $prometheus.scrapeInterval }}
+      evaluation_interval: {{ $prometheus.scrapeInterval }}
+    scrape_configs:
+      # Default registry on 8080: runner restarts, Go and process metrics.
+      - job_name: blink-workloads
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: [{{ $ns }}]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: "true"
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            target_label: workload
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+      # Radar, carrying the blink_* control-plane series.
+      - job_name: blink-radar
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: [{{ $ns }}]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_blink_io_radar_port]
+            action: keep
+            regex: \d+
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_blink_io_radar_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            target_label: workload
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blink-prometheus
+  namespace: {{ $ns }}
+  labels:
+    app: blink-prometheus
+    {{- include "blink.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: blink-prometheus
+  template:
+    metadata:
+      labels:
+        app: blink-prometheus
+      annotations:
+        checksum/config: {{ printf "%s" (toYaml $prometheus) | sha256sum | trunc 16 }}
+    spec:
+      serviceAccountName: blink-prometheus
+      securityContext:
+        runAsUser: 65534
+        runAsNonRoot: true
+        fsGroup: 65534
+      containers:
+        - name: prometheus
+          image: {{ $prometheus.image | quote }}
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+            - --storage.tsdb.retention.time={{ $prometheus.retention }}
+            - --web.enable-lifecycle
+          ports:
+            - name: http
+              containerPort: {{ $prometheus.port }}
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: {{ $prometheus.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: {{ $prometheus.port }}
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+            - name: data
+              mountPath: /prometheus
+          resources:
+            {{- toYaml $prometheus.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: blink-prometheus-config
+        - name: data
+          {{- if $prometheus.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: blink-prometheus
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: blink-prometheus
+  namespace: {{ $ns }}
+  labels:
+    app: blink-prometheus
+    {{- include "blink.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: blink-prometheus
+  ports:
+    - name: http
+      port: {{ $prometheus.port }}
+      targetPort: {{ $prometheus.port }}
+{{- if $prometheus.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: blink-prometheus
+  namespace: {{ $ns }}
+  labels:
+    app: blink-prometheus
+    {{- include "blink.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ $prometheus.persistence.size }}
+  {{- if $prometheus.persistence.storageClassName }}
+  storageClassName: {{ $prometheus.persistence.storageClassName | quote }}
+  {{- end }}
+{{- end }}
+{{- end }}
+{{- if $grafana.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: blink-grafana-provisioning
+  namespace: {{ $ns }}
+  labels:
+    app: blink-grafana
+    {{- include "blink.labels" . | nindent 4 }}
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        uid: blink-prometheus
+        type: prometheus
+        access: proxy
+        url: {{ $datasourceURL }}
+        isDefault: true
+        editable: false
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: blink
+        orgId: 1
+        folder: Blink
+        type: file
+        disableDeletion: true
+        allowUiUpdates: false
+        options:
+          path: /var/lib/grafana/dashboards
+---
+{{/* Dashboards load from files/, read verbatim, so {{label}} legends are not parsed as actions. */}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: blink-grafana-dashboards
+  namespace: {{ $ns }}
+  labels:
+    app: blink-grafana
+    {{- include "blink.labels" . | nindent 4 }}
+data:
+{{ (.Files.Glob "files/grafana/dashboards/*.json").AsConfig | indent 2 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blink-grafana
+  namespace: {{ $ns }}
+  labels:
+    app: blink-grafana
+    {{- include "blink.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: blink-grafana
+  template:
+    metadata:
+      labels:
+        app: blink-grafana
+      annotations:
+        checksum/dashboards: {{ (.Files.Glob "files/grafana/dashboards/*.json").AsConfig | sha256sum | trunc 16 }}
+        checksum/datasource: {{ $datasourceURL | sha256sum | trunc 16 }}
+    spec:
+      securityContext:
+        runAsUser: 472
+        runAsNonRoot: true
+        fsGroup: 472
+      containers:
+        - name: grafana
+          image: {{ $grafana.image | quote }}
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              value: {{ $grafana.adminUser | quote }}
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              value: {{ $grafana.adminPassword | quote }}
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: {{ $grafana.anonymous | quote }}
+            - name: GF_AUTH_ANONYMOUS_ORG_ROLE
+              value: "Viewer"
+            - name: GF_USERS_DEFAULT_THEME
+              value: "dark"
+            - name: GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH
+              value: "/var/lib/grafana/dashboards/blink-controller.json"
+          ports:
+            - name: http
+              containerPort: 3000
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/grafana
+            - name: provisioning-datasources
+              mountPath: /etc/grafana/provisioning/datasources
+            - name: provisioning-dashboards
+              mountPath: /etc/grafana/provisioning/dashboards
+            - name: dashboards
+              mountPath: /var/lib/grafana/dashboards
+          resources:
+            {{- toYaml $grafana.resources | nindent 12 }}
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: provisioning-datasources
+          configMap:
+            name: blink-grafana-provisioning
+            items:
+              - key: datasources.yaml
+                path: datasources.yaml
+        - name: provisioning-dashboards
+          configMap:
+            name: blink-grafana-provisioning
+            items:
+              - key: dashboards.yaml
+                path: dashboards.yaml
+        - name: dashboards
+          configMap:
+            name: blink-grafana-dashboards
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: blink-grafana
+  namespace: {{ $ns }}
+  labels:
+    app: blink-grafana
+    {{- include "blink.labels" . | nindent 4 }}
+spec:
+  type: {{ $grafana.service.type }}
+  selector:
+    app: blink-grafana
+  ports:
+    - name: http
+      port: {{ $grafana.service.port }}
+      targetPort: 3000
+      {{- if and (eq $grafana.service.type "NodePort") $grafana.service.nodePort }}
+      nodePort: {{ $grafana.service.nodePort }}
+      {{- end }}
+{{- end }}
+{{- end }}

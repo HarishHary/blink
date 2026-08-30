@@ -8,15 +8,16 @@ import (
 	"ergo.services/ergo/gen"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/harishhary/blink/internal/runtime"
-	snapshotruntime "github.com/harishhary/blink/internal/runtime/snapshot"
-	"github.com/harishhary/blink/internal/snapshot"
+	"github.com/harishhary/blink/internal/runtime/snapshot"
+	"github.com/harishhary/blink/internal/runtime/telemetry"
 )
 
 // ---------------------------------------------------------------------------
 // Types & state
 // ---------------------------------------------------------------------------
 
-// ReconcilerActorLifecycle describes the stable actor that projects control-plane snapshots and local artifacts into runtime desired state.
+// ReconcilerActorLifecycle describes the actor projecting snapshots and local artifacts into desired
+// state.
 type ReconcilerActorLifecycle string
 
 const (
@@ -40,12 +41,14 @@ type reconcilerActorStatus struct {
 	revision           uint64
 }
 
-// reconcilerActor subscribes to the buffered snapshot event and owns the snapshot, revisions, coalescing, and retry policy, replacing its resolver and watcher metas independently so an I/O failure discards neither that state nor the subscription.
+// reconcilerActor subscribes to the buffered snapshot event and owns the snapshot, revisions,
+// coalescing, and retry policy, replacing its metas independently so an I/O failure discards neither.
 type reconcilerActor struct {
 	act.Actor
 	directory        string
 	revision         uint64
-	events           snapshotruntime.Events
+	snapshotEvent    gen.Event
+	statusEvent      gen.Event
 	snapshot         *snapshot.Snapshot
 	readerActorReady bool
 	resolutionRetry  *runtime.ScheduledBackoff
@@ -54,16 +57,20 @@ type reconcilerActor struct {
 	resolving        bool
 	dirty            bool
 	deferred         bool
-	// The last state this incarnation proposed and the generation it proposed it at, so a re-resolution reproducing it is a no-op; nil until it proposes, which is why a replacement proposes once on its revision base.
+	// What this incarnation last proposed, so a re-resolution reproducing it is a no-op; nil until it
+	// proposes, which is why a replacement proposes once on its revision base.
 	proposed           map[string]routerDesiredState
 	proposedGeneration int64
+	lastStatus         reconcilerActorStatus
+	labels             telemetry.Labels
 }
 
 // ---------------------------------------------------------------------------
 // Messages
 // ---------------------------------------------------------------------------
 
-// MessageReconcilerActorActivate gives a replacement reconciler a revision base newer than the last state its supervisor accepted.
+// MessageReconcilerActorActivate gives a replacement reconciler a revision base past the last
+// accepted state.
 type MessageReconcilerActorActivate struct{ revisionBase uint64 }
 
 // MessageReconcilerActorStatusChanged publishes the reconciler status to its supervisor.
@@ -89,10 +96,12 @@ type MessageDesiredStateFreshness struct {
 // ---------------------------------------------------------------------------
 
 // newReconcilerActor constructs a reconciler actor with independent retry policies.
-func newReconcilerActor(events snapshotruntime.Events, directory string, retryMin, retryMax time.Duration) gen.ProcessBehavior {
+func newReconcilerActor(snapshotEvent, statusEvent gen.Event, directory string, retryMin, retryMax time.Duration, labels telemetry.Labels) gen.ProcessBehavior {
 	return &reconcilerActor{
-		events:          events,
+		snapshotEvent:   snapshotEvent,
+		statusEvent:     statusEvent,
 		directory:       directory,
+		labels:          labels,
 		resolutionRetry: runtime.NewScheduledBackoff(retryMin, retryMax),
 		resolver: artifactResolverMetaState{
 			restart: runtime.NewScheduledBackoff(retryMin, retryMax),
@@ -113,7 +122,7 @@ func newReconcilerActor(events snapshotruntime.Events, directory string, retryMi
 
 // Init validates the reconciler actor's required events.
 func (a *reconcilerActor) Init(...any) error {
-	if a.events.Snapshot.Name == "" || a.events.Status.Name == "" {
+	if a.snapshotEvent.Name == "" || a.statusEvent.Name == "" {
 		return fmt.Errorf("plugin reconciler: snapshot events are required")
 	}
 	return nil
@@ -141,9 +150,9 @@ func (a *reconcilerActor) HandleMessage(from gen.PID, message any) error {
 		}
 
 		a.revision = m.revisionBase
-		a.publishStatus()
+		a.reconcileStatus()
 
-		for _, event := range []gen.Event{a.events.Snapshot, a.events.Status} {
+		for _, event := range []gen.Event{a.snapshotEvent, a.statusEvent} {
 			buffered, err := a.MonitorEvent(event)
 			if err != nil {
 				return fmt.Errorf("monitor reconciler event %q: %w", event.Name, err)
@@ -197,7 +206,7 @@ func (a *reconcilerActor) HandleMessage(from gen.PID, message any) error {
 				a.resolutionRetry.CancelScheduled(false)
 			}
 		}
-		a.publishStatus()
+		a.reconcileStatus()
 		if started {
 			return a.requestResolve()
 		}
@@ -215,27 +224,33 @@ func (a *reconcilerActor) HandleMessage(from gen.PID, message any) error {
 		}
 
 		if a.snapshot == nil || m.snapshotGeneration != a.snapshot.Generation {
+			a.labels.Count(a, metricResolutions, "stale")
 			a.dirty = true
 			return a.requestResolve()
 		}
 
-		// A filesystem or snapshot change arrived mid-resolution, so this result may be stale: resolve again from the current snapshot and filesystem.
+		// A filesystem or snapshot change arrived mid-resolution, so this result may be stale: resolve
+		// again from the current snapshot and filesystem.
 		if a.dirty {
+			a.labels.Count(a, metricResolutions, "stale")
 			return a.requestResolve()
 		}
 		a.deferred = m.deferred
 		if m.deferred {
-			a.publishStatus()
+			a.labels.Count(a, metricResolutions, "deferred")
+			a.reconcileStatus()
 			return a.scheduleResolutionRetry()
 		}
 
 		// Re-proposing an unchanged state closes admission for a transition that changes nothing.
 		if a.proposed != nil && a.proposedGeneration == a.snapshot.Generation && sameDesiredState(m.desired, a.proposed) {
-			a.publishStatus()
+			a.labels.Count(a, metricResolutions, "unchanged")
+			a.reconcileStatus()
 			a.resolutionRetry.CancelScheduled(true)
 			return nil
 		}
 
+		a.labels.Count(a, metricResolutions, "proposed")
 		a.revision++
 		if err := a.Send(a.Parent(), MessageProposeDesiredState{
 			desired: MessageApplyCatalogDesiredState{
@@ -248,7 +263,7 @@ func (a *reconcilerActor) HandleMessage(from gen.PID, message any) error {
 		}
 		a.proposed = m.desired
 		a.proposedGeneration = a.snapshot.Generation
-		a.publishStatus()
+		a.reconcileStatus()
 		a.resolutionRetry.CancelScheduled(true)
 
 	case MessageArtifactDirectoryChanged:
@@ -259,7 +274,8 @@ func (a *reconcilerActor) HandleMessage(from gen.PID, message any) error {
 			return nil
 		}
 		a.dirty = true
-		// A concrete filesystem change is a useful immediate retry signal, so cancel the delayed timer but keep the backoff progression until a complete resolution resets it.
+		// A concrete filesystem change is a useful immediate retry signal, so cancel the delayed timer but
+		// keep the backoff progression until a complete resolution resets it.
 		a.resolutionRetry.CancelScheduled(false)
 		return a.requestResolve()
 
@@ -301,19 +317,19 @@ func (a *reconcilerActor) HandleMessage(from gen.PID, message any) error {
 			a.resolving = false
 			a.dirty = a.snapshot != nil
 			a.resolutionRetry.CancelScheduled(false)
-			a.publishStatus()
+			a.reconcileStatus()
 			return a.scheduleResolverRestart()
 
 		case a.watcher.alias:
 			a.watcher.alias = gen.Alias{}
 			a.watcher.status.lifecycle = ArtifactWatcherMetaRestarting
 			a.watcher.status.availability = runtime.AvailabilityUnavailable
-			a.publishStatus()
+			a.reconcileStatus()
 			return a.scheduleWatcherRestart()
 		}
 
 	case gen.MessageDownEvent:
-		if m.Event == a.events.Snapshot || m.Event == a.events.Status {
+		if m.Event == a.snapshotEvent || m.Event == a.statusEvent {
 			return fmt.Errorf("snapshot event terminated: %w", m.Reason)
 		}
 	}
@@ -342,7 +358,7 @@ func (a *reconcilerActor) startArtifactResolverMeta() error {
 
 	a.resolver.status.lifecycle = ArtifactResolverMetaStarting
 	a.resolver.status.availability = runtime.AvailabilityUnavailable
-	a.publishStatus()
+	a.reconcileStatus()
 	alias, err := a.SpawnMeta(
 		&artifactResolverMeta{
 			directory: a.directory,
@@ -352,7 +368,7 @@ func (a *reconcilerActor) startArtifactResolverMeta() error {
 	if err != nil {
 		a.resolver.status.lifecycle = ArtifactResolverMetaRestarting
 		a.Log().Error("artifact resolver meta spawn failed: error=%v", err)
-		a.publishStatus()
+		a.reconcileStatus()
 		if retryErr := a.scheduleResolverRestart(); retryErr != nil {
 			return fmt.Errorf("spawn artifact resolver meta: %v; schedule restart: %w", err, retryErr)
 		}
@@ -362,7 +378,7 @@ func (a *reconcilerActor) startArtifactResolverMeta() error {
 		_ = a.SendExitMeta(alias, gen.TerminateReasonShutdown)
 		a.resolver.status.lifecycle = ArtifactResolverMetaRestarting
 		a.Log().Error("artifact resolver meta monitor failed: error=%v", err)
-		a.publishStatus()
+		a.reconcileStatus()
 		if retryErr := a.scheduleResolverRestart(); retryErr != nil {
 			return fmt.Errorf("monitor artifact resolver meta: %v; schedule restart: %w", err, retryErr)
 		}
@@ -380,7 +396,7 @@ func (a *reconcilerActor) startArtifactWatcherMeta() error {
 
 	a.watcher.status.lifecycle = ArtifactWatcherMetaStarting
 	a.watcher.status.availability = runtime.AvailabilityUnavailable
-	a.publishStatus()
+	a.reconcileStatus()
 	alias, err := a.SpawnMeta(
 		&artifactWatcherMeta{
 			directory: a.directory,
@@ -390,7 +406,7 @@ func (a *reconcilerActor) startArtifactWatcherMeta() error {
 	if err != nil {
 		a.watcher.status.lifecycle = ArtifactWatcherMetaRestarting
 		a.Log().Error("artifact watcher meta spawn failed: error=%v", err)
-		a.publishStatus()
+		a.reconcileStatus()
 		if retryErr := a.scheduleWatcherRestart(); retryErr != nil {
 			return fmt.Errorf("spawn artifact watcher meta: %v; schedule restart: %w", err, retryErr)
 		}
@@ -400,7 +416,7 @@ func (a *reconcilerActor) startArtifactWatcherMeta() error {
 		_ = a.SendExitMeta(alias, gen.TerminateReasonShutdown)
 		a.watcher.status.lifecycle = ArtifactWatcherMetaRestarting
 		a.Log().Error("artifact watcher meta monitor failed: error=%v", err)
-		a.publishStatus()
+		a.reconcileStatus()
 		if retryErr := a.scheduleWatcherRestart(); retryErr != nil {
 			return fmt.Errorf("monitor artifact watcher meta: %v; schedule restart: %w", err, retryErr)
 		}
@@ -439,16 +455,16 @@ func (a *reconcilerActor) stopArtifactWatcherMeta(reason error) {
 // applyEvent incorporates monitored snapshot and reader-status events.
 func (a *reconcilerActor) applyEvent(event gen.MessageEvent) error {
 	switch event.Event {
-	case a.events.Status:
-		status, ok := event.Message.(snapshotruntime.ReaderActorStatus)
+	case a.statusEvent:
+		status, ok := event.Message.(snapshot.ReaderActorStatus)
 		if !ok {
 			return nil
 		}
 		a.readerActorReady = status.Availability == runtime.AvailabilityReady
-		a.publishStatus()
+		a.reconcileStatus()
 		return nil
 
-	case a.events.Snapshot:
+	case a.snapshotEvent:
 		snap, ok := event.Message.(*snapshot.Snapshot)
 		if !ok || snap == nil {
 			return nil
@@ -466,7 +482,7 @@ func (a *reconcilerActor) applyEvent(event gen.MessageEvent) error {
 		a.snapshot = snap.Clone()
 		a.dirty = true
 		a.deferred = false
-		a.publishStatus()
+		a.reconcileStatus()
 		return a.requestResolve()
 
 	default:
@@ -481,13 +497,13 @@ func (a *reconcilerActor) requestResolve() error {
 	}
 	a.resolving = true
 	a.dirty = false
-	a.publishStatus()
+	a.reconcileStatus()
 	snap := a.snapshot.Clone()
 	if err := a.Send(a.resolver.alias, MessageResolveArtifacts{snapshot: *snap}); err != nil {
 		a.resolving = false
 		a.dirty = true
 		a.resolver.status.availability = runtime.AvailabilityDegraded
-		a.publishStatus()
+		a.reconcileStatus()
 		if retryErr := a.scheduleResolutionRetry(); retryErr != nil {
 			return fmt.Errorf("send artifact resolve request: %v; schedule retry: %w", err, retryErr)
 		}
@@ -518,6 +534,7 @@ func (a *reconcilerActor) scheduleResolutionRetry() error {
 	}
 	a.resolutionRetry.Pending = true
 	a.resolutionRetry.Cancel = cancel
+	a.labels.Count(a, metricResolutionRetries)
 	return nil
 }
 
@@ -540,9 +557,10 @@ func (a *reconcilerActor) scheduleResolverRestart() error {
 	}
 	a.resolver.restart.Pending = true
 	a.resolver.restart.Cancel = cancel
+	a.labels.Count(a, metricWorkerRestarts, "resolver")
 	a.resolver.status.lifecycle = ArtifactResolverMetaRestarting
 	a.resolver.status.availability = runtime.AvailabilityUnavailable
-	a.publishStatus()
+	a.reconcileStatus()
 	return nil
 }
 
@@ -565,9 +583,10 @@ func (a *reconcilerActor) scheduleWatcherRestart() error {
 	}
 	a.watcher.restart.Pending = true
 	a.watcher.restart.Cancel = cancel
+	a.labels.Count(a, metricWorkerRestarts, "watcher")
 	a.watcher.status.lifecycle = ArtifactWatcherMetaRestarting
 	a.watcher.status.availability = runtime.AvailabilityUnavailable
-	a.publishStatus()
+	a.reconcileStatus()
 	return nil
 }
 
@@ -575,8 +594,8 @@ func (a *reconcilerActor) scheduleWatcherRestart() error {
 // Status projection
 // ---------------------------------------------------------------------------
 
-// publishStatus reports the current reconciler availability to its supervisor.
-func (a *reconcilerActor) publishStatus() {
+// status computes the reconciler's publishable status, shared by reconcileStatus and HandleInspect.
+func (a *reconcilerActor) status() reconcilerActorStatus {
 	availability := runtime.AvailabilityReady
 	switch {
 	case !a.readerActorReady ||
@@ -596,12 +615,42 @@ func (a *reconcilerActor) publishStatus() {
 		snapshotGeneration = a.snapshot.Generation
 	}
 
-	_ = a.Send(a.Parent(), MessageReconcilerActorStatusChanged{status: reconcilerActorStatus{
+	return reconcilerActorStatus{
 		lifecycle:          ReconcilerActorRunning,
 		availability:       availability,
 		snapshotGeneration: snapshotGeneration,
 		revision:           a.revision,
-	}})
+	}
+}
+
+// reconcileStatus recomputes and, on change, reports the current reconciler availability to its supervisor
+func (a *reconcilerActor) reconcileStatus() {
+	next := a.status()
+	if next == a.lastStatus {
+		return
+	}
+	a.lastStatus = next
+	_ = a.Send(a.Parent(), MessageReconcilerActorStatusChanged{status: next})
+}
+
+// HandleInspect exposes lifecycle, both sub-workers' health, and the gates deciding a re-resolution.
+func (a *reconcilerActor) HandleInspect(gen.PID, ...string) map[string]string {
+	status := a.status()
+	return map[string]string{
+		"reconciler:lifecycle":             string(status.lifecycle),
+		"reconciler:availability":          string(status.availability),
+		"reconciler:revision":              fmt.Sprintf("%d", status.revision),
+		"reconciler:snapshot_generation":   fmt.Sprintf("%d", status.snapshotGeneration),
+		"reconciler:proposed_generation":   fmt.Sprintf("%d", a.proposedGeneration),
+		"reconciler:reader_ready":          fmt.Sprintf("%t", a.readerActorReady),
+		"reconciler:resolving":             fmt.Sprintf("%t", a.resolving),
+		"reconciler:dirty":                 fmt.Sprintf("%t", a.dirty),
+		"reconciler:deferred":              fmt.Sprintf("%t", a.deferred),
+		"reconciler:resolver:lifecycle":    string(a.resolver.status.lifecycle),
+		"reconciler:resolver:availability": string(a.resolver.status.availability),
+		"reconciler:watcher:lifecycle":     string(a.watcher.status.lifecycle),
+		"reconciler:watcher:availability":  string(a.watcher.status.availability),
+	}
 }
 
 // ---------------------------------------------------------------------------

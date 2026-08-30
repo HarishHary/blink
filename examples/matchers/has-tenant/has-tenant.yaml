@@ -1,0 +1,15 @@
+id: "b1d8dd57-7d95-4f30-9c86-661887477d26"
+name: "has_tenant"
+display_name: "Has Tenant"
+description: "Matches events that carry a non-empty tenant_id. Use for testing only."
+enabled: true
+version: "1.0.0"
+
+# global: true means this matcher runs on all rules regardless of their
+# matchers list. Set to false (or omit) for opt-in use only.
+global: false
+
+# Rollout control (optional - defaults to blue-green).
+# mode: "blue-green"  # blue-green | canary | shadow
+# min_procs: 1
+# max_procs: 2

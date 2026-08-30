@@ -1,151 +1,158 @@
-# Snapshot Runtime
+# Snapshot runtime
 
-The generic `internal/runtime/snapshot` subtree reconstructs a compacted snapshot topic and exposes a typed, immutable projection. It is instantiated once for matcher metadata inside the plugin runtime (external commit) and once for rule metadata in `event_matcher` (direct commit). It is not a process pool.
+[Internals index](README.md) · [Controller runtime](controller-runtime.md) · [Plugin runtime](plugin-runtime.md)
+
+The `internal/runtime/snapshot` subtree subscribes to one namespace's controller actor over the Ergo cluster and exposes a typed, immutable projection. Two instances: matcher metadata in the plugin runtime (external commit), rules in `event_matcher` (direct commit).
 
 ## Composition
 
 ```mermaid
 flowchart TB
   supervisor["1 snapshot.Supervisor[T]\nRestForOne, transient, intensity 5 / 10 s"]
-  reader["1 reader actor\nfirst RestForOne child"]
-  meta["1 reader meta\none actor-spawned broker-reader meta-process"]
-  projection["1 projection actor[T]\nsecond RestForOne child"]
+  reader["1 reader actor\nfirst child"]
+  controller["namespace controller actor\nremote"]
+  projection["1 projection actor[T]\nsecond child"]
   supervisor --> reader
   supervisor --> projection
-  reader --> meta
+  reader <-->|Call/Send, cluster| controller
+  supervisor -->|MessageExecutorReport| controller
 ```
 
-Rest-for-one ordering is significant: a reader restart restarts the following projection; a projection restart does not restart the reader. The supervisor does not auto-shutdown and retains only the latest snapshot and reader-status events (buffer size 1).
+- A reader restart restarts the projection behind it; a projection restart does not.
+- No auto-shutdown. The supervisor keeps only the latest snapshot and reader-status events (buffer size 1).
+- No meta process: Ergo pushes remote messages into the reader's mailbox.
 
 ## Messages
 
-| Message                               | Direction                                                | Meaning                                                                           |
-| ------------------------------------- | -------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| `MessageReaderActorActivate`          | snapshot supervisor → reader actor                       | Authenticates reader-meta startup and supplies the snapshot event identity.       |
-| `MessageProjectionActorActivate`      | snapshot supervisor → projection actor                   | Authorizes buffered snapshot/status event monitoring.                             |
-| `MessageReaderActorStatusChanged`     | reader actor → snapshot supervisor                       | Publishes the current reader lifecycle, availability, and committed generation.   |
-| `MessageProjectionActorStatusChanged` | projection actor → snapshot supervisor                   | Publishes projection lifecycle, availability, and committed/prepared generations. |
-| `MessageProjectionCommit`             | external parent → snapshot supervisor → projection actor | Requests a PID/generation-fenced commit in external-commit mode only.             |
-| `MessageProjectionCommitResult`       | projection actor → snapshot supervisor → external parent | Returns the PID/generation-fenced external-commit result.                         |
+| Message                               | Direction                                                | Meaning                                                                       |
+| ------------------------------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `MessageReaderActorActivate`          | snapshot supervisor → reader actor                       | Authorizes the controller subscription.                                       |
+| `MessageProjectionActorActivate`      | snapshot supervisor → projection actor                   | Authorizes snapshot/status event monitoring.                                  |
+| `MessageReaderActorStatusChanged`     | reader actor → snapshot supervisor                       | Publishes reader lifecycle, availability, committed generation.               |
+| `MessageProjectionActorStatusChanged` | projection actor → snapshot supervisor                   | Publishes projection lifecycle, availability, committed/prepared generations. |
+| `MessageProjectionCommit`             | external parent → snapshot supervisor → projection actor | Requests a PID/generation-fenced commit, external-commit mode only.           |
+| `MessageProjectionCommitResult`       | projection actor → snapshot supervisor → external parent | Returns the fenced external-commit result.                                    |
+| `MessageExecutorReportTick`           | snapshot supervisor → snapshot supervisor                | Periodic convergence-report timer.                                            |
+| `MessageRadarTick`                    | snapshot supervisor → snapshot supervisor                | Periodic radar collector registration retry.                                  |
+| `MessageExecutorReport`               | snapshot supervisor → controller actor (cluster `Send`)  | Convergence report: generation received, generation held live.                |
 
 ## Roles
 
-| Role                | Default name or identity                              | Owner               | Responsibility                                                             |
-| ------------------- | ----------------------------------------------------- | ------------------- | -------------------------------------------------------------------------- |
-| Snapshot supervisor | registered `SupervisorOptions.Name`                   | parent runtime      | Owns child PIDs, stable events, and external-commit forwarding.            |
-| Reader actor        | child PID named `<SupervisorOptions.Name>-reader`     | snapshot supervisor | Owns effective entries, the committed generation, and reader-meta restart. |
-| Reader meta         | `gen.Alias` returned by `SpawnMeta`                   | reader actor        | Owns blocking broker reads and catch-up detection.                         |
-| Projection actor    | child PID named `<SupervisorOptions.Name>-projection` | snapshot supervisor | Owns typed parsed committed/prepared state.                                |
+| Role                | Default name or identity                | Owner               | Responsibility                                                                      |
+| ------------------- | --------------------------------------- | ------------------- | ----------------------------------------------------------------------------------- |
+| Snapshot supervisor | `snapshot-<namespace>-supervisor`       | parent runtime      | Child PIDs, stable events, commit forwarding, convergence reporting.                |
+| Reader actor        | `snapshot-<namespace>-reader-actor`     | snapshot supervisor | Controller subscription, committed generation, loss detection, resubscribe backoff. |
+| Projection actor    | `snapshot-<namespace>-projection-actor` | snapshot supervisor | Typed parsed committed/prepared state.                                              |
+
+- Names derive from `SupervisorOptions.Namespace` (the subtree's own, and the controller namespace its reader follows) via `SupervisorName`, `ReaderActorName`, `ProjectionActorName`, mirroring `controller-<namespace>-*`. None is configurable.
+- `ReaderActorOptions` carries `Endpoint` and `ExecutorID`. The typed loader is a `NewSupervisor` parameter, not an option.
+- Children get event identities at construction: the projection its two monitored names, the reader its one publication (name plus the `gen.Ref` token `SendEvent` requires).
+- `ControllerActorName` names the subscription's far end.
 
 ## Readiness
 
-The matcher runtime uses `ProjectionCommitExternal`, so its parent coordinates visibility; the rule tree uses `ProjectionCommitDirect`, so a complete parsed snapshot becomes visible immediately. A projection is `Ready` only with a committed generation, a ready reader, and reader and observed generations at or beyond that commit.
+`ProjectionCommitExternal` (matcher runtime) defers visibility to the parent; `ProjectionCommitDirect` (rule tree) makes a complete parsed snapshot visible at once. `Ready` needs a committed generation, a ready reader, and reader and observed generations at or beyond that commit.
 
-## Snapshot Supervisor
+## Snapshot supervisor
 
 ### Lifecycle
 
 ```mermaid
 stateDiagram-v2
     [*] --> Starting
-    Starting --> Running: reader and projection activated
+    Starting --> Running: children activated
     Running --> Restarting: transient child exits
-    Restarting --> Running: children restarted in RestForOne order
+    Restarting --> Running: restarted in RestForOne order
     Running --> Stopped: parent termination
-    Restarting --> Stopped: restart intensity exhausted or termination
+    Restarting --> Stopped: intensity exhausted or termination
 ```
 
 ### Messages
 
-| Message                | Direction                                     | Meaning                                                                                    |
-| ---------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `HandleChildStart`     | Ergo supervisor runtime → snapshot supervisor | Records and activates the reader or projection child incarnation.                          |
-| `HandleChildTerminate` | Ergo supervisor runtime → snapshot supervisor | Marks a child unavailable and reports external commit failure for a terminated projection. |
+| Message                | Direction                                     | Meaning                                                                                 |
+| ---------------------- | --------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `HandleChildStart`     | Ergo supervisor runtime → snapshot supervisor | Records and activates a child incarnation.                                              |
+| `HandleChildTerminate` | Ergo supervisor runtime → snapshot supervisor | Marks a child unavailable; reports external commit failure for a terminated projection. |
 
 ### Readiness
 
-The supervisor reports only the latest reader status through its buffered status event. In external-commit mode, it stamps projection status with the current projection PID and forwards status and matching commit results to its parent.
+Only the latest reader status is reported. External-commit mode stamps projection status with the current PID, and forwards status and matching commit results upward.
 
-## Reader Actor
+### Executor reporting
+
+The supervisor is the sole producer of `MessageExecutorReport{ExecutorID, Heartbeat, Applied, LastError}`, which the namespace controller folds into executor-convergence tracking (`/status`, `blink_controller_executors`, `blink_controller_executors_drifting`).
+
+| Field                           | Source                                                                      | Meaning                                                                                                        |
+| ------------------------------- | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `Heartbeat.CommittedGeneration` | reader status `Generation`                                                  | The newest generation the controller has pushed here.                                                          |
+| `Heartbeat.ReadyGeneration`     | projection status `CommittedGeneration`                                     | The generation this executor actually holds live.                                                              |
+| `Heartbeat.Availability`        | projection availability, capped at `degraded` while the reader is not ready | A live projection with a dead reader still serves its last generation, but can no longer receive the next one. |
+| `Applied`                       | a projection commit that advanced the generation                            | Edge event; `Admitted` is false when the generation went live degraded.                                        |
+| `LastError`                     | reader status `LastError`                                                   | Why the reader is not subscribed.                                                                              |
+
+Under `ProjectionCommitExternal` the two diverge while the parent fetches binaries; only its commit makes the new generation live.
+
+Reports are fire-and-forget, sent every `executorReportInterval` (30 s, a quarter of the controller's stale threshold) on a self-scheduled `MessageExecutorReportTick`, and immediately when a commit advances, reader availability changes, or the reader terminates.
+
+## Reader actor
 
 ### Lifecycle
 
-The reader actor starts a reader meta only after parent activation. It fences `MessageRecord` and `MessageCaughtUp` by the current meta alias. Records update an in-memory effective-entry map; a generation marker creates a sorted, cloned committed snapshot. Tombstones remove entries. A backwards generation is rejected, and malformed entries or markers are logged and ignored.
+- On activation: one bounded `Call` (`SubscribeRequest{ExecutorID, KnownGeneration}`) to `ReaderActorOptions.Endpoint`, the controller actor at `gen.ProcessID{Name, Node}`.
+- `SubscribeResponse` returns the committed snapshot (`Current`, nil before bootstrap) and `ControllerPID`; a `Current.Generation` newer than the last published is published at once.
+- It `MonitorPID`s the controller and `MonitorNode`s its node, then publishes pushed `SnapshotUpdate`s newer than the last generation seen.
+- `gen.MessageDownPID` (controller died) or `gen.MessageDownNode` (its node left) marks the reader unsubscribed and schedules a resubscribe carrying the last generation as `KnownGeneration`.
+- The controller's `SubscribeRequest` handler does not currently read `KnownGeneration` and always returns the full committed snapshot. The reader skips republishing a burst that is not newer than `lastGeneration`.
+- `Terminate` best-effort notifies the controller (`UnsubscribeRequest`).
 
 ```mermaid
 stateDiagram-v2
     [*] --> Starting
-    Starting --> Reconstructing: reader meta started
-    Reconstructing --> Degraded: records before catch-up
-    Degraded --> Ready: caught up with generation marker
-    Ready --> Ready: MessageRecord before a newer generation marker
-    Reconstructing --> Restarting: meta down or start failure
-    Restarting --> Reconstructing: scheduled retry
+    Starting --> Subscribing: parent activation
+    Subscribing --> Ready: subscribe succeeds
+    Ready --> Ready: newer SnapshotUpdate
+    Ready --> Restarting: controller PID or node down
+    Subscribing --> Restarting: subscribe fails
+    Restarting --> Subscribing: scheduled resubscribe
     Ready --> Stopped: terminate
-    Degraded --> Stopped: terminate
+    Restarting --> Stopped: terminate
 ```
 
 ### Messages
 
-| Message                    | Direction                                            | Meaning                                                               |
-| -------------------------- | ---------------------------------------------------- | --------------------------------------------------------------------- |
-| `MessageRecord`            | reader meta → reader actor                           | Alias-fenced compacted-topic record or generation marker.             |
-| `MessageCaughtUp`          | reader meta → reader actor                           | Alias-fenced zero-lag boundary that permits readiness after a marker. |
-| `MessageReaderMetaRestart` | reader actor → reader actor                          | Token-fenced reader-meta restart timer.                               |
-| `gen.MessageDownAlias`     | Ergo meta monitor → reader actor                     | Marks the reader meta unavailable and schedules retry.                |
-| `SendEvent`                | reader actor → snapshot supervisor event subscribers | Publishes a committed snapshot to buffered and live consumers.        |
+| Message                                     | Direction                                                 | Meaning                                                                                        |
+| ------------------------------------------- | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `SubscribeRequest`/`Response`               | reader actor ↔ controller actor (cluster `Call`)          | Bounded handshake: registers the subscriber, returns the committed snapshot.                   |
+| `SnapshotUpdate`                            | controller actor → reader actor (cluster `SendImportant`) | One commit's full state, pushed to every subscriber; applied only if newer than the last seen. |
+| `UnsubscribeRequest`                        | reader actor → controller actor (cluster `Send`)          | Best-effort shutdown hint; controller-side `MonitorPID` is the authoritative removal path.     |
+| `MessageSubscribeRestart`                   | reader actor → reader actor                               | Token-fenced resubscribe timer.                                                                |
+| `gen.MessageDownPID`, `gen.MessageDownNode` | Ergo cluster monitor → reader actor                       | Marks the controller unreachable and schedules a resubscribe.                                  |
+| `SendEvent`                                 | reader actor → snapshot supervisor event subscribers      | Publishes a committed snapshot to buffered and live consumers.                                 |
 
 ### Readiness
 
-The reader publishes only after both a generation marker and catch-up. Once ready, later records retain `Ready` and the prior committed generation until a newer generation marker commits the next snapshot; records alone do not degrade reader availability.
+`Ready` only while subscribed; a controller loss or failed (re)subscribe reports `Unavailable`.
 
-## Reader Meta
-
-### Lifecycle
-
-The meta polls up to 250 ms while catching up, then checks lag. It copies broker bytes before sending records to its parent actor.
-
-```mermaid
-stateDiagram-v2
-    [*] --> Reading
-    Reading --> Reading: MessageRecord
-    Reading --> CatchingUp: read timeout then lag check
-    CatchingUp --> CaughtUp: lag is zero
-    CatchingUp --> Reading: lag remains
-    Reading --> Failed: read, lag, or parent-send error
-    CaughtUp --> Reading: subsequent record
-    Reading --> Stopped: cancellation
-    CaughtUp --> Stopped: cancellation
-```
-
-### Messages
-
-| Message        | Direction                   | Meaning                                                                       |
-| -------------- | --------------------------- | ----------------------------------------------------------------------------- |
-| `ReadMessage`  | reader meta → broker reader | Reads one compacted-topic record without committing offsets.                  |
-| `ReadLag`      | reader meta → broker reader | Checks lag after a read timeout.                                              |
-| `SendExitMeta` | reader actor → Ergo runtime | Requests reader-meta termination during replacement or shutdown.              |
-| `Terminate`    | Ergo runtime → reader meta  | Cancels reads and closes the concrete reader after the parent's exit request. |
-
-### Readiness
-
-The reader actor owns reader-meta creation, restart/backoff, public status, snapshot state, and publication. The meta reports records and catch-up facts only; its alias prevents a replaced meta from changing the current reader state.
-
-## Projection Actor
+## Projection actor
 
 ### Lifecycle
 
-The projection actor monitors buffered snapshot and reader-status events. It parses every artifact spec through its typed loader. A spec that fails to parse is skipped rather than discarding the generation: the remaining plugins are prepared or committed as usual, the joined parse errors are retained, and the actor reports degraded until a later generation parses cleanly. A generation in which nothing parsed carries no usable projection, so it leaves the last committed projection intact and reports degraded. `ProjectionClient` uses the stable projection child name and returns a deep clone.
+It monitors buffered snapshot and reader-status events and parses every spec through its typed loader.
+
+- A failed spec is skipped; the rest are prepared or committed, joined parse errors kept, and the actor reports degraded until a later generation parses cleanly.
+- A generation with nothing parsed leaves the last commit intact and reports degraded.
+
+`ProjectionClient` uses the stable child name and returns a deep clone.
 
 ```mermaid
 stateDiagram-v2
     [*] --> Starting
-    Starting --> Observing: activated and events monitored
-    Observing --> Prepared: newer snapshot with at least one parsed spec, external mode
-    Observing --> Committed: newer snapshot with at least one parsed spec, direct mode
-    Prepared --> Committed: authenticated matching commit
-    Observing --> Degraded: skipped spec, or fully unparsable snapshot with prior commit
-    Committed --> Ready: reader ready at or beyond committed generation
+    Starting --> Observing: activated, events monitored
+    Observing --> Prepared: newer snapshot, >=1 parsed spec, external
+    Observing --> Committed: newer snapshot, >=1 parsed spec, direct
+    Prepared --> Committed: matching fenced commit
+    Observing --> Degraded: skipped spec, or unparsable with prior commit
+    Committed --> Ready: reader ready >= committed generation
     Ready --> Degraded: newer skipped or unparsable spec
     Ready --> Unavailable: reader not ready
     Committed --> Stopped: terminate
@@ -154,28 +161,58 @@ stateDiagram-v2
 
 ### Messages
 
-| Message                  | Direction                                    | Meaning                                                                         |
-| ------------------------ | -------------------------------------------- | ------------------------------------------------------------------------------- |
-| `gen.MessageEvent`       | snapshot supervisor event → projection actor | Buffered and live snapshot events drive observed, prepared, or committed state. |
-| `gen.MessageEvent`       | snapshot supervisor event → projection actor | Buffered and live reader-status events drive readiness.                         |
-| `ProjectionStateRequest` | `ProjectionClient.State` → projection actor  | Reads a deep-cloned current committed projection.                               |
-| `gen.MessageDownEvent`   | Ergo event monitor → projection actor        | Terminates the projection when a monitored snapshot or status event ends.       |
+| Message                  | Direction                                    | Meaning                                                       |
+| ------------------------ | -------------------------------------------- | ------------------------------------------------------------- |
+| `gen.MessageEvent`       | snapshot supervisor event → projection actor | Snapshot events drive observed, prepared, or committed state. |
+| `gen.MessageEvent`       | snapshot supervisor event → projection actor | Reader-status events drive readiness.                         |
+| `ProjectionStateRequest` | `ProjectionClient.State` → projection actor  | Reads a deep-cloned current committed projection.             |
+| `gen.MessageDownEvent`   | Ergo event monitor → projection actor        | Terminates the projection when a monitored event ends.        |
 
 ### Readiness
 
-Direct mode commits a complete parsed generation on receipt. In external mode, commit succeeds when the requested generation matches observed and is prepared or already committed; otherwise it returns `ErrProjectionNotPrepared`. External-mode parents receive stamped projection PIDs and commit results, preventing a stale child from being acknowledged.
+Direct mode commits a complete parsed generation on receipt. External mode commits when the requested generation matches observed and is prepared or already committed, otherwise `ErrProjectionNotPrepared`. Parents get stamped PIDs and commit results.
 
-## Retry and Shutdown
+## Telemetry
 
-No actor accepts an unrelated synchronous call. Reader restart uses the shared `runtime.ScheduledBackoff`: exponential multiplier 2, configured min/max, five retries, and token invalidation on cancellation or reset. Parent termination marks reader and projection stopped/unavailable; an optional `Stopped` channel receives the reason without blocking shutdown.
+Every layer publishes into the node's radar application, labelled by `namespace` from `SupervisorOptions.Namespace`, which `Init` requires. Plumbing: `internal/runtime/telemetry`, shared with the controller runtime.
 
-## Source Map
+| Layer            | Registers       | Publishes through | Notes                                                                                                        |
+| ---------------- | --------------- | ----------------- | ------------------------------------------------------------------------------------------------------------ |
+| Supervisor       | every collector | itself            | Registers through `gen.Node`. Publishes every gauge.                                                         |
+| Reader actor     | -               | itself            | Subscribe results, accepted and dropped pushes, controller loss. Copies the supervisor's `telemetry.Labels`. |
+| Projection actor | -               | itself            | Parse duration, result, per-spec failures, commit results.                                                   |
 
-- [`internal/runtime/snapshot/snapshot_supervisor.go`](../../internal/runtime/snapshot/snapshot_supervisor.go) - child order, RestForOne policy, event registration,
-  and external commit fencing.
-- [`internal/runtime/snapshot/snapshot_reader_actor.go`](../../internal/runtime/snapshot/snapshot_reader_actor.go) - snapshot construction, reader status, alias
-  fencing, and restart.
-- [`internal/runtime/snapshot/snapshot_reader_meta.go`](../../internal/runtime/snapshot/snapshot_reader_meta.go) - blocking reads, catch-up/lag protocol, and close.
-- [`internal/runtime/snapshot/projection_actor.go`](../../internal/runtime/snapshot/projection_actor.go) - projection modes, state call, parse, and commit semantics.
-- [`internal/runtime/backoff.go`](../../internal/runtime/backoff.go) and [`internal/runtime/snapshot/options.go`](../../internal/runtime/snapshot/options.go) - shared
-  retry policy and configuration.
+| Metric                                                                                                                                                                 | Published by     | Meaning                                                                                                        |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------- |
+| `blink_snapshot_supervisor_lifecycle`                                                                                                                                  | supervisor       | 0 starting, 1 running, 2 stopping. Running once both children are up; no demotion on rest-for-one replacement. |
+| `blink_snapshot_reader_availability`, `blink_snapshot_projection_availability`, `blink_snapshot_reported_availability`                                                 | supervisor       | 0 unavailable, 1 degraded, 2 ready; the third is what this executor reports.                                   |
+| `blink_snapshot_reader_generation`, `blink_snapshot_projection_committed_generation`, `blink_snapshot_projection_prepared_generation`, `blink_snapshot_generation_lag` | supervisor       | Delivered, serving, awaiting-commit generations, and the local half of controller-side drift.                  |
+| `blink_snapshot_commit_pending`, `blink_snapshot_executor_reports_total`                                                                                               | supervisor       | Generation whose external commit is in flight; convergence reports sent.                                       |
+| `blink_snapshot_child_starts_total{child}`, `blink_snapshot_child_terminations_total{child,reason}`                                                                    | supervisor       | Reader and projection churn.                                                                                   |
+| `blink_snapshot_subscribe_attempts_total{result}`, `blink_snapshot_controller_down_total{scope}`                                                                       | reader actor     | Subscribe outcomes; controller lost as process or whole node.                                                  |
+| `blink_snapshot_updates_total`, `blink_snapshot_updates_ignored_total{reason}`                                                                                         | reader actor     | Pushed commits applied; drops as unsubscribed, wrong-sender, empty, or stale.                                  |
+| `blink_snapshot_parses_total{result}`, `blink_snapshot_parse_failures_total`, `blink_snapshot_parse_seconds`                                                           | projection actor | A generation parses `ok`, `partial`, or `failed`. The failure counter is per spec.                             |
+| `blink_snapshot_commits_total{result}`                                                                                                                                 | projection actor | External commit requests; `error` when not prepared.                                                           |
+
+`MessageRadarTick` drives registration: sent from `Init`, retried every `telemetry.RadarTickInterval` (30 s) until radar accepts them. The supervisor monitors `radar_metrics` and clears `collectorsRegistered` on `gen.MessageDownProcessID`. No readiness signal here; the subtree reports through `MessageExecutorReport`.
+
+Emission is best-effort: an unreachable radar discards the `Send` error, a zero `telemetry.Labels` stays silent. Gauges republish on state changes and on each executor-report tick.
+
+## Retry and shutdown
+
+Lifecycle is `starting`, `running`, `stopping`. No draining stage; a stop is immediate.
+
+- No actor accepts an unrelated synchronous call.
+- Reader resubscribe uses `runtime.ScheduledBackoff`: multiplier 2, configured min and max, five retries, token invalidated on cancel or reset.
+- Parent termination marks reader and projection stopped and unavailable.
+- An optional `Stopped` channel receives the reason without blocking shutdown.
+
+## Source references
+
+- [`internal/runtime/snapshot/snapshot_supervisor.go`](../../internal/runtime/snapshot/snapshot_supervisor.go) - children, events, commit fencing.
+- [`internal/runtime/snapshot/snapshot_reader_actor.go`](../../internal/runtime/snapshot/snapshot_reader_actor.go) - subscribe, controller loss, publication.
+- [`internal/runtime/snapshot/subscription.go`](../../internal/runtime/snapshot/subscription.go) - `SubscribeRequest`/`Response`, `SnapshotUpdate`, `UnsubscribeRequest`, `MessageExecutorReport`, EDF.
+- [`internal/runtime/snapshot/projection_actor.go`](../../internal/runtime/snapshot/projection_actor.go) - modes, parse, commit.
+- [`internal/runtime/snapshot/metrics.go`](../../internal/runtime/snapshot/metrics.go) - metric specs.
+- [`internal/runtime/telemetry/metrics.go`](../../internal/runtime/telemetry/metrics.go) - radar plumbing.
+- [`internal/runtime/backoff.go`](../../internal/runtime/backoff.go), [`internal/runtime/snapshot/options.go`](../../internal/runtime/snapshot/options.go) - retry, options.

@@ -1,15 +1,11 @@
-{{/*
-Standard labels applied to every resource.
-*/}}
+{{/* Labels applied to every resource. */}}
 {{- define "blink.labels" -}}
 app.kubernetes.io/part-of: blink
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
 {{- end }}
 
-{{/*
-envFrom block - every pod sources shared config and auth.
-*/}}
+{{/* Shared config and auth, sourced by every pod. */}}
 {{- define "blink.envFrom" -}}
 - configMapRef:
     name: blink-config
@@ -17,9 +13,7 @@ envFrom block - every pod sources shared config and auth.
     name: blink-auth
 {{- end }}
 
-{{/*
-Standard HTTP health probes on port 8080.
-*/}}
+{{/* Kubelet health probes; always 8080, never radar. */}}
 {{- define "blink.probes" -}}
 readinessProbe:
   httpGet:
@@ -35,10 +29,7 @@ livenessProbe:
   periodSeconds: 20
 {{- end }}
 
-{{/*
-Plugin volume definition - hostPath by default, swap for PVC in production.
-Call with root context: include "blink.pluginVolume" $
-*/}}
+{{/* Plugin volume, hostPath unless a PVC is set; call with root context. */}}
 {{- define "blink.pluginVolume" -}}
 - name: plugins
   {{- if .Values.plugins.volume.hostPath }}
@@ -53,23 +44,18 @@ Call with root context: include "blink.pluginVolume" $
   {{- end }}
 {{- end }}
 
-{{/*
-Plugin volume mount - always at /plugins.
-*/}}
+{{/* Plugin volume mount, always /plugins. */}}
 {{- define "blink.pluginVolumeMount" -}}
 - name: plugins
   mountPath: /plugins
 {{- end }}
 
-{{/*
-Image reference: registry/name:tag
-Args: dict "registry" $registry "name" $name "tag" $tag
-*/}}
+{{/* Image reference registry/name:tag; args dict "registry" "name" "tag". */}}
 {{- define "blink.image" -}}
 {{ .registry }}/{{ .name }}:{{ .tag }}
 {{- end }}
 
-{{/* Return stage topology declared in the common values file. */}}
+{{/* Stage topology from the common values file. */}}
 {{- define "blink.stage" -}}
 {{- $global := .root.Values.global | default dict -}}
 {{- $stages := required "global.stages is required; pass deployments/helm/values.yaml" (get $global "stages") -}}

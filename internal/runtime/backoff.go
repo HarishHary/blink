@@ -16,7 +16,7 @@ var (
 	ErrArtifactWatch     = errors.New("plugin artifact watch failed")
 	ErrArtifactResolve   = errors.New("plugin artifact resolution failed")
 	ErrSnapshotLoad      = errors.New("snapshot state load failed")
-	ErrSnapshotPublish   = errors.New("snapshot publication failed")
+	ErrSnapshotWrite     = errors.New("snapshot write failed")
 	ErrSnapshotRead      = errors.New("snapshot read failed")
 	ErrSnapshotSubscribe = errors.New("snapshot event subscription failed")
 	ErrBackoffStopped    = errors.New("scheduled backoff stopped")
@@ -35,6 +35,7 @@ type ScheduledBackoff struct {
 
 const scheduledRestartLimit uint64 = 5
 
+// NewScheduledBackoff returns an exponential backoff bounded by scheduledRestartLimit retries.
 func NewScheduledBackoff(minDelay, maxDelay time.Duration) *ScheduledBackoff {
 	return &ScheduledBackoff{
 		Strategy: backoff.WithMaxRetries(backoff.NewExponentialBackOff(
@@ -46,6 +47,7 @@ func NewScheduledBackoff(minDelay, maxDelay time.Duration) *ScheduledBackoff {
 	}
 }
 
+// CancelScheduled drops any pending retry and invalidates its token, resetting the progression on reset.
 func (s *ScheduledBackoff) CancelScheduled(reset bool) {
 	if s == nil {
 		return

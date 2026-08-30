@@ -5,19 +5,19 @@ import (
 	"sync"
 )
 
-// asyncResult is the one-shot completion channel shared by Runtime and
-// runtimeSupervisor for one submitted invocation. Completion is idempotent so
-// send failures, child termination, cancellation, and normal completion may
-// race without blocking or double-completing the caller.
+// AsyncResult is one invocation's one-shot completion channel, idempotent so a send failure, a child
+// termination, cancellation, and normal completion may race without double-completing the caller.
 type AsyncResult struct {
 	Once sync.Once
 	Ch   chan error
 }
 
+// NewAsyncResult returns a one-shot completion channel for one submitted invocation.
 func NewAsyncResult() *AsyncResult {
 	return &AsyncResult{Ch: make(chan error, 1)}
 }
 
+// Complete delivers the terminal result once; later calls are no-ops.
 func (r *AsyncResult) Complete(err error) {
 	if r == nil {
 		return
@@ -55,9 +55,8 @@ func (i Invocation) Err() error {
 	return i.State.err
 }
 
-// Cancel requests cancellation of this invocation. Cancellation is idempotent;
-// the invocation completes only when the runtime acknowledges a terminal
-// result through the normal completion path.
+// Cancel idempotently requests cancellation; the invocation completes only once the runtime
+// acknowledges a terminal result through the normal path.
 func (i Invocation) Cancel(err error) {
 	if i.State == nil {
 		return
@@ -66,16 +65,15 @@ func (i Invocation) Cancel(err error) {
 }
 
 type invocationState struct {
-	done chan struct{}
-
-	mu  sync.RWMutex
-	err error
-
+	done         chan struct{}
+	mu           sync.RWMutex
+	err          error
 	completeOnce sync.Once
 	cancelOnce   sync.Once
 	cancel       func(error)
 }
 
+// NewInvocationState returns the shared state behind one Invocation handle.
 func NewInvocationState(cancel func(error)) *invocationState {
 	if cancel == nil {
 		cancel = func(error) {}
@@ -86,6 +84,7 @@ func NewInvocationState(cancel func(error)) *invocationState {
 	}
 }
 
+// RequestCancel runs the cancel hook once, defaulting to context.Canceled.
 func (s *invocationState) RequestCancel(err error) {
 	if s == nil {
 		return
@@ -98,6 +97,7 @@ func (s *invocationState) RequestCancel(err error) {
 	})
 }
 
+// Complete records the terminal error once and closes done.
 func (s *invocationState) Complete(err error) {
 	if s == nil {
 		return

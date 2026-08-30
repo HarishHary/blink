@@ -4,11 +4,12 @@ import (
 	"github.com/harishhary/blink/internal/backends"
 	"github.com/harishhary/blink/internal/runtime"
 	"github.com/harishhary/blink/internal/runtime/plugin"
-	"github.com/harishhary/blink/internal/snapshot"
+	"github.com/harishhary/blink/internal/runtime/snapshot"
 	"go.yaml.in/yaml/v4"
 )
 
-// CatalogGroup holds all YAML entries sharing a logical plugin ID (healthy: one BG Primary + at most one CN/SH Candidate).
+// CatalogGroup holds all YAML entries sharing a logical plugin ID (healthy: one BG Primary + at most
+// one CN/SH Candidate).
 type CatalogGroup[T plugin.Artifact] struct {
 	Id      string
 	Entries []T
@@ -66,8 +67,7 @@ func SnapshotChanged(next []snapshot.EffectiveEntry, prior *snapshot.Snapshot) b
 	if prior == nil || len(next) != len(prior.Entries) {
 		return true
 	}
-	// Each ref's spec + digest fold into its key, so a metadata-only change (same binary/mode) or a
-	// binary swap (same spec, new digest) still bumps the generation. Mode rides in the spec too.
+	// Ref keys fold in spec+digest, so any metadata, mode, or binary change bumps the generation.
 	type key struct {
 		id, primary, candidate string
 		enabled                bool
@@ -122,7 +122,7 @@ func DiffEntries(prior *snapshot.Snapshot, next []snapshot.EffectiveEntry, recor
 		priorByID[e.Id] = e
 	}
 	for _, e := range next {
-		if p, ok := priorByID[e.Id]; !ok || !EffectiveEntryEqual(p, e) {
+		if p, ok := priorByID[e.Id]; !ok || !snapshot.EffectiveEntryEqual(p, e) {
 			upserts = append(upserts, e)
 		}
 	}
@@ -134,19 +134,64 @@ func DiffEntries(prior *snapshot.Snapshot, next []snapshot.EffectiveEntry, recor
 	return upserts, tombstones
 }
 
-// EffectiveEntryEqual reports whether two entries have identical routing data.
-func EffectiveEntryEqual(left, right snapshot.EffectiveEntry) bool {
-	return left.Id == right.Id && left.Enabled == right.Enabled &&
-		ArtifactRefEqual(left.Primary, right.Primary) && ArtifactRefEqual(left.Candidate, right.Candidate)
+// ClassifyChanges pairs each upsert with why it differs from the prior commit; loader is only
+// needed to isolate a rollout-percentage-only edit buried inside an otherwise-identical candidate spec.
+func ClassifyChanges[T plugin.Artifact](loader plugin.Loader[T], prior *snapshot.Snapshot, upserts []snapshot.EffectiveEntry) []snapshot.EntryChange {
+	var priorByID map[string]snapshot.EffectiveEntry
+	if prior != nil {
+		priorByID = make(map[string]snapshot.EffectiveEntry, len(prior.Entries))
+		for _, e := range prior.Entries {
+			priorByID[e.Id] = e
+		}
+	}
+	changes := make([]snapshot.EntryChange, len(upserts))
+	for i, next := range upserts {
+		if prev, ok := priorByID[next.Id]; ok {
+			changes[i] = snapshot.EntryChange{Kind: classifyChange(loader, &prev, next), Entry: next}
+		} else {
+			changes[i] = snapshot.EntryChange{Kind: snapshot.ChangeAdded, Entry: next}
+		}
+	}
+	return changes
 }
 
-// ArtifactRefEqual reports whether two artifact references match.
-func ArtifactRefEqual(left, right *snapshot.ArtifactRef) bool {
+// artifactRefIdentity reports whether two refs name the same artifact, ignoring spec content and
+// rollout mode.
+func artifactRefIdentity(left, right *snapshot.ArtifactRef) bool {
 	if (left == nil) != (right == nil) {
 		return false
 	}
 	if left == nil {
 		return true
 	}
-	return left.Name == right.Name && left.RolloutMode == right.RolloutMode && left.Hash == right.Hash && string(left.Spec) == string(right.Spec)
+	return left.Name == right.Name && left.Hash == right.Hash
+}
+
+// classifyChange isolates why one entry differs from its prior version, drilling from a general
+// update down to a same-artifact candidate's rollout-mode or percentage-only change.
+func classifyChange[T plugin.Artifact](loader plugin.Loader[T], prior *snapshot.EffectiveEntry, next snapshot.EffectiveEntry) snapshot.ChangeKind {
+	if prior == nil {
+		return snapshot.ChangeAdded
+	}
+	if next.Enabled != prior.Enabled || !artifactRefIdentity(prior.Primary, next.Primary) {
+		return snapshot.ChangeUpdated
+	}
+	if !artifactRefIdentity(prior.Candidate, next.Candidate) {
+		return snapshot.ChangeUpdated
+	}
+	if prior.Candidate == nil {
+		return snapshot.ChangeUpdated // Primary spec content changed; identity checks above already passed
+	}
+	if prior.Candidate.RolloutMode != next.Candidate.RolloutMode {
+		return snapshot.ChangeRolloutMode
+	}
+	if string(prior.Candidate.Spec) == string(next.Candidate.Spec) {
+		return snapshot.ChangeUpdated
+	}
+	prevValue, prevErr := loader.ParseSpec(next.Candidate.Name, prior.Candidate.Spec)
+	nextValue, nextErr := loader.ParseSpec(next.Candidate.Name, next.Candidate.Spec)
+	if prevErr == nil && nextErr == nil && loader.RolloutPct(prevValue) != loader.RolloutPct(nextValue) {
+		return snapshot.ChangeTrafficSplit
+	}
+	return snapshot.ChangeUpdated
 }

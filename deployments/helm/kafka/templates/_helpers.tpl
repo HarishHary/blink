@@ -13,11 +13,7 @@
 {{- if hasKey $topic "dlq" -}}
 {{- $dlqTopicName = required (printf "global.stages.%s.workload.environment.kafka_topic_%s_dlq is required" .stage $envName) (get $environment (printf "kafka_topic_%s_dlq" $envName)) -}}
 {{- end -}}
-{{- $snapshotTopicName := "" -}}
-{{- if hasKey $topic "snapshot" -}}
-{{- $snapshotTopicName = required (printf "global.stages.%s.workload.environment.kafka_topic_%s_snapshot is required" .stage $envName) (get $environment (printf "kafka_topic_%s_snapshot" $envName)) -}}
-{{- end -}}
-{{- toYaml (mergeOverwrite $stage (dict "workloadName" $workloadName "topicName" $topicName "consumerGroup" $consumerGroup "dlqTopicName" $dlqTopicName "withDLQ" (hasKey $topic "dlq") "snapshotTopicName" $snapshotTopicName "withSnapshot" (hasKey $topic "snapshot"))) -}}
+{{- toYaml (mergeOverwrite $stage (dict "workloadName" $workloadName "topicName" $topicName "consumerGroup" $consumerGroup "dlqTopicName" $dlqTopicName "withDLQ" (hasKey $topic "dlq"))) -}}
 {{- end }}
 
 {{- define "kafka.topic" -}}

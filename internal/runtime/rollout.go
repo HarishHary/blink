@@ -14,6 +14,7 @@ const (
 	RolloutModeShadow
 )
 
+// String returns the mode's wire spelling.
 func (m RolloutMode) String() string {
 	switch m {
 	case RolloutModeBlueGreen:
@@ -27,8 +28,10 @@ func (m RolloutMode) String() string {
 	}
 }
 
+// MarshalText encodes the mode as its wire spelling.
 func (m RolloutMode) MarshalText() ([]byte, error) { return []byte(m.String()), nil }
 
+// UnmarshalText decodes a mode, treating an empty value as blue-green.
 func (m *RolloutMode) UnmarshalText(text []byte) error {
 	switch string(text) {
 	case "blue-green", "bluegreen", "":
@@ -61,7 +64,8 @@ func (k ArtifactKey) String() string {
 // MissingTenantRolloutKey stands in for an item carrying no usable tenant, so it still routes somewhere.
 const MissingTenantRolloutKey = "\x00missing-tenant\x00"
 
-// RolloutBucketCount is how many buckets RolloutBucket hashes into, and so the most groups any batch can split into.
+// RolloutBucketCount is how many buckets RolloutBucket hashes into, and so the most groups any batch
+// can split into.
 const RolloutBucketCount = 100
 
 // NormalizeRolloutKey turns a raw field value into a rollout key, falling back for anything unusable.
@@ -72,7 +76,8 @@ func NormalizeRolloutKey(value any) string {
 	return MissingTenantRolloutKey
 }
 
-// RolloutBucket hashes a rollout key into 1..RolloutBucketCount, which is what a canary percentage compares against.
+// RolloutBucket hashes a rollout key into 1..RolloutBucketCount, which is what a canary percentage
+// compares against.
 func RolloutBucket(key string) uint32 {
 	if key == "" {
 		key = MissingTenantRolloutKey
@@ -82,15 +87,18 @@ func RolloutBucket(key string) uint32 {
 	return h.Sum32()%RolloutBucketCount + 1
 }
 
-// RouteGroup is the positions routing to one side, named by the first key seen there since all of them route alike.
+// RouteGroup is the positions routing to one side, named by the first key seen there since all of
+// them route alike.
 type RouteGroup struct {
 	Key     string
 	Indexes []int
 }
 
-// RouteSides groups a batch's positions by the side a canary at this percentage takes them to, nil when one side takes all.
+// RouteSides groups a batch's positions by the side a canary at this percentage takes them to, nil
+// when one side takes all.
 func RouteSides(keys []string, canaryPct float64) []RouteGroup {
-	// Only a partial canary splits a batch: with no candidate, or a whole one that is elected primary, every key routes alike.
+	// Only a partial canary splits a batch: with no candidate, or a whole one that is elected primary,
+	// every key routes alike.
 	if canaryPct <= 0 || canaryPct >= RolloutBucketCount {
 		return nil
 	}

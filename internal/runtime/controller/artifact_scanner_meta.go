@@ -15,7 +15,8 @@ import (
 	"github.com/harishhary/blink/internal/helpers"
 	"github.com/harishhary/blink/internal/runtime"
 	"github.com/harishhary/blink/internal/runtime/plugin"
-	"github.com/harishhary/blink/internal/snapshot"
+	"github.com/harishhary/blink/internal/runtime/snapshot"
+	"github.com/harishhary/blink/internal/runtime/telemetry"
 )
 
 const (
@@ -50,9 +51,10 @@ type artifactScannerMeta[T plugin.Artifact] struct {
 	digests   map[string]fileIndex[string]
 	runCtx    context.Context
 	cancelRun context.CancelFunc
+	labels    telemetry.Labels
 }
 
-// fileIndex is something derived from a file — a parsed spec, or a binary's checksum — and
+// fileIndex is something derived from a file - a parsed spec, or a binary's checksum - and
 // the file identity it was derived from, so a poll only re-reads what changed.
 type fileIndex[T any] struct {
 	value   T
@@ -182,8 +184,14 @@ func (m *artifactScannerMeta[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (
 	return fmt.Errorf("artifact scanner meta: unsupported call %T", request), nil
 }
 
-// HandleInspect provides no custom scanner diagnostics.
-func (m *artifactScannerMeta[T]) HandleInspect(gen.PID, ...string) map[string]string { return nil }
+// HandleInspect exposes the scanner's file-index sizes
+func (m *artifactScannerMeta[T]) HandleInspect(gen.PID, ...string) map[string]string {
+	return map[string]string{
+		"scanner:directory": m.directory,
+		"scanner:parsed":    fmt.Sprintf("%d", len(m.parsed)),
+		"scanner:binaries":  fmt.Sprintf("%d", len(m.digests)),
+	}
+}
 
 // Terminate cancels active filesystem observation.
 func (m *artifactScannerMeta[T]) Terminate(error) {
@@ -198,14 +206,21 @@ func (m *artifactScannerMeta[T]) sendScan(watcher *fsnotify.Watcher) error {
 	if attachErr != nil && strings.Contains(attachErr.Error(), "exists") {
 		attachErr = nil
 	}
+	started := time.Now()
 	entries, ids, complete, err := m.scan()
+	m.labels.Observe(m, metricArtifactScanTime, time.Since(started).Seconds())
+	m.labels.Set(m, metricArtifactSpecs, float64(len(m.parsed)))
+	m.labels.Set(m, metricArtifactBinaries, float64(len(m.digests)))
+	if attachErr != nil {
+		m.labels.Count(m, metricArtifactScanFailures, "watch")
+	}
 	if err == nil && attachErr != nil {
 		err = fmt.Errorf("%w: directory %q: %w", runtime.ErrArtifactWatch, m.directory, attachErr)
 	}
 	if err != nil {
 		m.Log().Warning("artifact scan incomplete: directory=%q alias=%s error=%v", m.directory, m.ID(), err)
 	}
-	entries = cloneEntries(entries)
+	entries = snapshot.CloneEntries(entries)
 	if sendErr := m.Send(m.Parent(), MessageArtifactScanResult{
 		source:     m.ID(),
 		complete:   complete,
@@ -227,6 +242,7 @@ func (m *artifactScannerMeta[T]) sendScan(watcher *fsnotify.Watcher) error {
 func (m *artifactScannerMeta[T]) scan() ([]snapshot.EffectiveEntry, []string, bool, error) {
 	files, err := os.ReadDir(m.directory)
 	if err != nil {
+		m.labels.Count(m, metricArtifactScanFailures, "directory")
 		return nil, nil, false, fmt.Errorf("%w: directory %q: %w", runtime.ErrArtifactScan, m.directory, err)
 	}
 	seenParsed := make(map[string]struct{})
@@ -237,15 +253,13 @@ func (m *artifactScannerMeta[T]) scan() ([]snapshot.EffectiveEntry, []string, bo
 		}
 		name := file.Name()
 		path := filepath.Join(m.directory, name)
-		// Size and modification time identify a file well enough to skip re-reading it: a
-		// spec rewrite that preserves both keeps the last parsed generation, and a binary
-		// rewrite that preserves both stalls that rollout instead of deploying something
-		// unverified, because the plugin runtime re-checksums against the published digest
-		// before it launches.
+		// Size and modification time identify a file well enough to skip re-reading it; a binary
+		// rewrite preserving both stalls its rollout, since the runtime re-checksums the digest.
 		info, infoErr := file.Info()
 		if isYAML(name) {
 			seenParsed[path] = struct{}{}
 			if infoErr != nil {
+				m.labels.Count(m, metricArtifactScanFailures, "spec_stat")
 				m.Log().Debug("artifact spec stat failed: path=%q error=%v", path, infoErr)
 				continue
 			}
@@ -254,11 +268,13 @@ func (m *artifactScannerMeta[T]) scan() ([]snapshot.EffectiveEntry, []string, bo
 			}
 			data, readErr := os.ReadFile(path)
 			if readErr != nil {
+				m.labels.Count(m, metricArtifactScanFailures, "spec_read")
 				m.Log().Debug("artifact spec read failed: path=%q error=%v", path, readErr)
 				continue
 			}
 			item, parseErr := m.loader.ParseSpec(strings.TrimSuffix(name, filepath.Ext(name)), data)
 			if parseErr != nil {
+				m.labels.Count(m, metricArtifactScanFailures, "spec_parse")
 				m.Log().Debug("artifact spec parse failed: path=%q error=%v", path, parseErr)
 				continue
 			}
@@ -268,6 +284,7 @@ func (m *artifactScannerMeta[T]) scan() ([]snapshot.EffectiveEntry, []string, bo
 			continue
 		}
 		if infoErr != nil {
+			m.labels.Count(m, metricArtifactScanFailures, "binary_stat")
 			m.Log().Debug("artifact binary stat failed: path=%q error=%v", path, infoErr)
 			if _, known := m.digests[name]; known {
 				// Preserve a known digest only while metadata for a still-present
@@ -285,6 +302,7 @@ func (m *artifactScannerMeta[T]) scan() ([]snapshot.EffectiveEntry, []string, bo
 		}
 		digest, digestErr := helpers.BinaryChecksum(path)
 		if digestErr != nil {
+			m.labels.Count(m, metricArtifactScanFailures, "binary_checksum")
 			m.Log().Debug("artifact binary checksum failed: path=%q error=%v", path, digestErr)
 			continue
 		}

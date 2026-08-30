@@ -9,6 +9,8 @@ metadata:
 data:
   KAFKA_BROKERS:         {{ .Values.kafka.brokers | quote }}
   ENVIRONMENT:           {{ .Values.environment | quote }}
+  CONTROLLER_NODE_HOST:  {{ .Values.cluster.controllerNodeHost | quote }}
+  ETCD_ENDPOINTS:        {{ .Values.etcd.endpoints | quote }}
 
 ---
 apiVersion: v1
@@ -22,3 +24,6 @@ stringData:
   PRODUCT:        {{ .Values.auth.product | quote }}
   AUTH0_AUDIENCE: {{ .Values.auth.auth0Audience | quote }}
   AUTH0_ISSUER:   {{ .Values.auth.auth0Issuer | quote }}
+  CLUSTER_COOKIE: {{ .Values.cluster.cookie | quote }}
+  ETCD_USERNAME:  {{ .Values.etcd.username | quote }}
+  ETCD_PASSWORD:  {{ .Values.etcd.password | quote }}
