@@ -1,7 +1,7 @@
 kafka:
   brokers: blink-kafka-cluster-kafka-bootstrap.kafka:9092
 
-# Scaler capacity shared by every data-plane stage.
+# Scaler defaults for every data-plane stage.
 scalerDefaults:
   minReplicas: 1
   maxReplicas: 6

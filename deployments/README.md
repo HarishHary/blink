@@ -104,14 +104,15 @@ The Blink chart defaults to `localhost`, `latest`, and `image.pullPolicy: Never`
 | `rule-tuner`       | `stages.tuner`      | yes           | yes   |                                                                           |
 | `alert-enricher`   | `stages.enricher`   | yes           | yes   |                                                                           |
 | `alert-formatter`  | `stages.formatter`  | yes           | yes   |                                                                           |
-| `alert-dispatcher` | `stages.dispatcher` | yes           | yes   |                                                                           |
+| `alert-dispatcher` | `stages.dispatcher` | yes           | yes   | No `cmd/` binary builds this image yet.                                   |
 
-Each `workload` map carries `name`, `container`, `replicas`, `image`, `resources`, and `environment`. `plugins` and `radar` both default to `true`. Snake-case keys in `environment` render as uppercase environment variables, so a stage's topics, consumer group, DLQ, and plugin directory are all configured there.
+Each `workload` map carries `name`, `container`, `replicas`, `image`, `resources`, and `environment`. `plugins` and `radar` default to `true`, `observer` to `false`. Snake-case keys in `environment` render as uppercase environment variables, so a stage's topics, consumer group, DLQ, and plugin directory are all configured there.
 
-Two constraints the template enforces, failing the render rather than deploying something broken:
+Three constraints the template enforces, failing the render rather than deploying something broken:
 
 - the controller at any replica count other than 1, until publication leader election exists;
-- `controllerState` with no PVC and no `controllerState.existingClaim`.
+- `controllerState` with no PVC and no `controllerState.existingClaim`;
+- `observer: true` on a workload with `radar: false`, which runs no node to observe.
 
 Every workload running an Ergo node joins one cluster: `etcd.yaml` deploys a dedicated 3-member etcd for node discovery, and `cluster.cookie` authenticates node-to-node connections. Both are Blink's own, not shared infrastructure. This is the only path for snapshot distribution - no Kafka topic is involved.
 
@@ -141,6 +142,19 @@ curl -s localhost:9090/metrics | grep blink_controller_availability
 kubectl port-forward deployment/rule-executor 9090:9090 --namespace blink
 curl -s localhost:9090/metrics | grep blink_plugin_
 ```
+
+### Observer
+
+Ergo's observer UI inspects a live node's processes, supervision tree, and mailboxes. It is off everywhere by default; `observer: true` on one workload adds the port, Service entry, and `OBSERVER_*` variables. Setting `environment: dev` chart-wide enables it on every node instead, and adds MCP on 9922, but also drops every service to debug logging.
+
+```bash
+helm upgrade --install blink deployments/helm/blink --namespace blink -f deployments/helm/values.yaml \
+  --set global.stages.matcher.workload.observer=true
+kubectl port-forward deployment/event-matcher 9911:9911 --namespace blink
+open http://localhost:9911
+```
+
+Leave it off in shared clusters: the UI is unauthenticated and can send messages to live processes.
 
 ## Monitoring
 

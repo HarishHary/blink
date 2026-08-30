@@ -8,16 +8,14 @@ environment: prod
 kafka:
   brokers: "blink-kafka-cluster-kafka-bootstrap.kafka:9092"
 
-# Plugin volume mounted into every service pod.
-# Switch to pvc for production (shared ReadWriteMany PVC).
+# Plugin volume; swap hostPath for a ReadWriteMany PVC in production.
 plugins:
   volume:
     hostPath:
       path: /blink/plugins
       type: Directory
 
-# Durable controller generation and snapshot state. Leave existingClaim empty
-# to let this chart create a dedicated ReadWriteOnce claim.
+# Controller generation and snapshot state; empty existingClaim makes the chart create the claim.
 controllerState:
   mountPath: /var/lib/blink/controller
   existingClaim: ""
@@ -26,12 +24,7 @@ controllerState:
   size: 1Gi
   storageClassName: ""
 
-# Capacity shared by every workload, including the controller.
-# Every plugin-hosting service runs its plugins as subprocesses, so the CPU limit is not
-# only a throttle: Go derives GOMAXPROCS from it, and the runtime sizes its plugin process
-# budget from GOMAXPROCS, so a 500m limit caps plugin scale-up at two extra processes however
-# many matchers are deployed. Raise a single stage's resources in deployments/helm/values.yaml
-# when one of them needs more than this.
+# Defaults for every workload. The CPU limit sets GOMAXPROCS, which sizes the plugin process budget: 500m caps scale-up at two extra processes. Override per stage in deployments/helm/values.yaml.
 workloadDefaults:
   replicas: 1
   terminationGracePeriodSeconds: 30
@@ -43,31 +36,70 @@ workloadDefaults:
       cpu: "2"
       memory: "1Gi"
 
-# ---------------------------------------------------------------------------
-# Auth Secret - override in production via --set or external secret manager.
-# ---------------------------------------------------------------------------
+# Auth secret; override in production via --set or an external secret manager.
 auth:
   product: "blink"
   auth0Audience: "https://api.example.com"
   auth0Issuer: "https://example.auth0.com/"
 
-# ---------------------------------------------------------------------------
-# Native Ergo cluster networking (controller <-> executors) - the only snapshot distribution
-# path; every workload joins the cluster. cookie is sensitive - override in production via
-# --set or an external secret manager.
-# ---------------------------------------------------------------------------
+# Ergo cluster networking, the only snapshot distribution path; every workload running a node joins it.
 cluster:
+  # Sensitive; override in production via --set or an external secret manager.
   cookie: ""
-  # controllerNodeHost is the controller's cluster-reachable node host - its own Service name.
+  # The controller's cluster-reachable node host: its own Service name.
   controllerNodeHost: "blink-controller"
-  # port is the Ergo cluster acceptor port (internal/runtime/plugin.Start pins this exact port,
-  # not a range). Only the controller's Service needs it: it's the only workload other nodes
-  # reach by a stable name rather than dialing a pod IP directly.
+  # Cluster acceptor port, pinned not scanned. Only the controller's Service exposes it - the one node others reach by name.
   port: 11144
 
-# etcd is the production registrar for cluster node discovery - a dedicated 3-member cluster
-# for Blink's exclusive use, not a shared etcd. username/password are sensitive - override in
-# production via --set or an external secret manager.
+# Radar: each Ergo node's /metrics and per-namespace /health/ready. Scraped only - probes stay on 8080 so one degraded namespace cannot pull a pod out of its Service.
+radar:
+  port: 9090
+
+# Ergo's observer UI, per workload via `observer: true`. Off by default; ENVIRONMENT=dev enables it regardless, and adds MCP on 9922.
+observer:
+  port: 9911
+
+# Grafana and the Prometheus feeding it. Targets come from the pod annotations workloads.yaml sets, so nothing is listed here. For an existing Prometheus: prometheus.enabled=false plus grafana.datasourceURL.
+monitoring:
+  enabled: true
+  prometheus:
+    enabled: true
+    image: "prom/prometheus:v2.53.3"
+    port: 9090
+    scrapeInterval: 15s
+    retention: 24h
+    # Off by default: this Prometheus is for looking at a live deployment, not long-term storage.
+    persistence:
+      enabled: false
+      size: 10Gi
+      storageClassName: ""
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "512Mi"
+      limits:
+        cpu: "1"
+        memory: "2Gi"
+  grafana:
+    enabled: true
+    image: "grafana/grafana:11.6.0"
+    adminUser: admin
+    adminPassword: admin
+    anonymous: false
+    datasourceURL: ""
+    service:
+      type: ClusterIP
+      port: 3000
+      nodePort: null
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+
+# Cluster node-discovery registrar: a dedicated 3-member etcd for Blink's exclusive use, not a shared one.
 etcd:
   image: "quay.io/coreos/etcd:v3.5.17"
   replicas: 3

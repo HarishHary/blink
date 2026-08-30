@@ -1,7 +1,4 @@
-{{/*
-Dedicated 3-member etcd cluster for Blink's own Ergo cluster node discovery (see
-docs/internals/controller-runtime.md). Not a shared etcd - every workload requires it.
-*/}}
+{{/* Dedicated 3-member etcd for Blink's own cluster node discovery; every node-running workload needs it. */}}
 {{- $ns := .Release.Namespace }}
 {{- $replicas := .Values.etcd.replicas | default 3 }}
 {{- $initialCluster := list }}

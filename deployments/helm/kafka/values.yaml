@@ -8,7 +8,7 @@ kafka:
     storage:
       size: 100Gi
 
-# Topic capacity shared by every data-plane stage.
+# Topic defaults for every data-plane stage.
 topicDefaults:
   primary:
     partitions: 6

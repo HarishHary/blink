@@ -1,23 +1,23 @@
-# Shared topology for all independent Blink Helm charts.
-# Stage entry template (omit scaler to disable autoscaling):
+# Shared topology for all three Blink charts. Stage entry template; omit scaler to disable autoscaling.
 # <stage-name>:
 #   workload:
 #     name: <deployment-name>
 #     container: <binary-name>          # defaults to name
-#     plugins: true                     # set false to omit the plugin volume
+#     plugins: true                     # false omits the plugin volume
+#     radar: true                       # false when the binary runs no Ergo node
+#     observer: false                   # true adds Ergo's observer UI; needs radar
 #     replicas: 2
-#     resources:                        # defaults in the chart; the CPU limit also sets
-#       requests:                       # GOMAXPROCS, and with it the plugin process budget
+#     resources:                        # chart defaults; the CPU limit also sets GOMAXPROCS
+#       requests:
 #         cpu: "250m"
 #         memory: "256Mi"
 #       limits:
 #         cpu: "2"
 #         memory: "1Gi"
-#     environment:                     # snake_case keys render uppercase
+#     environment:                      # snake_case keys render uppercase: app_setting -> APP_SETTING
 #       kafka_topic_<stage>: <input-topic>
 #       kafka_group_<stage>: <consumer-group>
 #       <type>_plugin_dir: /plugins/example
-#       app_setting: "value"           # renders APP_SETTING=value
 #   scaler:
 #     minReplicas: 1
 #     maxReplicas: 6
@@ -35,7 +35,7 @@
 #       config:
 #         retention.ms: "86400000"
 global:
-  # The controller is not a pipeline stage, but uses the same workload settings.
+  # Not a pipeline stage, but takes the same workload settings.
   controller:
     workload:
       name: blink-controller
@@ -93,8 +93,10 @@ global:
         name: alert-merger
         container: alert-merger
         plugins: false
+        # Runs no Ergo node, so there is no radar endpoint to scrape.
+        radar: false
         terminationGracePeriodSeconds: 40
-        # alert_merger groups related alerts; replicas must not exceed topic partitions.
+        # Groups related alerts, so replicas must not exceed topic partitions.
         replicas: 1
         environment:
           kafka_topic_merger: alert-merger-topic

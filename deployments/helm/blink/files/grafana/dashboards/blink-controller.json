@@ -1,0 +1,540 @@
+{
+  "uid": "blink-controller",
+  "title": "Blink Controller",
+  "description": "Control-plane state per controller namespace: readiness, snapshot commits, worker I/O, and the supervisor and application layers that outlive a controller actor.",
+  "tags": ["blink", "controller"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 2,
+  "editable": true,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "namespace",
+        "label": "Controller namespace",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+        "query": "label_values(blink_controller_availability, namespace)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Availability",
+      "description": "A namespace is ready only with a complete artifact scan and a loaded, ready writer.",
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "blink_controller_availability{namespace=~\"$namespace\"}",
+          "legendFormat": "{{namespace}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": { "text": "unavailable", "index": 0 },
+                "1": { "text": "degraded", "index": 1 },
+                "2": { "text": "ready", "index": 2 }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "green", "value": 2 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Supervisor lifecycle",
+      "description": "Published by the supervisor, which stays up while its actor restarts underneath it.",
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "blink_controller_supervisor_lifecycle{namespace=~\"$namespace\"}",
+          "legendFormat": "{{namespace}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": { "text": "starting", "index": 0 },
+                "1": { "text": "running", "index": 1 },
+                "2": { "text": "draining", "index": 2 },
+                "3": { "text": "stopping", "index": 3 }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "orange", "value": null },
+              { "color": "green", "value": 1 },
+              { "color": "orange", "value": 2 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Application loaded",
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "blink_controller_application_state{namespace=~\"$namespace\"}",
+          "legendFormat": "{{namespace}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": { "text": "stopped", "index": 0 },
+                "1": { "text": "loaded", "index": 1 }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Committed generation",
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "blink_controller_generation{namespace=~\"$namespace\"}",
+          "legendFormat": "{{namespace}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 1, "fillOpacity": 0, "showPoints": "never" } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Records and subscribers",
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "blink_controller_records{namespace=~\"$namespace\"}",
+          "legendFormat": "{{namespace}} records"
+        },
+        {
+          "refId": "B",
+          "expr": "blink_controller_subscribers{namespace=~\"$namespace\"}",
+          "legendFormat": "{{namespace}} subscribers"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Executors reporting vs drifting",
+      "description": "Drifting counts executors behind the committed generation past the drift grace.",
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "blink_controller_executors{namespace=~\"$namespace\"}",
+          "legendFormat": "{{namespace}} converged"
+        },
+        {
+          "refId": "B",
+          "expr": "blink_controller_executors_drifting{namespace=~\"$namespace\"}",
+          "legendFormat": "{{namespace}} drifting"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" } },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": ".*drifting.*" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Snapshot commits and write results",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 13 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (namespace) (rate(blink_controller_snapshot_commits_total{namespace=~\"$namespace\"}[5m]))",
+          "legendFormat": "{{namespace}} commits"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (namespace, result) (rate(blink_controller_snapshot_writes_total{namespace=~\"$namespace\"}[5m]))",
+          "legendFormat": "{{namespace}} writes {{result}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Snapshot write latency",
+      "description": "Dispatch of a write to its result, as the controller actor sees it.",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 13 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (namespace, le) (rate(blink_controller_snapshot_write_seconds_bucket{namespace=~\"$namespace\"}[5m])))",
+          "legendFormat": "{{namespace}} p95"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.5, sum by (namespace, le) (rate(blink_controller_snapshot_write_seconds_bucket{namespace=~\"$namespace\"}[5m])))",
+          "legendFormat": "{{namespace}} p50"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "lineWidth": 1, "fillOpacity": 0, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Writer queue and rejects",
+      "description": "The writer queue holds one job; a reject means the actor dispatched while a write was still in flight.",
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "blink_controller_snapshot_write_queue{namespace=~\"$namespace\"}",
+          "legendFormat": "{{namespace}} queued"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (namespace) (rate(blink_controller_snapshot_write_rejects_total{namespace=~\"$namespace\"}[5m]))",
+          "legendFormat": "{{namespace}} rejects/s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Writer database attempts",
+      "description": "Individual attempts including retries, so an error rate above the write rate means backoff is active.",
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (namespace, result) (rate(blink_controller_snapshot_write_attempts_total{namespace=~\"$namespace\"}[5m]))",
+          "legendFormat": "{{namespace}} {{result}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Writer startup loads",
+      "description": "One load per writer meta start; an error here is what leaves a namespace degraded after a restart.",
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (namespace, result) (increase(blink_controller_snapshot_loads_total{namespace=~\"$namespace\"}[1h]))",
+          "legendFormat": "{{namespace}} {{result}}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (namespace, le) (rate(blink_controller_snapshot_load_seconds_bucket{namespace=~\"$namespace\"}[1h])))",
+          "legendFormat": "{{namespace}} p95 seconds"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Artifact scans",
+      "description": "Scan outcomes and how long one takes; a scan that never completes is what holds a namespace unavailable.",
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 27 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (namespace, result) (rate(blink_controller_artifact_scans_total{namespace=~\"$namespace\"}[5m]))",
+          "legendFormat": "{{namespace}} {{result}}/s"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (namespace, le) (rate(blink_controller_artifact_scan_seconds_bucket{namespace=~\"$namespace\"}[5m])))",
+          "legendFormat": "{{namespace}} p95 seconds"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 1, "fillOpacity": 0, "showPoints": "never" } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Artifact files not indexed, by stage",
+      "description": "A parse or checksum failure keeps the last good entry, so this is the only signal that an authored file is being ignored.",
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 27 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (namespace, stage) (rate(blink_controller_artifact_scan_failures_total{namespace=~\"$namespace\"}[5m]))",
+          "legendFormat": "{{namespace}} {{stage}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Artifact index size",
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 27 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "blink_controller_artifact_specs{namespace=~\"$namespace\"}",
+          "legendFormat": "{{namespace}} specs"
+        },
+        {
+          "refId": "B",
+          "expr": "blink_controller_artifact_binaries{namespace=~\"$namespace\"}",
+          "legendFormat": "{{namespace}} binaries"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Actor and worker churn",
+      "description": "Writer I/O fences are what a drain waits on; child terminations and worker restarts are the churn underneath a live supervisor.",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 34 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "blink_controller_writer_fences{namespace=~\"$namespace\"}",
+          "legendFormat": "{{namespace}} fences"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (namespace) (increase(blink_controller_child_starts_total{namespace=~\"$namespace\"}[1h]))",
+          "legendFormat": "{{namespace}} child starts"
+        },
+        {
+          "refId": "C",
+          "expr": "sum by (namespace, reason) (increase(blink_controller_child_terminations_total{namespace=~\"$namespace\"}[1h]))",
+          "legendFormat": "{{namespace}} child {{reason}}"
+        },
+        {
+          "refId": "D",
+          "expr": "sum by (namespace, worker) (increase(blink_controller_worker_restarts_total{namespace=~\"$namespace\"}[1h]))",
+          "legendFormat": "{{namespace}} {{worker}} restarts"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "Application lifecycle events",
+      "description": "One load per runner attempt: repeated loads mean the service is being retried.",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 34 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (namespace, result) (increase(blink_controller_application_loads_total{namespace=~\"$namespace\"}[1h]))",
+          "legendFormat": "{{namespace}} load {{result}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (namespace, reason) (increase(blink_controller_application_terminations_total{namespace=~\"$namespace\"}[1h]))",
+          "legendFormat": "{{namespace}} terminate {{reason}}"
+        },
+        {
+          "refId": "C",
+          "expr": "sum by (namespace, result) (increase(blink_controller_application_closes_total{namespace=~\"$namespace\"}[1h]))",
+          "legendFormat": "{{namespace}} close {{result}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    }
+  ]
+}
