@@ -4,8 +4,10 @@
 #     name: <deployment-name>
 #     container: <binary-name>          # defaults to name
 #     plugins: true                     # false omits the plugin volume
-#     radar: true                       # false when the binary runs no Ergo node
-#     observer: false                   # true adds Ergo's observer UI; needs radar
+#     node: true                        # false when the binary runs no Ergo node; forbids the three below
+#     radar: true                       # metrics and per-namespace readiness
+#     observer: false                   # Ergo's process-inspection UI, unauthenticated
+#     mcp: false                        # Ergo's MCP server, unauthenticated
 #     replicas: 2
 #     resources:                        # chart defaults; the CPU limit also sets GOMAXPROCS
 #       requests:
@@ -93,7 +95,8 @@ global:
         name: alert-merger
         container: alert-merger
         plugins: false
-        # Runs no Ergo node, so there is no radar endpoint to scrape.
+        # Runs no Ergo node, so it serves none of the node endpoints.
+        node: false
         radar: false
         terminationGracePeriodSeconds: 40
         # Groups related alerts, so replicas must not exceed topic partitions.
