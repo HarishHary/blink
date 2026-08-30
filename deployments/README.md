@@ -1,7 +1,8 @@
-# Blink Kubernetes Deployment
+# Blink Kubernetes deployment
 
-This runbook documents the deployed `controller` and `event-matcher` runtime. The Helm templates are generic: `deployments/helm/blink/templates/workloads.yaml` renders the controller and every key in
-`global.stages`. This page makes no runtime claim for stage entries outside the controller and matcher configuration.
+[Services](../docs/services/README.md) · [Runtime overview](../docs/internals/README.md)
+
+Runbook for installing and operating Blink on Kubernetes: prerequisites, the Helm values contract, and the commands to verify and repair a running deployment. Runtime behavior belongs to the service docs.
 
 ## Local prerequisites
 
@@ -90,39 +91,33 @@ helm upgrade --install blink-keda deployments/helm/keda --namespace blink -f dep
 
 The Blink chart defaults to `localhost`, `latest`, and `image.pullPolicy: Never`. Override image settings for a registry-backed cluster.
 
-## Controller and matcher topology
+## Workload topology
 
-`global.controller.workload` configures `blink-controller`; it is constrained by the template to exactly one replica and mounts controller state at `/var/lib/blink/controller`. Its environment
-supplies five plugin directories.
+`workloads.yaml` renders one Deployment per `global.stages` key plus `global.controller`, all from the same template. Adding a stage adds a workload; no template edit.
 
-Every workload joins a native Ergo cluster to reach the controller - `deployments/helm/blink/templates/etcd.yaml` deploys a dedicated 3-member etcd cluster for node discovery, and `cluster.cookie` (in `deployments/helm/blink/values.yaml`, sensitive - override per environment) authenticates connections between nodes. This is the only path for snapshot distribution; the Kafka snapshot topics and compacted-topic reader/publisher this replaced are gone (see `docs/internals/controller-runtime.md`).
+| Workload           | Values key          | Plugin volume | Radar | Notes                                                                     |
+| ------------------ | ------------------- | ------------- | ----- | ------------------------------------------------------------------------- |
+| `blink-controller` | `global.controller` | yes           | yes   | One replica only; mounts controller state at `/var/lib/blink/controller`. |
+| `event-matcher`    | `stages.matcher`    | yes           | yes   |                                                                           |
+| `rule-executor`    | `stages.executor`   | yes           | yes   |                                                                           |
+| `alert-merger`     | `stages.merger`     | no            | no    | Runs no Ergo node, so both are set `false`.                               |
+| `rule-tuner`       | `stages.tuner`      | yes           | yes   |                                                                           |
+| `alert-enricher`   | `stages.enricher`   | yes           | yes   |                                                                           |
+| `alert-formatter`  | `stages.formatter`  | yes           | yes   |                                                                           |
+| `alert-dispatcher` | `stages.dispatcher` | yes           | yes   |                                                                           |
 
-`global.stages.matcher.workload` configures `event-matcher`. Its input, consumer group, executor output, DLQ, plugin directory, and matcher retry settings are all in
-its `environment` map. Snake-case keys in that map render as uppercase environment variables.
+Each `workload` map carries `name`, `container`, `replicas`, `image`, `resources`, and `environment`. `plugins` and `radar` both default to `true`. Snake-case keys in `environment` render as uppercase environment variables, so a stage's topics, consumer group, DLQ, and plugin directory are all configured there.
 
-```mermaid
-flowchart LR
-    files[Mounted plugin directories] --> controller[blink-controller]
-    controller -->|SnapshotUpdate, Ergo cluster| runtime[event-matcher plugin runtime]
-    controller -->|SnapshotUpdate, Ergo cluster| catalog[event-matcher rule projection]
-    raw[event-matcher topic] --> matcher[event-matcher]
-    runtime --> matcher
-    catalog --> matcher
-    matcher --> output[rule-executor topic]
-    matcher -. terminal failure .-> dlq[event-matcher DLQ topic]
-```
+Two constraints the template enforces, failing the render rather than deploying something broken:
 
-| Message                         | Direction                                                                  | Meaning                                                                     |
-| -------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| Mounted plugin directories       | Plugin volume → `blink-controller`                                         | The controller's `artifact_scanner` reads catalog artifacts.                |
-| `SubscribeRequest`/`SnapshotUpdate` | `blink-controller` ↔ event-matcher plugin runtime and rule projection (Ergo cluster) | Pushes committed catalog entries directly to every subscriber - no Kafka topic in this path. |
-| Raw JSON events                  | `event-matcher` topic → `event-matcher`                                    | Supplies events for matching.                                               |
-| Committed matcher and rule projections | Plugin runtime and rule projection → `event-matcher`                 | Supplies the current matching state.                                        |
-| Protobuf `execpb.ExecMessage` records | `event-matcher` → `rule-executor` topic                               | Emits eligible rule executions.                                             |
-| DLQ envelope                     | `event-matcher` → `event-matcher` DLQ topic                                | Records a terminal failure.                                                 |
+- the controller at any replica count other than 1, until publication leader election exists;
+- `controllerState` with no PVC and no `controllerState.existingClaim`.
 
-The controller and matcher mount the configured plugin volume. Local values use the host path `/blink/plugins`; a production deployment can use `plugins.volume.persistentVolumeClaim`. The controller
-needs the rules, matchers, tuning-rules, formatters, and enrichments directories; the matcher needs the matchers directory.
+Every workload running an Ergo node joins one cluster: `etcd.yaml` deploys a dedicated 3-member etcd for node discovery, and `cluster.cookie` authenticates node-to-node connections. Both are Blink's own, not shared infrastructure. This is the only path for snapshot distribution - no Kafka topic is involved.
+
+The plugin volume is the host path `/blink/plugins` locally, or `plugins.volume.persistentVolumeClaim`. The controller needs all five catalog directories; each executor needs only its own.
+
+What actually flows between these workloads at runtime is in [services](../docs/services/README.md) and [message flow](../docs/internals/message-flow.md).
 
 ## Verify
 
@@ -133,8 +128,52 @@ kubectl get scaledobjects -n blink
 kubectl rollout status deployment/event-matcher --namespace blink --timeout=120s
 ```
 
-Both workloads serve `/health/live`, `/health/ready`, and `/metrics` on port 8080. Event matcher becomes ready after its matcher runtime and rule projection are ready; startup additionally waits
-for non-empty primary matcher and rule catalogs before it begins consuming events.
+Every workload serves `/health/live`, `/health/ready`, and `/metrics` on port 8080. Readiness is per service - see [services](../docs/services/README.md); `event-matcher` for instance waits on both projections before it consumes.
+
+Every workload that runs an Ergo node additionally serves radar on port 9090 (`radar.port`, `RADAR_HOST`/`RADAR_PORT`): `/metrics` for its per-namespace control-plane series and `/health/ready`,
+which reports 503 while any namespace on that node is not ready. Alert merger runs no node and sets `radar: false`, so it has neither the port nor the scrape annotation. The kubelet probes stay on 8080 on purpose - the controller Service is how executors resolve the Ergo cluster port, so a degraded namespace must not remove the pod from it.
+
+```bash
+kubectl port-forward deployment/blink-controller 9090:9090 --namespace blink
+curl -s localhost:9090/health/ready | jq .
+curl -s localhost:9090/metrics | grep blink_controller_availability
+
+kubectl port-forward deployment/rule-executor 9090:9090 --namespace blink
+curl -s localhost:9090/metrics | grep blink_plugin_
+```
+
+## Monitoring
+
+`deployments/helm/blink/templates/monitoring.yaml` installs Grafana and the Prometheus that feeds it as part of the Blink chart, like etcd. Prometheus discovers pods by annotation, so no target lists need maintaining: every workload is scraped on 8080 (runner restarts, Go and process metrics) and every pod carrying the `blink.io/radar-port` annotation is scraped a second time on its radar port (every `blink_controller_*`, `blink_plugin_*`, and `blink_snapshot_*` series).
+Grafana provisions the datasource and three dashboards from `deployments/helm/blink/files/grafana/dashboards/`, so a fresh install already has them in the `Blink` folder: **Blink Controller**, **Blink Plugin Runtime**, and **Blink Snapshot Runtime**. Between them they panel every `blink_*` series the runtime publishes.
+
+```bash
+kubectl port-forward deployment/blink-grafana 3000:3000 --namespace blink
+open http://localhost:3000   # admin/admin by default; --set monitoring.grafana.adminPassword=...
+```
+
+Each dashboard is grouped the same way - availability and lifecycle state first, then the flow, then the layer detail behind a degraded namespace - and each is filtered by its own namespace variable.
+
+- **Blink Controller** - commit flow, then writer queue and database attempts, artifact files the scanner could not index by stage, writer I/O fences, controller-actor terminations by reason, and
+  application load/close outcomes per runner attempt.
+- **Blink Plugin Runtime** - the rollout transition and the revisions and generations behind it, then routers and plugin processes, invocation rate and latency, every way a call is rejected before a
+  plugin sees it, and the router, process, and child churn under a live supervisor.
+- **Blink Snapshot Runtime** - reader, projection, and reported availability, then delivered vs serving generations and the lag the controller reads as drift, subscription attempts and controller
+  losses, ignored updates by reason, parse results and latency, and external commit outcomes.
+
+```bash
+# Confirm both scrape jobs are up before blaming an empty panel.
+kubectl port-forward deployment/blink-prometheus 9091:9090 --namespace blink
+curl -s localhost:9091/api/v1/targets | jq '.data.activeTargets[] | {job: .labels.job, pod: .labels.pod, health}'
+```
+
+| Value                                                                               | Effect                                                                                                                                         |
+| ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `monitoring.enabled=false`                                                          | Installs neither. The pod annotations stay, so an existing cluster Prometheus still finds them.                                                |
+| `monitoring.prometheus.enabled=false` with `monitoring.grafana.datasourceURL=<url>` | Grafana and the dashboard only, pointed at a Prometheus you already run.                                                                       |
+| `monitoring.prometheus.persistence.enabled=true`                                    | Keeps metric history across pod restarts; off by default, since this Prometheus is for looking at a running deployment, not long-term storage. |
+| `monitoring.grafana.service.type=NodePort` with `nodePort`                          | Reaches Grafana without a port-forward on Minikube.                                                                                            |
+| `monitoring.grafana.anonymous=true`                                                 | Unauthenticated Viewer access - convenient locally, not for a shared cluster.                                                                  |
 
 ## Operational commands
 
@@ -166,6 +205,7 @@ kubectl rollout status deployment/event-matcher -n blink --timeout=60s
 
 Produce newline-delimited JSON directly into a topic. `kafka-console-producer.sh` runs inside the
 broker pod, so copy the file in first if it's larger than the broker's `/tmp` (often a few MB tmpfs
+
 - copy to `/home/kafka` instead for anything sizable):
 
 ```bash
@@ -207,9 +247,11 @@ kubectl rollout restart deployment/event-matcher --namespace blink
 kubectl rollout status deployment/event-matcher --namespace blink --timeout=60s
 ```
 
-## References
+## Documents
 
-- [Service index](../docs/services/README.md)
+- [Services index](../docs/services/README.md)
 - [Controller](../docs/services/controller.md)
 - [Event matcher](../docs/services/event_matcher.md)
 - [Runtime overview](../docs/internals/README.md)
+- [Message flow](../docs/internals/message-flow.md)
+- [Concurrency knobs](../docs/internals/concurrency-knobs.md)
