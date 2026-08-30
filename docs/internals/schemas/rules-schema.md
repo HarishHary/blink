@@ -1,6 +1,8 @@
 # Rule sidecar schema
 
-A rule binary `<name>` ships alongside `<name>.yaml`. It embeds the [common fields](README.md#common-fields-every-plugin-type) and adds the fields below (`pkg/rules.RuleMetadata`).
+[Schemas index](README.md) · [Plugin runtime](../plugin-runtime.md) · [Concurrency knobs](../concurrency-knobs.md)
+
+A rule binary `<name>` ships alongside `<name>.yaml`. The sidecar embeds the [common fields](README.md#common-fields-every-plugin-type) and adds the fields below (`pkg/rules.RuleMetadata`).
 
 ## Rule-specific fields
 

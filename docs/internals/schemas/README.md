@@ -1,8 +1,10 @@
 # Plugin YAML sidecar schemas
 
-Every plugin binary `<name>` ships alongside a `<name>.yaml` **sidecar** that declares its identity, rollout mode, and type-specific configuration. The controller's artifact_scanner meta process parses these into the snapshot; see [Controller runtime](../controller-runtime.md#artifact-scanner-meta).
+[Internals index](../README.md) · [Controller runtime](../controller-runtime.md) · [Plugin runtime](../plugin-runtime.md)
 
-> **The plugin `name` is the sidecar filename stem, not a YAML field.** 
+Every plugin binary `<name>` ships alongside a `<name>.yaml` **sidecar**. The sidecar declares the plugin's identity, rollout mode, and type-specific configuration. The controller's artifact_scanner meta process parses these into the snapshot; see [Controller runtime](../controller-runtime.md#artifact-scanner-meta).
+
+> **The plugin `name` is the sidecar filename stem, not a YAML field.**
 > `Name` is derived from the file at load time (`plugin.Spec.Name` is `yaml:"-"`), so a `name:` (or `file_name:`) key in the YAML is **ignored**. Rename the file to rename the plugin.
 
 ## Common fields (every plugin type)
@@ -19,14 +21,20 @@ These come from `plugin.Spec`, embedded (`yaml:",inline"`) in every type's metad
 | `mode`              | string        | Rollout mode: `blue-green` (default), `canary`, or `shadow`.                             |
 | `rollout_pct`       | number        | Canary traffic percentage; used only when `mode: canary`.                                |
 | `min_procs`         | int           | Subprocesses started before the first call and never shrunk past. Defaults to `0`.       |
-| `max_procs`         | int           | Maximum plugin subprocesses for the actor deployment manager, `<= 100`. Defaults to `1`.  |
+| `max_procs`         | int           | Maximum plugin subprocesses for the actor deployment manager, `<= 100`. Defaults to `1`. |
 | `calls_per_process` | int           | Invocations one of those subprocesses may serve at once, `<= 64`. Defaults to `32`.      |
 
-`min_procs` is a reservation, not a target. Those processes start before any call arrives and are drawn outside the shared process budget, so 50 plugins at `min_procs: 4` is 200 subprocesses whatever the budget says. Leave it at `0` unless the first call's cold start matters - at `0` a route still gets one process once a call queues.
+`min_procs` is a reservation, not a target. Those processes start before any call arrives and sit outside the shared process budget, so 50 plugins at `min_procs: 4` is 200 subprocesses whatever the budget says.
 
-`max_procs` shards a batch across subprocesses. That splits the batch into more calls without reducing its work, so extra processes pay only when the plugin's own per-event CPU dominates per-call overhead and cores are free to run them.
+Leave `min_procs` at `0` unless the first call's cold start matters. At `0` a route still gets one process once a call queues.
 
-`calls_per_process` is the cheaper form of the same concurrency: a second call in a subprocess costs a goroutine and a gRPC stream, not another OS process. It is also the one that needs something from you. **Your plugin must be concurrency-safe.** The plugin server holds one plugin object per subprocess and gRPC gives every RPC its own goroutine, so at the default `32` thirty-two calls run through that one object at once. Any state shared between them - maps, cursors, open files, HTTP or database clients not safe for concurrent use - is a race. The runtime cannot check it. A plugin that is not safe sets `calls_per_process: 1` and serializes.
+`max_procs` shards a batch across subprocesses. That splits the batch into more calls without reducing its work, so extra processes pay off only when the plugin's per-event CPU dominates per-call overhead and cores are free to run them.
+
+`calls_per_process` is the cheaper form of the same concurrency. A second call in a subprocess costs a goroutine and a gRPC stream, not another OS process.
+
+> **Your plugin must be concurrency-safe.** The plugin server holds one plugin object per subprocess, and gRPC gives every RPC its own goroutine. At the default `32`, thirty-two calls run through that one object at once.
+>
+> Any state shared between them is a race: maps, cursors, open files, HTTP or database clients not safe for concurrent use. The runtime cannot check this for you. A plugin that is not safe sets `calls_per_process: 1` and serializes.
 
 Rollout modes, deployment routes, and plugin processes: [Plugin runtime](../plugin-runtime.md#deployment-route). What each value costs: [Concurrency knobs](../concurrency-knobs.md).
 
