@@ -102,6 +102,29 @@ Admission knobs:
 
 See [plugin-runtime.md](../internals/plugin-runtime.md#invocation) and [concurrency-knobs.md](../internals/concurrency-knobs.md).
 
+### Metrics
+
+Two registries. The health server serves the default Go registry; radar serves its own.
+
+| Family                  | Endpoint         | Series                                                         |
+| ----------------------- | ---------------- | -------------------------------------------------------------- |
+| `blink_event_matcher_*` | `:8080/metrics`  | below                                                          |
+| `blink_runner_*`        | `:8080/metrics`  | [shared metrics](README.md#shared-metrics)                     |
+| `blink_plugin_*`        | radar `/metrics` | [plugin runtime](../internals/plugin-runtime.md#telemetry)     |
+| `blink_snapshot_*`      | radar `/metrics` | [snapshot runtime](../internals/snapshot-runtime.md#telemetry) |
+
+The radar series carry a `namespace` label: `matcher` for the plugin runtime and its own catalog projection, `rule` for the standalone rule projection. The `:8080` series carry no `namespace`.
+
+| Metric                                                | Meaning                                                                                 |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `blink_event_matcher_events_in_total`                 | Records that decoded into an event; decode failures excluded.                           |
+| `blink_event_matcher_events_forwarded_total`          | Records written to the output topic; DLQ writes excluded.                               |
+| `blink_event_matcher_read_errors_total`               | Failed group fetches; context cancellation excluded.                                    |
+| `blink_event_matcher_parse_errors_total`              | Input decode or output encode failure. Both DLQ the record rather than failing a batch. |
+| `blink_event_matcher_write_errors_total`              | Failed `WriteMessages` calls, counted per attempt, so retries add.                      |
+| `blink_event_matcher_match_duration_seconds{matcher}` | One matcher call, bounded by `MATCHER_TIMEOUT_SEC`; observed even when the call fails.  |
+| `blink_event_matcher_rules_routed_per_event`          | Eligible rules per event. A zero observation is an event dropped with no rule.          |
+
 ## Kafka batch contract
 
 The group reader fetches up to `MAX_BATCH_SIZE` (default 50) from `KAFKA_TOPIC_MATCHER` using `KAFKA_GROUP_MATCHER`. Each batch snapshots matcher and rule state once. Positions are processed independently, but non-drop records are published serially in fetched order. Offsets commit only after every record is terminal and every required write is acknowledged. Writes are synchronous, so delivery is at least once.

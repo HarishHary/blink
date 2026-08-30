@@ -69,7 +69,7 @@ stateDiagram-v2
 | `gen.Node.ApplicationUnload`                    | service → Ergo node   | Unloads the cleaned application.                              |
 | `gen.Node.ApplicationStopForce`                 | service → Ergo node   | Forces termination after the 45-second graceful-stop timeout. |
 
-A failed application returns to `services.Runner`, which retries with exponential delays from 1 s to 60 s plus up to 25% jitter, indefinitely while the process context lives. Metrics: `blink_runner_service_restarts_total`, `blink_runner_service_restart_delay_seconds`.
+A failed application returns to `services.Runner`, which retries with exponential delays from 1 s to 60 s plus up to 25% jitter, indefinitely while the process context lives. Restarts are counted by `blink_runner_*` ([shared metrics](README.md#shared-metrics)), labelled per controller service.
 
 ## Health and readiness
 
@@ -94,7 +94,12 @@ Actor availability is internal; the probes never gate on it. An active actor rep
 
 ### Metrics
 
-Every series carries a `namespace` label; radar adds a `node` label from the node name.
+| Family               | Endpoint         | Series                                     |
+| -------------------- | ---------------- | ------------------------------------------ |
+| `blink_runner_*`     | `:8080/metrics`  | [shared metrics](README.md#shared-metrics) |
+| `blink_controller_*` | radar `/metrics` | below                                      |
+
+Every `blink_controller_*` series carries a `namespace` label; radar adds a `node` label from the node name.
 
 | Metric                                                                                                                                                                                                   | Published by          | Meaning                                                                                                                                                                              |
 | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
