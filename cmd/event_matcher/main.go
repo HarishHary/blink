@@ -3,9 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
-	"slog"
 	"syscall"
 	"time"
 
@@ -63,7 +63,8 @@ func main() {
 
 	var cfg config
 	if err := services.LoadFromEnvironment(&cfg); err != nil {
-		slog.Fatalf("load config: %v", err)
+		slog.Error("load config", "error", err)
+		os.Exit(1)
 	}
 	cfg.Broker = brokers.NewKafkaBroker(cfg.Kafka)
 	rootLogger := logger.New("event-matcher", cfg.Debug)
@@ -108,11 +109,11 @@ func main() {
 	host, err := plugin.Start(plugin.NodeOptions{
 		Name:            nodeName,
 		Debug:           cfg.Debug,
-		Observer:        plugin.EndpointOptions{Enabled: cfg.ObserverEnabled, Host: cfg.ObserverHost, Port: cfg.ObserverPort},
-		MCP:             plugin.EndpointOptions{Enabled: cfg.MCPEnabled, Host: cfg.MCPHost, Port: cfg.MCPPort},
 		ShutdownTimeout: runtimeShutdownTimeout,
 		Applications:    []gen.ApplicationBehavior{app},
 		Cluster:         cluster,
+		Observer:        plugin.EndpointOptions{Enabled: cfg.ObserverEnabled, Host: cfg.ObserverHost, Port: cfg.ObserverPort},
+		MCP:             plugin.EndpointOptions{Enabled: cfg.MCPEnabled, Host: cfg.MCPHost, Port: cfg.MCPPort},
 		Radar:           plugin.EndpointOptions{Enabled: cfg.RadarEnabled, Host: cfg.RadarHost, Port: cfg.RadarPort},
 	})
 	if err != nil {

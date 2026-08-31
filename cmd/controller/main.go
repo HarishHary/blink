@@ -2,9 +2,9 @@ package main
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"os/signal"
-	"slog"
 	"syscall"
 	"time"
 
@@ -59,7 +59,8 @@ func main() {
 
 	var cfg config
 	if err := services.LoadFromEnvironment(&cfg); err != nil {
-		slog.Fatalf("load controller config: %v", err)
+		slog.Error("load controller config", "error", err)
+		os.Exit(1)
 	}
 	rootLogger := logger.New("controller", cfg.Debug)
 
