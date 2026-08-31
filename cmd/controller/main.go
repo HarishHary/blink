@@ -2,9 +2,9 @@ package main
 
 import (
 	"context"
-	"log/slog"
 	"os"
 	"os/signal"
+	"slog"
 	"syscall"
 	"time"
 
@@ -25,8 +25,6 @@ const runtimeShutdownTimeout = 45 * time.Second
 type config struct {
 	services.Common
 	plugin.EtcdClusterConfig
-	// ControllerNodeHost is this node's cluster-reachable name (its stable Service DNS name in
-	// k8s). Empty keeps the "controller" default.
 	ControllerNodeHost    string `env:"CONTROLLER_NODE_HOST,optional"`
 	ControllerDatabaseDSN string `env:"CONTROLLER_DATABASE_DSN"`
 	RulePluginDir         string `env:"RULE_PLUGIN_DIR"`
@@ -54,16 +52,16 @@ func controllerStatus(node gen.Node, namespaces []string) func() any {
 	}
 }
 
+// main starts the controller node, one controller service per namespace, and the health endpoint, and serves them until the process is signalled.
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	var cfg config
 	if err := services.LoadFromEnvironment(&cfg); err != nil {
-		slog.Error("load controller config", "error", err)
-		os.Exit(1)
+		slog.Fatalf("load controller config: %v", err)
 	}
-	rootLogger := logger.New("controller", cfg.Env)
+	rootLogger := logger.New("controller", cfg.Debug)
 
 	nodeHost := cfg.ControllerNodeHost
 	if nodeHost == "" {
@@ -77,11 +75,12 @@ func main() {
 	cluster := &plugin.ClusterOptions{Cookie: cfg.Cookie, Port: cfg.Port, Registrar: registrar, Flags: plugin.DefaultClusterFlags()}
 	host, err := plugin.Start(plugin.NodeOptions{
 		Name:            nodeName,
-		Env:             cfg.Env,
-		Observer:        plugin.ObserverOptions{Enabled: cfg.Observer, Host: cfg.ObserverHost, Port: cfg.ObserverPort},
+		Debug:           cfg.Debug,
 		ShutdownTimeout: runtimeShutdownTimeout,
 		Cluster:         cluster,
-		Radar:           &plugin.RadarOptions{Host: cfg.RadarHost, Port: cfg.RadarPort},
+		Observer:        plugin.EndpointOptions{Enabled: cfg.ObserverEnabled, Host: cfg.ObserverHost, Port: cfg.ObserverPort},
+		MCP:             plugin.EndpointOptions{Enabled: cfg.MCPEnabled, Host: cfg.MCPHost, Port: cfg.MCPPort},
+		Radar:           plugin.EndpointOptions{Enabled: cfg.RadarEnabled, Host: cfg.RadarHost, Port: cfg.RadarPort},
 	})
 	if err != nil {
 		rootLogger.FatalF("start controller node: %v", err)
@@ -98,54 +97,61 @@ func main() {
 			},
 		},
 	}, rules.Loader{})
+
+	matcherControllerSvc := controller.NewService(node, "controller-matcher", controller.ApplicationOptions{
+		DatabaseDSN: cfg.ControllerDatabaseDSN,
+		Namespace:   "matcher",
+		SupervisorOptions: controller.SupervisorOptions{
+			ActorOptions: controller.ActorOptions{
+				Directory: cfg.MatcherPluginDir,
+			},
+		},
+	}, matchers.Loader{})
+
+	tuningRulesControllerSvc := controller.NewService(node, "controller-tuning", controller.ApplicationOptions{
+		DatabaseDSN: cfg.ControllerDatabaseDSN,
+		Namespace:   "tuning",
+		SupervisorOptions: controller.SupervisorOptions{
+			ActorOptions: controller.ActorOptions{
+				Directory: cfg.TuningPluginDir,
+			},
+		},
+	}, tuning_rules.Loader{})
+
+	formattersControllerSvc := controller.NewService(node, "controller-formatter", controller.ApplicationOptions{
+		DatabaseDSN: cfg.ControllerDatabaseDSN,
+		Namespace:   "formatter",
+		SupervisorOptions: controller.SupervisorOptions{
+			ActorOptions: controller.ActorOptions{
+				Directory: cfg.FormatterPluginDir,
+			},
+		},
+	}, formatters.Loader{})
+
+	enrichmentControllerSvc := controller.NewService(node, "controller-enrichment", controller.ApplicationOptions{
+		DatabaseDSN: cfg.ControllerDatabaseDSN,
+		Namespace:   "enrichment",
+		SupervisorOptions: controller.SupervisorOptions{
+			ActorOptions: controller.ActorOptions{
+				Directory: cfg.EnrichmentPluginDir,
+			},
+		},
+	}, enrichments.Loader{})
+
+	healthSvc := services.NewHealthService(":8080", nil, controllerStatus(node, []string{"rule", "matcher", "tuning", "formatter", "enrichment"}))
 	runner.Register(
 		ruleControllerSvc,
-		controller.NewService(node, "controller-matcher", controller.ApplicationOptions{
-			DatabaseDSN: cfg.ControllerDatabaseDSN,
-			Namespace:   "matcher",
-			SupervisorOptions: controller.SupervisorOptions{
-				ActorOptions: controller.ActorOptions{
-					Directory: cfg.MatcherPluginDir,
-				},
-			},
-		}, matchers.Loader{}),
-		controller.NewService(node, "controller-tuning", controller.ApplicationOptions{
-			DatabaseDSN: cfg.ControllerDatabaseDSN,
-			Namespace:   "tuning",
-			SupervisorOptions: controller.SupervisorOptions{
-				ActorOptions: controller.ActorOptions{
-					Directory: cfg.TuningPluginDir,
-				},
-			},
-		}, tuning_rules.Loader{}),
-		controller.NewService(node, "controller-formatter", controller.ApplicationOptions{
-			DatabaseDSN: cfg.ControllerDatabaseDSN,
-			Namespace:   "formatter",
-			SupervisorOptions: controller.SupervisorOptions{
-				ActorOptions: controller.ActorOptions{
-					Directory: cfg.FormatterPluginDir,
-				},
-			},
-		}, formatters.Loader{}),
-		controller.NewService(node, "controller-enrichment", controller.ApplicationOptions{
-			DatabaseDSN: cfg.ControllerDatabaseDSN,
-			Namespace:   "enrichment",
-			SupervisorOptions: controller.SupervisorOptions{
-				ActorOptions: controller.ActorOptions{
-					Directory: cfg.EnrichmentPluginDir,
-				},
-			},
-		}, enrichments.Loader{}),
+		matcherControllerSvc,
+		tuningRulesControllerSvc,
+		formattersControllerSvc,
+		enrichmentControllerSvc,
+		healthSvc,
 	)
-	healthSvc := services.NewHealthService(":8080", nil, controllerStatus(node, []string{"rule", "matcher", "tuning", "formatter", "enrichment"}))
-	runner.Register(healthSvc)
 	runner.Run(ctx)
-
 	closeCtx, cancel := context.WithTimeout(context.Background(), runtimeShutdownTimeout)
-	err = host.Close(closeCtx)
-	cancel()
-	if err != nil {
+	defer cancel()
+	if err := host.Close(closeCtx); err != nil {
 		rootLogger.FatalF("close controller node: %v", err)
 	}
-	rootLogger.Info("Shutting down controller")
+	rootLogger.Info("Controller shut down.")
 }

@@ -3,9 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/signal"
+	"slog"
 	"syscall"
 	"time"
 
@@ -56,21 +56,20 @@ func (a *application) Load(...any) (gen.ApplicationSpec, error) {
 	return spec, nil
 }
 
-// main starts the Ergo node, the matcher runtime, and the Runner, and runs them for the process lifetime.
-// If the runtime stops, main exits and the pod restarts it.
+// main starts the Ergo node, the matcher runtime, and the Runner, and runs them for the process lifetime. If the runtime stops, main exits and the pod restarts it.
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	var cfg config
 	if err := services.LoadFromEnvironment(&cfg); err != nil {
-		slog.Error("load config", "error", err)
-		os.Exit(1)
+		slog.Fatalf("load config: %v", err)
 	}
 	cfg.Broker = brokers.NewKafkaBroker(cfg.Kafka)
-	rootLogger := logger.New("event-matcher", cfg.Env)
+	rootLogger := logger.New("event-matcher", cfg.Debug)
 
 	runCtx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
 
 	controllerHost := cfg.ControllerNodeHost
 	if controllerHost == "" {
@@ -79,7 +78,6 @@ func main() {
 	nodeName := gen.Atom(fmt.Sprintf("event-matcher-%s@%s", cfg.PodName, cfg.PodIP))
 	registrar, err := plugin.NewEtcdRegistrar(cfg.EtcdClusterConfig, cfg.Env)
 	if err != nil {
-		cancelRun()
 		rootLogger.FatalF("create etcd registrar: %v", err)
 	}
 
@@ -109,15 +107,15 @@ func main() {
 	cluster := &plugin.ClusterOptions{Cookie: cfg.Cookie, Port: cfg.Port, Registrar: registrar, Flags: plugin.DefaultClusterFlags()}
 	host, err := plugin.Start(plugin.NodeOptions{
 		Name:            nodeName,
-		Env:             cfg.Env,
-		Observer:        plugin.ObserverOptions{Enabled: cfg.Observer, Host: cfg.ObserverHost, Port: cfg.ObserverPort},
+		Debug:           cfg.Debug,
+		Observer:        plugin.EndpointOptions{Enabled: cfg.ObserverEnabled, Host: cfg.ObserverHost, Port: cfg.ObserverPort},
+		MCP:             plugin.EndpointOptions{Enabled: cfg.MCPEnabled, Host: cfg.MCPHost, Port: cfg.MCPPort},
 		ShutdownTimeout: runtimeShutdownTimeout,
 		Applications:    []gen.ApplicationBehavior{app},
 		Cluster:         cluster,
-		Radar:           &plugin.RadarOptions{Host: cfg.RadarHost, Port: cfg.RadarPort},
+		Radar:           plugin.EndpointOptions{Enabled: cfg.RadarEnabled, Host: cfg.RadarHost, Port: cfg.RadarPort},
 	})
 	if err != nil {
-		cancelRun()
 		rootLogger.FatalF("event-matcher: %v", err)
 	}
 
@@ -146,7 +144,6 @@ func main() {
 		}
 	default:
 	}
-	cancelRun()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), runtimeShutdownTimeout)
 	if err := host.Close(shutdownCtx); err != nil {
