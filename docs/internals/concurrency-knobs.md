@@ -1,6 +1,6 @@
 # Concurrency knobs
 
-[Internals index](README.md) · [Plugin runtime](plugin-runtime.md) · [Event matcher service](../services/event_matcher.md)
+[Internals index](README.md) · [Plugin runtime](plugin-runtime.md) · [Event matcher service](../services/event_matcher.md) · [Rule tuner service](../services/rule_tuner.md)
 
 Every concurrency knob moves one of four quantities: how many plugin calls a batch makes, how many run at once, how many wait, and how many are refused. This page names each knob, what moving it does, and the queue that absorbs it.
 
@@ -31,7 +31,7 @@ Every call carries its items already encoded, so no call pays a conversion and a
 
 ## The payload ceiling
 
-gRPC defaults a receiver to 4 MiB, and go-plugin keeps that default on both ends. An oversized request is `ResourceExhausted`: the call fails, the batch exhausts `MATCHER_MAX_ATTEMPTS`, and it dead-letters. Nothing above the transport recovers, so `runtime.MaxCallPayloadBytes` is 3 MiB.
+gRPC defaults a receiver to 4 MiB, and go-plugin keeps that default on both ends. An oversized request is `ResourceExhausted`: the call fails, the batch exhausts `MAX_ATTEMPTS`, and it dead-letters. Nothing above the transport recovers, so `runtime.MaxCallPayloadBytes` is 3 MiB.
 
 `events.Batch` and `alerts.Batch` price each item when the batch is built - encoded length plus repeated-field framing - and `runtime.ChunkBounds` cuts before the item that would cross the budget. Prices come from the encoding, not the item's shape.
 
@@ -65,7 +65,7 @@ Between `min_procs` and `max_procs` the process count is derived from calls:
 
 | Knob                                   | Set by                                                                                | Raising it                                                                                                                    | Lowering it                                                                                          | Absorbed by                                                           |
 | -------------------------------------- | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| `MAX_BATCH_SIZE`                       | env, unset is 50, no upper bound                                                      | More events per fetch and per state snapshot; more events per call until the payload budget binds; larger replay window       | Fewer events per commit; more fetches, projection reads, and snapshot clones per event               | Kafka fetch, then the batch's own commit boundary                     |
+| `MAX_BATCH_SIZE`                       | env, unset is 10,000, no upper bound                                                  | More events per fetch and per state snapshot; more events per call until the payload budget binds; larger replay window       | Fewer events per commit; more fetches, projection reads, and snapshot clones per event               | Kafka fetch, then the batch's own commit boundary                     |
 | `MAX_CONCURRENT_CALLS`                 | env                                                                                   | More matchers evaluated at once for one batch                                                                                 | Matchers evaluated in more waves; lower peak CPU                                                     | Service semaphore: `match` blocks before submitting                   |
 | `MaxBatchSize`                         | `MAX_BATCH_SIZE`                                                                      | Raises `fanOut` until 101 caps it, so it moves a budget only for batches under 101 events                                     | Shrinks it, never below the fan-out that batch can produce                                           | Nothing - it only sizes other budgets                                 |
 | `MaxConcurrentCalls`                   | `MAX_CONCURRENT_CALLS`                                                                | Raises both derived budgets, since every concurrent call carries its own fan-out                                              | Shrinks both                                                                                         | Nothing - it only sizes the budgets                                   |
@@ -90,11 +90,11 @@ Between `min_procs` and `max_procs` the process count is derived from calls:
 | `CircuitCooldown`                      | default 5m                                                                            | A repeatedly failing deployment stays failed longer                                                                           | Faster retry after a transient host problem                                                          | All tracked invocations fail while the circuit is open                |
 | `RetryMin` / `RetryMax` (manager)      | defaults 5s / 5m, 5 attempts                                                          | The manager waits longer before replacing a lost process                                                                      | Faster replacement, finite budget spent sooner                                                       | Queued calls wait; exhaustion opens the circuit                       |
 | `ProcessOptions.RetryMin` / `RetryMax` | defaults 5s / 5m, 5 attempts                                                          | One process waits longer before restarting its subprocess                                                                     | Faster local restarts, budget spent sooner                                                           | `MessagePluginProcessRestartExhausted`, then the manager replaces it  |
-| `MATCHER_TIMEOUT_SEC`                  | env                                                                                   | A slow matcher call is waited out                                                                                             | Faster whole-call failure, then retry                                                                | The service's own call context                                        |
-| `MATCHER_MAX_ATTEMPTS`                 | env                                                                                   | More retries before dead-lettering                                                                                            | Faster dead-letters, shorter attempt tail                                                            | Batch stays uncommitted while retrying                                |
-| `MATCHER_RETRY_BASE_MS` / `_CAP_MS`    | env                                                                                   | Longer waits between attempts                                                                                                 | Faster retries, more load on a failing plugin                                                        | The batch's own latency                                               |
+| `TIMEOUT_SEC`                          | env, process-local                                                                    | A slow service call is waited out                                                                                             | Faster whole-call failure, then retry                                                                | The service's own call context                                        |
+| `MAX_ATTEMPTS`                         | env, process-local                                                                    | More retries before dead-lettering                                                                                            | Faster dead-letters, shorter attempt tail                                                            | Batch stays uncommitted while retrying                                |
+| `RETRY_BASE_MS` / `_CAP_MS`            | env, process-local                                                                    | Longer waits between attempts                                                                                                 | Faster retries, more load on a failing plugin                                                        | The batch's own latency                                               |
 
-The env knobs are read in [`cmd/event_matcher/matcher.go`](../../cmd/event_matcher/matcher.go), which owns their defaults.
+Matcher, executor, and tuner read these shared-named settings from their own process environments in [`cmd/event_matcher/matcher/matcher.go`](../../cmd/event_matcher/matcher/matcher.go), [`cmd/rule_executor/executor/executor.go`](../../cmd/rule_executor/executor/executor.go), and [`cmd/rule_tuner/tuner/tuner.go`](../../cmd/rule_tuner/tuner/tuner.go), which own their defaults.
 
 ## What moves when you change one value
 
@@ -125,22 +125,23 @@ Rejections are answers about capacity, so a retry can succeed. `ResourceExhauste
 ## Tuning
 
 - **Large events.** No knob here is the lever; fan-out and body width are. Give rules narrower `log_types` (an empty list matches every log type), and project the body down to the fields matchers read. `MAX_BATCH_SIZE` bounds events, not bytes: 45,000 events of 3 KB is 140 MB of raw JSON before decode, plus decoded maps and a cloned shard per chunk per matcher.
-- **More throughput per event.** Set `MAX_BATCH_SIZE` explicitly, around 10,000 for small events; unset is 50. Cost per event falls up to that point as the projection reads and catalog clones amortise. Higher costs latency and memory: per-batch time rises linearly against `MATCHER_TIMEOUT_SEC`, the batch is held as messages plus decoded events plus one encoding per event, and the uncommitted replay window is one batch. Use ~1,000 when commit latency matters more.
-- **Many plugins on few cores.** Lower `MAX_CONCURRENT_CALLS`: it bounds concurrent matcher calls and sizes the shared budget. Do not raise it above the default 8 - it multiplies against declared capacity, and every in-flight call holds its chunk's events.
+- **More throughput per event.** The unset default of 10,000 suits small events. Cost per event falls up to that point as the projection reads and catalog clones amortise. Higher costs latency and memory: per-batch time rises linearly against `TIMEOUT_SEC`, the batch is held as messages plus decoded events plus one encoding per event, and the uncommitted replay window is one batch. Use ~1,000 when commit latency matters more.
+- **Many plugins on few cores.** Lower `MAX_CONCURRENT_CALLS`: it bounds concurrent matcher calls and sizes the shared budget. Do not raise it above the default 10 - it multiplies against declared capacity, and every in-flight call holds its chunk's events.
 - **A plugin whose calls are CPU-heavy.** Raise `max_procs`: its subprocesses run on separate cores and share nothing, and it pays only when cores are free. Leave `min_procs` at 0, since it bypasses the process budget - 50 matchers at `min_procs=4` is 200 subprocesses whatever the budget says.
 - **A plugin whose calls wait on something else.** Raise `calls_per_process` above its default 32 rather than `max_procs`: a blocked call holds a subprocess without holding a core. It holds only where the plugin's own code is concurrency-safe, which the runtime cannot check; a plugin that is not safe sets `calls_per_process: 1`.
 - **Bursty traffic.** Lower `ScaleCooldown` for a faster ramp, raise `IdleTimeout` to keep processes warm. `min_procs > 0` removes the first call's cold start.
-- **Tail latency.** Lower `MATCHER_TIMEOUT_SEC`, `InvocationTimeout`, and `MATCHER_MAX_ATTEMPTS`. A batch commits only when every event is terminal, so the slowest call sets commit latency.
+- **Tail latency.** Lower `TIMEOUT_SEC`, `InvocationTimeout`, and `MAX_ATTEMPTS`. A batch commits only when every event is terminal, so the slowest call sets commit latency.
 
 ## Source references
 
-- [`cmd/event_matcher/matcher.go`](../../cmd/event_matcher/matcher.go) - env knobs and defaults.
+- [`cmd/event_matcher/matcher/matcher.go`](../../cmd/event_matcher/matcher/matcher.go) - env knobs and defaults.
 - [`pkg/matchers/application.go`](../../pkg/matchers/application.go) - grouping, chunking, worker budget: the fan-out.
 - [`pkg/rules`](../../pkg/rules/application.go), [`pkg/enrichments`](../../pkg/enrichments/application.go), [`pkg/formatters`](../../pkg/formatters/application.go), [`pkg/tuning_rules`](../../pkg/tuning_rules/application.go) - the same path per item type.
 - [`internal/runtime/rollout.go`](../../internal/runtime/rollout.go) - `RolloutBucketCount`, buckets, `RouteSides`.
 - [`internal/runtime/shard.go`](../../internal/runtime/shard.go) - `MaxCallPayloadBytes`, `ChunkBounds`, `ShardBytes`.
 - [`pkg/events/batch.go`](../../pkg/events/batch.go), [`pkg/alerts/batch.go`](../../pkg/alerts/batch.go) - shared encodings and prices.
 - [`cmd/rule_executor/executor/executor.go`](../../cmd/rule_executor/executor/executor.go) - one encoding per message.
+- [`cmd/rule_tuner/tuner/tuner.go`](../../cmd/rule_tuner/tuner/tuner.go) - alert batching and shared process-local knobs.
 - [`internal/runtime/plugin/defaults.go`](../../internal/runtime/plugin/defaults.go) - derived budgets, timing defaults.
 - [`internal/runtime/plugin/runtime_application.go`](../../internal/runtime/plugin/runtime_application.go) - `CallBudget`, admission, rejection paths.
 - [`internal/runtime/plugin/deployment_manager.go`](../../internal/runtime/plugin/deployment_manager.go) - queueing, dispatch, scaling, idle shrink, circuit.

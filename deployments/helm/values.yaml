@@ -125,8 +125,8 @@ global:
                     kafka_topic_enricher: alert-enricher-topic
                     kafka_topic_tuner_dlq: rule-tuner-dlq-topic
                     tuner_plugin_dir: /plugins/tuning_rules
-                    max_batch_size: "50"
-                    max_concurrent_calls: "8"
+                    max_batch_size: "10000"
+                    max_concurrent_calls: "10"
                     timeout_sec: "10"
                     max_attempts: "3"
                     retry_base_ms: "100"
