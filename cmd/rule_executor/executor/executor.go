@@ -90,24 +90,24 @@ type Service struct {
 
 // RuleRuntime supplies committed rule state and evaluates events against it.
 type RuleRuntime interface {
+	Evaluate(context.Context, snapshot.ProjectionState[*rules.RuleMetadata], string, *events.Batch) rules.EvaluateResult
 	State(context.Context) (snapshot.ProjectionState[*rules.RuleMetadata], error)
 	Status(context.Context) (plugin.SupervisorStatus, error)
-	Evaluate(context.Context, snapshot.ProjectionState[*rules.RuleMetadata], string, *events.Batch) rules.EvaluateResult
 }
 
-// Config contains the environment-loaded settings and runtime dependencies injected by main.
+// Config supplies service dependencies and settings; see docs/services/rule_executor.md.
 type Config struct {
-	Broker        brokers.Broker
-	ExecutorTopic string `env:"KAFKA_TOPIC_EXECUTOR"`
-	ExecutorGroup string `env:"KAFKA_GROUP_EXECUTOR"`
-	MergerTopic   string `env:"KAFKA_TOPIC_MERGER"`
-	DLQTopic      string `env:"KAFKA_TOPIC_EXECUTOR_DLQ"`
-	BatchSize     int    `env:"EXECUTOR_BATCH_SIZE,optional"`
-	Concurrency   int    `env:"EXECUTOR_CONCURRENCY,optional"`
-	TimeoutSec    int    `env:"EXECUTOR_TIMEOUT_SEC,optional"`
-	MaxAttempts   int    `env:"EXECUTOR_MAX_ATTEMPTS,optional"`
-	RetryBaseMS   int    `env:"EXECUTOR_RETRY_BASE_MS,optional"`
-	RetryCapMS    int    `env:"EXECUTOR_RETRY_CAP_MS,optional"`
+	Broker             brokers.Broker
+	ExecutorTopic      string `env:"KAFKA_TOPIC_EXECUTOR"`
+	ExecutorGroup      string `env:"KAFKA_GROUP_EXECUTOR"`
+	MergerTopic        string `env:"KAFKA_TOPIC_MERGER"`
+	DLQTopic           string `env:"KAFKA_TOPIC_EXECUTOR_DLQ"`
+	MaxBatchSize       int    `env:"MAX_BATCH_SIZE,optional"`
+	MaxConcurrentCalls int    `env:"MAX_CONCURRENT_CALLS,optional"`
+	TimeoutSec         int    `env:"TIMEOUT_SEC,optional"`
+	MaxAttempts        int    `env:"MAX_ATTEMPTS,optional"`
+	RetryBaseMS        int    `env:"RETRY_BASE_MS,optional"`
+	RetryCapMS         int    `env:"RETRY_CAP_MS,optional"`
 }
 
 // batch is one poll's decoded work: ordered rule entries plus dead-letter records.
@@ -123,11 +123,11 @@ type preparedDLQ struct {
 
 // WithDefaults fills optional settings and ensures the retry cap is at least the base delay.
 func (c Config) WithDefaults() Config {
-	if c.BatchSize <= 0 {
-		c.BatchSize = 10000
+	if c.MaxBatchSize <= 0 {
+		c.MaxBatchSize = 10000
 	}
-	if c.Concurrency <= 0 {
-		c.Concurrency = 10
+	if c.MaxConcurrentCalls <= 0 {
+		c.MaxConcurrentCalls = 10
 	}
 	if c.TimeoutSec <= 0 {
 		c.TimeoutSec = 10
@@ -156,7 +156,7 @@ func NewService(logger *logger.Logger, cfg Config, runtime RuleRuntime) *Service
 		mergerWriter: cfg.Broker.NewWriter(cfg.MergerTopic),
 		dlqWriter:    cfg.Broker.NewWriter(cfg.DLQTopic),
 		runtime:      runtime,
-		sem:          semaphore.NewWeighted(int64(cfg.Concurrency)),
+		sem:          semaphore.NewWeighted(int64(cfg.MaxConcurrentCalls)),
 	}
 }
 
@@ -204,7 +204,7 @@ func (s *Service) Run(ctx context.Context) errors.Error {
 
 	for {
 		start := time.Now()
-		msgs, err := reader.ReadBatch(ctx, s.config.BatchSize)
+		msgs, err := reader.ReadBatch(ctx, s.config.MaxBatchSize)
 		readBatchTime.Observe(time.Since(start).Seconds())
 		readBatchTotal.WithLabelValues(metricResult(ctx, err)).Inc()
 		if err != nil {

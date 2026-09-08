@@ -62,8 +62,8 @@ func main() {
 
 	// Match admission limits to the service; leave the process budget at its CPU-based default.
 	app := rules.NewApplication(plugin.ApplicationOptions{
-		MaxBatchSize:       cfg.BatchSize,
-		MaxConcurrentCalls: cfg.Concurrency,
+		MaxBatchSize:       cfg.MaxBatchSize,
+		MaxConcurrentCalls: cfg.MaxConcurrentCalls,
 		Namespace:          "rule",
 		SupervisorOptions: plugin.SupervisorOptions{
 			Directory: cfg.RulePluginDir,

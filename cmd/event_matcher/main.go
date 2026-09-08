@@ -70,8 +70,8 @@ func main() {
 
 	// Match admission limits to the service; leave the process budget at its CPU-based default.
 	app := matcher.NewApplication(plugin.ApplicationOptions{
-		MaxBatchSize:       cfg.BatchSize,
-		MaxConcurrentCalls: cfg.Concurrency,
+		MaxBatchSize:       cfg.MaxBatchSize,
+		MaxConcurrentCalls: cfg.MaxConcurrentCalls,
 		Namespace:          "matcher",
 		SupervisorOptions: plugin.SupervisorOptions{
 			Directory:      cfg.MatcherPluginDir,

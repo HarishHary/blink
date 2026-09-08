@@ -73,17 +73,17 @@ type RuleStateSource interface {
 
 // Config supplies service dependencies and settings; see docs/services/event_matcher.md.
 type Config struct {
-	Broker        brokers.Broker
-	MatcherTopic  string `env:"KAFKA_TOPIC_MATCHER"`
-	MatcherGroup  string `env:"KAFKA_GROUP_MATCHER"`
-	ExecutorTopic string `env:"KAFKA_TOPIC_EXECUTOR"`
-	DLQTopic      string `env:"KAFKA_TOPIC_MATCHER_DLQ"`
-	BatchSize     int    `env:"MAX_BATCH_SIZE,optional"`
-	Concurrency   int    `env:"MAX_CONCURRENT_CALLS,optional"`
-	TimeoutSec    int    `env:"MATCHER_TIMEOUT_SEC,optional"`
-	MaxAttempts   int    `env:"MATCHER_MAX_ATTEMPTS,optional"`
-	RetryBaseMS   int    `env:"MATCHER_RETRY_BASE_MS,optional"`
-	RetryCapMS    int    `env:"MATCHER_RETRY_CAP_MS,optional"`
+	Broker             brokers.Broker
+	MatcherTopic       string `env:"KAFKA_TOPIC_MATCHER"`
+	MatcherGroup       string `env:"KAFKA_GROUP_MATCHER"`
+	ExecutorTopic      string `env:"KAFKA_TOPIC_EXECUTOR"`
+	DLQTopic           string `env:"KAFKA_TOPIC_MATCHER_DLQ"`
+	MaxBatchSize       int    `env:"MAX_BATCH_SIZE,optional"`
+	MaxConcurrentCalls int    `env:"MAX_CONCURRENT_CALLS,optional"`
+	TimeoutSec         int    `env:"TIMEOUT_SEC,optional"`
+	MaxAttempts        int    `env:"MAX_ATTEMPTS,optional"`
+	RetryBaseMS        int    `env:"RETRY_BASE_MS,optional"`
+	RetryCapMS         int    `env:"RETRY_CAP_MS,optional"`
 }
 
 // Service resolves each fetched event to a drop, executor record, or DLQ record before publishing in input order.
@@ -164,11 +164,11 @@ type matcherEntry struct {
 
 // WithDefaults fills optional settings and ensures the retry cap is at least the base delay.
 func (c Config) WithDefaults() Config {
-	if c.BatchSize <= 0 {
-		c.BatchSize = 10000
+	if c.MaxBatchSize <= 0 {
+		c.MaxBatchSize = 10000
 	}
-	if c.Concurrency <= 0 {
-		c.Concurrency = 10
+	if c.MaxConcurrentCalls <= 0 {
+		c.MaxConcurrentCalls = 10
 	}
 	if c.TimeoutSec <= 0 {
 		c.TimeoutSec = 10
@@ -198,7 +198,7 @@ func NewService(logger *logger.Logger, cfg Config, matcherRuntime MatcherRuntime
 		ruleState:      ruleState,
 		executorWriter: cfg.Broker.NewWriter(cfg.ExecutorTopic),
 		dlqWriter:      cfg.Broker.NewWriter(cfg.DLQTopic),
-		sem:            semaphore.NewWeighted(int64(cfg.Concurrency)),
+		sem:            semaphore.NewWeighted(int64(cfg.MaxConcurrentCalls)),
 	}
 }
 
@@ -249,7 +249,7 @@ func (s *Service) Run(ctx context.Context) errors.Error {
 
 	for {
 		start := time.Now()
-		msgs, err := reader.ReadBatch(ctx, s.config.BatchSize)
+		msgs, err := reader.ReadBatch(ctx, s.config.MaxBatchSize)
 		readBatchTime.Observe(time.Since(start).Seconds())
 		readBatchTotal.WithLabelValues(metricResult(ctx, err)).Inc()
 		if err != nil {
