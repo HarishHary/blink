@@ -45,11 +45,7 @@ All three processes require `KAFKA_BROKERS`, `ETCD_ENDPOINTS`, and `CLUSTER_COOK
 | `event_matcher` | `KAFKA_TOPIC_MATCHER`, `KAFKA_GROUP_MATCHER`, `KAFKA_TOPIC_EXECUTOR`, `KAFKA_TOPIC_MATCHER_DLQ`, `MATCHER_PLUGIN_DIR`                                                                                                                                                                                           |
 | `rule_executor` | `KAFKA_TOPIC_EXECUTOR`, `KAFKA_GROUP_EXECUTOR`, `KAFKA_TOPIC_MERGER`, `KAFKA_TOPIC_EXECUTOR_DLQ`, `RULE_PLUGIN_DIR`                                                                                                                                                                                             |
 
-Optional matcher settings are `MAX_BATCH_SIZE`, `MAX_CONCURRENT_CALLS`, `MATCHER_TIMEOUT_SEC`, `MATCHER_MAX_ATTEMPTS`, `MATCHER_RETRY_BASE_MS`, and `MATCHER_RETRY_CAP_MS`. Defaults are
-respectively 10000, 10, 10 seconds, 3, 100 ms, and 5000 ms.
-
-Optional executor settings are `EXECUTOR_BATCH_SIZE`, `EXECUTOR_CONCURRENCY`, `EXECUTOR_TIMEOUT_SEC`, `EXECUTOR_MAX_ATTEMPTS`, `EXECUTOR_RETRY_BASE_MS`, and `EXECUTOR_RETRY_CAP_MS`. Defaults are
-respectively 10000, 10, 10 seconds, 3, 100 ms, and 5000 ms.
+Optional matcher and executor process-local settings are `MAX_BATCH_SIZE`, `MAX_CONCURRENT_CALLS`, `TIMEOUT_SEC`, `MAX_ATTEMPTS`, `RETRY_BASE_MS`, and `RETRY_CAP_MS`. Defaults are respectively 10000, 10, 10 seconds, 3, 100 ms, and 5000 ms; the names are shared, but each process reads its own environment.
 
 ## Kubernetes
 

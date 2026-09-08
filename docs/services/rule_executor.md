@@ -89,7 +89,7 @@ Startup is stricter. Before creating the consumer-group reader it requires:
 - the rule projection `Ready` with at least one primary;
 - the rule runtime's own status `Ready`.
 
-`EXECUTOR_CONCURRENCY` caps concurrent service calls into the rule application. `EXECUTOR_BATCH_SIZE` and `EXECUTOR_CONCURRENCY` also pass to the runtime as `MaxBatchSize` and `MaxConcurrentCalls`, sizing its per-plugin and shared admission budgets. The application may split one rule's events by rollout side and payload size, but its bounded worker budget limits active invocations.
+`MAX_CONCURRENT_CALLS` caps concurrent service calls into the rule application. `MAX_BATCH_SIZE` and `MAX_CONCURRENT_CALLS` also pass to the runtime as `MaxBatchSize` and `MaxConcurrentCalls`, sizing its per-plugin and shared admission budgets. The application may split one rule's events by rollout side and payload size, but its bounded worker budget limits active invocations.
 
 Plugin processes are subprocesses, budgeted separately: up to `GOMAXPROCS x 2` past every deployment's `min_procs`. See [plugin-runtime.md](../internals/plugin-runtime.md#invocation) and [concurrency-knobs.md](../internals/concurrency-knobs.md).
 
@@ -123,7 +123,7 @@ An unavailable explicit rule ID is a `rules` DLQ, not a disabled-rule drop.
 
 ## Kafka batch contract
 
-The group reader fetches up to `EXECUTOR_BATCH_SIZE` (default 10,000) from `KAFKA_TOPIC_EXECUTOR` using `KAFKA_GROUP_EXECUTOR`. Each batch pins rule state once. Rules evaluate concurrently, while `EXECUTOR_CONCURRENCY` (default 10) bounds active application calls. Offsets commit only after every required alert and DLQ write succeeds. Writes are synchronous with all replicas required, so delivery is at least once.
+The group reader fetches up to `MAX_BATCH_SIZE` (default 10,000) from `KAFKA_TOPIC_EXECUTOR` using `KAFKA_GROUP_EXECUTOR`. Each batch pins rule state once. Rules evaluate concurrently, while `MAX_CONCURRENT_CALLS` (default 10) bounds active application calls. Offsets commit only after every required alert and DLQ write succeeds. Writes are synchronous with all replicas required, so delivery is at least once.
 
 ### Kafka batch terminal lifecycle
 
@@ -160,10 +160,10 @@ Three inputs DLQ before any rule call: an invalid `ExecMessage`, a missing event
 
 Evaluation retry:
 
-- Rules run concurrently, with active application calls bounded by `EXECUTOR_CONCURRENCY`.
+- Rules run concurrently, with active application calls bounded by `MAX_CONCURRENT_CALLS`.
 - A rule call retries only its failed items; whole-call and result-shape failures retry all pending items.
-- `EXECUTOR_MAX_ATTEMPTS` (default 3) is the evaluation stop condition.
-- The delay starts at `EXECUTOR_RETRY_BASE_MS` (default 100 ms), carries jitter, and is capped by `EXECUTOR_RETRY_CAP_MS` (default 5000 ms).
+- `MAX_ATTEMPTS` (default 3) is the evaluation stop condition.
+- The delay starts at `RETRY_BASE_MS` (default 100 ms), carries jitter, and is capped by `RETRY_CAP_MS` (default 5000 ms).
 - After exhaustion, each failed rule-item pair produces a DLQ record; one input can therefore produce several executor DLQs.
 
 Publication uses the same jittered backoff but has no attempt limit; cancellation is its bound. Alerts are prepared before any write, then published by rule and input order; all DLQs follow. A later failure leaves the source batch uncommitted, so already acknowledged outputs can repeat after restart.
@@ -187,12 +187,12 @@ Required service variables are `KAFKA_BROKERS`, `ETCD_ENDPOINTS`, `CLUSTER_COOKI
 
 | Variable                 | Default | Meaning                                                        |
 | ------------------------ | ------- | -------------------------------------------------------------- |
-| `EXECUTOR_BATCH_SIZE`    | `10000` | Maximum records fetched per source batch.                      |
-| `EXECUTOR_CONCURRENCY`   | `10`    | Maximum active service calls into the rule application.        |
-| `EXECUTOR_TIMEOUT_SEC`   | `10`    | Deadline for one rule application call.                        |
-| `EXECUTOR_MAX_ATTEMPTS`  | `3`     | Evaluation attempts before a failed item is dead-lettered.     |
-| `EXECUTOR_RETRY_BASE_MS` | `100`   | Initial evaluation and publication retry delay.                |
-| `EXECUTOR_RETRY_CAP_MS`  | `5000`  | Maximum retry delay; raised to the base when configured lower. |
+| `MAX_BATCH_SIZE`         | `10000` | Maximum records fetched per source batch.                      |
+| `MAX_CONCURRENT_CALLS`   | `10`    | Maximum active service calls into the rule application.        |
+| `TIMEOUT_SEC`            | `10`    | Deadline for one rule application call.                        |
+| `MAX_ATTEMPTS`           | `3`     | Evaluation attempts before a failed item is dead-lettered.     |
+| `RETRY_BASE_MS`          | `100`   | Initial evaluation and publication retry delay.                |
+| `RETRY_CAP_MS`           | `5000`  | Maximum retry delay; raised to the base when configured lower. |
 
 ## Source references
 

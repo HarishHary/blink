@@ -91,7 +91,7 @@ Startup is stricter. Before creating the consumer-group reader it also requires:
 - both projections `Ready` with at least one primary;
 - the matcher runtime's own status `Ready`.
 
-The rule side has no such wait. A degraded rule projection stays routable on its last committed generation but is not ready; an unavailable one fails the attempt. Matcher runtime state reads wait through `ErrPluginUnavailable` for at most `MATCHER_TIMEOUT_SEC + 1s`; other errors fail the attempt.
+The rule side has no such wait. A degraded rule projection stays routable on its last committed generation but is not ready; an unavailable one fails the attempt. Matcher runtime state reads wait through `ErrPluginUnavailable` for a retry window of `TIMEOUT_SEC + 1s`; other errors fail the attempt.
 
 Admission knobs:
 
@@ -165,13 +165,13 @@ Three inputs DLQ at decode, before any matcher call: a decode failure, a non-str
 Retry:
 
 - A matcher call retries only its failed subset; whole-call and result-shape failures retry all pending items.
-- `MATCHER_MAX_ATTEMPTS` (default 3) is the stop condition.
-- The delay starts at `MATCHER_RETRY_BASE_MS` (default 100 ms), carries jitter, and is capped by `MATCHER_RETRY_CAP_MS` (default 5000 ms).
+- `MAX_ATTEMPTS` (default 3) is the stop condition.
+- The delay starts at `RETRY_BASE_MS` (default 100 ms), carries jitter, and is capped by `RETRY_CAP_MS` (default 5000 ms).
 - After exhaustion the event is DLQed.
 
 Publication retries under the same limit; exhaustion or cancellation exits the attempt with the batch uncommitted. A `Terminal` record is redelivered only by a later fetch in a later attempt.
 
-A promotion mid-batch retires the old generation's routers, and those events are rejected unevaluated. On an unavailable rejection the service re-reads runtime state after the batch's calls drain; if the committed generation moved, the batch is re-resolved instead of dead-lettered. Other rejections keep their dead-letters. A plugin that is down leaves the rest of the catalog routable; only a runtime with nothing routable stalls the attempt. `MATCHER_MAX_ATTEMPTS` bounds these replays.
+A promotion mid-batch retires the old generation's routers, and those events are rejected unevaluated. On an unavailable rejection the service re-reads runtime state after the batch's calls drain; if the committed generation moved, the batch is re-resolved instead of dead-lettered. Other rejections keep their dead-letters. A plugin that is down leaves the rest of the catalog routable; only a runtime with nothing routable stalls the attempt. `MAX_ATTEMPTS` bounds these replays.
 
 The downstream record preserves the input Kafka key and carries the source event plus eligible rule IDs. DLQ envelopes preserve the key and add the original payload, source, stage, reason, attempts, and timestamp. A record encodable as neither output is dropped.
 
