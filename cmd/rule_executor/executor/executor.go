@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
@@ -14,6 +15,8 @@ import (
 	"github.com/harishhary/blink/internal/errors"
 	"github.com/harishhary/blink/internal/exec/pb"
 	"github.com/harishhary/blink/internal/logger"
+	"github.com/harishhary/blink/internal/runtime"
+	"github.com/harishhary/blink/internal/runtime/plugin"
 	"github.com/harishhary/blink/internal/runtime/snapshot"
 	"github.com/harishhary/blink/pkg/alerts"
 	"github.com/harishhary/blink/pkg/events"
@@ -48,6 +51,12 @@ var (
 	ruleMatches          = promauto.NewCounterVec(prometheus.CounterOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "rule_matches_total"}, []string{"rule"})
 )
 
+const (
+	readinessInterval = 500 * time.Millisecond
+	readinessTimeout  = time.Second
+	readinessGrace    = 2 * time.Second
+)
+
 type ruleItem struct {
 	event    events.Event
 	raw      []byte
@@ -64,17 +73,21 @@ type ruleEntry struct {
 
 // Service evaluates routed events and publishes alerts or dead-letter records.
 type Service struct {
-	logger       *logger.Logger
-	config       Config
-	mergerWriter brokers.Writer
-	dlqWriter    brokers.Writer
-	runtime      RuleRuntime
-	sem          *semaphore.Weighted
+	logger         *logger.Logger
+	config         Config
+	mergerWriter   brokers.Writer
+	dlqWriter      brokers.Writer
+	runtime        RuleRuntime
+	sem            *semaphore.Weighted
+	ready          atomic.Bool
+	snapshotsReady atomic.Bool
+	readyAt        atomic.Int64
 }
 
 // RuleRuntime supplies committed rule state and evaluates events against it.
 type RuleRuntime interface {
 	State(context.Context) (snapshot.ProjectionState[*rules.RuleMetadata], error)
+	Status(context.Context) (plugin.SupervisorStatus, error)
 	Evaluate(context.Context, snapshot.ProjectionState[*rules.RuleMetadata], string, *events.Batch) rules.EvaluateResult
 }
 
@@ -85,13 +98,12 @@ type Config struct {
 	ExecutorGroup string `env:"KAFKA_GROUP_EXECUTOR"`
 	MergerTopic   string `env:"KAFKA_TOPIC_MERGER"`
 	DLQTopic      string `env:"KAFKA_TOPIC_EXECUTOR_DLQ"`
-	ReadyFn       func() bool
-	BatchSize     int `env:"EXECUTOR_BATCH_SIZE,optional"`
-	Concurrency   int `env:"EXECUTOR_CONCURRENCY,optional"`
-	TimeoutSec    int `env:"EXECUTOR_TIMEOUT_SEC,optional"`
-	MaxAttempts   int `env:"EXECUTOR_MAX_ATTEMPTS,optional"`
-	RetryBaseMS   int `env:"EXECUTOR_RETRY_BASE_MS,optional"`
-	RetryCapMS    int `env:"EXECUTOR_RETRY_CAP_MS,optional"`
+	BatchSize     int    `env:"EXECUTOR_BATCH_SIZE,optional"`
+	Concurrency   int    `env:"EXECUTOR_CONCURRENCY,optional"`
+	TimeoutSec    int    `env:"EXECUTOR_TIMEOUT_SEC,optional"`
+	MaxAttempts   int    `env:"EXECUTOR_MAX_ATTEMPTS,optional"`
+	RetryBaseMS   int    `env:"EXECUTOR_RETRY_BASE_MS,optional"`
+	RetryCapMS    int    `env:"EXECUTOR_RETRY_CAP_MS,optional"`
 }
 
 // batch is one poll's decoded work: ordered rule entries plus dead-letter records.
@@ -139,12 +151,39 @@ func NewService(logger *logger.Logger, cfg Config, runtime RuleRuntime) *Service
 	}
 }
 
+// Name identifies the service to the Runner.
 func (s *Service) Name() string { return "rule-executor" }
 
+// Ready reports cached readiness without issuing runtime calls for each probe.
+func (s *Service) Ready() bool { return s.ready.Load() && s.snapshotsReady.Load() }
+
+// Run consumes batches until failure or cancellation, leaving unfinished batches uncommitted.
 func (s *Service) Run(ctx context.Context) errors.Error {
-	if !waitForReady(ctx, s.config.ReadyFn) {
-		return nil
+	s.ready.Store(false)
+	s.snapshotsReady.Store(false)
+	s.readyAt.Store(0)
+	defer s.ready.Store(false)
+
+	pollCtx, stopPolling := context.WithCancel(ctx)
+	pollingDone := make(chan struct{})
+	defer func() {
+		stopPolling()
+		<-pollingDone
+	}()
+	go func() {
+		defer close(pollingDone)
+		s.pollReadiness(pollCtx)
+	}()
+	s.ready.Store(true)
+
+	if err := s.waitForReady(ctx); err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
+		return errors.NewE(err)
 	}
+	s.readyAt.Store(time.Now().UnixNano())
+	s.snapshotsReady.Store(true)
 
 	s.logger.Info("runtime ready; consuming events (topic=%s group=%s)", s.config.ExecutorTopic, s.config.ExecutorGroup)
 	reader := s.config.Broker.NewReader(s.config.ExecutorTopic, s.config.ExecutorGroup)
@@ -194,21 +233,43 @@ func (s *Service) Run(ctx context.Context) errors.Error {
 	}
 }
 
-// waitForReady polls the optional snapshot readiness callback before reader creation.
-func waitForReady(ctx context.Context, readyFn func() bool) bool {
-	if readyFn == nil {
-		return true
-	}
-
+// waitForReady requires a nonempty ready rule snapshot and ready runtime before consumption.
+func (s *Service) waitForReady(ctx context.Context) error {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		if readyFn() {
-			return ctx.Err() == nil
+		state, stateErr := s.runtime.State(ctx)
+		status, statusErr := s.runtime.Status(ctx)
+		if stateErr == nil && statusErr == nil &&
+			state.Availability == runtime.AvailabilityReady && len(state.Primaries) > 0 &&
+			status.Availability == runtime.AvailabilityReady {
+			return nil
 		}
 		select {
 		case <-ctx.Done():
-			return false
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+// pollReadiness refreshes cached state readiness and allows a brief stale-state grace period.
+func (s *Service) pollReadiness(ctx context.Context) {
+	ticker := time.NewTicker(readinessInterval)
+	defer ticker.Stop()
+	for {
+		callCtx, cancel := context.WithTimeout(ctx, readinessTimeout)
+		state, err := s.runtime.State(callCtx)
+		cancel()
+		if err == nil && state.Availability == runtime.AvailabilityReady {
+			s.readyAt.Store(time.Now().UnixNano())
+			s.snapshotsReady.Store(true)
+		} else if time.Since(time.Unix(0, s.readyAt.Load())) > readinessGrace {
+			s.snapshotsReady.Store(false)
+		}
+		select {
+		case <-ctx.Done():
+			return
 		case <-ticker.C:
 		}
 	}

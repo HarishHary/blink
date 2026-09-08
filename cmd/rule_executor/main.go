@@ -13,7 +13,6 @@ import (
 	"github.com/harishhary/blink/cmd/rule_executor/executor"
 	"github.com/harishhary/blink/internal/brokers"
 	"github.com/harishhary/blink/internal/logger"
-	"github.com/harishhary/blink/internal/runtime"
 	"github.com/harishhary/blink/internal/runtime/plugin"
 	"github.com/harishhary/blink/internal/runtime/snapshot"
 	"github.com/harishhary/blink/internal/services"
@@ -99,21 +98,8 @@ func main() {
 		}
 	}()
 
-	appReadyFn := func() bool {
-		statusCtx, statusCancel := context.WithTimeout(context.Background(), time.Second)
-		defer statusCancel()
-		status, err := app.Status(statusCtx)
-		return err == nil && status.Availability == runtime.AvailabilityReady
-	}
-	cfg.Config.ReadyFn = func() bool {
-		statusCtx, statusCancel := context.WithTimeout(context.Background(), time.Second)
-		defer statusCancel()
-		_, err := app.State(statusCtx)
-		return err == nil && appReadyFn()
-	}
-
 	executorSvc := executor.NewService(rootLogger.With("component", "service"), cfg.Config, app)
-	healthSvc := services.NewHealthService(":8080", cfg.Config.ReadyFn, nil)
+	healthSvc := services.NewHealthService(":8080", executorSvc.Ready, nil)
 	runner := services.New(rootLogger.With("component", "runner"))
 	runner.Register(executorSvc, healthSvc)
 	runner.Run(runCtx)
