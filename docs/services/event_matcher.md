@@ -115,15 +115,16 @@ Two registries. The health server serves the default Go registry; radar serves i
 
 The radar series carry a `namespace` label: `matcher` for the plugin runtime and its own catalog projection, `rule` for the standalone rule projection. The `:8080` series carry no `namespace`.
 
-| Metric                                                | Meaning                                                                                 |
-| ----------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `blink_event_matcher_events_in_total`                 | Records that decoded into an event; decode failures excluded.                           |
-| `blink_event_matcher_events_forwarded_total`          | Records written to the output topic; DLQ writes excluded.                               |
-| `blink_event_matcher_read_errors_total`               | Failed group fetches; context cancellation excluded.                                    |
-| `blink_event_matcher_parse_errors_total`              | Input decode or output encode failure. Both DLQ the record rather than failing a batch. |
-| `blink_event_matcher_write_errors_total`              | Failed `WriteMessages` calls, counted per attempt, so retries add.                      |
-| `blink_event_matcher_match_duration_seconds{matcher}` | One matcher call, bounded by `MATCHER_TIMEOUT_SEC`; observed even when the call fails.  |
-| `blink_event_matcher_rules_routed_per_event`          | Eligible rules per event. A zero observation is an event dropped with no rule.          |
+The [Kafka-stage metric contract](README.md#kafka-stage-metrics) defines the shared counters, histograms, labels, and measurement points. Use prefix `blink_event_matcher_`.
+`destination="output"` means the executor-topic writer; `plugin` is the matcher name. DLQ stages are `decode`, `log_type`, `encode`, and `matcher`.
+
+| Additional metric                            | Meaning                                                                                                                                              |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `blink_event_matcher_rules_routed_per_event` | Eligible rules for events reaching routing after successful matching; zero means no candidate survived. Events dropped before matching are excluded. |
+| `blink_event_matcher_batch_replays_total`    | Additional batch attempts actually begun after matcher generation changes. These do not increment fetched-input or evaluation-retry counts.          |
+
+Drop decisions have `scope="event"` and reasons `no_rules`, `unmatched`, or `dlq_encode`. Matcher has no per-rule drop series: individual candidate rejection is not a source-event drop.
+Routed-rule histogram buckets are `0, 1, 5, 10, 25, 50, 100`. See the [migration table](README.md#migration-from-earlier-service-metrics) for replaced names and changed semantics.
 
 ## Kafka batch contract
 

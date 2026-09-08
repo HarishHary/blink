@@ -5,6 +5,7 @@ import (
 	stderrors "errors"
 	"fmt"
 	"maps"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -29,26 +30,28 @@ import (
 )
 
 var (
-	batchSizeHist        = promauto.NewHistogram(prometheus.HistogramOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "batch_size"})
-	eventsIn             = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "events_in_total"})
-	alertsOut            = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "alerts_out_total"})
-	ruleEvalHist         = promauto.NewHistogramVec(prometheus.HistogramOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "rule_evaluation_seconds"}, []string{"rule"})
-	ruleEvalErrors       = promauto.NewCounterVec(prometheus.CounterOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "rule_evaluation_errors_total"}, []string{"rule"})
-	readBatchErrors      = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "read_batch_errors_total"})
-	readBatchDuration    = promauto.NewHistogram(prometheus.HistogramOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "read_batch_seconds"})
-	commitErrors         = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "commit_errors_total"})
-	commitDuration       = promauto.NewHistogram(prometheus.HistogramOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "commit_seconds"})
-	eventsParseErrors    = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "events_parse_errors_total"})
-	eventsInvalidLogType = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "events_invalid_log_type_total"})
-	eventsNoRules        = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "events_no_rules_total"})
-	batchProcessDuration = promauto.NewHistogram(prometheus.HistogramOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "batch_processing_seconds"})
-	rulesPerBatch        = promauto.NewHistogram(prometheus.HistogramOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "rules_per_batch"})
-	concurrencyGauge     = promauto.NewGauge(prometheus.GaugeOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "concurrent_rules"})
-	alertsWriteErrors    = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "alerts_write_errors_total"})
-	alertsWriteDuration  = promauto.NewHistogram(prometheus.HistogramOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "alerts_write_seconds"})
-	dlqOut               = promauto.NewCounterVec(prometheus.CounterOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "dlq_records_total"}, []string{"stage"})
-	dlqWriteErrors       = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "dlq_write_errors_total"})
-	ruleMatches          = promauto.NewCounterVec(prometheus.CounterOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "rule_matches_total"}, []string{"rule"})
+	durationBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60}
+	batchBuckets    = []float64{0, 1, 10, 50, 100, 500, 1000, 5000, 10000, 50000}
+	eventsIn        = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "events_in_total", Help: "Records returned by successful broker batch reads, including invalid records."})
+	batchSize       = promauto.NewHistogram(prometheus.HistogramOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "batch_size", Help: "Records returned by each successful broker batch read.", Buckets: batchBuckets})
+	readBatchTotal  = promauto.NewCounterVec(prometheus.CounterOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "read_batch_total", Help: "Broker batch read attempts by result."}, []string{"result"})
+	readBatchTime   = promauto.NewHistogram(prometheus.HistogramOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "read_batch_seconds", Help: "Duration of broker batch read attempts.", Buckets: durationBuckets})
+	batchTotal      = promauto.NewCounterVec(prometheus.CounterOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "batch_processing_total", Help: "Fetched batch processing attempts by result, excluding broker reads and commits."}, []string{"result"})
+	batchTime       = promauto.NewHistogram(prometheus.HistogramOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "batch_processing_seconds", Help: "Duration of fetched batch processing, excluding broker reads and commits.", Buckets: durationBuckets})
+	commitTotal     = promauto.NewCounterVec(prometheus.CounterOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "commit_total", Help: "Broker commit attempts by result."}, []string{"result"})
+	commitTime      = promauto.NewHistogram(prometheus.HistogramOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "commit_seconds", Help: "Duration of broker commit attempts.", Buckets: durationBuckets})
+	evaluationTotal = promauto.NewCounterVec(prometheus.CounterOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "evaluation_total", Help: "Admitted rule runtime call attempts by plugin and result."}, []string{"plugin", "result"})
+	evaluationTime  = promauto.NewHistogramVec(prometheus.HistogramOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "evaluation_seconds", Help: "Rule runtime call duration after admission, excluding retry backoff.", Buckets: durationBuckets}, []string{"plugin"})
+	evaluationItems = promauto.NewCounterVec(prometheus.CounterOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "evaluation_items_total", Help: "Rule item attempts by plugin and result."}, []string{"plugin", "result"})
+	evaluationRetry = promauto.NewCounterVec(prometheus.CounterOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "evaluation_retries_total", Help: "Additional admitted rule runtime calls after the first call in a retry loop."}, []string{"plugin"})
+	evaluationsLive = promauto.NewGauge(prometheus.GaugeOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "evaluations_in_flight", Help: "Rule runtime calls currently admitted."})
+	writeTotal      = promauto.NewCounterVec(prometheus.CounterOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "write_total", Help: "Broker write attempts by destination and result."}, []string{"destination", "result"})
+	writeTime       = promauto.NewHistogramVec(prometheus.HistogramOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "write_seconds", Help: "Duration of broker write attempts by destination.", Buckets: durationBuckets}, []string{"destination"})
+	writeRetry      = promauto.NewCounterVec(prometheus.CounterOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "write_retries_total", Help: "Additional broker write attempts after the first call in a retry loop."}, []string{"destination"})
+	recordsOut      = promauto.NewCounterVec(prometheus.CounterOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "records_out_total", Help: "Records acknowledged by broker writes by destination."}, []string{"destination"})
+	dlqRecords      = promauto.NewCounterVec(prometheus.CounterOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "dlq_records_total", Help: "Dead-letter records acknowledged by broker writes by processing stage."}, []string{"stage"})
+	drops           = promauto.NewCounterVec(prometheus.CounterOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "drops_total", Help: "Drop decisions by scope and reason; may include decisions from batches that are not committed."}, []string{"scope", "reason"})
+	rulesPerBatch   = promauto.NewHistogram(prometheus.HistogramOpts{Namespace: "blink", Subsystem: "rule_executor", Name: "rules_per_batch", Help: "Distinct rules evaluated for each fetched batch.", Buckets: []float64{0, 1, 5, 10, 25, 50, 100, 250, 500, 1000}})
 )
 
 const (
@@ -109,7 +112,12 @@ type Config struct {
 // batch is one poll's decoded work: ordered rule entries plus dead-letter records.
 type batch struct {
 	entries []*ruleEntry
-	dlq     []brokers.Message
+	dlq     []preparedDLQ
+}
+
+type preparedDLQ struct {
+	message brokers.Message
+	stage   string
 }
 
 // WithDefaults fills optional settings and ensures the retry cap is at least the base delay.
@@ -194,42 +202,45 @@ func (s *Service) Run(ctx context.Context) errors.Error {
 	}()
 
 	for {
-		batchStart := time.Now()
-
+		start := time.Now()
 		msgs, err := reader.ReadBatch(ctx, s.config.BatchSize)
-		readBatchDuration.Observe(time.Since(batchStart).Seconds())
+		readBatchTime.Observe(time.Since(start).Seconds())
+		readBatchTotal.WithLabelValues(metricResult(ctx, err)).Inc()
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
-			readBatchErrors.Inc()
 			err := errors.NewE(err)
 			s.logger.Error(err)
 			return err
 		}
-		batchSizeHist.Observe(float64(len(msgs)))
+		batchSize.Observe(float64(len(msgs)))
 		eventsIn.Add(float64(len(msgs)))
 
-		if err := s.processBatch(ctx, msgs); err != nil {
+		start = time.Now()
+		batchErr := s.processBatch(ctx, msgs)
+		batchTime.Observe(time.Since(start).Seconds())
+		batchTotal.WithLabelValues(metricResult(ctx, batchErr)).Inc()
+		if batchErr != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
-			s.logger.Error(err)
-			return err
+			s.logger.Error(batchErr)
+			return batchErr
 		}
 
-		startCommit := time.Now()
-		if err := reader.CommitMessages(ctx, msgs...); err != nil {
+		start = time.Now()
+		commitErr := reader.CommitMessages(ctx, msgs...)
+		commitTime.Observe(time.Since(start).Seconds())
+		commitTotal.WithLabelValues(metricResult(ctx, commitErr)).Inc()
+		if commitErr != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
-			commitErrors.Inc()
-			err := errors.NewE(err)
+			err := errors.NewE(commitErr)
 			s.logger.Error(err)
 			return err
 		}
-		commitDuration.Observe(time.Since(startCommit).Seconds())
-		batchProcessDuration.Observe(time.Since(batchStart).Seconds())
 	}
 }
 
@@ -282,8 +293,8 @@ func (s *Service) processBatch(ctx context.Context, msgs []brokers.Message) erro
 		return errors.NewE(err)
 	}
 	batch := s.decode(msgs, ruleState.Primaries)
+	rulesPerBatch.Observe(float64(len(batch.entries)))
 	if len(batch.entries) > 0 {
-		rulesPerBatch.Observe(float64(len(batch.entries)))
 		s.logger.Info("evaluating %d rule(s) across batch of %d message(s)", len(batch.entries), len(msgs))
 		s.evaluateRules(ctx, ruleState, batch.entries)
 		if ctx.Err() != nil {
@@ -306,12 +317,10 @@ func (s *Service) decode(msgs []brokers.Message, ruleSet []*rules.RuleMetadata) 
 	for _, msg := range msgs {
 		var execMsg pb.ExecMessage
 		if err := proto.Unmarshal(msg.Value, &execMsg); err != nil {
-			eventsParseErrors.Inc()
 			s.queueDLQ(batch, msg, "decode", err.Error(), 0)
 			continue
 		}
 		if execMsg.GetEvent() == nil {
-			eventsParseErrors.Inc()
 			s.queueDLQ(batch, msg, "decode", "exec message has no event", 0)
 			continue
 		}
@@ -319,9 +328,15 @@ func (s *Service) decode(msgs []brokers.Message, ruleSet []*rules.RuleMetadata) 
 		event := execMsg.GetEvent().AsMap()
 		logType, ok := event["log_type"].(string)
 		if !ok {
-			eventsInvalidLogType.Inc()
 			s.queueDLQ(batch, msg, "log_type", "event log_type must be a string", 0)
 			continue
+		}
+		if len(execMsg.GetRuleIds()) == 0 {
+			for _, meta := range ruleSet {
+				if !meta.Enabled && (len(meta.LogTypes) == 0 || slices.Contains(meta.LogTypes, logType)) {
+					drops.WithLabelValues("rule", "disabled").Inc()
+				}
+			}
 		}
 
 		metaList, err := eligibleRules(ruleSet, logType, execMsg.GetRuleIds())
@@ -330,23 +345,24 @@ func (s *Service) decode(msgs []brokers.Message, ruleSet []*rules.RuleMetadata) 
 			continue
 		}
 		if len(metaList) == 0 {
-			eventsNoRules.Inc()
+			drops.WithLabelValues("event", "no_rules").Inc()
 			continue
 		}
 
 		// Encode each event once and share the bytes across eligible rules.
 		raw, marshalErr := proto.Marshal(execMsg.GetEvent())
 		if marshalErr != nil {
-			eventsParseErrors.Inc()
 			s.queueDLQ(batch, msg, "encode", marshalErr.Error(), 0)
 			continue
 		}
 
 		for _, meta := range metaList {
 			if !meta.Enabled {
+				drops.WithLabelValues("rule", "disabled").Inc()
 				continue
 			}
 			if len(meta.ReqSubkeys) > 0 && !rules.DefaultSubKeysInEvent(meta, event) {
+				drops.WithLabelValues("rule", "missing_subkeys").Inc()
 				continue
 			}
 			entry, exists := byRule[meta.Id]
@@ -391,7 +407,7 @@ func (s *Service) evaluateWithRetries(ctx context.Context, state snapshot.Projec
 			pendingRaw[i] = item.raw
 		}
 
-		evaluation := s.evaluate(ctx, state, entry.meta, events.NewBatch(pendingEvents, pendingRaw))
+		evaluation := s.evaluate(ctx, state, entry.meta, events.NewBatch(pendingEvents, pendingRaw), attempt > 1)
 		if evaluation.CallErr != nil {
 			if attempt == s.config.MaxAttempts {
 				for _, item := range pendingItems {
@@ -425,38 +441,50 @@ func (s *Service) evaluateWithRetries(ctx context.Context, state snapshot.Projec
 	}, s.newBackoff(ctx))
 }
 
-func (s *Service) evaluate(ctx context.Context, state snapshot.ProjectionState[*rules.RuleMetadata], rule *rules.RuleMetadata, batch *events.Batch) rules.EvaluateResult {
+func (s *Service) evaluate(ctx context.Context, state snapshot.ProjectionState[*rules.RuleMetadata], rule *rules.RuleMetadata, batch *events.Batch, retry bool) rules.EvaluateResult {
 	if err := s.sem.Acquire(ctx, 1); err != nil {
 		return rules.EvaluateResult{CallErr: errors.NewE(err)}
 	}
-	concurrencyGauge.Inc()
+	if retry {
+		evaluationRetry.WithLabelValues(rule.Name).Inc()
+	}
+	evaluationsLive.Inc()
 	defer func() {
+		evaluationsLive.Dec()
 		s.sem.Release(1)
-		concurrencyGauge.Dec()
 	}()
 
 	evalCtx, cancel := context.WithTimeout(ctx, time.Duration(s.config.TimeoutSec)*time.Second)
 	defer cancel()
 	startEval := time.Now()
 	result := s.runtime.Evaluate(evalCtx, state, rule.Id, batch)
-	ruleEvalHist.WithLabelValues(rule.Name).Observe(time.Since(startEval).Seconds())
-	if result.CallErr != nil {
-		ruleEvalErrors.WithLabelValues(rule.Name).Inc()
-		return result
-	}
+	evaluationTime.WithLabelValues(rule.Name).Observe(time.Since(startEval).Seconds())
+	callResult := metricResult(ctx, result.CallErr)
 	if len(result.Items) != batch.Len() {
-		ruleEvalErrors.WithLabelValues(rule.Name).Inc()
-		return rules.EvaluateResult{CallErr: errors.NewF("rule %s returned %d items for %d events", rule.Name, len(result.Items), batch.Len())}
-	}
-	itemErrors := 0
-	for _, item := range result.Items {
-		if item.Err != nil {
-			itemErrors++
+		if result.CallErr == nil {
+			result = rules.EvaluateResult{CallErr: errors.NewF("rule %s returned %d items for %d events", rule.Name, len(result.Items), batch.Len())}
+			callResult = "error"
 		}
 	}
-	if itemErrors > 0 {
-		ruleEvalErrors.WithLabelValues(rule.Name).Add(float64(itemErrors))
+	itemErrors := 0
+	if result.CallErr != nil {
+		evaluationItems.WithLabelValues(rule.Name, "error").Add(float64(batch.Len()))
+	} else {
+		for _, item := range result.Items {
+			itemResult := "unmatched"
+			if item.Err != nil {
+				itemResult = "error"
+				itemErrors++
+			} else if item.Matched {
+				itemResult = "matched"
+			}
+			evaluationItems.WithLabelValues(rule.Name, itemResult).Inc()
+		}
+		if itemErrors > 0 {
+			callResult = "error"
+		}
 	}
+	evaluationTotal.WithLabelValues(rule.Name, callResult).Inc()
 	return result
 }
 
@@ -472,6 +500,7 @@ func (s *Service) prepare(batch *batch) errors.Error {
 				continue
 			}
 			if !item.result.Matched {
+				drops.WithLabelValues("rule", "unmatched").Inc()
 				continue
 			}
 
@@ -507,30 +536,37 @@ func (s *Service) publish(ctx context.Context, batch *batch) errors.Error {
 			if item.result.Err != nil || !item.result.Matched {
 				continue
 			}
-			startWrite := time.Now()
-			if err := s.writeWithRetries(ctx, s.mergerWriter, item.alert, alertsWriteErrors); err != nil {
+			if err := s.writeWithRetries(ctx, s.mergerWriter, "output", item.alert); err != nil {
 				return err
 			}
-			alertsWriteDuration.Observe(time.Since(startWrite).Seconds())
-			ruleMatches.WithLabelValues(entry.meta.Name).Inc()
-			alertsOut.Inc()
 		}
 	}
 	for _, rec := range batch.dlq {
-		if err := s.writeWithRetries(ctx, s.dlqWriter, rec, dlqWriteErrors); err != nil {
+		if err := s.writeWithRetries(ctx, s.dlqWriter, "dlq", rec.message); err != nil {
 			return err
 		}
+		dlqRecords.WithLabelValues(rec.stage).Inc()
 	}
 	return nil
 }
 
 // writeWithRetries retries a publish until it succeeds or the context is canceled.
-func (s *Service) writeWithRetries(ctx context.Context, w brokers.Writer, msg brokers.Message, errCount prometheus.Counter) errors.Error {
+func (s *Service) writeWithRetries(ctx context.Context, w brokers.Writer, destination string, msg brokers.Message) errors.Error {
+	attempt := 0
 	err := backoff.Retry(func() error {
+		attempt++
+		if attempt > 1 {
+			writeRetry.WithLabelValues(destination).Inc()
+		}
+		start := time.Now()
 		if werr := w.WriteMessages(ctx, msg); werr != nil {
-			errCount.Inc()
+			writeTime.WithLabelValues(destination).Observe(time.Since(start).Seconds())
+			writeTotal.WithLabelValues(destination, metricResult(ctx, werr)).Inc()
 			return werr
 		}
+		writeTime.WithLabelValues(destination).Observe(time.Since(start).Seconds())
+		writeTotal.WithLabelValues(destination, "ok").Inc()
+		recordsOut.WithLabelValues(destination).Inc()
 		return nil
 	}, s.newBackoff(ctx))
 	if err != nil {
@@ -544,10 +580,24 @@ func (s *Service) queueDLQ(batch *batch, source brokers.Message, stage, reason s
 	msg, err := dlq.Record(source, stage, reason, attempts)
 	if err != nil {
 		s.logger.ErrorF("dropping dead-letter record (stage=%s): %v", stage, err)
+		scope := "event"
+		if stage == "rule" {
+			scope = "rule"
+		}
+		drops.WithLabelValues(scope, "dlq_encode").Inc()
 		return
 	}
-	dlqOut.WithLabelValues(stage).Inc()
-	batch.dlq = append(batch.dlq, msg)
+	batch.dlq = append(batch.dlq, preparedDLQ{message: msg, stage: stage})
+}
+
+func metricResult(ctx context.Context, err error) string {
+	if err == nil {
+		return "ok"
+	}
+	if ctx.Err() != nil {
+		return "canceled"
+	}
+	return "error"
 }
 
 // newBackoff returns the service's exponential retry policy (RetryBaseMS initial, RetryCapMS cap, jittered).

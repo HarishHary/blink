@@ -27,13 +27,29 @@ import (
 )
 
 var (
-	eventsIn        = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "event_matcher", Name: "events_in_total"})
-	eventsForwarded = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "event_matcher", Name: "events_forwarded_total"})
-	readErrors      = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "event_matcher", Name: "read_errors_total"})
-	parseErrors     = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "event_matcher", Name: "parse_errors_total"})
-	writeErrors     = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "event_matcher", Name: "write_errors_total"})
-	matchDuration   = promauto.NewHistogramVec(prometheus.HistogramOpts{Namespace: "blink", Subsystem: "event_matcher", Name: "match_duration_seconds", Buckets: prometheus.DefBuckets}, []string{"matcher"})
-	rulesRouted     = promauto.NewHistogram(prometheus.HistogramOpts{Namespace: "blink", Subsystem: "event_matcher", Name: "rules_routed_per_event", Buckets: []float64{0, 1, 5, 10, 25, 50, 100}})
+	durationBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60}
+	batchBuckets    = []float64{0, 1, 10, 50, 100, 500, 1000, 5000, 10000, 50000}
+	eventsIn        = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "event_matcher", Name: "events_in_total", Help: "Records returned by successful broker batch reads, including invalid records."})
+	batchSize       = promauto.NewHistogram(prometheus.HistogramOpts{Namespace: "blink", Subsystem: "event_matcher", Name: "batch_size", Help: "Records returned by each successful broker batch read.", Buckets: batchBuckets})
+	readBatchTotal  = promauto.NewCounterVec(prometheus.CounterOpts{Namespace: "blink", Subsystem: "event_matcher", Name: "read_batch_total", Help: "Broker batch read attempts by result."}, []string{"result"})
+	readBatchTime   = promauto.NewHistogram(prometheus.HistogramOpts{Namespace: "blink", Subsystem: "event_matcher", Name: "read_batch_seconds", Help: "Duration of broker batch read attempts.", Buckets: durationBuckets})
+	batchTotal      = promauto.NewCounterVec(prometheus.CounterOpts{Namespace: "blink", Subsystem: "event_matcher", Name: "batch_processing_total", Help: "Fetched batch resolution attempts by result, excluding broker reads and commits."}, []string{"result"})
+	batchTime       = promauto.NewHistogram(prometheus.HistogramOpts{Namespace: "blink", Subsystem: "event_matcher", Name: "batch_processing_seconds", Help: "Duration of fetched batch resolution, excluding broker reads and commits.", Buckets: durationBuckets})
+	commitTotal     = promauto.NewCounterVec(prometheus.CounterOpts{Namespace: "blink", Subsystem: "event_matcher", Name: "commit_total", Help: "Broker commit attempts by result."}, []string{"result"})
+	commitTime      = promauto.NewHistogram(prometheus.HistogramOpts{Namespace: "blink", Subsystem: "event_matcher", Name: "commit_seconds", Help: "Duration of broker commit attempts.", Buckets: durationBuckets})
+	evaluationTotal = promauto.NewCounterVec(prometheus.CounterOpts{Namespace: "blink", Subsystem: "event_matcher", Name: "evaluation_total", Help: "Admitted matcher runtime call attempts by plugin and result."}, []string{"plugin", "result"})
+	evaluationTime  = promauto.NewHistogramVec(prometheus.HistogramOpts{Namespace: "blink", Subsystem: "event_matcher", Name: "evaluation_seconds", Help: "Matcher runtime call duration after admission, excluding retry backoff.", Buckets: durationBuckets}, []string{"plugin"})
+	evaluationItems = promauto.NewCounterVec(prometheus.CounterOpts{Namespace: "blink", Subsystem: "event_matcher", Name: "evaluation_items_total", Help: "Matcher item attempts by plugin and result."}, []string{"plugin", "result"})
+	evaluationRetry = promauto.NewCounterVec(prometheus.CounterOpts{Namespace: "blink", Subsystem: "event_matcher", Name: "evaluation_retries_total", Help: "Additional admitted matcher runtime calls after the first call in a retry loop."}, []string{"plugin"})
+	evaluationsLive = promauto.NewGauge(prometheus.GaugeOpts{Namespace: "blink", Subsystem: "event_matcher", Name: "evaluations_in_flight", Help: "Matcher runtime calls currently admitted."})
+	writeTotal      = promauto.NewCounterVec(prometheus.CounterOpts{Namespace: "blink", Subsystem: "event_matcher", Name: "write_total", Help: "Broker write attempts by destination and result."}, []string{"destination", "result"})
+	writeTime       = promauto.NewHistogramVec(prometheus.HistogramOpts{Namespace: "blink", Subsystem: "event_matcher", Name: "write_seconds", Help: "Duration of broker write attempts by destination.", Buckets: durationBuckets}, []string{"destination"})
+	writeRetry      = promauto.NewCounterVec(prometheus.CounterOpts{Namespace: "blink", Subsystem: "event_matcher", Name: "write_retries_total", Help: "Additional broker write attempts after the first call in a retry loop."}, []string{"destination"})
+	recordsOut      = promauto.NewCounterVec(prometheus.CounterOpts{Namespace: "blink", Subsystem: "event_matcher", Name: "records_out_total", Help: "Records acknowledged by broker writes by destination."}, []string{"destination"})
+	dlqRecords      = promauto.NewCounterVec(prometheus.CounterOpts{Namespace: "blink", Subsystem: "event_matcher", Name: "dlq_records_total", Help: "Dead-letter records acknowledged by broker writes by processing stage."}, []string{"stage"})
+	drops           = promauto.NewCounterVec(prometheus.CounterOpts{Namespace: "blink", Subsystem: "event_matcher", Name: "drops_total", Help: "Drop decisions by scope and reason; may include decisions from batches that are not committed."}, []string{"scope", "reason"})
+	rulesRouted     = promauto.NewHistogram(prometheus.HistogramOpts{Namespace: "blink", Subsystem: "event_matcher", Name: "rules_routed_per_event", Help: "Eligible rules routed for each valid source event.", Buckets: []float64{0, 1, 5, 10, 25, 50, 100}})
+	batchReplays    = promauto.NewCounter(prometheus.CounterOpts{Namespace: "blink", Subsystem: "event_matcher", Name: "batch_replays_total", Help: "Additional fetched batch resolution attempts after matcher generation changes."})
 )
 
 const (
@@ -106,6 +122,7 @@ const (
 type preparedRecord struct {
 	kind    terminalKind
 	message brokers.Message
+	stage   string
 }
 
 // ruleCandidate is a rule selected by log type, still eligible until a matcher rejects it.
@@ -231,25 +248,39 @@ func (s *Service) Run(ctx context.Context) errors.Error {
 	}()
 
 	for {
+		start := time.Now()
 		msgs, err := reader.ReadBatch(ctx, s.config.BatchSize)
+		readBatchTime.Observe(time.Since(start).Seconds())
+		readBatchTotal.WithLabelValues(metricResult(ctx, err)).Inc()
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
-			readErrors.Inc()
 			return errors.NewE(err)
 		}
-		if err := s.resolveBatch(ctx, msgs); err != nil {
+		eventsIn.Add(float64(len(msgs)))
+		batchSize.Observe(float64(len(msgs)))
+
+		start = time.Now()
+		batchErr := s.resolveBatch(ctx, msgs)
+		batchTime.Observe(time.Since(start).Seconds())
+		batchTotal.WithLabelValues(metricResult(ctx, batchErr)).Inc()
+		if batchErr != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
-			return err
+			return batchErr
 		}
-		if err := reader.CommitMessages(ctx, msgs...); err != nil {
+
+		start = time.Now()
+		commitErr := reader.CommitMessages(ctx, msgs...)
+		commitTime.Observe(time.Since(start).Seconds())
+		commitTotal.WithLabelValues(metricResult(ctx, commitErr)).Inc()
+		if commitErr != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
-			return errors.NewE(err)
+			return errors.NewE(commitErr)
 		}
 	}
 }
@@ -316,6 +347,7 @@ func (s *Service) resolveBatch(ctx context.Context, msgs []brokers.Message) erro
 		if !wait(ctx, policy) {
 			return err
 		}
+		batchReplays.Inc()
 	}
 }
 
@@ -388,13 +420,10 @@ func (s *Service) decode(b *batch) {
 		b.states[i] = state
 		var evt events.Event
 		if err := json.Unmarshal(msg.Value, &evt); err != nil {
-			parseErrors.Inc()
 			prepared := s.prepareDLQ(msg, "decode", err.Error(), 0)
 			state.prepared = &prepared
 			continue
 		}
-		eventsIn.Inc()
-
 		logType, ok := evt["log_type"].(string)
 		if !ok {
 			prepared := s.prepareDLQ(msg, "log_type", "event log_type must be a string", 0)
@@ -404,6 +433,7 @@ func (s *Service) decode(b *batch) {
 
 		candidates := rules.RulesForLogTypeIn(b.ruleState.Primaries, logType)
 		if len(candidates) == 0 {
+			drops.WithLabelValues("event", "no_rules").Inc()
 			state.prepared = &preparedRecord{kind: terminalDrop}
 			continue
 		}
@@ -411,7 +441,6 @@ func (s *Service) decode(b *batch) {
 		// Encode once for matching and forwarding; encoding failures go to the DLQ without retries.
 		raw, encodeErr := evt.Marshal()
 		if encodeErr != nil {
-			parseErrors.Inc()
 			prepared := s.prepareDLQ(msg, "encode", encodeErr.Error(), 0)
 			state.prepared = &prepared
 			continue
@@ -497,7 +526,7 @@ func (s *Service) matchWithRetries(ctx context.Context, b *batch, entry *matcher
 			pendingEvents[i] = item.state.event
 			pendingRaw[i] = item.state.raw
 		}
-		result := s.match(ctx, b, entry.meta, events.NewBatch(pendingEvents, pendingRaw))
+		result := s.match(ctx, b, entry.meta, events.NewBatch(pendingEvents, pendingRaw), attempt > 1)
 		if ctx.Err() != nil {
 			return unavailable
 		}
@@ -548,20 +577,48 @@ func (s *Service) matchWithRetries(ctx context.Context, b *batch, entry *matcher
 }
 
 // match performs one bounded, timed runtime call for the pending items.
-func (s *Service) match(ctx context.Context, b *batch, matcher *matchers.MatcherMetadata, pending *events.Batch) matchers.MatchResult {
+func (s *Service) match(ctx context.Context, b *batch, matcher *matchers.MatcherMetadata, pending *events.Batch, retry bool) matchers.MatchResult {
 	if err := s.sem.Acquire(ctx, 1); err != nil {
 		return matchers.MatchResult{CallErr: errors.NewE(err)}
 	}
-	defer s.sem.Release(1)
+	if retry {
+		evaluationRetry.WithLabelValues(matcher.Name).Inc()
+	}
+	evaluationsLive.Inc()
+	defer func() {
+		evaluationsLive.Dec()
+		s.sem.Release(1)
+	}()
 
 	matchCtx, cancel := context.WithTimeout(ctx, time.Duration(s.config.TimeoutSec)*time.Second)
 	defer cancel()
 	start := time.Now()
 	result := s.matcherRuntime.Match(matchCtx, b.matcherState, matcher.Id, pending)
-	matchDuration.WithLabelValues(matcher.Name).Observe(time.Since(start).Seconds())
+	evaluationTime.WithLabelValues(matcher.Name).Observe(time.Since(start).Seconds())
+	callResult := metricResult(ctx, result.CallErr)
+	itemErrors := 0
 	if result.CallErr == nil && len(result.Items) != pending.Len() {
-		return matchers.MatchResult{CallErr: errors.NewF("matcher %s returned invalid result shape", matcher.Name)}
+		result = matchers.MatchResult{CallErr: errors.NewF("matcher %s returned invalid result shape", matcher.Name)}
+		callResult = "error"
 	}
+	if result.CallErr != nil {
+		evaluationItems.WithLabelValues(matcher.Name, "error").Add(float64(pending.Len()))
+	} else {
+		for _, item := range result.Items {
+			itemResult := "unmatched"
+			if item.Err != nil {
+				itemResult = "error"
+				itemErrors++
+			} else if item.Matched {
+				itemResult = "matched"
+			}
+			evaluationItems.WithLabelValues(matcher.Name, itemResult).Inc()
+		}
+		if itemErrors > 0 {
+			callResult = "error"
+		}
+	}
+	evaluationTotal.WithLabelValues(matcher.Name, callResult).Inc()
 	return result
 }
 
@@ -587,6 +644,7 @@ func (s *Service) prepare(b *batch) {
 		rulesRouted.Observe(float64(len(ruleIDs)))
 
 		if len(ruleIDs) == 0 {
+			drops.WithLabelValues("event", "unmatched").Inc()
 			state.prepared = &preparedRecord{kind: terminalDrop}
 			continue
 		}
@@ -600,24 +658,31 @@ func (s *Service) prepare(b *batch) {
 // publish preserves fetched order, batching consecutive records bound for the same writer.
 func (s *Service) publish(ctx context.Context, b *batch) errors.Error {
 	var (
-		pending     []brokers.Message
-		pendingKind terminalKind
+		pending       []brokers.Message
+		pendingStages []string
+		pendingKind   terminalKind
 	)
 	flush := func() errors.Error {
 		if len(pending) == 0 {
 			return nil
 		}
 		writer := s.executorWriter
+		destination := "output"
 		if pendingKind == terminalDLQ {
 			writer = s.dlqWriter
+			destination = "dlq"
 		}
-		if err := s.writeWithRetries(ctx, writer, pending...); err != nil {
+		if err := s.writeWithRetries(ctx, writer, destination, pending...); err != nil {
 			return err
 		}
-		if pendingKind == terminalNormal {
-			eventsForwarded.Add(float64(len(pending)))
+		recordsOut.WithLabelValues(destination).Add(float64(len(pending)))
+		if pendingKind == terminalDLQ {
+			for _, stage := range pendingStages {
+				dlqRecords.WithLabelValues(stage).Inc()
+			}
 		}
 		pending = nil
+		pendingStages = nil
 		return nil
 	}
 	for _, state := range b.states {
@@ -635,19 +700,27 @@ func (s *Service) publish(ctx context.Context, b *batch) errors.Error {
 		}
 		pendingKind = kind
 		pending = append(pending, state.prepared.message)
+		if kind == terminalDLQ {
+			pendingStages = append(pendingStages, state.prepared.stage)
+		}
 	}
 	return flush()
 }
 
 // writeWithRetries bounds each publish so Runner can restart a failed service attempt.
-func (s *Service) writeWithRetries(ctx context.Context, w brokers.Writer, msgs ...brokers.Message) errors.Error {
+func (s *Service) writeWithRetries(ctx context.Context, w brokers.Writer, destination string, msgs ...brokers.Message) errors.Error {
 	policy := s.newBackoff(ctx)
 	for attempt := 1; ; attempt++ {
+		if attempt > 1 {
+			writeRetry.WithLabelValues(destination).Inc()
+		}
+		start := time.Now()
 		err := w.WriteMessages(ctx, msgs...)
+		writeTime.WithLabelValues(destination).Observe(time.Since(start).Seconds())
+		writeTotal.WithLabelValues(destination, metricResult(ctx, err)).Inc()
 		if err == nil {
 			return nil
 		}
-		writeErrors.Inc()
 		if attempt >= s.config.MaxAttempts || !wait(ctx, policy) {
 			return errors.NewE(err)
 		}
@@ -659,9 +732,20 @@ func (s *Service) prepareDLQ(source brokers.Message, stage, reason string, attem
 	msg, err := dlq.Record(source, stage, reason, attempts)
 	if err != nil {
 		s.logger.ErrorF("dropping dead-letter record (stage=%s): %v", stage, err)
+		drops.WithLabelValues("event", "dlq_encode").Inc()
 		return preparedRecord{kind: terminalDrop}
 	}
-	return preparedRecord{kind: terminalDLQ, message: msg}
+	return preparedRecord{kind: terminalDLQ, message: msg, stage: stage}
+}
+
+func metricResult(ctx context.Context, err error) string {
+	if err == nil {
+		return "ok"
+	}
+	if ctx.Err() != nil {
+		return "canceled"
+	}
+	return "error"
 }
 
 // newBackoff returns a jittered exponential policy; callers bound attempts and elapsed time.

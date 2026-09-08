@@ -106,28 +106,20 @@ Two registries. The health server serves the default Go registry; radar serves i
 
 The radar series carry the `rule` namespace label. The `:8080` series carry no namespace label.
 
-| Metric                                                   | Meaning                                                              |
-| -------------------------------------------------------- | -------------------------------------------------------------------- |
-| `blink_rule_executor_batch_size`                         | Records returned by each successful fetch.                           |
-| `blink_rule_executor_events_in_total`                    | Records fetched, including records later dead-lettered or dropped.   |
-| `blink_rule_executor_alerts_out_total`                   | Alerts acknowledged by the merger-topic writer.                      |
-| `blink_rule_executor_rule_evaluation_seconds{rule}`      | One rule application call, including failed calls.                   |
-| `blink_rule_executor_rule_evaluation_errors_total{rule}` | Whole-call failures plus failed result items.                        |
-| `blink_rule_executor_read_batch_errors_total`            | Failed batch fetches; context cancellation excluded.                 |
-| `blink_rule_executor_read_batch_seconds`                 | Batch-fetch latency, including failed fetches.                       |
-| `blink_rule_executor_commit_errors_total`                | Failed source-offset commits; context cancellation excluded.         |
-| `blink_rule_executor_commit_seconds`                     | Successful source-offset commit latency.                             |
-| `blink_rule_executor_events_parse_errors_total`          | Invalid protobuf, missing event, or event re-encoding failure.       |
-| `blink_rule_executor_events_invalid_log_type_total`      | Events whose `log_type` is not a string.                             |
-| `blink_rule_executor_events_no_rules_total`              | Valid events with no rules selected before enabled/subkey filtering. |
-| `blink_rule_executor_batch_processing_seconds`           | Successful fetch-through-commit latency.                             |
-| `blink_rule_executor_rules_per_batch`                    | Distinct rules evaluated in a fetched batch.                         |
-| `blink_rule_executor_concurrent_rules`                   | Rule application calls holding a service concurrency permit.         |
-| `blink_rule_executor_alerts_write_errors_total`          | Failed merger-topic write attempts.                                  |
-| `blink_rule_executor_alerts_write_seconds`               | Successful alert publication latency, including retries.             |
-| `blink_rule_executor_dlq_records_total{stage}`           | Serialized executor DLQ records by failure stage.                    |
-| `blink_rule_executor_dlq_write_errors_total`             | Failed executor-DLQ write attempts.                                  |
-| `blink_rule_executor_rule_matches_total{rule}`           | Matched alerts acknowledged by the merger-topic writer.              |
+The [Kafka-stage metric contract](README.md#kafka-stage-metrics) defines the shared counters, histograms, labels, and measurement points. Use prefix `blink_rule_executor_`.
+`destination="output"` means the merger-topic writer; `plugin` is the rule name. DLQ stages are `decode`, `log_type`, `rules`, `encode`, and `rule`.
+
+| Additional metric                     | Meaning                                                                                                                                 |
+| ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `blink_rule_executor_rules_per_batch` | Distinct rules selected for evaluation after decoding, including zero-work batches; buckets `0, 1, 5, 10, 25, 50, 100, 250, 500, 1000`. |
+
+Drop decisions distinguish source events from individual rule decisions:
+
+- `scope="event"`: `no_rules` when no rules are selected; `dlq_encode` when a pre-evaluation dead-letter envelope cannot be serialized.
+- `scope="rule"`: `disabled` for disabled log-type candidates during implicit selection, `missing_subkeys` for a selected rule missing required event fields, `unmatched` for a successful non-match, or `dlq_encode` for a failed rule's unserializable dead-letter envelope.
+
+One input can produce several rule-scoped drops and still publish an alert for another rule. A disabled-only implicit selection also produces an event-scoped `no_rules` decision; scopes must not be summed as unique inputs.
+An unavailable explicit rule ID is a `rules` DLQ, not a disabled-rule drop. See the [migration table](README.md#migration-from-earlier-service-metrics) for replaced names and changed semantics.
 
 ## Kafka batch contract
 
