@@ -35,7 +35,7 @@ Events
   -> Detect                current: rule_executor
   -> Correlate             planned
   -> Tune                  planned; tuning plugin contracts exist
-  -> Enrich/Investigate    planned; enrichment plugin contracts exist
+  -> Enrich                planned; enrichment plugin contracts exist
   -> Format                planned; formatter plugin contracts exist
   -> Deliver               planned
 ```
