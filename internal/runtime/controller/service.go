@@ -40,6 +40,7 @@ func (s *Service[T]) Run(ctx context.Context) errs.Error {
 	if name != app.Name() {
 		return errs.NewE(errors.Join(fmt.Errorf("loaded application name %q, want %q", name, app.Name()), s.cleanupAttempt(ctx, app, name)))
 	}
+	//argus:allow A2011 zero-value options have nil Env and no shared mutable payload
 	if err := s.node.ApplicationStart(name, gen.ApplicationOptions{}); err != nil {
 		app.Seal()
 		return errs.NewE(errors.Join(fmt.Errorf("start %s: %w", name, err), s.forceStop(name), s.cleanupAttempt(ctx, app, name)))

@@ -82,6 +82,21 @@ type EntryChange struct {
 	Entry EffectiveEntry
 }
 
+// Clone returns a deep copy of the entry change.
+func (c EntryChange) Clone() EntryChange {
+	c.Entry = c.Entry.Clone()
+	return c
+}
+
+// CloneEntryChanges returns independent copies of entry changes.
+func CloneEntryChanges(changes []EntryChange) []EntryChange {
+	cloned := append([]EntryChange(nil), changes...)
+	for i := range cloned {
+		cloned[i] = cloned[i].Clone()
+	}
+	return cloned
+}
+
 // Snapshot is a sorted set of EffectiveEntry consumed by executors; Generation is either the
 // controller's fleet-wide DB generation or a reader's per-pod change token, never both.
 type Snapshot struct {
@@ -95,9 +110,6 @@ func (s *Snapshot) Clone() *Snapshot {
 		return nil
 	}
 	clone := *s
-	clone.Entries = append([]EffectiveEntry(nil), s.Entries...)
-	for i := range clone.Entries {
-		clone.Entries[i] = clone.Entries[i].Clone()
-	}
+	clone.Entries = CloneEntries(s.Entries)
 	return &clone
 }

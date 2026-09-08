@@ -180,6 +180,7 @@ func (s *supervisor[T]) HandleMessage(from gen.PID, message any) error {
 		if s.actor.pid == from {
 			if err := s.Send(from, m); err != nil && !stalePIDSendFailure(err) {
 				s.Log().Error("snapshot writer I/O completion forwarding failed: name=%s child=%s alias=%s error=%v", s.Name(), from, m.Alias, err)
+				//argus:allow A2012 forwarding failure is fatal because losing this completion blocks writer replacement and drain
 				return fmt.Errorf("forward snapshot writer I/O completion to %s: %w", from, err)
 			}
 		}
