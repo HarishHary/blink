@@ -61,12 +61,13 @@ helm upgrade --install blink deployments/helm/blink --namespace blink --create-n
 
 ### Build images
 
-For Minikube, build the three documented images into its image store:
+For Minikube, build the four documented images into its image store:
 
 ```bash
 minikube image build --tag localhost/blink-controller:latest --file cmd/controller/Dockerfile .
 minikube image build --tag localhost/blink-event-matcher:latest --file cmd/event_matcher/Dockerfile .
 minikube image build --tag localhost/blink-rule-executor:latest --file cmd/rule_executor/Dockerfile .
+minikube image build --tag localhost/blink-rule-tuner:latest --file cmd/rule_tuner/Dockerfile .
 ```
 
 ## Helm validation and install
@@ -129,9 +130,10 @@ kubectl get kafka,kafkatopic -n kafka
 kubectl get scaledobjects -n blink
 kubectl rollout status deployment/event-matcher --namespace blink --timeout=120s
 kubectl rollout status deployment/rule-executor --namespace blink --timeout=120s
+kubectl rollout status deployment/rule-tuner --namespace blink --timeout=120s
 ```
 
-Every workload serves `/health/live`, `/health/ready`, and `/metrics` on port 8080. Readiness is per service - see [services](../docs/services/README.md); `event-matcher` waits on matcher and rule state, while `rule-executor` waits on rule state before consuming.
+Every workload serves `/health/live`, `/health/ready`, and `/metrics` on port 8080. Readiness is per service - see [services](../docs/services/README.md); `event-matcher` waits on matcher and rule state, `rule-executor` waits on rule state, and `rule-tuner` waits on tuning state before consuming.
 
 Every workload that runs an Ergo node additionally serves radar on port 9090 (`radar.port`, `RADAR_HOST`/`RADAR_PORT`): `/metrics` for its per-namespace control-plane series and `/health/ready`,
 which reports 503 while any namespace on that node is not ready. Alert merger runs no node and sets `node: false`, so it has neither the port nor the scrape annotation. The kubelet probes stay on 8080 on purpose - the controller Service is how executors resolve the Ergo cluster port, so a degraded namespace must not remove the pod from it.
@@ -271,6 +273,7 @@ kubectl rollout status deployment/event-matcher --namespace blink --timeout=60s
 - [Controller](../docs/services/controller.md)
 - [Event matcher](../docs/services/event_matcher.md)
 - [Rule executor](../docs/services/rule_executor.md)
+- [Rule tuner](../docs/services/rule_tuner.md)
 - [Runtime overview](../docs/internals/README.md)
 - [Message flow](../docs/internals/message-flow.md)
 - [Concurrency knobs](../docs/internals/concurrency-knobs.md)
