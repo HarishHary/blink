@@ -3,11 +3,11 @@ module github.com/harishhary/blink
 go 1.26
 
 require (
-	ergo.services/actor/health v0.1.0
-	ergo.services/actor/metrics v0.3.0
+	ergo.services/actor/health v0.0.0-20260807131927-95b2e1ebf6fe
+	ergo.services/actor/metrics v0.2.2-0.20260807131927-95b2e1ebf6fe
 	ergo.services/application/mcp v0.0.0-20260807132520-3b2d3707a392
 	ergo.services/application/observer v0.2.1
-	ergo.services/application/radar v0.1.0
+	ergo.services/application/radar v0.0.0-20260807132520-3b2d3707a392
 	ergo.services/ergo v1.999.330
 	ergo.services/registrar/etcd v0.3.1-0.20260806082553-384fc6fb1b2f
 	github.com/Azure/azure-sdk-for-go/sdk/messaging/azeventhubs/v2 v2.0.2
