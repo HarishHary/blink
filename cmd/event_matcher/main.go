@@ -10,12 +10,12 @@ import (
 	"time"
 
 	"ergo.services/ergo/gen"
+	"github.com/harishhary/blink/cmd/event_matcher/matcher"
 	"github.com/harishhary/blink/internal/brokers"
 	"github.com/harishhary/blink/internal/logger"
 	"github.com/harishhary/blink/internal/runtime/plugin"
 	"github.com/harishhary/blink/internal/runtime/snapshot"
 	"github.com/harishhary/blink/internal/services"
-	"github.com/harishhary/blink/pkg/matchers"
 	"github.com/harishhary/blink/pkg/rules"
 )
 
@@ -25,38 +25,15 @@ const runtimeShutdownTimeout = 45 * time.Second
 // config is everything event_matcher needs. See docs/services/event_matcher.md.
 type config struct {
 	services.Common
-	Config
+	matcher.Config
 	plugin.EtcdClusterConfig
-	// ControllerNodeHost names the controller node this executor subscribes to over the
-	// cluster. Must match cmd/controller's CONTROLLER_NODE_HOST.
 	ControllerNodeHost string `env:"CONTROLLER_NODE_HOST,optional"`
 	PodName            string `env:"POD_NAME,optional"`
 	PodIP              string `env:"POD_IP,optional"`
 	MatcherPluginDir   string `env:"MATCHER_PLUGIN_DIR"`
 }
 
-// application is the matcher plugin runtime plus the rule snapshot supervisor, so both start and stop with the node.
-type application struct {
-	*matchers.Application
-	ruleOpts snapshot.SupervisorOptions
-}
-
-// Load adds the rule snapshot supervisor to the matcher application's spec.
-func (a *application) Load(...any) (gen.ApplicationSpec, error) {
-	spec, err := a.Application.Load()
-	if err != nil {
-		return gen.ApplicationSpec{}, err
-	}
-	spec.Group = append(spec.Group, gen.ApplicationMemberSpec{
-		Factory: func() gen.ProcessBehavior {
-			return snapshot.NewSupervisor(a.ruleOpts, rules.Loader{})
-		},
-	})
-	spec.Map["rule_snapshot"] = snapshot.SupervisorName(a.ruleOpts.Namespace)
-	return spec, nil
-}
-
-// main starts the Ergo node, the matcher runtime, and the Runner, and runs them for the process lifetime. If the runtime stops, main exits and the pod restarts it.
+// main runs the matcher service and exits if its runtime stops.
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -91,20 +68,20 @@ func main() {
 		}
 	}
 
-	app := &application{
-		// Admission budgets come from the reader's batch size and the service's concurrency limit.
-		// ManagerOptions.ProcessBudget defaults to available CPUs when left unset.
-		Application: matchers.NewApplication(plugin.ApplicationOptions{MaxBatchSize: cfg.BatchSize, MaxConcurrentCalls: cfg.Concurrency, Namespace: "matcher",
-			SupervisorOptions: plugin.SupervisorOptions{
-				Directory:      cfg.MatcherPluginDir,
-				SnapshotReader: snapshotReaderFor("matcher"),
-			}}, rootLogger),
-		ruleOpts: snapshot.SupervisorOptions{
-			Namespace:          "rule",
-			ReaderActorOptions: snapshotReaderFor("rule"),
-			ProjectionMode:     snapshot.ProjectionCommitDirect,
+	// Match admission limits to the service; leave the process budget at its CPU-based default.
+	app := matcher.NewApplication(plugin.ApplicationOptions{
+		MaxBatchSize:       cfg.BatchSize,
+		MaxConcurrentCalls: cfg.Concurrency,
+		Namespace:          "matcher",
+		SupervisorOptions: plugin.SupervisorOptions{
+			Directory:      cfg.MatcherPluginDir,
+			SnapshotReader: snapshotReaderFor("matcher"),
 		},
-	}
+	}, snapshot.SupervisorOptions{
+		Namespace:          "rule",
+		ReaderActorOptions: snapshotReaderFor("rule"),
+		ProjectionMode:     snapshot.ProjectionCommitDirect,
+	}, rootLogger)
 
 	cluster := &plugin.ClusterOptions{Cookie: cfg.Cookie, Port: cfg.Port, Registrar: registrar, Flags: plugin.DefaultClusterFlags()}
 	host, err := plugin.Start(plugin.NodeOptions{
@@ -130,7 +107,7 @@ func main() {
 		}
 	}()
 
-	matcherSvc := NewService(rootLogger.With("component", "service"), cfg.Config, app, snapshot.NewProjectionClient[*rules.RuleMetadata](host.Node(), "rule"))
+	matcherSvc := matcher.NewService(rootLogger.With("component", "service"), cfg.Config, app, snapshot.NewProjectionClient[*rules.RuleMetadata](host.Node(), "rule"))
 	healthSvc := services.NewHealthService(":8080", matcherSvc.Ready, nil)
 	runner := services.New(rootLogger.With("component", "runner"))
 	runner.Register(matcherSvc, healthSvc)
