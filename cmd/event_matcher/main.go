@@ -67,6 +67,7 @@ func main() {
 		os.Exit(1)
 	}
 	cfg.Broker = brokers.NewKafkaBroker(cfg.Kafka)
+	cfg.Config = cfg.Config.WithDefaults()
 	rootLogger := logger.New("event-matcher", cfg.Debug)
 
 	runCtx, cancelRun := context.WithCancel(ctx)

@@ -1,4 +1,4 @@
-package main
+package matcher
 
 import (
 	"context"
@@ -37,14 +37,10 @@ var (
 )
 
 const (
-	// readinessInterval is how often the cached readiness verdict is refreshed.
 	readinessInterval = 500 * time.Millisecond
-	// readinessTimeout bounds the projection calls behind one readiness refresh.
-	readinessTimeout = time.Second
-	// readinessGrace is how long projections may stay unreadable before readiness is demoted.
-	readinessGrace = 2 * time.Second
-	// stateWaitMargin extends the matcher-call timeout that readMatcherState waits on a pending transition.
-	stateWaitMargin = time.Second
+	readinessTimeout  = time.Second
+	readinessGrace    = 2 * time.Second
+	stateWaitMargin   = time.Second
 )
 
 // MatcherRuntime is the matcher call surface consumed by Service.
@@ -54,53 +50,42 @@ type MatcherRuntime interface {
 	Status(context.Context) (plugin.SupervisorStatus, error)
 }
 
-// RuleStateSource supplies the committed rule state for each batch. No route readiness here: this
-// service reads rule metadata to route events, it never invokes a rule.
+// RuleStateSource supplies committed rule metadata for routing, not rule execution.
 type RuleStateSource interface {
 	State(context.Context) (snapshot.ProjectionState[*rules.RuleMetadata], error)
 }
 
-// Config is the set of dependencies NewService needs, injected by main. See docs/services/event_matcher.md.
+// Config supplies service dependencies and settings; see docs/services/event_matcher.md.
 type Config struct {
 	Broker        brokers.Broker
 	MatcherTopic  string `env:"KAFKA_TOPIC_MATCHER"`
 	MatcherGroup  string `env:"KAFKA_GROUP_MATCHER"`
 	ExecutorTopic string `env:"KAFKA_TOPIC_EXECUTOR"`
 	DLQTopic      string `env:"KAFKA_TOPIC_MATCHER_DLQ"`
-	// BatchSize is the number of events to process in a single batch, and the runtime's MaxBatchSize.
-	BatchSize int `env:"MAX_BATCH_SIZE,optional"`
-	// Concurrency is the maximum number of concurrent matcher runtime calls, and its MaxConcurrentCalls.
-	Concurrency int `env:"MAX_CONCURRENT_CALLS,optional"`
-	// TimeoutSec bounds each matcher runtime call in seconds.
-	TimeoutSec int `env:"MATCHER_TIMEOUT_SEC,optional"`
-	// MaxAttempts bounds attempts for matcher calls, batch replays, and broker writes. Matcher
-	// exhaustion dead-letters the event; write exhaustion fails the attempt without committing.
-	MaxAttempts int `env:"MATCHER_MAX_ATTEMPTS,optional"`
-	// RetryBaseMS is the initial matcher and publication retry delay in milliseconds.
-	RetryBaseMS int `env:"MATCHER_RETRY_BASE_MS,optional"`
-	// RetryCapMS bounds exponential matcher and publication retry delays in milliseconds.
-	RetryCapMS int `env:"MATCHER_RETRY_CAP_MS,optional"`
+	BatchSize     int    `env:"MAX_BATCH_SIZE,optional"`
+	Concurrency   int    `env:"MAX_CONCURRENT_CALLS,optional"`
+	TimeoutSec    int    `env:"MATCHER_TIMEOUT_SEC,optional"`
+	MaxAttempts   int    `env:"MATCHER_MAX_ATTEMPTS,optional"`
+	RetryBaseMS   int    `env:"MATCHER_RETRY_BASE_MS,optional"`
+	RetryCapMS    int    `env:"MATCHER_RETRY_CAP_MS,optional"`
 }
 
 // Service resolves each fetched event to a drop, executor record, or DLQ record before publishing in input order.
 type Service struct {
-	logger         *logger.Logger
-	config         Config
-	matcherRuntime MatcherRuntime
-	ruleState      RuleStateSource
-	executorWriter brokers.Writer
-	dlqWriter      brokers.Writer
-	sem            *semaphore.Weighted // bounds concurrent matcher runtime calls
-	ready          atomic.Bool         // Run is consuming
-	snapshotsReady atomic.Bool         // cached readiness verdict, refreshed by pollReadiness
-	readyAt        atomic.Int64        // unix nanos of the last verified readiness
-	// lastRuleAvailability suppresses repeated snapshot logging; only the consumer
-	// goroutine touches it.
+	logger               *logger.Logger
+	config               Config
+	matcherRuntime       MatcherRuntime
+	ruleState            RuleStateSource
+	executorWriter       brokers.Writer
+	dlqWriter            brokers.Writer
+	sem                  *semaphore.Weighted
+	ready                atomic.Bool
+	snapshotsReady       atomic.Bool
+	readyAt              atomic.Int64
 	lastRuleAvailability runtime.Availability
 }
 
-// batch pins the snapshots one fetched batch resolves against, so a rollover mid-flight
-// can't change the state it already routed on.
+// batch pins snapshots so a rollover cannot change in-flight routing.
 type batch struct {
 	msgs         []brokers.Message
 	matcherState snapshot.ProjectionState[*matchers.MatcherMetadata]
@@ -140,15 +125,14 @@ type matcherFailure struct {
 type eventState struct {
 	mu         sync.Mutex
 	event      events.Event
-	raw        []byte // the event's protobuf encoding, built once for every matcher call and the forward
+	raw        []byte
 	source     brokers.Message
 	candidates []*ruleCandidate
 	failure    *matcherFailure
 	prepared   *preparedRecord
 }
 
-// matcherItem is one event's stake in a matcher call: the candidates that call decides,
-// plus the reason its most recent attempt failed.
+// matcherItem tracks an event's candidates and latest failure for one matcher.
 type matcherItem struct {
 	state      *eventState
 	candidates []*ruleCandidate
@@ -161,29 +145,34 @@ type matcherEntry struct {
 	items []matcherItem
 }
 
-// NewService returns a matcher service, defaulting every unset tuning knob.
+// WithDefaults fills optional settings and ensures the retry cap is at least the base delay.
+func (c Config) WithDefaults() Config {
+	if c.BatchSize <= 0 {
+		c.BatchSize = 10000
+	}
+	if c.Concurrency <= 0 {
+		c.Concurrency = 10
+	}
+	if c.TimeoutSec <= 0 {
+		c.TimeoutSec = 10
+	}
+	if c.MaxAttempts <= 0 {
+		c.MaxAttempts = 3
+	}
+	if c.RetryBaseMS <= 0 {
+		c.RetryBaseMS = 100
+	}
+	if c.RetryCapMS <= 0 {
+		c.RetryCapMS = 5000
+	}
+	if c.RetryCapMS < c.RetryBaseMS {
+		c.RetryCapMS = c.RetryBaseMS
+	}
+	return c
+}
+
 func NewService(logger *logger.Logger, cfg Config, matcherRuntime MatcherRuntime, ruleState RuleStateSource) *Service {
-	if cfg.BatchSize <= 0 {
-		cfg.BatchSize = 50
-	}
-	if cfg.Concurrency <= 0 {
-		cfg.Concurrency = 8
-	}
-	if cfg.TimeoutSec <= 0 {
-		cfg.TimeoutSec = 10
-	}
-	if cfg.MaxAttempts <= 0 {
-		cfg.MaxAttempts = 3
-	}
-	if cfg.RetryBaseMS <= 0 {
-		cfg.RetryBaseMS = 100
-	}
-	if cfg.RetryCapMS <= 0 {
-		cfg.RetryCapMS = 5000
-	}
-	if cfg.RetryCapMS < cfg.RetryBaseMS {
-		cfg.RetryCapMS = cfg.RetryBaseMS
-	}
+	cfg = cfg.WithDefaults()
 
 	return &Service{
 		logger:         logger,
@@ -199,12 +188,10 @@ func NewService(logger *logger.Logger, cfg Config, matcherRuntime MatcherRuntime
 // Name identifies the service to the Runner.
 func (s *Service) Name() string { return "event-matcher" }
 
-// Ready reports the last polled verdict. Probes arrive at a rate the service does not
-// control, so they read a cached value instead of issuing their own projection calls.
+// Ready reports cached readiness without issuing projection calls for each probe.
 func (s *Service) Ready() bool { return s.ready.Load() && s.snapshotsReady.Load() }
 
-// Run consumes batches until the reader fails or ctx ends. The matcher runtime is owned by the
-// process, not this attempt, so Run just leaves the fetched batch uncommitted on the way out.
+// Run consumes batches until failure or cancellation, leaving unfinished batches uncommitted.
 func (s *Service) Run(ctx context.Context) errors.Error {
 	s.ready.Store(false)
 	s.snapshotsReady.Store(false)
@@ -222,8 +209,7 @@ func (s *Service) Run(ctx context.Context) errors.Error {
 		defer close(pollingDone)
 		s.pollReadiness(pollCtx)
 	}()
-	// Ready from here: this reports readable projections, not the stricter gate below, so a
-	// deployment with legitimately empty snapshots doesn't stall its own rollout.
+	// Readiness allows empty snapshots; consumption requires the stricter gate below.
 	s.ready.Store(true)
 
 	if err := s.waitForReady(ctx); err != nil {
@@ -232,8 +218,7 @@ func (s *Service) Run(ctx context.Context) errors.Error {
 		}
 		return errors.NewE(err)
 	}
-	// Seed the verdict: waitForReady already checked a stricter condition than the poller, and the
-	// first matcher call can make state unreadable before the poller samples it.
+	// Seed readiness before the first matcher call can temporarily block state reads.
 	s.readyAt.Store(time.Now().UnixNano())
 	s.snapshotsReady.Store(true)
 
@@ -269,8 +254,7 @@ func (s *Service) Run(ctx context.Context) errors.Error {
 	}
 }
 
-// waitForReady blocks until both projections are ready with primaries and the matcher runtime is
-// routable, so the first batch never races an empty matcher/rule set or a route still starting up.
+// waitForReady requires nonempty ready projections and a routable matcher runtime before consumption.
 func (s *Service) waitForReady(ctx context.Context) error {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
@@ -292,9 +276,7 @@ func (s *Service) waitForReady(ctx context.Context) error {
 	}
 }
 
-// pollReadiness refreshes the cached verdict every readinessInterval. Degraded stays not-ready,
-// since routing then runs on stale rules. An unreadable read only demotes readiness after
-// readinessGrace, since reads routinely fail while matcher calls are in flight.
+// pollReadiness refreshes readiness, allowing a grace period for degraded or unreadable projections.
 func (s *Service) pollReadiness(ctx context.Context) {
 	ticker := time.NewTicker(readinessInterval)
 	defer ticker.Stop()
@@ -319,13 +301,10 @@ func (s *Service) pollReadiness(ctx context.Context) {
 	}
 }
 
-// errBatchReplay means the matcher runtime moved to a new generation while the batch
-// was being resolved, so its events were never evaluated.
+// errBatchReplay signals a generation change before the batch was published.
 var errBatchReplay = stderrors.New("matcher generation changed mid-batch")
 
-// resolveBatch retries processBatch on errBatchReplay: a promotion retires the previous generation's
-// events before they're evaluated, and nothing has published yet, so replaying can't duplicate
-// output. MaxAttempts bounds the replays.
+// resolveBatch retries unpublished batches after generation changes, up to MaxAttempts.
 func (s *Service) resolveBatch(ctx context.Context, msgs []brokers.Message) errors.Error {
 	policy := s.newBackoff(ctx)
 	for attempt := 1; ; attempt++ {
@@ -352,8 +331,7 @@ func (s *Service) processBatch(ctx context.Context, msgs []brokers.Message) erro
 	if ctx.Err() != nil {
 		return errors.NewE(ctx.Err())
 	}
-	// ErrPluginUnavailable covers a retired router, a lost plugin process, or a promotion. Only a
-	// generation change invalidates the batch; anything else keeps its dead-letters.
+	// Only a generation change invalidates the batch; other unavailable errors keep their dead-letters.
 	if unavailable {
 		if state, err := s.readMatcherState(ctx); err == nil && state.CommittedGeneration != b.matcherState.CommittedGeneration {
 			return errors.NewE(errBatchReplay)
@@ -363,9 +341,7 @@ func (s *Service) processBatch(ctx context.Context, msgs []brokers.Message) erro
 	return s.publish(ctx, b)
 }
 
-// newBatch captures the snapshots one batch resolves against. A degraded rule projection still
-// routes on its last committed generation; Ready reports the degradation. Unavailable means no
-// generation ever parsed, so it must not route: zero candidates would silently drop every event.
+// newBatch pins snapshots, allowing degraded rules but rejecting unavailable rules to avoid silent drops.
 func (s *Service) newBatch(ctx context.Context, msgs []brokers.Message) (*batch, error) {
 	matcherState, err := s.readMatcherState(ctx)
 	if err != nil {
@@ -389,9 +365,7 @@ func (s *Service) newBatch(ctx context.Context, msgs []brokers.Message) (*batch,
 	return &batch{msgs: msgs, matcherState: matcherState, ruleState: ruleState}, nil
 }
 
-// readMatcherState reads the plugin runtime state, waiting out a pending transition instead of
-// failing the batch: the runtime won't serve state until the transition settles, which a stray
-// call from the previous batch can delay. Any other error means the runtime is gone, not busy.
+// readMatcherState retries unavailable state reads for the matcher timeout plus stateWaitMargin.
 func (s *Service) readMatcherState(ctx context.Context) (snapshot.ProjectionState[*matchers.MatcherMetadata], error) {
 	deadline := time.Now().Add(time.Duration(s.config.TimeoutSec)*time.Second + stateWaitMargin)
 	policy := s.newBackoff(ctx)
@@ -434,8 +408,7 @@ func (s *Service) decode(b *batch) {
 			continue
 		}
 
-		// Encode failures are data problems, not attempt failures, so they DLQ instead of retrying.
-		// Encoding once here, not per matcher call, avoids paying for it once per fan-out.
+		// Encode once for matching and forwarding; encoding failures go to the DLQ without retries.
 		raw, encodeErr := evt.Marshal()
 		if encodeErr != nil {
 			parseErrors.Inc()
@@ -488,8 +461,7 @@ func (s *Service) groupByMatcher(b *batch) map[string]*matcherEntry {
 	return byMatcher
 }
 
-// recordFailure keeps one failure per event: matchers resolve concurrently, so the lowest
-// identifier wins, keeping the dead-letter reason reproducible.
+// recordFailure keeps the lowest matcher identifier's failure for reproducible dead-letter reasons.
 func (s *eventState) recordFailure(matcher, reason string, attempts int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -498,8 +470,7 @@ func (s *eventState) recordFailure(matcher, reason string, attempts int) {
 	}
 }
 
-// evaluateMatchers resolves every matcher group concurrently and reports whether any
-// call was rejected as unavailable, which processBatch then attributes to a rollover or not.
+// evaluateMatchers resolves matcher groups concurrently and reports unavailable calls.
 func (s *Service) evaluateMatchers(ctx context.Context, b *batch) bool {
 	var unavailable atomic.Bool
 	var wg sync.WaitGroup
@@ -514,9 +485,7 @@ func (s *Service) evaluateMatchers(ctx context.Context, b *batch) bool {
 	return unavailable.Load()
 }
 
-// matchWithRetries retries one matcher's failed items and reports whether the runtime rejected a
-// call as unavailable. Items still pending at MaxAttempts dead-letter, since forwarding them would
-// mean an unevaluated event. Cancellation records nothing, leaving the batch for redelivery.
+// matchWithRetries retries failed items, records exhausted failures, and reports unavailable calls.
 func (s *Service) matchWithRetries(ctx context.Context, b *batch, entry *matcherEntry) bool {
 	pending := entry.items
 	unavailable := false
@@ -534,8 +503,7 @@ func (s *Service) matchWithRetries(ctx context.Context, b *batch, entry *matcher
 		}
 
 		if result.CallErr != nil {
-			// A whole-call failure retries every pending item; each keeps the reason it
-			// would dead-letter with.
+			// Whole-call failures retry every pending item with the same dead-letter reason.
 			s.logger.Error(result.CallErr)
 			if stderrors.Is(result.CallErr, runtime.ErrPluginUnavailable) {
 				unavailable = true
@@ -597,8 +565,7 @@ func (s *Service) match(ctx context.Context, b *batch, matcher *matchers.Matcher
 	return result
 }
 
-// prepare builds every terminal record before any broker write begins. Every outcome is
-// a per-event terminal, so preparation cannot fail an attempt.
+// prepare resolves every event to a terminal record before any broker write begins.
 func (s *Service) prepare(b *batch) {
 	for _, state := range b.states {
 		if state.prepared != nil {
@@ -630,7 +597,7 @@ func (s *Service) prepare(b *batch) {
 	}
 }
 
-// publish writes prepared records in fetched order, one write per run of consecutive records bound for the same writer
+// publish preserves fetched order, batching consecutive records bound for the same writer.
 func (s *Service) publish(ctx context.Context, b *batch) errors.Error {
 	var (
 		pending     []brokers.Message
@@ -697,9 +664,7 @@ func (s *Service) prepareDLQ(source brokers.Message, stage, reason string, attem
 	return preparedRecord{kind: terminalDLQ, message: msg}
 }
 
-// newBackoff returns the service's exponential retry policy (RetryBaseMS initial,
-// RetryCapMS cap, jittered). Every caller states its own stop condition, so the policy
-// itself never expires.
+// newBackoff returns a jittered exponential policy; callers bound attempts and elapsed time.
 func (s *Service) newBackoff(ctx context.Context) backoff.BackOffContext {
 	return backoff.WithContext(backoff.NewExponentialBackOff(
 		backoff.WithInitialInterval(time.Duration(s.config.RetryBaseMS)*time.Millisecond),
@@ -708,8 +673,7 @@ func (s *Service) newBackoff(ctx context.Context) backoff.BackOffContext {
 	), ctx)
 }
 
-// wait sleeps the policy's next delay and reports whether it elapsed rather than the
-// context ending, so each retry loop keeps its stop condition inline.
+// wait reports whether the next retry delay elapsed without cancellation or backoff exhaustion.
 func wait(ctx context.Context, policy backoff.BackOff) bool {
 	delay := policy.NextBackOff()
 	if delay == backoff.Stop {
@@ -731,8 +695,7 @@ const (
 	execRuleIDsField = 2
 )
 
-// execPayload frames an ExecMessage around an already-encoded event, reusing the encoding the
-// matcher calls used. // premature optimization here...
+// execPayload builds an ExecMessage using the event encoding already used by matcher calls.
 func execPayload(event []byte, ruleIDs []string) []byte {
 	size := protowire.SizeTag(execEventField) + protowire.SizeBytes(len(event))
 	for _, id := range ruleIDs {
