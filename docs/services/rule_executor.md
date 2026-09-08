@@ -119,7 +119,7 @@ Drop decisions distinguish source events from individual rule decisions:
 - `scope="rule"`: `disabled` for disabled log-type candidates during implicit selection, `missing_subkeys` for a selected rule missing required event fields, `unmatched` for a successful non-match, or `dlq_encode` for a failed rule's unserializable dead-letter envelope.
 
 One input can produce several rule-scoped drops and still publish an alert for another rule. A disabled-only implicit selection also produces an event-scoped `no_rules` decision; scopes must not be summed as unique inputs.
-An unavailable explicit rule ID is a `rules` DLQ, not a disabled-rule drop. See the [migration table](README.md#migration-from-earlier-service-metrics) for replaced names and changed semantics.
+An unavailable explicit rule ID is a `rules` DLQ, not a disabled-rule drop.
 
 ## Kafka batch contract
 

@@ -124,7 +124,7 @@ The [Kafka-stage metric contract](README.md#kafka-stage-metrics) defines the sha
 | `blink_event_matcher_batch_replays_total`    | Additional batch attempts actually begun after matcher generation changes. These do not increment fetched-input or evaluation-retry counts.          |
 
 Drop decisions have `scope="event"` and reasons `no_rules`, `unmatched`, or `dlq_encode`. Matcher has no per-rule drop series: individual candidate rejection is not a source-event drop.
-Routed-rule histogram buckets are `0, 1, 5, 10, 25, 50, 100`. See the [migration table](README.md#migration-from-earlier-service-metrics) for replaced names and changed semantics.
+Routed-rule histogram buckets are `0, 1, 5, 10, 25, 50, 100`.
 
 ## Kafka batch contract
 
