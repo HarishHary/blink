@@ -34,12 +34,12 @@ flowchart TB
   ruleSnap -.->|SubscribeRequest/SnapshotUpdate, cluster| ruleController[controller-rule-actor]
 ```
 
-| Message                                   | Direction                                                               | Meaning                                                                                                  |
-| ----------------------------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `plugin.Start`                            | `main` → Ergo node                                                      | Starts the node with cluster networking and radar, named `event-matcher-<pod>@<pod ip>`.                 |
-| `services.Runner.Register`                | `main` → matcher service, health service                                | Registers the two services.                                                                              |
-| `Application` (`matcher.NewApplication`)  | `main` → Ergo node                                                      | Loads the process-owned matcher application and the rule snapshot supervisor member, once at node start. |
-| `SubscribeRequest`/`SnapshotUpdate`       | matcher/rule snapshot supervisor ↔ namespace controller actor (cluster) | Subscribes to `controller-matcher-actor` and `controller-rule-actor`; receives pushed generations.       |
+| Message                                  | Direction                                                               | Meaning                                                                                                  |
+| ---------------------------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `plugin.Start`                           | `main` → Ergo node                                                      | Starts the node with cluster networking and radar, named `event-matcher-<pod>@<pod ip>`.                 |
+| `services.Runner.Register`               | `main` → matcher service, health service                                | Registers the two services.                                                                              |
+| `Application` (`matcher.NewApplication`) | `main` → Ergo node                                                      | Loads the process-owned matcher application and the rule snapshot supervisor member, once at node start. |
+| `SubscribeRequest`/`SnapshotUpdate`      | matcher/rule snapshot supervisor ↔ namespace controller actor (cluster) | Subscribes to `controller-matcher-actor` and `controller-rule-actor`; receives pushed generations.       |
 
 The matcher application is process-owned, not attempt-owned; the service borrows it through `Match`, `State`, and the rule projection client. A restarted attempt reuses the running runtime; an application that stops cancels the Runner and exits non-zero.
 
