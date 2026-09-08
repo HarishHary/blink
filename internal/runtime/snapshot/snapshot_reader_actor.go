@@ -158,7 +158,9 @@ func (a *readerActor) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error)
 // Terminate cancels any pending resubscribe and notifies the controller, best effort.
 func (a *readerActor) Terminate(error) {
 	defer a.reconcileStatus()
-	a.restart.CancelScheduled(false)
+	if a.restart != nil {
+		a.restart.CancelScheduled(false)
+	}
 	if a.subscribed {
 		_ = a.SendProcessID(a.opts.Endpoint, UnsubscribeRequest{ExecutorID: a.opts.ExecutorID})
 	}
