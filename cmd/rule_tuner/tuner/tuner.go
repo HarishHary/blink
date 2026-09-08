@@ -199,7 +199,6 @@ func (s *Service) Run(ctx context.Context) errors.Error {
 		defer close(pollingDone)
 		s.pollReadiness(pollCtx)
 	}()
-	s.ready.Store(true)
 
 	if err := s.waitForReady(ctx); err != nil {
 		if ctx.Err() != nil {
@@ -212,6 +211,7 @@ func (s *Service) Run(ctx context.Context) errors.Error {
 
 	s.logger.Info("runtime ready; consuming alerts (topic=%s group=%s)", s.config.TunerTopic, s.config.TunerGroup)
 	reader := s.config.Broker.NewReader(s.config.TunerTopic, s.config.TunerGroup)
+	s.ready.Store(true)
 	defer func() {
 		if err := reader.Close(); err != nil {
 			s.logger.Error(errors.NewE(err))
