@@ -129,6 +129,7 @@ func (m *snapshotWriterMeta) Start() (runErr error) {
 		}
 		m.Log().Info("snapshot writer loaded: alias=%s records=%d generation=%d entries=%d", m.ID(), len(records), generation, savedEntries)
 	}
+	//argus:allow A1001 record and snapshot clones are exclusively transferred to the receiver
 	if sendErr := m.Send(m.Parent(), MessageSnapshotLoadResult{
 		source:     m.ID(),
 		records:    records,
@@ -143,6 +144,7 @@ func (m *snapshotWriterMeta) Start() (runErr error) {
 		select {
 		case <-m.runCtx.Done():
 			return nil
+		//argus:allow A1005 jobs is initialized only by Init; channel send/receive/len/cap are concurrency-safe
 		case job := <-m.jobs:
 			m.labels.Set(m, metricWriteQueue, float64(len(m.jobs)))
 			m.Log().Debug("snapshot write started: alias=%s generation=%d changed=%t upserts=%d tombstones=%d", m.ID(), job.next.Generation, job.changed, len(job.upserts), len(job.tombstones))
