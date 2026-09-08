@@ -241,8 +241,9 @@ func (a *readerActor) scheduleSubscribeRestart() error {
 	return nil
 }
 
-// publishSnapshot sends the received snapshot to subscribers.
+// publishSnapshot publishes a cloned snapshot.
 func (a *readerActor) publishSnapshot(snap *Snapshot) {
+	//argus:allow A1001 cloned snapshot transfers to the event; subscribers treat the shared event as immutable
 	_ = a.SendEvent(a.snapshotEvent.name, a.snapshotEvent.token, snap.Clone())
 }
 
