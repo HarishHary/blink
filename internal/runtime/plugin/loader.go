@@ -111,7 +111,7 @@ func (BaseLoader[U, T]) RolloutPct(value T) float64 { return value.Metadata().Ro
 func isNilLoader[T any](loader Loader[T]) bool {
 	value := reflect.ValueOf(loader)
 	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
 		return value.IsNil()
 	default:
 		return false
