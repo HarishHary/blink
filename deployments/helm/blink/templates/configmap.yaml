@@ -11,6 +11,7 @@ data:
   ENVIRONMENT:           {{ .Values.environment | quote }}
   CONTROLLER_NODE_HOST:  {{ .Values.cluster.controllerNodeHost | quote }}
   ETCD_ENDPOINTS:        {{ .Values.etcd.endpoints | quote }}
+  DEBUG:                 {{ .Values.debug | quote }}
 
 ---
 apiVersion: v1

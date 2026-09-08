@@ -7,19 +7,16 @@ import "github.com/harishhary/blink/internal/brokers"
 // service uses - so each binary loads, and requires, exactly its own dependencies. Grow
 // Common as services reveal genuinely shared needs.
 type Common struct {
-	Kafka brokers.KafkaConfig
-	// Env selects log verbosity (dev|staging|integration|prod); see logger.New. Optional: an
-	// empty value defaults to integration (Debug off), which is the prod-safe default.
-	Env string `env:"ENVIRONMENT,optional"`
-	// Observer independently enables Ergo's observer app (see NodeOptions.Observer) - Env == "dev"
-	// still implies it, so a prod-level Env can opt in without dropping to debug logging. ObserverHost
-	// and ObserverPort bind it; empty values keep observer's own localhost:9911, which a port-forward
-	// reaches and nothing else does.
-	Observer     bool   `env:"OBSERVER_ENABLED,optional"`
-	ObserverHost string `env:"OBSERVER_HOST,optional"`
-	ObserverPort uint16 `env:"OBSERVER_PORT,optional"`
-	// RadarHost and RadarPort bind the node's radar endpoint, which serves Prometheus metrics and
-	// readiness signals; empty values keep plugin.RadarOptions' pod-reachable defaults.
-	RadarHost string `env:"RADAR_HOST,optional"`
-	RadarPort uint16 `env:"RADAR_PORT,optional"`
+	Kafka           brokers.KafkaConfig
+	Env             string `env:"ENVIRONMENT,optional"`   // Env names the Ergo cluster this process joins, as blink-<env>; it gates nothing else.
+	Debug           bool   `env:"DEBUG,optional"`         // Debug raises this process's logger and its Ergo node to debug level.
+	RadarEnabled    bool   `env:"RADAR_ENABLED,optional"` // radar serves Prometheus metrics and readiness signals
+	RadarHost       string `env:"RADAR_HOST,optional"`
+	RadarPort       uint16 `env:"RADAR_PORT,optional"`
+	ObserverEnabled bool   `env:"OBSERVER_ENABLED,optional"` // observer is Ergo's process-inspection UI
+	ObserverHost    string `env:"OBSERVER_HOST,optional"`
+	ObserverPort    uint16 `env:"OBSERVER_PORT,optional"`
+	MCPEnabled      bool   `env:"MCP_ENABLED,optional"` // MCP is Ergo's agent server.
+	MCPHost         string `env:"MCP_HOST,optional"`
+	MCPPort         uint16 `env:"MCP_PORT,optional"`
 }

@@ -34,12 +34,12 @@ flowchart TB
   ruleSnap -.->|SubscribeRequest/SnapshotUpdate, cluster| ruleController[controller-rule-actor]
 ```
 
-| Message                                   | Direction                                                               | Meaning                                                                                                  |
-| ----------------------------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `plugin.Start`                            | `main` → Ergo node                                                      | Starts the node with cluster networking and radar, named `event-matcher-<pod>@<pod ip>`.                 |
-| `services.Runner.Register`                | `main` → matcher service, health service                                | Registers the two services.                                                                              |
-| `Application` (`matchers.NewApplication`) | `main` → Ergo node                                                      | Loads the process-owned matcher application and the rule snapshot supervisor member, once at node start. |
-| `SubscribeRequest`/`SnapshotUpdate`       | matcher/rule snapshot supervisor ↔ namespace controller actor (cluster) | Subscribes to `controller-matcher-actor` and `controller-rule-actor`; receives pushed generations.       |
+| Message                                  | Direction                                                               | Meaning                                                                                                  |
+| ---------------------------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `plugin.Start`                           | `main` → Ergo node                                                      | Starts the node with cluster networking and radar, named `event-matcher-<pod>@<pod ip>`.                 |
+| `services.Runner.Register`               | `main` → matcher service, health service                                | Registers the two services.                                                                              |
+| `Application` (`matcher.NewApplication`) | `main` → Ergo node                                                      | Loads the process-owned matcher application and the rule snapshot supervisor member, once at node start. |
+| `SubscribeRequest`/`SnapshotUpdate`      | matcher/rule snapshot supervisor ↔ namespace controller actor (cluster) | Subscribes to `controller-matcher-actor` and `controller-rule-actor`; receives pushed generations.       |
 
 The matcher application is process-owned, not attempt-owned; the service borrows it through `Match`, `State`, and the rule projection client. A restarted attempt reuses the running runtime; an application that stops cancels the Runner and exits non-zero.
 
@@ -91,7 +91,7 @@ Startup is stricter. Before creating the consumer-group reader it also requires:
 - both projections `Ready` with at least one primary;
 - the matcher runtime's own status `Ready`.
 
-The rule side has no such wait. A degraded rule projection stays routable on its last committed generation but is not ready; an unavailable one fails the attempt. Matcher runtime state reads wait through `ErrPluginUnavailable` for at most `MATCHER_TIMEOUT_SEC + 1s`; other errors fail the attempt.
+The rule side has no such wait. A degraded rule projection stays routable on its last committed generation but is not ready; an unavailable one fails the attempt. Matcher runtime state reads wait through `ErrPluginUnavailable` for a retry window of `TIMEOUT_SEC + 1s`; other errors fail the attempt.
 
 Admission knobs:
 
@@ -115,19 +115,20 @@ Two registries. The health server serves the default Go registry; radar serves i
 
 The radar series carry a `namespace` label: `matcher` for the plugin runtime and its own catalog projection, `rule` for the standalone rule projection. The `:8080` series carry no `namespace`.
 
-| Metric                                                | Meaning                                                                                 |
-| ----------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `blink_event_matcher_events_in_total`                 | Records that decoded into an event; decode failures excluded.                           |
-| `blink_event_matcher_events_forwarded_total`          | Records written to the output topic; DLQ writes excluded.                               |
-| `blink_event_matcher_read_errors_total`               | Failed group fetches; context cancellation excluded.                                    |
-| `blink_event_matcher_parse_errors_total`              | Input decode or output encode failure. Both DLQ the record rather than failing a batch. |
-| `blink_event_matcher_write_errors_total`              | Failed `WriteMessages` calls, counted per attempt, so retries add.                      |
-| `blink_event_matcher_match_duration_seconds{matcher}` | One matcher call, bounded by `MATCHER_TIMEOUT_SEC`; observed even when the call fails.  |
-| `blink_event_matcher_rules_routed_per_event`          | Eligible rules per event. A zero observation is an event dropped with no rule.          |
+The [Kafka-stage metric contract](README.md#kafka-stage-metrics) defines the shared counters, histograms, labels, and measurement points. Use prefix `blink_event_matcher_`.
+`destination="output"` means the executor-topic writer; `plugin` is the matcher name. DLQ stages are `decode`, `log_type`, `encode`, and `matcher`.
+
+| Additional metric                            | Meaning                                                                                                                                              |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `blink_event_matcher_rules_routed_per_event` | Eligible rules for events reaching routing after successful matching; zero means no candidate survived. Events dropped before matching are excluded. |
+| `blink_event_matcher_batch_replays_total`    | Additional batch attempts actually begun after matcher generation changes. These do not increment fetched-input or evaluation-retry counts.          |
+
+Drop decisions have `scope="event"` and reasons `no_rules`, `unmatched`, or `dlq_encode`. Matcher has no per-rule drop series: individual candidate rejection is not a source-event drop.
+Routed-rule histogram buckets are `0, 1, 5, 10, 25, 50, 100`.
 
 ## Kafka batch contract
 
-The group reader fetches up to `MAX_BATCH_SIZE` (default 50) from `KAFKA_TOPIC_MATCHER` using `KAFKA_GROUP_MATCHER`. Each batch snapshots matcher and rule state once. Positions are processed independently, but non-drop records are published serially in fetched order. Offsets commit only after every record is terminal and every required write is acknowledged. Writes are synchronous, so delivery is at least once.
+The group reader fetches up to `MAX_BATCH_SIZE` (default 10,000) from `KAFKA_TOPIC_MATCHER` using `KAFKA_GROUP_MATCHER`. Each batch snapshots matcher and rule state once. Positions are processed independently, but non-drop records are published serially in fetched order. Offsets commit only after every record is terminal and every required write is acknowledged. Writes are synchronous, so delivery is at least once.
 
 ### Kafka batch terminal lifecycle
 
@@ -164,13 +165,13 @@ Three inputs DLQ at decode, before any matcher call: a decode failure, a non-str
 Retry:
 
 - A matcher call retries only its failed subset; whole-call and result-shape failures retry all pending items.
-- `MATCHER_MAX_ATTEMPTS` (default 3) is the stop condition.
-- The delay starts at `MATCHER_RETRY_BASE_MS` (default 100 ms), carries jitter, and is capped by `MATCHER_RETRY_CAP_MS` (default 5000 ms).
+- `MAX_ATTEMPTS` (default 3) is the stop condition.
+- The delay starts at `RETRY_BASE_MS` (default 100 ms), carries jitter, and is capped by `RETRY_CAP_MS` (default 5000 ms).
 - After exhaustion the event is DLQed.
 
 Publication retries under the same limit; exhaustion or cancellation exits the attempt with the batch uncommitted. A `Terminal` record is redelivered only by a later fetch in a later attempt.
 
-A promotion mid-batch retires the old generation's routers, and those events are rejected unevaluated. On an unavailable rejection the service re-reads runtime state after the batch's calls drain; if the committed generation moved, the batch is re-resolved instead of dead-lettered. Other rejections keep their dead-letters. A plugin that is down leaves the rest of the catalog routable; only a runtime with nothing routable stalls the attempt. `MATCHER_MAX_ATTEMPTS` bounds these replays.
+A promotion mid-batch retires the old generation's routers, and those events are rejected unevaluated. On an unavailable rejection the service re-reads runtime state after the batch's calls drain; if the committed generation moved, the batch is re-resolved instead of dead-lettered. Other rejections keep their dead-letters. A plugin that is down leaves the rest of the catalog routable; only a runtime with nothing routable stalls the attempt. `MAX_ATTEMPTS` bounds these replays.
 
 The downstream record preserves the input Kafka key and carries the source event plus eligible rule IDs. DLQ envelopes preserve the key and add the original payload, source, stage, reason, attempts, and timestamp. A record encodable as neither output is dropped.
 
@@ -202,7 +203,7 @@ Shadow calls go out only when the committed projection carries a shadow candidat
 ## Source references
 
 - [`cmd/event_matcher/main.go`](../../cmd/event_matcher/main.go) - process wiring, subscription endpoints, application ownership, node and Runner lifecycle.
-- [`cmd/event_matcher/matcher.go`](../../cmd/event_matcher/matcher.go) - readiness, batch terminals, retry, publication, commit.
+- [`cmd/event_matcher/matcher/matcher.go`](../../cmd/event_matcher/matcher/matcher.go) - readiness, batch terminals, retry, publication, commit.
 - [`pkg/matchers/application.go`](../../pkg/matchers/application.go) - ordered matching, rollout grouping, payload/capacity chunking, shadow submissions.
 - [`internal/services/runner.go`](../../internal/services/runner.go) - restart policy; [`internal/services/health.go`](../../internal/services/health.go) - probe endpoints.
 - [`internal/brokers/broker.go`](../../internal/brokers/broker.go) - commit/ack boundary.

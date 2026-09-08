@@ -5,26 +5,26 @@
 {{- $config := include "blink.workloadConfig" (dict "root" $ "overrides" $stage.workload) | fromYaml }}
 {{- $plugins := true }}
 {{- if hasKey $stage.workload "plugins" }}{{- $plugins = $stage.workload.plugins }}{{- end }}
-{{- $radar := true }}
-{{- if hasKey $stage.workload "radar" }}{{- $radar = $stage.workload.radar }}{{- end }}
-{{- $observer := false }}
-{{- if hasKey $stage.workload "observer" }}{{- $observer = $stage.workload.observer }}{{- end }}
-{{- $workloads = append $workloads (dict "workload" $stage.workloadName "container" (default $stage.workloadName $stage.workload.container) "config" $config "plugins" $plugins "radar" $radar "observer" $observer) }}
+{{- $node := true }}
+{{- if hasKey $stage.workload "node" }}{{- $node = $stage.workload.node }}{{- end }}
+{{- $endpoints := include "blink.endpoints" (dict "root" $ "workload" $stage.workload) | fromYaml }}
+{{- $workloads = append $workloads (dict "workload" $stage.workloadName "container" (default $stage.workloadName $stage.workload.container) "config" $config "plugins" $plugins "node" $node "endpoints" $endpoints.enabled) }}
 {{- end }}
 {{- $controller := required "global.controller is required; pass deployments/helm/values.yaml" .Values.global.controller }}
 {{- $controllerWorkload := required "global.controller.workload is required" $controller.workload }}
 {{- $controllerConfig := include "blink.workloadConfig" (dict "root" . "overrides" $controllerWorkload) | fromYaml }}
 {{- $controllerName := required "global.controller.workload.name is required" $controllerWorkload.name }}
-{{- $controllerObserver := false }}
-{{- if hasKey $controllerWorkload "observer" }}{{- $controllerObserver = $controllerWorkload.observer }}{{- end }}
-{{- $workloads = append $workloads (dict "workload" $controllerName "container" (default $controllerName $controllerWorkload.container) "config" $controllerConfig "plugins" true "radar" true "observer" $controllerObserver "controllerState" true) }}
+{{- $controllerEndpoints := include "blink.endpoints" (dict "root" $ "workload" $controllerWorkload) | fromYaml }}
+{{- $workloads = append $workloads (dict "workload" $controllerName "container" (default $controllerName $controllerWorkload.container) "config" $controllerConfig "plugins" true "node" true "endpoints" $controllerEndpoints.enabled "controllerState" true) }}
 {{- range $item := $workloads }}
 {{- if and $item.controllerState (ne (int $item.config.replicas) 1) }}
 {{- fail "the Blink controller requires exactly one replica until publication leader election is implemented" }}
 {{- end }}
-{{- if and $item.observer (not $item.radar) }}
-{{- fail "observer needs an Ergo node, but this workload sets radar: false" }}
+{{- if and (not $item.node) $item.endpoints }}
+{{- fail (printf "%s sets node: false, so it has no Ergo node to serve radar, observer, or mcp from" $item.workload) }}
 {{- end }}
+{{- $radar := false }}
+{{- range $endpoint := $item.endpoints }}{{- if eq $endpoint.name "radar" }}{{- $radar = true }}{{- end }}{{- end }}
 {{- if and $item.controllerState (not $.Values.controllerState.existingClaim) }}
 ---
 apiVersion: v1
@@ -71,7 +71,7 @@ spec:
         prometheus.io/scrape: "true"
         prometheus.io/port: "8080"
         prometheus.io/path: /metrics
-{{ if $item.radar }}
+{{ if $radar }}
         # Second scrape target on this pod: radar's per-namespace runtime series.
         blink.io/radar-port: {{ $.Values.radar.port | quote }}
 {{ end }}
@@ -95,19 +95,13 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: status.podIP
-{{ if $item.radar }}
-            - name: RADAR_HOST
-              value: "0.0.0.0"
-            - name: RADAR_PORT
-              value: {{ $.Values.radar.port | quote }}
-{{ end }}
-{{ if $item.observer }}
-            - name: OBSERVER_ENABLED
+{{ range $endpoint := $item.endpoints }}
+            - name: {{ $endpoint.name | upper }}_ENABLED
               value: "true"
-            - name: OBSERVER_HOST
+            - name: {{ $endpoint.name | upper }}_HOST
               value: "0.0.0.0"
-            - name: OBSERVER_PORT
-              value: {{ $.Values.observer.port | quote }}
+            - name: {{ $endpoint.name | upper }}_PORT
+              value: {{ $endpoint.port | quote }}
 {{ end }}
 {{ range $name, $value := $item.config.environment }}
             - name: {{ $name | upper }}
@@ -120,13 +114,9 @@ spec:
             - name: cluster
               containerPort: {{ $.Values.cluster.port }}
 {{ end }}
-{{ if $item.radar }}
-            - name: radar
-              containerPort: {{ $.Values.radar.port }}
-{{ end }}
-{{ if $item.observer }}
-            - name: observer
-              containerPort: {{ $.Values.observer.port }}
+{{ range $endpoint := $item.endpoints }}
+            - name: {{ $endpoint.name }}
+              containerPort: {{ $endpoint.port }}
 {{ end }}
           {{- include "blink.probes" $ | nindent 10 }}
 {{ if or $item.plugins $item.controllerState }}
@@ -173,14 +163,9 @@ spec:
       port: {{ $.Values.cluster.port }}
       targetPort: {{ $.Values.cluster.port }}
 {{ end }}
-{{ if $item.radar }}
-    - name: radar
-      port: {{ $.Values.radar.port }}
-      targetPort: {{ $.Values.radar.port }}
-{{ end }}
-{{ if $item.observer }}
-    - name: observer
-      port: {{ $.Values.observer.port }}
-      targetPort: {{ $.Values.observer.port }}
+{{ range $endpoint := $item.endpoints }}
+    - name: {{ $endpoint.name }}
+      port: {{ $endpoint.port }}
+      targetPort: {{ $endpoint.port }}
 {{ end }}
 {{- end }}

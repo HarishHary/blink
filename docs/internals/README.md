@@ -4,7 +4,7 @@ The runtime is local to each service process, but every process joins one native
 
 Kafka remains the transport for the primary event/alert pipeline (matcher → executor → merger → tuner → enricher → formatter → dispatcher). This page does not cover that pipeline.
 
-Radar is installed on every node. `ENVIRONMENT=dev` also enables the local observer and MCP applications, and `OBSERVER_ENABLED` turns the observer on at any `ENVIRONMENT`. `OBSERVER_HOST`/`OBSERVER_PORT` bind it, defaulting to `localhost:9911` because it is unauthenticated.
+A node can serve three HTTP endpoints, each off unless its own variable enables it, independent of the others and of `ENVIRONMENT`: radar (`RADAR_ENABLED`, metrics and per-namespace readiness), Ergo's observer UI (`OBSERVER_ENABLED`), and its MCP server (`MCP_ENABLED`). `*_HOST`/`*_PORT` bind each, defaulting to `0.0.0.0` and 9090/9911/9922. `DEBUG=true` raises the process logger and its node to debug level.
 
 ## Composition
 

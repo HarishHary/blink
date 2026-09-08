@@ -64,7 +64,7 @@ var (
 		{Kind: telemetry.Gauge, Name: metricGeneration, Help: "Committed snapshot generation", Labels: namespaceLabels},
 		{Kind: telemetry.Gauge, Name: metricRecords, Help: "Tracked controller records", Labels: namespaceLabels},
 		{Kind: telemetry.Gauge, Name: metricSubscribers, Help: "Subscribed executors", Labels: namespaceLabels},
-		{Kind: telemetry.Gauge, Name: metricExecutors, Help: "Executors reporting convergence", Labels: namespaceLabels},
+		{Kind: telemetry.Gauge, Name: metricExecutors, Help: "Executors with tracked convergence reports", Labels: namespaceLabels},
 		{Kind: telemetry.Gauge, Name: metricExecutorsDrifting, Help: "Executors behind the committed generation past the drift grace", Labels: namespaceLabels},
 		{Kind: telemetry.Counter, Name: metricSnapshotCommits, Help: "Snapshot generations committed and pushed to subscribers", Labels: namespaceLabels},
 		{Kind: telemetry.Counter, Name: metricSnapshotWrites, Help: "Snapshot write attempts by result", Labels: resultLabels},
@@ -72,14 +72,14 @@ var (
 		{Kind: telemetry.Counter, Name: metricWorkerRestarts, Help: "Worker meta-process restarts scheduled", Labels: []string{"namespace", "worker"}},
 		{
 			Kind: telemetry.Histogram, Name: metricSnapshotWriteTime, Labels: namespaceLabels,
-			Help:    "Seconds from dispatching a snapshot write to its result",
+			Help:    "Seconds from dispatching a snapshot write to a successful result, including retries",
 			Buckets: ioBuckets,
 		},
 
 		// meta: artifact scanner
 		{Kind: telemetry.Gauge, Name: metricArtifactSpecs, Help: "Artifact specs the scanner currently holds parsed", Labels: namespaceLabels},
 		{Kind: telemetry.Gauge, Name: metricArtifactBinaries, Help: "Artifact binaries the scanner currently holds checksummed", Labels: namespaceLabels},
-		{Kind: telemetry.Counter, Name: metricArtifactScanFailures, Help: "Artifact files the scanner could not index, by stage", Labels: []string{"namespace", "stage"}},
+		{Kind: telemetry.Counter, Name: metricArtifactScanFailures, Help: "Artifact scan or index failures by stage", Labels: []string{"namespace", "stage"}},
 		{
 			Kind: telemetry.Histogram, Name: metricArtifactScanTime, Labels: namespaceLabels,
 			Help:    "Seconds one artifact directory scan took",

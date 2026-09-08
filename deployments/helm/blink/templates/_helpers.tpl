@@ -65,6 +65,18 @@ livenessProbe:
 {{- toYaml (mergeOverwrite $stage (dict "workloadName" $workloadName)) -}}
 {{- end }}
 
+{{/* A workload's enabled node endpoints as `enabled: [{name, port}]`; args dict "root" "workload". */}}
+{{- define "blink.endpoints" -}}
+{{- $workload := .workload | default dict -}}
+{{- $enabled := list -}}
+{{- range $endpoint := list (dict "name" "radar" "on" true) (dict "name" "observer" "on" false) (dict "name" "mcp" "on" false) -}}
+{{- $on := $endpoint.on -}}
+{{- if hasKey $workload $endpoint.name }}{{- $on = get $workload $endpoint.name }}{{- end -}}
+{{- if $on }}{{- $enabled = append $enabled (dict "name" $endpoint.name "port" (get $.root.Values $endpoint.name).port) }}{{- end -}}
+{{- end -}}
+{{- toYaml (dict "enabled" $enabled) -}}
+{{- end }}
+
 {{/* Merge a stage's workload settings with this chart's defaults. */}}
 {{- define "blink.workloadConfig" -}}
 {{- toYaml (mergeOverwrite (deepCopy (.root.Values.workloadDefaults | default dict)) (.overrides | default dict)) -}}

@@ -1,6 +1,6 @@
 # Development
 
-This guide is scoped to the currently documented `controller` and `event_matcher` services and their Ergo runtime.
+This guide is scoped to the currently documented `controller`, `event_matcher`, and `rule_executor` services and their Ergo runtime.
 
 ## Prerequisites
 
@@ -14,36 +14,38 @@ This guide is scoped to the currently documented `controller` and `event_matcher
 Run these commands from the repository root:
 
 ```bash
-go build ./cmd/controller ./cmd/event_matcher
+go build ./cmd/controller ./cmd/event_matcher ./cmd/rule_executor
 go test ./cmd/controller
 go test ./cmd/event_matcher/matcher
+go test ./cmd/rule_executor/executor
 go test ./internal/runtime/controller ./internal/runtime/plugin ./internal/runtime/snapshot
 go test ./...
 staticcheck ./...
 pre-commit run --all-files
 ```
 
-The focused test commands cover the two composition roots and their current actor runtimes. `go test ./...` remains the repository-wide check.
+The focused test commands cover the three composition roots and their current actor runtimes. `go test ./...` remains the repository-wide check.
 
 ## Runtime layout
 
 - `cmd/controller` starts one local Ergo node and registers five controller services: rule, matcher, tuning, formatter, and enrichment catalogs.
-- `cmd/event_matcher` starts one local Ergo node, an attempt-owned matcher plugin application, and a rule snapshot projection.
+- `cmd/event_matcher` starts one local Ergo node, a process-owned matcher plugin application, and a rule snapshot projection.
+- `cmd/rule_executor` starts one local Ergo node and a process-owned rule plugin application.
 - `internal/runtime/controller`, `internal/runtime/plugin`, and `internal/runtime/snapshot` contain the actor implementations.
-- Each process exposes `/health/live`, `/health/ready`, and `/metrics` on port 8080. The matcher readiness check requires both current projections to be ready; the controller health service has no
+- Each process exposes `/health/live`, `/health/ready`, and `/metrics` on port 8080. The matcher requires matcher and rule state; the executor requires rule state; the controller health service has no
   extra readiness predicate.
 
 ## Required environment
 
-All processes require `KAFKA_BROKERS`; `ENVIRONMENT` is optional and selects logging/runtime diagnostics (`dev` enables the local Ergo observer and MCP applications).
+All three processes require `KAFKA_BROKERS`, `ETCD_ENDPOINTS`, and `CLUSTER_COOKIE`. `ENVIRONMENT` is optional and only names the Ergo cluster (`blink-<env>`). `DEBUG=true` raises logging to debug level; `RADAR_ENABLED`, `OBSERVER_ENABLED`, and `MCP_ENABLED` each turn on one node endpoint.
 
 | Process         | Required service-specific variables                                                                                                                                                                                                                                                                     |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `controller`    | `CONTROLLER_DATABASE_DSN`, `KAFKA_TOPIC_EXECUTOR_SNAPSHOT`, `KAFKA_TOPIC_MATCHER_SNAPSHOT`, `KAFKA_TOPIC_TUNER_SNAPSHOT`, `KAFKA_TOPIC_FORMATTER_SNAPSHOT`, `KAFKA_TOPIC_ENRICHER_SNAPSHOT`, `RULE_PLUGIN_DIR`, `MATCHER_PLUGIN_DIR`, `TUNER_PLUGIN_DIR`, `FORMATTER_PLUGIN_DIR`, `ENRICHER_PLUGIN_DIR` |
-| `event_matcher` | `KAFKA_TOPIC_MATCHER`, `KAFKA_GROUP_MATCHER`, `KAFKA_TOPIC_EXECUTOR`, `KAFKA_TOPIC_MATCHER_DLQ`, `KAFKA_TOPIC_MATCHER_SNAPSHOT`, `KAFKA_TOPIC_EXECUTOR_SNAPSHOT`, `MATCHER_PLUGIN_DIR`                                                                                                                  |
+| `controller`    | `CONTROLLER_DATABASE_DSN`, `RULE_PLUGIN_DIR`, `MATCHER_PLUGIN_DIR`, `TUNER_PLUGIN_DIR`, `FORMATTER_PLUGIN_DIR`, `ENRICHER_PLUGIN_DIR`                                                                                                                                                                        |
+| `event_matcher` | `KAFKA_TOPIC_MATCHER`, `KAFKA_GROUP_MATCHER`, `KAFKA_TOPIC_EXECUTOR`, `KAFKA_TOPIC_MATCHER_DLQ`, `MATCHER_PLUGIN_DIR`                                                                                                                                                                                           |
+| `rule_executor` | `KAFKA_TOPIC_EXECUTOR`, `KAFKA_GROUP_EXECUTOR`, `KAFKA_TOPIC_MERGER`, `KAFKA_TOPIC_EXECUTOR_DLQ`, `RULE_PLUGIN_DIR`                                                                                                                                                                                             |
 
-Optional matcher settings are `MAX_BATCH_SIZE`, `MAX_CONCURRENT_CALLS`, `MATCHER_TIMEOUT_SEC`, `MATCHER_MAX_ATTEMPTS`, `MATCHER_RETRY_BASE_MS`, and `MATCHER_RETRY_CAP_MS`. Defaults are
-respectively 50, 8, 10 seconds, 3, 100 ms, and 5000 ms.
+Optional matcher and executor process-local settings are `MAX_BATCH_SIZE`, `MAX_CONCURRENT_CALLS`, `TIMEOUT_SEC`, `MAX_ATTEMPTS`, `RETRY_BASE_MS`, and `RETRY_CAP_MS`. Defaults are respectively 10000, 10, 10 seconds, 3, 100 ms, and 5000 ms; the names are shared, but each process reads its own environment.
 
 ## Kubernetes
 
@@ -52,6 +54,9 @@ Use the shared `deployments/helm/values.yaml` with each Helm chart. The current 
 ## References
 
 - [Service index](docs/services/README.md)
+- [Controller](docs/services/controller.md)
+- [Event matcher](docs/services/event_matcher.md)
+- [Rule executor](docs/services/rule_executor.md)
 - [Runtime overview](docs/internals/README.md)
 - [Message flow](docs/internals/message-flow.md)
 - [Schema reference](docs/internals/schemas/README.md)

@@ -51,13 +51,21 @@ cluster:
   # Cluster acceptor port, pinned not scanned. Only the controller's Service exposes it - the one node others reach by name.
   port: 11144
 
-# Radar: each Ergo node's /metrics and per-namespace /health/ready. Scraped only - probes stay on 8080 so one degraded namespace cannot pull a pod out of its Service.
+# The three endpoints an Ergo node can serve, each toggled per workload by its own key. Only radar defaults on.
+# Radar: /metrics and per-namespace /health/ready. Scraped only - probes stay on 8080 so one degraded namespace cannot pull a pod out of its Service.
 radar:
   port: 9090
 
-# Ergo's observer UI, per workload via `observer: true`. Off by default; ENVIRONMENT=dev enables it regardless, and adds MCP on 9922.
+# Ergo's observer UI, per workload via `observer: true`. Unauthenticated, so keep it off outside debugging.
 observer:
   port: 9911
+
+# Ergo's MCP server, per workload via `mcp: true`. Unauthenticated, so keep it off outside debugging.
+mcp:
+  port: 9922
+
+# Debug logging for every workload, Blink's logger and its Ergo node alike.
+debug: false
 
 # Grafana and the Prometheus feeding it. Targets come from the pod annotations workloads.yaml sets, so nothing is listed here. For an existing Prometheus: prometheus.enabled=false plus grafana.datasourceURL.
 monitoring:

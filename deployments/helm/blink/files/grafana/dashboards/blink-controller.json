@@ -211,15 +211,15 @@
     {
       "id": 6,
       "type": "timeseries",
-      "title": "Executors reporting vs drifting",
-      "description": "Drifting counts executors behind the committed generation past the drift grace.",
+      "title": "Tracked executor reports vs drifting",
+      "description": "Reporting includes all tracked convergence reports; drifting counts those behind the committed generation past the drift grace.",
       "gridPos": { "h": 7, "w": 8, "x": 16, "y": 6 },
       "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
       "targets": [
         {
           "refId": "A",
           "expr": "blink_controller_executors{namespace=~\"$namespace\"}",
-          "legendFormat": "{{namespace}} converged"
+          "legendFormat": "{{namespace}} reporting"
         },
         {
           "refId": "B",
@@ -274,8 +274,8 @@
     {
       "id": 8,
       "type": "timeseries",
-      "title": "Snapshot write latency",
-      "description": "Dispatch of a write to its result, as the controller actor sees it.",
+      "title": "Successful snapshot write latency",
+      "description": "Dispatch to a successful write result, including retries; failed results are excluded.",
       "gridPos": { "h": 7, "w": 12, "x": 12, "y": 13 },
       "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
       "targets": [
@@ -334,7 +334,7 @@
       "id": 10,
       "type": "timeseries",
       "title": "Writer database attempts",
-      "description": "Individual attempts including retries, so an error rate above the write rate means backoff is active.",
+      "description": "Database attempts include retries. Actor write results are controller-accepted results, including intermediate failures; neither count represents logical jobs.",
       "gridPos": { "h": 7, "w": 8, "x": 8, "y": 20 },
       "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
       "targets": [
@@ -415,8 +415,8 @@
     {
       "id": 13,
       "type": "timeseries",
-      "title": "Artifact files not indexed, by stage",
-      "description": "A parse or checksum failure keeps the last good entry, so this is the only signal that an authored file is being ignored.",
+      "title": "Artifact scan/index failures, by stage",
+      "description": "Scan or index failures by stage, including directory and watch events as well as artifact processing failures.",
       "gridPos": { "h": 7, "w": 8, "x": 8, "y": 27 },
       "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
       "targets": [

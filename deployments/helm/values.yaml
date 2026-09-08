@@ -4,8 +4,10 @@
 #     name: <deployment-name>
 #     container: <binary-name>          # defaults to name
 #     plugins: true                     # false omits the plugin volume
-#     radar: true                       # false when the binary runs no Ergo node
-#     observer: false                   # true adds Ergo's observer UI; needs radar
+#     node: true                        # false when the binary runs no Ergo node; forbids the three below
+#     radar: true                       # metrics and per-namespace readiness
+#     observer: false                   # Ergo's process-inspection UI, unauthenticated
+#     mcp: false                        # Ergo's MCP server, unauthenticated
 #     replicas: 2
 #     resources:                        # chart defaults; the CPU limit also sets GOMAXPROCS
 #       requests:
@@ -62,12 +64,12 @@ global:
           kafka_topic_executor: rule-executor-topic
           kafka_topic_matcher_dlq: event-matcher-dlq-topic
           matcher_plugin_dir: /plugins/matchers
-          max_concurrent_calls: "10"
-          matcher_timeout_sec: "10"
-          matcher_max_attempts: "3"
-          matcher_retry_base_ms: "100"
-          matcher_retry_cap_ms: "5000"
           max_batch_size: "10000"
+          max_concurrent_calls: "10"
+          timeout_sec: "10"
+          max_attempts: "3"
+          retry_base_ms: "100"
+          retry_cap_ms: "5000"
       scaler: {}
       topic:
         dlq: {}
@@ -81,19 +83,20 @@ global:
           kafka_group_executor: rule-executor-group
           kafka_topic_merger: alert-merger-topic
           rule_plugin_dir: /plugins/rules
-          executor_batch_size: "50"
-          executor_concurrency: "8"
-          executor_timeout_sec: "10"
-          executor_max_attempts: "3"
-          executor_retry_base_ms: "100"
-          executor_retry_cap_ms: "5000"
+          max_batch_size: "10000"
+          max_concurrent_calls: "10"
+          timeout_sec: "10"
+          max_attempts: "3"
+          retry_base_ms: "100"
+          retry_cap_ms: "5000"
       scaler: {}
     merger:
       workload:
         name: alert-merger
         container: alert-merger
         plugins: false
-        # Runs no Ergo node, so there is no radar endpoint to scrape.
+        # Runs no Ergo node, so it serves none of the node endpoints.
+        node: false
         radar: false
         terminationGracePeriodSeconds: 40
         # Groups related alerts, so replicas must not exceed topic partitions.
