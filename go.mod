@@ -8,7 +8,7 @@ require (
 	ergo.services/application/mcp v0.0.0-20260807132520-3b2d3707a392
 	ergo.services/application/observer v0.1.1-0.20260807132520-3b2d3707a392
 	ergo.services/application/radar v0.0.0-20260807132520-3b2d3707a392
-	ergo.services/ergo v1.999.321-0.20260813122550-5102d48bf215
+	ergo.services/ergo v1.999.330
 	ergo.services/registrar/etcd v0.3.1-0.20260806082553-384fc6fb1b2f
 	github.com/Azure/azure-sdk-for-go/sdk/messaging/azeventhubs/v2 v2.0.2
 	github.com/cenkalti/backoff/v4 v4.3.0
@@ -17,6 +17,7 @@ require (
 	github.com/hashicorp/go-plugin v1.8.0
 	github.com/mattn/go-sqlite3 v1.14.49
 	github.com/prometheus/client_golang v1.24.1
+	github.com/prometheus/client_model v0.6.2
 	github.com/segmentio/kafka-go v0.4.51
 	go.yaml.in/yaml/v4 v4.0.0-rc.6
 	golang.org/x/sync v0.22.0
@@ -48,7 +49,6 @@ require (
 	github.com/oklog/run v1.1.0 // indirect
 	github.com/pierrec/lz4/v4 v4.1.22 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
-	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.70.1 // indirect
 	github.com/prometheus/procfs v0.21.1 // indirect
 	go.etcd.io/etcd/api/v3 v3.5.28 // indirect

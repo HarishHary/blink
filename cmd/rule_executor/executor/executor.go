@@ -58,6 +58,7 @@ const (
 	readinessInterval = 500 * time.Millisecond
 	readinessTimeout  = time.Second
 	readinessGrace    = 2 * time.Second
+	stateWaitMargin   = time.Second
 )
 
 type ruleItem struct {
@@ -286,9 +287,24 @@ func (s *Service) pollReadiness(ctx context.Context) {
 	}
 }
 
+// readRuleState retries unavailable state reads during the configured retry window.
+func (s *Service) readRuleState(ctx context.Context) (snapshot.ProjectionState[*rules.RuleMetadata], error) {
+	deadline := time.Now().Add(time.Duration(s.config.TimeoutSec)*time.Second + stateWaitMargin)
+	policy := s.newBackoff(ctx)
+	for {
+		state, err := s.runtime.State(ctx)
+		if err == nil {
+			return state, nil
+		}
+		if !stderrors.Is(err, runtime.ErrPluginUnavailable) || time.Now().After(deadline) || !wait(ctx, policy) {
+			return snapshot.ProjectionState[*rules.RuleMetadata]{}, err
+		}
+	}
+}
+
 // processBatch decodes, evaluates, prepares, and publishes one fetched batch.
 func (s *Service) processBatch(ctx context.Context, msgs []brokers.Message) errors.Error {
-	ruleState, err := s.runtime.State(ctx)
+	ruleState, err := s.readRuleState(ctx)
 	if err != nil {
 		return errors.NewE(err)
 	}
@@ -608,6 +624,21 @@ func (s *Service) newBackoff(ctx context.Context) backoff.BackOffContext {
 		backoff.WithMaxElapsedTime(0),
 	)
 	return backoff.WithContext(b, ctx)
+}
+
+func wait(ctx context.Context, policy backoff.BackOff) bool {
+	delay := policy.NextBackOff()
+	if delay == backoff.Stop {
+		return false
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 // eligibleRules returns the rule metadata to evaluate for this event.
