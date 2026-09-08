@@ -2,56 +2,141 @@ package main
 
 import (
 	"context"
-	"log"
+	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
+	"ergo.services/ergo/gen"
 	"github.com/harishhary/blink/cmd/rule_executor/executor"
 	"github.com/harishhary/blink/internal/brokers"
-	"github.com/harishhary/blink/internal/controller"
 	"github.com/harishhary/blink/internal/logger"
+	"github.com/harishhary/blink/internal/runtime"
+	"github.com/harishhary/blink/internal/runtime/plugin"
+	"github.com/harishhary/blink/internal/runtime/snapshot"
 	"github.com/harishhary/blink/internal/services"
 	"github.com/harishhary/blink/pkg/rules"
 )
 
+// runtimeShutdownTimeout bounds the Ergo node close after the Runner returns.
+const runtimeShutdownTimeout = 45 * time.Second
+
+// config is everything rule_executor needs.
 type config struct {
 	services.Common
 	executor.Config
-	ExecutorSnapshotTopic string `env:"KAFKA_TOPIC_EXECUTOR_SNAPSHOT"`
-	RulePluginDir         string `env:"RULE_PLUGIN_DIR"`
+	plugin.EtcdClusterConfig
+	ControllerNodeHost string `env:"CONTROLLER_NODE_HOST,optional"`
+	PodName            string `env:"POD_NAME,optional"`
+	PodIP              string `env:"POD_IP,optional"`
+	RulePluginDir      string `env:"RULE_PLUGIN_DIR"`
 }
 
+// main runs the executor service and exits if its runtime stops.
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	var cfg config
 	if err := services.LoadFromEnvironment(&cfg); err != nil {
-		log.Fatalf("config: %v", err)
+		slog.Error("load config", "error", err)
+		os.Exit(1)
 	}
-	cfg.Config.Broker = brokers.NewKafkaBroker(cfg.Kafka)
-	b := cfg.Config.Broker
-	rootLogger := logger.New("rule-executor", cfg.Env)
+	cfg.Broker = brokers.NewKafkaBroker(cfg.Kafka)
+	cfg.Config = cfg.Config.WithDefaults()
+	rootLogger := logger.New("rule-executor", cfg.Debug)
 
-	// The rule snapshot is the data plane's rule configuration source.
-	ruleSnap := controller.NewSnapshotReader(rootLogger.With("component", "rule_snapshot"), b.NewBroadcastReader(cfg.ExecutorSnapshotTopic))
-	ruleSnapSvc := services.NewManagedService("rule-snapshot-sync", ruleSnap)
+	runCtx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
 
-	// The plugin executor reconciles rule processes from the rule snapshot.
-	ruleCfg := rules.NewSnapshotConfig(rootLogger.With("component", "rule_config"), ruleSnap)
-	rulePool := rules.NewPool(rootLogger.With("component", "rule_pool"), ruleCfg, 0)
-	pluginExecutor := rules.NewPluginExecutor(rootLogger.With("component", "plugin_executor"), rulePool.Sync, cfg.RulePluginDir, ruleSnap, ruleCfg)
-	pluginExecutorSvc := services.NewManagedService("rule-executor-sync", pluginExecutor)
+	controllerHost := cfg.ControllerNodeHost
+	if controllerHost == "" {
+		controllerHost = "controller"
+	}
+	nodeName := gen.Atom(fmt.Sprintf("rule-executor-%s@%s", cfg.PodName, cfg.PodIP))
+	registrar, err := plugin.NewEtcdRegistrar(cfg.EtcdClusterConfig, cfg.Env)
+	if err != nil {
+		rootLogger.FatalF("create etcd registrar: %v", err)
+	}
 
-	// The executor consumes routed events and publishes alerts to the merger.
-	cfg.Config.ReadyFn = func() bool { return ruleSnap.Ready() && len(ruleCfg.Primaries()) > 0 }
-	executorSvc := executor.NewService(rootLogger.With("component", "service"), cfg.Config, rulePool, ruleCfg)
+	// Match admission limits to the service; leave the process budget at its CPU-based default.
+	app := rules.NewApplication(plugin.ApplicationOptions{
+		MaxBatchSize:       cfg.BatchSize,
+		MaxConcurrentCalls: cfg.Concurrency,
+		Namespace:          "rule",
+		SupervisorOptions: plugin.SupervisorOptions{
+			Directory: cfg.RulePluginDir,
+			SnapshotReader: snapshot.ReaderActorOptions{
+				Endpoint:   gen.ProcessID{Name: snapshot.ControllerActorName("rule"), Node: gen.Atom("controller@" + controllerHost)},
+				ExecutorID: cfg.PodName,
+			},
+		},
+	}, rootLogger)
 
-	go services.ServeHealth(rootLogger.With("component", "health"), ":8080", func() bool { return ruleSnap.Ready() })
+	cluster := &plugin.ClusterOptions{Cookie: cfg.Cookie, Registrar: registrar, Flags: plugin.DefaultClusterFlags()}
+	host, err := plugin.Start(plugin.NodeOptions{
+		Name:            nodeName,
+		Debug:           cfg.Debug,
+		ShutdownTimeout: runtimeShutdownTimeout,
+		Applications:    []gen.ApplicationBehavior{app},
+		Cluster:         cluster,
+		Observer:        plugin.EndpointOptions{Enabled: cfg.ObserverEnabled, Host: cfg.ObserverHost, Port: cfg.ObserverPort},
+		MCP:             plugin.EndpointOptions{Enabled: cfg.MCPEnabled, Host: cfg.MCPHost, Port: cfg.MCPPort},
+		Radar:           plugin.EndpointOptions{Enabled: cfg.RadarEnabled, Host: cfg.RadarHost, Port: cfg.RadarPort},
+	})
+	if err != nil {
+		rootLogger.FatalF("rule-executor: %v", err)
+	}
 
+	runnerStopped := make(chan error, 1)
+	go func() {
+		err := app.Wait(runCtx)
+		if runCtx.Err() == nil {
+			runnerStopped <- err
+			cancelRun()
+		}
+	}()
+
+	appReadyFn := func() bool {
+		statusCtx, statusCancel := context.WithTimeout(context.Background(), time.Second)
+		defer statusCancel()
+		status, err := app.Status(statusCtx)
+		return err == nil && status.Availability == runtime.AvailabilityReady
+	}
+	cfg.Config.ReadyFn = func() bool {
+		statusCtx, statusCancel := context.WithTimeout(context.Background(), time.Second)
+		defer statusCancel()
+		_, err := app.State(statusCtx)
+		return err == nil && appReadyFn()
+	}
+
+	executorSvc := executor.NewService(rootLogger.With("component", "service"), cfg.Config, app)
+	healthSvc := services.NewHealthService(":8080", cfg.Config.ReadyFn, nil)
 	runner := services.New(rootLogger.With("component", "runner"))
-	runner.Register(ruleSnapSvc, pluginExecutorSvc, executorSvc)
-	runner.Run(ctx)
-	log.Println("Shutting down rule-executor")
+	runner.Register(executorSvc, healthSvc)
+	runner.Run(runCtx)
+
+	var runnerErr error
+	select {
+	case err := <-runnerStopped:
+		if err == nil {
+			runnerErr = fmt.Errorf("rule-executor runner stopped")
+		} else {
+			runnerErr = fmt.Errorf("rule-executor runner stopped: %w", err)
+		}
+	default:
+	}
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), runtimeShutdownTimeout)
+	if err := host.Close(shutdownCtx); err != nil {
+		rootLogger.ErrorF("stop Ergo node: %v", err)
+	}
+	shutdownCancel()
+
+	if runnerErr != nil {
+		rootLogger.FatalF("rule-executor runner: %v", runnerErr)
+	}
+	rootLogger.Info("Shutting down rule-executor")
 }
