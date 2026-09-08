@@ -578,6 +578,7 @@ func (a *actor[T]) sendPending() error {
 	for i := range message.records {
 		message.records[i] = message.records[i].Clone()
 	}
+	//argus:allow A1001 deep-cloned records, snapshot, upserts, and tombstones transfer exclusively to the writer
 	if err := a.Send(a.writer.alias, message); err != nil {
 		a.Log().Error("pending write dispatch failed: name=%s generation=%d error=%v", a.Name(), message.next.Generation, err)
 		a.writer.status.Writing = false
@@ -808,7 +809,12 @@ func (a *actor[T]) committedUpserts() []snapshot.EffectiveEntry {
 // unregistered, since MonitorPID's MessageDownPID is the removal path.
 func (a *actor[T]) notifySubscribers(update snapshot.SnapshotUpdate) {
 	for id, pid := range a.subscribers {
-		if err := a.SendImportant(pid, update); err != nil {
+		delivery := update
+		delivery.Snapshot = update.Snapshot.Clone()
+		delivery.Changes = snapshot.CloneEntryChanges(update.Changes)
+		delivery.Tombstones = append([]string(nil), update.Tombstones...)
+		//argus:allow A1001 each subscriber receives an exclusive deep copy of the original update
+		if err := a.SendImportant(pid, delivery); err != nil {
 			a.Log().Error("snapshot push failed: name=%s executor_id=%s pid=%s error=%v", a.Name(), id, pid, err)
 		}
 	}

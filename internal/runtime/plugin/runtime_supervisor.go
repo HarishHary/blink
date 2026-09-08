@@ -588,10 +588,7 @@ func (s *supervisor[P, M]) startReconcilerActor(pid gen.PID) error {
 	}
 	s.refreshStatus()
 
-	revisionBase := s.desiredState.desiredRevision
-	if s.pendingDesiredState.desiredRevision > revisionBase {
-		revisionBase = s.pendingDesiredState.desiredRevision
-	}
+	revisionBase := max(s.pendingDesiredState.desiredRevision, s.desiredState.desiredRevision)
 	if err := s.Send(pid, MessageReconcilerActorActivate{revisionBase: revisionBase}); err != nil {
 		_ = s.Node().SendExit(
 			pid,

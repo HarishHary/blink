@@ -226,8 +226,6 @@ func (s *Service) Run(ctx context.Context) errors.Error {
 		defer close(pollingDone)
 		s.pollReadiness(pollCtx)
 	}()
-	// Readiness allows empty snapshots; consumption requires the stricter gate below.
-	s.ready.Store(true)
 
 	if err := s.waitForReady(ctx); err != nil {
 		if ctx.Err() != nil {
@@ -241,6 +239,7 @@ func (s *Service) Run(ctx context.Context) errors.Error {
 
 	s.logger.Info("runtime ready; consuming events (topic=%s group=%s)", s.config.MatcherTopic, s.config.MatcherGroup)
 	reader := s.config.Broker.NewReader(s.config.MatcherTopic, s.config.MatcherGroup)
+	s.ready.Store(true)
 	defer func() {
 		if err := reader.Close(); err != nil && ctx.Err() == nil {
 			s.logger.Error(errors.NewE(err))

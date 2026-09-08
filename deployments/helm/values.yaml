@@ -37,147 +37,147 @@
 #       config:
 #         retention.ms: "86400000"
 global:
-  # Not a pipeline stage, but takes the same workload settings.
-  controller:
-    workload:
-      name: blink-controller
-      container: controller
-      replicas: 1
-      terminationGracePeriodSeconds: 120
-      strategy:
-        type: Recreate
-      environment:
-        controller_database_dsn: "file:/var/lib/blink/controller/controller.db?_journal_mode=WAL&_busy_timeout=5000"
-        rule_plugin_dir: /plugins/rules
-        matcher_plugin_dir: /plugins/matchers
-        tuner_plugin_dir: /plugins/tuning_rules
-        formatter_plugin_dir: /plugins/formatters
-        enricher_plugin_dir: /plugins/enrichments
-  stages:
-    matcher:
-      workload:
-        name: event-matcher
-        container: event-matcher
-        environment:
-          kafka_topic_matcher: event-matcher-topic
-          kafka_group_matcher: event-matcher-group
-          kafka_topic_executor: rule-executor-topic
-          kafka_topic_matcher_dlq: event-matcher-dlq-topic
-          matcher_plugin_dir: /plugins/matchers
-          max_batch_size: "10000"
-          max_concurrent_calls: "10"
-          timeout_sec: "10"
-          max_attempts: "3"
-          retry_base_ms: "100"
-          retry_cap_ms: "5000"
-      scaler: {}
-      topic:
-        dlq: {}
-    executor:
-      workload:
-        name: rule-executor
-        container: rule-executor
-        environment:
-          kafka_topic_executor: rule-executor-topic
-          kafka_topic_executor_dlq: rule-executor-dlq-topic
-          kafka_group_executor: rule-executor-group
-          kafka_topic_merger: alert-merger-topic
-          rule_plugin_dir: /plugins/rules
-          max_batch_size: "10000"
-          max_concurrent_calls: "10"
-          timeout_sec: "10"
-          max_attempts: "3"
-          retry_base_ms: "100"
-          retry_cap_ms: "5000"
-      scaler: {}
-    merger:
-      workload:
-        name: alert-merger
-        container: alert-merger
-        plugins: false
-        # Runs no Ergo node, so it serves none of the node endpoints.
-        node: false
-        radar: false
-        terminationGracePeriodSeconds: 40
-        # Groups related alerts, so replicas must not exceed topic partitions.
-        replicas: 1
-        environment:
-          kafka_topic_merger: alert-merger-topic
-          kafka_group_merger: alert-merger-group
-          kafka_topic_tuner: rule-tuner-topic
-          kafka_topic_merger_dlq: alert-merger-dlq-topic
-          merger_batch_size: "50"
-          merger_max_groups: "10000"
-          merger_max_pending_records: "10000"
-          merger_flush_interval_sec: "10"
-          merger_drain_timeout_sec: "30"
-          merger_retry_base_ms: "100"
-          merger_retry_cap_ms: "5000"
-      topic:
-        dlq: {}
-    tuner:
-      workload:
-        name: rule-tuner
-        container: rule-tuner
-        environment:
-          kafka_topic_tuner: rule-tuner-topic
-          kafka_group_tuner: rule-tuner-group
-          kafka_topic_enricher: alert-enricher-topic
-          kafka_topic_tuner_dlq: rule-tuner-dlq-topic
-          tuner_plugin_dir: /plugins/tuning_rules
-          tuner_batch_size: "50"
-          tuner_concurrency: "8"
-          tuner_timeout_sec: "10"
-          tuner_max_attempts: "3"
-          tuner_retry_base_ms: "100"
-          tuner_retry_cap_ms: "5000"
-      scaler: {}
-      topic:
-        dlq: {}
-    enricher:
-      workload:
-        name: alert-enricher
-        container: alert-enricher
-        environment:
-          kafka_topic_enricher: alert-enricher-topic
-          kafka_group_enricher: alert-enricher-group
-          kafka_topic_formatter: alert-formatter-topic
-          kafka_topic_enricher_dlq: alert-enricher-dlq-topic
-          enricher_plugin_dir: /plugins/enrichments
-          enricher_batch_size: "50"
-          enricher_concurrency: "8"
-          enricher_timeout_sec: "10"
-          enricher_max_attempts: "3"
-          enricher_retry_base_ms: "100"
-          enricher_retry_cap_ms: "5000"
-      scaler: {}
-      topic:
-        dlq: {}
-    formatter:
-      workload:
-        name: alert-formatter
-        container: alert-formatter
-        environment:
-          kafka_topic_formatter: alert-formatter-topic
-          kafka_group_formatter: alert-formatter-group
-          kafka_topic_dispatcher: alert-dispatcher-topic
-          kafka_topic_formatter_dlq: alert-formatter-dlq-topic
-          formatter_plugin_dir: /plugins/formatters
-          formatter_batch_size: "50"
-          formatter_concurrency: "8"
-          formatter_timeout_sec: "10"
-          formatter_max_attempts: "3"
-          formatter_retry_base_ms: "100"
-          formatter_retry_cap_ms: "5000"
-      scaler: {}
-      topic:
-        dlq: {}
-    dispatcher:
-      workload:
-        name: alert-dispatcher
-        container: alert-dispatcher
-        environment:
-          kafka_topic_dispatcher: alert-dispatcher-topic
-          kafka_group_dispatcher: alert-dispatcher-group
-          dispatcher_config_dir: /plugins/dispatchers
-      scaler: {}
+    # Not a pipeline stage, but takes the same workload settings.
+    controller:
+        workload:
+            name: blink-controller
+            container: controller
+            replicas: 1
+            terminationGracePeriodSeconds: 120
+            strategy:
+                type: Recreate
+            environment:
+                controller_database_dsn: "file:/var/lib/blink/controller/controller.db?_journal_mode=WAL&_busy_timeout=5000"
+                rule_plugin_dir: /plugins/rules
+                matcher_plugin_dir: /plugins/matchers
+                tuner_plugin_dir: /plugins/tuning_rules
+                formatter_plugin_dir: /plugins/formatters
+                enricher_plugin_dir: /plugins/enrichments
+    stages:
+        matcher:
+            workload:
+                name: event-matcher
+                container: event-matcher
+                environment:
+                    kafka_topic_matcher: event-matcher-topic
+                    kafka_group_matcher: event-matcher-group
+                    kafka_topic_executor: rule-executor-topic
+                    kafka_topic_matcher_dlq: event-matcher-dlq-topic
+                    matcher_plugin_dir: /plugins/matchers
+                    max_batch_size: "10000"
+                    max_concurrent_calls: "10"
+                    timeout_sec: "10"
+                    max_attempts: "3"
+                    retry_base_ms: "100"
+                    retry_cap_ms: "5000"
+            scaler: {}
+            topic:
+                dlq: {}
+        executor:
+            workload:
+                name: rule-executor
+                container: rule-executor
+                environment:
+                    kafka_topic_executor: rule-executor-topic
+                    kafka_topic_executor_dlq: rule-executor-dlq-topic
+                    kafka_group_executor: rule-executor-group
+                    kafka_topic_merger: alert-merger-topic
+                    rule_plugin_dir: /plugins/rules
+                    max_batch_size: "10000"
+                    max_concurrent_calls: "10"
+                    timeout_sec: "10"
+                    max_attempts: "3"
+                    retry_base_ms: "100"
+                    retry_cap_ms: "5000"
+            scaler: {}
+        merger:
+            workload:
+                name: alert-merger
+                container: alert-merger
+                plugins: false
+                # Runs no Ergo node, so it serves none of the node endpoints.
+                node: false
+                radar: false
+                terminationGracePeriodSeconds: 40
+                # Groups related alerts, so replicas must not exceed topic partitions.
+                replicas: 1
+                environment:
+                    kafka_topic_merger: alert-merger-topic
+                    kafka_group_merger: alert-merger-group
+                    kafka_topic_tuner: rule-tuner-topic
+                    kafka_topic_merger_dlq: alert-merger-dlq-topic
+                    merger_batch_size: "50"
+                    merger_max_groups: "10000"
+                    merger_max_pending_records: "10000"
+                    merger_flush_interval_sec: "10"
+                    merger_drain_timeout_sec: "30"
+                    merger_retry_base_ms: "100"
+                    merger_retry_cap_ms: "5000"
+            topic:
+                dlq: {}
+        tuner:
+            workload:
+                name: rule-tuner
+                container: rule-tuner
+                environment:
+                    kafka_topic_tuner: rule-tuner-topic
+                    kafka_group_tuner: rule-tuner-group
+                    kafka_topic_enricher: alert-enricher-topic
+                    kafka_topic_tuner_dlq: rule-tuner-dlq-topic
+                    tuner_plugin_dir: /plugins/tuning_rules
+                    max_batch_size: "10000"
+                    max_concurrent_calls: "10"
+                    timeout_sec: "10"
+                    max_attempts: "3"
+                    retry_base_ms: "100"
+                    retry_cap_ms: "5000"
+            scaler: {}
+            topic:
+                dlq: {}
+        enricher:
+            workload:
+                name: alert-enricher
+                container: alert-enricher
+                environment:
+                    kafka_topic_enricher: alert-enricher-topic
+                    kafka_group_enricher: alert-enricher-group
+                    kafka_topic_formatter: alert-formatter-topic
+                    kafka_topic_enricher_dlq: alert-enricher-dlq-topic
+                    enricher_plugin_dir: /plugins/enrichments
+                    enricher_batch_size: "50"
+                    enricher_concurrency: "8"
+                    enricher_timeout_sec: "10"
+                    enricher_max_attempts: "3"
+                    enricher_retry_base_ms: "100"
+                    enricher_retry_cap_ms: "5000"
+            scaler: {}
+            topic:
+                dlq: {}
+        formatter:
+            workload:
+                name: alert-formatter
+                container: alert-formatter
+                environment:
+                    kafka_topic_formatter: alert-formatter-topic
+                    kafka_group_formatter: alert-formatter-group
+                    kafka_topic_dispatcher: alert-dispatcher-topic
+                    kafka_topic_formatter_dlq: alert-formatter-dlq-topic
+                    formatter_plugin_dir: /plugins/formatters
+                    formatter_batch_size: "50"
+                    formatter_concurrency: "8"
+                    formatter_timeout_sec: "10"
+                    formatter_max_attempts: "3"
+                    formatter_retry_base_ms: "100"
+                    formatter_retry_cap_ms: "5000"
+            scaler: {}
+            topic:
+                dlq: {}
+        dispatcher:
+            workload:
+                name: alert-dispatcher
+                container: alert-dispatcher
+                environment:
+                    kafka_topic_dispatcher: alert-dispatcher-topic
+                    kafka_group_dispatcher: alert-dispatcher-group
+                    dispatcher_config_dir: /plugins/dispatchers
+            scaler: {}

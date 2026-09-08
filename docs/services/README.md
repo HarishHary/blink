@@ -5,16 +5,17 @@
 | [Controller](controller.md)       | Plugin sidecars, binaries, SQLite state     | `SnapshotUpdate` pushed to cluster subscribers, five namespaces | One control application per plugin type; distributes desired state to executors.          |
 | [Event matcher](event_matcher.md) | Raw JSON events, matcher and rule snapshots | Protobuf `ExecMessage` records, matcher DLQ records, or none    | Selects rules by `log_type`, evaluates required matcher plugins, preserves the input key. |
 | [Rule executor](rule_executor.md) | `ExecMessage` records and rule snapshots    | Alerts, executor DLQ records, or none                           | Evaluates selected rule plugins and keys matched alerts for downstream merging.           |
+| [Rule tuner](rule_tuner.md)       | Alerts and tuning snapshots                 | Tuned alerts, tuner DLQ records, or an ignored terminal         | Applies global and explicit tuning rules; preserves the source key on output alerts.      |
 
 ## Runtime relationship
 
-The controller distributes snapshots. Event matcher subscribes to matcher and rule namespaces; rule executor subscribes to the rule namespace. Both run local Ergo plugin applications, and the Ergo cluster (etcd for discovery) is their only cross-process control-plane connection. Kafka carries the event and alert pipeline.
+The controller distributes snapshots. Event matcher subscribes to matcher and rule namespaces; rule executor and rule tuner subscribe to rule and tuning respectively. All three run local Ergo plugin applications, and the Ergo cluster (etcd for discovery) is their only cross-process control-plane connection. Kafka carries the event and alert pipeline.
 
 See the [runtime overview](../internals/README.md) for actor composition, and [message flow](../internals/message-flow.md) for wire contracts.
 
 ## Shared metrics
 
-Every service embeds `internal/services.Runner`, so every process exposes `blink_runner_*` on its own health server at `:8080/metrics`. Matcher and executor also share the Kafka-stage metric contract below, under separate service prefixes. Controller retains its control-plane metrics on radar.
+Every service embeds `internal/services.Runner`, so every process exposes `blink_runner_*` on its own health server at `:8080/metrics`. Matcher, executor, and tuner share the Kafka-stage metric contract below, under separate service prefixes. Controller retains its control-plane metrics on radar.
 
 | Metric                                                | Meaning                                                                      |
 | ----------------------------------------------------- | ---------------------------------------------------------------------------- |
@@ -28,10 +29,11 @@ The `service` label is the service's own `Name()`, not the process:
 | `controller`    | `controller-rule`, `controller-matcher`, `controller-tuning`, `controller-formatter`, `controller-enrichment`, `health service` |
 | `event_matcher` | `event-matcher`, `health service`                                                                                               |
 | `rule_executor` | `rule-executor`, `health service`                                                                                               |
+| `rule_tuner`    | `rule-tuner`, `health service`                                                                                                  |
 
 ## Kafka-stage metrics
 
-Event matcher and rule executor expose the same baseline on `:8080/metrics`. Prefix each suffix below with `blink_event_matcher_` or `blink_rule_executor_`.
+Event matcher, rule executor, and rule tuner expose the same 19-family baseline on `:8080/metrics`. Prefix each suffix below with `blink_event_matcher_`, `blink_rule_executor_`, or `blink_rule_tuner_`.
 
 | Suffix and labels                       | Type      | Measurement                                                                                                                                  |
 | --------------------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -59,11 +61,11 @@ Label conventions:
 
 - Operation `result` is `ok`, `error`, or `canceled`. A failed operation with a canceled service context is `canceled`; a successful operation remains `ok`. A plugin timeout while the service context remains live is `error`.
 - Item `result` is `matched`, `unmatched`, or `error`, independently of the aggregate call outcome. Retried items add new observations; these are not unique-event counts.
-- `destination` is `output` or `dlq`. Output means the executor topic for matcher and merger topic for executor.
+- `destination` is `output` or `dlq`. Output means the executor topic for matcher, merger topic for executor, and enricher topic for tuner.
 - `plugin` is the configured matcher or rule name, never an event identifier. Names determine series cardinality; avoid unbounded plugin-name churn.
 - `stage` and drop `reason` are fixed processing categories listed on each service page, never error text, source keys, or rule IDs.
 
 All operation-duration histograms include successful, failed, and canceled attempts. Duration buckets are `0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60` seconds.
 Batch-size buckets are `0, 1, 10, 50, 100, 500, 1000, 5000, 10000, 50000` records; Prometheus also supplies the `+Inf` bucket.
 
-Acknowledgment is not an offset commit: partial publication followed by failure can be replayed and counted again. Drop decisions can also belong to uncommitted or internally replayed batches. Do not sum drops across scopes or use input minus output as a loss counter: executor fans one source out to multiple rule outcomes. Histogram `_count` series provide attempt denominators; counters expose outcomes separately.
+Acknowledgment is not an offset commit: partial publication followed by failure can be replayed and counted again. Drop decisions can also belong to uncommitted or internally replayed batches. Do not sum drops across scopes or use input minus output as a loss counter: executor fans one source out to multiple rule outcomes, while tuner can emit a semantic pass-through. Histogram `_count` series provide attempt denominators; counters expose outcomes separately.

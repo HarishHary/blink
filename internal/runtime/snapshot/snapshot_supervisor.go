@@ -384,10 +384,10 @@ func (s *Supervisor[T]) Terminate(reason error) {
 	}
 }
 
-// reportExecutor sends this executor's convergence report fire-and-forget; the supervisor is the one
-// process that sees both the pushed generation and the one the projection holds live.
+// reportExecutor sends this executor's current convergence report.
 func (s *Supervisor[T]) reportExecutor(applied *ExecutorAppliedGeneration) {
 	s.labels.Count(s, metricExecutorReports)
+	//argus:allow A1001 fresh heartbeat and applied generation transfer exclusively to the controller
 	_ = s.SendProcessID(s.opts.ReaderActorOptions.Endpoint, MessageExecutorReport{
 		ExecutorID: s.opts.ReaderActorOptions.ExecutorID,
 		Heartbeat: &ExecutorHeartbeat{

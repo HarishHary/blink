@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"ergo.services/ergo/gen"
@@ -45,13 +46,15 @@ type artifactScannerMetaStatus struct {
 // artifactScannerMeta owns filesystem observation and parsing for one scanner instance.
 type artifactScannerMeta[T plugin.Artifact] struct {
 	gen.MetaProcess
-	directory string
-	loader    plugin.Loader[T]
-	parsed    map[string]fileIndex[T]
-	digests   map[string]fileIndex[string]
-	runCtx    context.Context
-	cancelRun context.CancelFunc
-	labels    telemetry.Labels
+	directory   string
+	loader      plugin.Loader[T]
+	parsed      map[string]fileIndex[T]
+	digests     map[string]fileIndex[string]
+	parsedCount atomic.Int64
+	digestCount atomic.Int64
+	runCtx      context.Context
+	cancelRun   context.CancelFunc
+	labels      telemetry.Labels
 }
 
 // fileIndex is something derived from a file - a parsed spec, or a binary's checksum - and
@@ -184,12 +187,12 @@ func (m *artifactScannerMeta[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (
 	return fmt.Errorf("artifact scanner meta: unsupported call %T", request), nil
 }
 
-// HandleInspect exposes the scanner's file-index sizes
+// HandleInspect exposes the last completed scan's file-index sizes.
 func (m *artifactScannerMeta[T]) HandleInspect(gen.PID, ...string) map[string]string {
 	return map[string]string{
 		"scanner:directory": m.directory,
-		"scanner:parsed":    fmt.Sprintf("%d", len(m.parsed)),
-		"scanner:binaries":  fmt.Sprintf("%d", len(m.digests)),
+		"scanner:parsed":    fmt.Sprintf("%d", m.parsedCount.Load()),
+		"scanner:binaries":  fmt.Sprintf("%d", m.digestCount.Load()),
 	}
 }
 
@@ -208,9 +211,12 @@ func (m *artifactScannerMeta[T]) sendScan(watcher *fsnotify.Watcher) error {
 	}
 	started := time.Now()
 	entries, ids, complete, err := m.scan()
+	parsedCount, digestCount := len(m.parsed), len(m.digests)
+	m.parsedCount.Store(int64(parsedCount))
+	m.digestCount.Store(int64(digestCount))
 	m.labels.Observe(m, metricArtifactScanTime, time.Since(started).Seconds())
-	m.labels.Set(m, metricArtifactSpecs, float64(len(m.parsed)))
-	m.labels.Set(m, metricArtifactBinaries, float64(len(m.digests)))
+	m.labels.Set(m, metricArtifactSpecs, float64(parsedCount))
+	m.labels.Set(m, metricArtifactBinaries, float64(digestCount))
 	if attachErr != nil {
 		m.labels.Count(m, metricArtifactScanFailures, "watch")
 	}
@@ -221,6 +227,7 @@ func (m *artifactScannerMeta[T]) sendScan(watcher *fsnotify.Watcher) error {
 		m.Log().Warning("artifact scan incomplete: directory=%q alias=%s error=%v", m.directory, m.ID(), err)
 	}
 	entries = snapshot.CloneEntries(entries)
+	//argus:allow A1001 CloneEntries deep-copies entries and fresh IDs transfer; post-send only len reads
 	if sendErr := m.Send(m.Parent(), MessageArtifactScanResult{
 		source:     m.ID(),
 		complete:   complete,

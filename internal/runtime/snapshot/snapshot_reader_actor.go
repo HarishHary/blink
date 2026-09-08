@@ -158,7 +158,9 @@ func (a *readerActor) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error)
 // Terminate cancels any pending resubscribe and notifies the controller, best effort.
 func (a *readerActor) Terminate(error) {
 	defer a.reconcileStatus()
-	a.restart.CancelScheduled(false)
+	if a.restart != nil {
+		a.restart.CancelScheduled(false)
+	}
 	if a.subscribed {
 		_ = a.SendProcessID(a.opts.Endpoint, UnsubscribeRequest{ExecutorID: a.opts.ExecutorID})
 	}
@@ -239,8 +241,9 @@ func (a *readerActor) scheduleSubscribeRestart() error {
 	return nil
 }
 
-// publishSnapshot sends the received snapshot to subscribers.
+// publishSnapshot publishes a cloned snapshot.
 func (a *readerActor) publishSnapshot(snap *Snapshot) {
+	//argus:allow A1001 cloned snapshot transfers to the event; subscribers treat the shared event as immutable
 	_ = a.SendEvent(a.snapshotEvent.name, a.snapshotEvent.token, snap.Clone())
 }
 
