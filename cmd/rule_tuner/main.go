@@ -2,63 +2,127 @@ package main
 
 import (
 	"context"
-	"log"
+	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
+	"ergo.services/ergo/gen"
 	"github.com/harishhary/blink/cmd/rule_tuner/tuner"
 	"github.com/harishhary/blink/internal/brokers"
-	"github.com/harishhary/blink/internal/controller"
 	"github.com/harishhary/blink/internal/logger"
+	"github.com/harishhary/blink/internal/runtime/plugin"
+	"github.com/harishhary/blink/internal/runtime/snapshot"
 	"github.com/harishhary/blink/internal/services"
 	"github.com/harishhary/blink/pkg/tuning_rules"
 )
 
-// config contains the environment-loaded rule-tuner settings.
+// runtimeShutdownTimeout bounds the Ergo node close after the Runner returns.
+const runtimeShutdownTimeout = 45 * time.Second
+
+// config is everything rule_tuner needs.
 type config struct {
 	services.Common
 	tuner.Config
-	TunerSnapshotTopic string `env:"KAFKA_TOPIC_TUNER_SNAPSHOT"`
+	plugin.EtcdClusterConfig
+	ControllerNodeHost string `env:"CONTROLLER_NODE_HOST,optional"`
+	PodName            string `env:"POD_NAME,optional"`
+	PodIP              string `env:"POD_IP,optional"`
 	TuningPluginDir    string `env:"TUNER_PLUGIN_DIR"`
 }
 
+// main runs the tuner service and exits if its runtime stops.
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	var cfg config
 	if err := services.LoadFromEnvironment(&cfg); err != nil {
-		log.Fatalf("config: %v", err)
+		slog.Error("load config", "error", err)
+		os.Exit(1)
 	}
-	cfg.Config.Broker = brokers.NewKafkaBroker(cfg.Kafka)
-	b := cfg.Config.Broker
-	rootLogger := logger.New("rule-tuner", cfg.Env)
+	cfg.Broker = brokers.NewKafkaBroker(cfg.Kafka)
+	cfg.Config = cfg.Config.WithDefaults()
+	rootLogger := logger.New("rule-tuner", cfg.Debug)
 
-	// The snapshot drives both tuning-rule metadata and subprocess lifecycle.
-	tuningSnap := controller.NewSnapshotReader(rootLogger.With("component", "tuning_snapshot"), b.NewBroadcastReader(cfg.TunerSnapshotTopic))
-	tuningSnapSvc := services.NewManagedService("tuning-snapshot-sync", tuningSnap)
-	tuningCfg := tuning_rules.NewSnapshotConfig(rootLogger.With("component", "tuning_config"), tuningSnap)
+	runCtx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
 
-	tuningPool := tuning_rules.NewPool(rootLogger.With("component", "tuning_pool"), tuningCfg, 0)
-
-	pluginExecutor := tuning_rules.NewPluginExecutor(rootLogger.With("component", "plugin_executor"), tuningPool.Sync, cfg.TuningPluginDir, tuningSnap, tuningCfg)
-	pluginExecutorSvc := services.NewManagedService("rule-tuner-sync", pluginExecutor)
-
-	cfg.Config.ReadyFn = func() bool {
-		return tuningSnap.Ready() && len(tuningCfg.Primaries()) > 0
+	controllerHost := cfg.ControllerNodeHost
+	if controllerHost == "" {
+		controllerHost = "controller"
 	}
-	tunerSvc := tuner.NewService(rootLogger.With("component", "service"), cfg.Config, tuningPool, tuningCfg)
+	nodeName := gen.Atom(fmt.Sprintf("rule-tuner-%s@%s", cfg.PodName, cfg.PodIP))
+	registrar, err := plugin.NewEtcdRegistrar(cfg.EtcdClusterConfig, cfg.Env)
+	if err != nil {
+		rootLogger.FatalF("create etcd registrar: %v", err)
+	}
 
-	// Health only requires snapshot catch-up; consumption also requires a non-empty primary catalog.
-	go services.ServeHealth(rootLogger.With("component", "health"), ":8080", tuningSnap.Ready)
+	// Match admission limits to the service; leave the process budget at its CPU-based default.
+	app := tuning_rules.NewApplication(plugin.ApplicationOptions{
+		MaxBatchSize:       cfg.MaxBatchSize,
+		MaxConcurrentCalls: cfg.MaxConcurrentCalls,
+		Namespace:          "tuning",
+		SupervisorOptions: plugin.SupervisorOptions{
+			Directory: cfg.TuningPluginDir,
+			SnapshotReader: snapshot.ReaderActorOptions{
+				Endpoint:   gen.ProcessID{Name: snapshot.ControllerActorName("tuning"), Node: gen.Atom("controller@" + controllerHost)},
+				ExecutorID: cfg.PodName,
+			},
+		},
+	}, rootLogger)
 
+	cluster := &plugin.ClusterOptions{Cookie: cfg.Cookie, Registrar: registrar, Flags: plugin.DefaultClusterFlags()}
+	host, err := plugin.Start(plugin.NodeOptions{
+		Name:            nodeName,
+		Debug:           cfg.Debug,
+		ShutdownTimeout: runtimeShutdownTimeout,
+		Applications:    []gen.ApplicationBehavior{app},
+		Cluster:         cluster,
+		Observer:        plugin.EndpointOptions{Enabled: cfg.ObserverEnabled, Host: cfg.ObserverHost, Port: cfg.ObserverPort},
+		MCP:             plugin.EndpointOptions{Enabled: cfg.MCPEnabled, Host: cfg.MCPHost, Port: cfg.MCPPort},
+		Radar:           plugin.EndpointOptions{Enabled: cfg.RadarEnabled, Host: cfg.RadarHost, Port: cfg.RadarPort},
+	})
+	if err != nil {
+		rootLogger.FatalF("rule-tuner: %v", err)
+	}
+
+	runnerStopped := make(chan error, 1)
+	go func() {
+		err := app.Wait(runCtx)
+		if runCtx.Err() == nil {
+			runnerStopped <- err
+			cancelRun()
+		}
+	}()
+
+	tunerSvc := tuner.NewService(rootLogger.With("component", "service"), cfg.Config, app)
+	healthSvc := services.NewHealthService(":8080", tunerSvc.Ready, nil)
 	runner := services.New(rootLogger.With("component", "runner"))
-	runner.Register(
-		tuningSnapSvc,
-		pluginExecutorSvc,
-		tunerSvc,
-	)
-	runner.Run(ctx)
-	log.Println("Shutting down rule-tuner")
+	runner.Register(tunerSvc, healthSvc)
+	runner.Run(runCtx)
+
+	var runnerErr error
+	select {
+	case err := <-runnerStopped:
+		if err == nil {
+			runnerErr = fmt.Errorf("rule-tuner runner stopped")
+		} else {
+			runnerErr = fmt.Errorf("rule-tuner runner stopped: %w", err)
+		}
+	default:
+	}
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), runtimeShutdownTimeout)
+	if err := host.Close(shutdownCtx); err != nil {
+		rootLogger.ErrorF("stop Ergo node: %v", err)
+	}
+	shutdownCancel()
+
+	if runnerErr != nil {
+		rootLogger.FatalF("rule-tuner runner: %v", runnerErr)
+	}
+	rootLogger.Info("Shutting down rule-tuner")
 }
