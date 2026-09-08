@@ -38,7 +38,7 @@ flowchart TB
 | ----------------------------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | `plugin.Start`                            | `main` → Ergo node                                                      | Starts the node with cluster networking and radar, named `event-matcher-<pod>@<pod ip>`.                 |
 | `services.Runner.Register`                | `main` → matcher service, health service                                | Registers the two services.                                                                              |
-| `Application` (`matchers.NewApplication`) | `main` → Ergo node                                                      | Loads the process-owned matcher application and the rule snapshot supervisor member, once at node start. |
+| `Application` (`matcher.NewApplication`)  | `main` → Ergo node                                                      | Loads the process-owned matcher application and the rule snapshot supervisor member, once at node start. |
 | `SubscribeRequest`/`SnapshotUpdate`       | matcher/rule snapshot supervisor ↔ namespace controller actor (cluster) | Subscribes to `controller-matcher-actor` and `controller-rule-actor`; receives pushed generations.       |
 
 The matcher application is process-owned, not attempt-owned; the service borrows it through `Match`, `State`, and the rule projection client. A restarted attempt reuses the running runtime; an application that stops cancels the Runner and exits non-zero.
@@ -127,7 +127,7 @@ The radar series carry a `namespace` label: `matcher` for the plugin runtime and
 
 ## Kafka batch contract
 
-The group reader fetches up to `MAX_BATCH_SIZE` (default 50) from `KAFKA_TOPIC_MATCHER` using `KAFKA_GROUP_MATCHER`. Each batch snapshots matcher and rule state once. Positions are processed independently, but non-drop records are published serially in fetched order. Offsets commit only after every record is terminal and every required write is acknowledged. Writes are synchronous, so delivery is at least once.
+The group reader fetches up to `MAX_BATCH_SIZE` (default 10,000) from `KAFKA_TOPIC_MATCHER` using `KAFKA_GROUP_MATCHER`. Each batch snapshots matcher and rule state once. Positions are processed independently, but non-drop records are published serially in fetched order. Offsets commit only after every record is terminal and every required write is acknowledged. Writes are synchronous, so delivery is at least once.
 
 ### Kafka batch terminal lifecycle
 
@@ -202,7 +202,7 @@ Shadow calls go out only when the committed projection carries a shadow candidat
 ## Source references
 
 - [`cmd/event_matcher/main.go`](../../cmd/event_matcher/main.go) - process wiring, subscription endpoints, application ownership, node and Runner lifecycle.
-- [`cmd/event_matcher/matcher.go`](../../cmd/event_matcher/matcher.go) - readiness, batch terminals, retry, publication, commit.
+- [`cmd/event_matcher/matcher/matcher.go`](../../cmd/event_matcher/matcher/matcher.go) - readiness, batch terminals, retry, publication, commit.
 - [`pkg/matchers/application.go`](../../pkg/matchers/application.go) - ordered matching, rollout grouping, payload/capacity chunking, shadow submissions.
 - [`internal/services/runner.go`](../../internal/services/runner.go) - restart policy; [`internal/services/health.go`](../../internal/services/health.go) - probe endpoints.
 - [`internal/brokers/broker.go`](../../internal/brokers/broker.go) - commit/ack boundary.
