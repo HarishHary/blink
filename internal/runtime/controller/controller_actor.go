@@ -63,7 +63,7 @@ type actor[T plugin.Artifact] struct {
 	opts                ActorOptions
 	loader              plugin.Loader[T]
 	database            backends.Database
-	barrier             *writerIOBarrier
+	barrier             *runtime.IOBarrier
 	lifecycle           ActorLifecycle
 	scanner             scannerMetaState
 	writer              writerMetaState
@@ -81,7 +81,7 @@ type actor[T plugin.Artifact] struct {
 
 // newActor constructs the controller actor with normalized options, its typed loader, and the labels
 // its supervisor built from the namespace.
-func newActor[T plugin.Artifact](opts ActorOptions, loader plugin.Loader[T], labels telemetry.Labels, database backends.Database, barrier *writerIOBarrier) gen.ProcessBehavior {
+func newActor[T plugin.Artifact](opts ActorOptions, loader plugin.Loader[T], labels telemetry.Labels, database backends.Database, barrier *runtime.IOBarrier) gen.ProcessBehavior {
 	return &actor[T]{opts: actorOptionsWithDefaults(opts), loader: loader, labels: labels, database: database, barrier: barrier}
 }
 

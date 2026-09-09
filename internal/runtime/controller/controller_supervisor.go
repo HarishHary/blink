@@ -38,7 +38,7 @@ type supervisor[T plugin.Artifact] struct {
 	namespace            string
 	loader               plugin.Loader[T]
 	database             backends.Database
-	barrier              *writerIOBarrier
+	barrier              *runtime.IOBarrier
 	lifecycle            SupervisorLifecycle
 	actor                actorState
 	writerFences         map[gen.Alias]gen.PID
@@ -50,7 +50,7 @@ type supervisor[T plugin.Artifact] struct {
 
 // newSupervisor constructs the controller supervisor with the namespace its application configured,
 // normalized options, and its typed loader.
-func newSupervisor[T plugin.Artifact](namespace string, opts SupervisorOptions, loader plugin.Loader[T], database backends.Database, barrier *writerIOBarrier) gen.ProcessBehavior {
+func newSupervisor[T plugin.Artifact](namespace string, opts SupervisorOptions, loader plugin.Loader[T], database backends.Database, barrier *runtime.IOBarrier) gen.ProcessBehavior {
 	return &supervisor[T]{
 		opts:      supervisorOptionsWithDefaults(opts),
 		namespace: namespace,

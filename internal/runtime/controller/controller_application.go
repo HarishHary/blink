@@ -8,6 +8,7 @@ import (
 	"ergo.services/ergo/app"
 	"ergo.services/ergo/gen"
 	"github.com/harishhary/blink/internal/backends"
+	"github.com/harishhary/blink/internal/runtime"
 	"github.com/harishhary/blink/internal/runtime/plugin"
 	"github.com/harishhary/blink/internal/runtime/snapshot"
 	"github.com/harishhary/blink/internal/runtime/telemetry"
@@ -19,7 +20,7 @@ type Application[T plugin.Artifact] struct {
 	opts     ApplicationOptions
 	loader   plugin.Loader[T]
 	database *sql.DB
-	barrier  *writerIOBarrier
+	barrier  *runtime.IOBarrier
 	stopped  chan error
 	labels   telemetry.Labels
 }
@@ -31,7 +32,7 @@ func NewApplication[T plugin.Artifact](opts ApplicationOptions, loader plugin.Lo
 	return &Application[T]{
 		opts:    normalized,
 		loader:  loader,
-		barrier: newWriterIOBarrier(),
+		barrier: runtime.NewIOBarrier(),
 		stopped: make(chan error, 1),
 		labels:  telemetry.NewLabels(normalized.Namespace),
 	}

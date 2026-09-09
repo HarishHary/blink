@@ -279,14 +279,14 @@ stateDiagram-v2
 
 | Message                                                                | Direction                                        | Meaning                                                                              |
 | ---------------------------------------------------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------ |
-| `writerIOBarrier.Acquire`, `MessageSnapshotWriterIOStarted`            | snapshot writer meta → supervisor                | Reserves application I/O; registers its fence.                                       |
+| `runtime.IOBarrier.Acquire`, `MessageSnapshotWriterIOStarted`          | snapshot writer meta → supervisor                | Reserves application I/O; registers its fence.                                       |
 | `Database.LoadAll`, `Database.LoadGeneration`, `Database.LoadSnapshot` | snapshot writer meta → SQLite                    | Loads bootstrap records, generation, snapshot.                                       |
 | `MessageSnapshotLoadResult`                                            | snapshot writer meta → actor                     | Delivers the bootstrap result.                                                       |
 | `MessageWriteSnapshot`                                                 | actor → snapshot writer meta                     | Queues the one buffered write job.                                                   |
 | `MessageSnapshotWriteResult`                                           | snapshot writer meta → actor                     | Reports each failed attempt and final success.                                       |
 | `Terminate`                                                            | actor → snapshot writer meta                     | Cancels loading or writing.                                                          |
 | `MessageSnapshotWriterIOStopped`                                       | snapshot writer meta → supervisor → owning actor | Releases the fence; notifies the owning actor if still current when `Start` returns. |
-| `writerIOBarrier.Release`                                              | snapshot writer meta → barrier                   | Releases the I/O reservation when `Start` returns.                                   |
+| `runtime.IOBarrier.Release`                                            | snapshot writer meta → barrier                   | Releases the I/O reservation when `Start` returns.                                   |
 
 ### Readiness
 

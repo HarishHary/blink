@@ -36,7 +36,7 @@ type snapshotWriterMetaStatus struct {
 type snapshotWriterMeta struct {
 	gen.MetaProcess
 	database   backends.Database
-	barrier    *writerIOBarrier
+	barrier    *runtime.IOBarrier
 	supervisor gen.PID
 	runCtx     context.Context
 	cancelRun  context.CancelFunc
