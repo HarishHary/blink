@@ -21,6 +21,7 @@ const (
 	defaultProcessorRestartPeriod    uint16 = 10
 )
 
+// kafkaReaderActorOptionsWithDefaults applies reader retry and restart defaults.
 func kafkaReaderActorOptionsWithDefaults(opts KafkaReaderActorOptions) KafkaReaderActorOptions {
 	if opts.RestartMin <= 0 {
 		opts.RestartMin = defaultKafkaRestartMin
@@ -43,6 +44,7 @@ func kafkaReaderActorOptionsWithDefaults(opts KafkaReaderActorOptions) KafkaRead
 	return opts
 }
 
+// kafkaWriterActorOptionsWithDefaults applies writer retry and restart defaults.
 func kafkaWriterActorOptionsWithDefaults(opts KafkaWriterActorOptions) KafkaWriterActorOptions {
 	if opts.RestartMin <= 0 {
 		opts.RestartMin = defaultKafkaRestartMin
@@ -65,6 +67,7 @@ func kafkaWriterActorOptionsWithDefaults(opts KafkaWriterActorOptions) KafkaWrit
 	return opts
 }
 
+// processorSupervisorOptionsWithDefaults applies processor supervisor defaults.
 func processorSupervisorOptionsWithDefaults(opts ProcessorSupervisorOptions) ProcessorSupervisorOptions {
 	for i := range opts.Writers {
 		opts.Writers[i] = kafkaWriterActorOptionsWithDefaults(opts.Writers[i])
@@ -78,15 +81,26 @@ func processorSupervisorOptionsWithDefaults(opts ProcessorSupervisorOptions) Pro
 	return opts
 }
 
+// ProcessorSupervisorName returns the processor supervisor name for a namespace.
 func ProcessorSupervisorName(namespace string) gen.Atom {
 	return subtreeName(namespace, "supervisor")
 }
+
+// KafkaReaderActorName returns the Kafka reader actor name for a namespace.
 func KafkaReaderActorName(namespace string) gen.Atom { return subtreeName(namespace, "reader") }
+
+// KafkaWriterActorName returns the Kafka writer actor name for a destination.
 func KafkaWriterActorName(namespace, destination string) gen.Atom {
 	return subtreeName(namespace, "writer-"+destination)
 }
+
+// CoordinatorName returns the coordinator name for a namespace.
 func CoordinatorName(namespace string) gen.Atom { return subtreeName(namespace, "coordinator") }
-func JobPoolName(namespace string) gen.Atom     { return subtreeName(namespace, "job-pool") }
+
+// JobPoolName returns the job pool name for a namespace.
+func JobPoolName(namespace string) gen.Atom { return subtreeName(namespace, "job-pool") }
+
+// subtreeName returns a stage processor subtree name.
 func subtreeName(namespace, suffix string) gen.Atom {
 	return gen.Atom("stage-" + namespace + "-processor-" + suffix)
 }
