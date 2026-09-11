@@ -395,12 +395,7 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 			if a.lifecycle == ActorRunning {
 				a.Log().Error("snapshot writer stopped unexpectedly: name=%s alias=%s reason=%v", a.Name(), m.Alias, m.Reason)
 			}
-			a.writer.alias = gen.Alias{}
-			a.writer.status.Lifecycle = SnapshotWriterMetaRestarting
-			a.writer.status.Availability = runtime.AvailabilityUnavailable
-			a.writer.status.Loaded = false
-			a.writer.status.Writing = false
-			a.writer.status.LastError = m.Reason
+			a.writerMetaLost(m.Alias, m.Reason)
 			if a.lifecycle == ActorDraining || a.lifecycle == ActorDrained {
 				return a.maybeDrained()
 			}
@@ -503,6 +498,17 @@ func (a *actor[T]) stopWriter(reason error) {
 		_ = a.DemonitorAlias(alias)
 		_ = a.SendExitMeta(alias, reason)
 	}
+}
+
+func (a *actor[T]) writerMetaLost(alias gen.Alias, reason error) {
+	if alias == a.writer.alias {
+		a.writer.alias = gen.Alias{}
+	}
+	a.writer.status.Lifecycle = SnapshotWriterMetaRestarting
+	a.writer.status.Availability = runtime.AvailabilityUnavailable
+	a.writer.status.Loaded = false
+	a.writer.status.Writing = false
+	a.writer.status.LastError = reason
 }
 
 // scheduleScannerRestart arranges the next scanner restart attempt.

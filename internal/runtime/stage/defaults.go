@@ -12,9 +12,11 @@ const (
 	defaultKafkaReaderRetryMin              = 100 * time.Millisecond
 	defaultKafkaReaderRetryMax              = 5 * time.Second
 	kafkaReaderRetryAttemptBudget           = 5
+	kafkaReaderUnavailableThreshold         = kafkaReaderRetryAttemptBudget
 	defaultKafkaWriterRetryMin              = 100 * time.Millisecond
 	defaultKafkaWriterRetryMax              = 5 * time.Second
 	kafkaWriterRetryAttemptBudget           = 5
+	kafkaWriterUnavailableThreshold         = kafkaWriterRetryAttemptBudget
 	defaultProcessorRestartIntensity uint16 = 5
 	defaultProcessorRestartPeriod    uint16 = 10
 )
