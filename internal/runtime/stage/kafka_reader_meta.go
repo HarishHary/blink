@@ -130,7 +130,7 @@ func (m *kafkaReaderMeta) Init(process gen.MetaProcess) error {
 		return fmt.Errorf("kafka reader meta: reserve completion proof")
 	}
 	m.completion.Seal()
-	if err := m.Send(m.supervisor, MessageKafkaReaderIOStarted{Alias: m.ID(), completion: m.completion}); err != nil {
+	if err := m.SendWithPriority(m.supervisor, MessageKafkaReaderIOStarted{Alias: m.ID(), completion: m.completion}, gen.MessagePriorityHigh); err != nil {
 		m.cancelRun()
 		m.completion.Release()
 		m.ioBarrier.Release()
@@ -141,7 +141,9 @@ func (m *kafkaReaderMeta) Init(process gen.MetaProcess) error {
 
 // Start owns one fresh broker client, its serialized fetch/commit loop, and its single Close call.
 func (m *kafkaReaderMeta) Start() (runErr error) {
-	defer func() { _ = m.Send(m.supervisor, MessageKafkaReaderIOStopped{Alias: m.ID()}) }()
+	defer func() {
+		_ = m.SendWithPriority(m.supervisor, MessageKafkaReaderIOStopped{Alias: m.ID()}, gen.MessagePriorityHigh)
+	}()
 	defer m.completion.Release()
 	defer m.ioBarrier.Release()
 	reader := m.newReader()
@@ -156,7 +158,7 @@ func (m *kafkaReaderMeta) Start() (runErr error) {
 	if m.runCtx.Err() != nil {
 		return nil
 	}
-	if err := m.Send(m.Parent(), MessageKafkaReaderReady{alias: m.ID()}); err != nil {
+	if err := m.SendWithPriority(m.Parent(), MessageKafkaReaderReady{alias: m.ID()}, gen.MessagePriorityHigh); err != nil {
 		return fmt.Errorf("kafka reader meta: report ready: %w", err)
 	}
 
@@ -261,10 +263,10 @@ func (m *kafkaReaderMeta) fetch(reader brokers.Reader, job MessageKafkaReaderFet
 		if m.runCtx.Err() != nil {
 			return
 		}
-		_ = m.Send(m.Parent(), MessageKafkaReaderRetryProgress{
+		_ = m.SendWithPriority(m.Parent(), MessageKafkaReaderRetryProgress{
 			source: m.ID(), operationID: job.operationID,
 			kind: kafkaReaderFetching, err: fmt.Errorf("fetch attempt %d/%d: %w", attempt, kafkaReaderRetryAttemptBudget, err),
-		})
+		}, gen.MessagePriorityHigh)
 	})
 	if m.runCtx.Err() != nil {
 		return nil
@@ -273,7 +275,7 @@ func (m *kafkaReaderMeta) fetch(reader brokers.Reader, job MessageKafkaReaderFet
 		source: m.ID(), operationID: job.operationID,
 		records: records, err: err,
 	}
-	if sendErr := m.Send(m.Parent(), result); sendErr != nil {
+	if sendErr := m.SendWithPriority(m.Parent(), result, gen.MessagePriorityHigh); sendErr != nil {
 		return fmt.Errorf("kafka reader meta: send fetch result: %w", sendErr)
 	}
 	return nil
@@ -314,10 +316,10 @@ func (m *kafkaReaderMeta) commit(reader brokers.Reader, job MessageKafkaReaderCo
 		if m.runCtx.Err() != nil {
 			return
 		}
-		_ = m.Send(m.Parent(), MessageKafkaReaderRetryProgress{
+		_ = m.SendWithPriority(m.Parent(), MessageKafkaReaderRetryProgress{
 			source: m.ID(), operationID: job.operationID,
 			kind: kafkaReaderCommitting, err: fmt.Errorf("commit attempt %d/%d: %w", attempt, kafkaReaderRetryAttemptBudget, err),
-		})
+		}, gen.MessagePriorityHigh)
 	})
 	if m.runCtx.Err() != nil {
 		return nil
@@ -329,7 +331,7 @@ func (m *kafkaReaderMeta) commit(reader brokers.Reader, job MessageKafkaReaderCo
 		source: m.ID(), operationID: job.operationID,
 		sources: append([]RecordRef(nil), job.sources...), err: err,
 	}
-	if sendErr := m.Send(m.Parent(), result); sendErr != nil {
+	if sendErr := m.SendWithPriority(m.Parent(), result, gen.MessagePriorityHigh); sendErr != nil {
 		return fmt.Errorf("kafka reader meta: send commit result: %w", sendErr)
 	}
 	return nil

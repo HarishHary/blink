@@ -113,7 +113,7 @@ func (m *kafkaWriterMeta) Init(process gen.MetaProcess) error {
 		return fmt.Errorf("kafka writer meta: reserve completion proof")
 	}
 	m.completion.Seal()
-	if err := m.Send(m.supervisor, MessageKafkaWriterIOStarted{Alias: m.ID(), completion: m.completion}); err != nil {
+	if err := m.SendWithPriority(m.supervisor, MessageKafkaWriterIOStarted{Alias: m.ID(), completion: m.completion}, gen.MessagePriorityHigh); err != nil {
 		m.cancelRun()
 		m.completion.Release()
 		m.ioBarrier.Release()
@@ -124,7 +124,9 @@ func (m *kafkaWriterMeta) Init(process gen.MetaProcess) error {
 
 // Start runs the writer client and processes queued writes.
 func (m *kafkaWriterMeta) Start() (runErr error) {
-	defer func() { _ = m.Send(m.supervisor, MessageKafkaWriterIOStopped{Alias: m.ID()}) }()
+	defer func() {
+		_ = m.SendWithPriority(m.supervisor, MessageKafkaWriterIOStopped{Alias: m.ID()}, gen.MessagePriorityHigh)
+	}()
 	defer m.completion.Release()
 	defer m.ioBarrier.Release()
 	writer := m.newWriter()
@@ -139,7 +141,7 @@ func (m *kafkaWriterMeta) Start() (runErr error) {
 	if m.runCtx.Err() != nil {
 		return nil
 	}
-	if err := m.Send(m.Parent(), MessageKafkaWriterReady{alias: m.ID()}); err != nil {
+	if err := m.SendWithPriority(m.Parent(), MessageKafkaWriterReady{alias: m.ID()}, gen.MessagePriorityHigh); err != nil {
 		return fmt.Errorf("kafka writer meta: report ready: %w", err)
 	}
 
@@ -264,10 +266,10 @@ func (m *kafkaWriterMeta) write(writer brokers.Writer, job MessageKafkaWriterWri
 		if m.runCtx.Err() != nil {
 			return
 		}
-		_ = m.Send(m.Parent(), MessageKafkaWriterRetryProgress{
+		_ = m.SendWithPriority(m.Parent(), MessageKafkaWriterRetryProgress{
 			source: m.ID(), operationID: job.operationID,
 			err: fmt.Errorf("write attempt %d/%d: %w", attempt, kafkaWriterRetryAttemptBudget, err),
-		})
+		}, gen.MessagePriorityHigh)
 	})
 	if m.runCtx.Err() != nil {
 		return nil
@@ -275,9 +277,9 @@ func (m *kafkaWriterMeta) write(writer brokers.Writer, job MessageKafkaWriterWri
 	if err == nil {
 		m.labels.Add(m, metricKafkaWriterRecords, float64(len(job.records)))
 	}
-	if sendErr := m.Send(m.Parent(), MessageKafkaWriterWriteResult{
+	if sendErr := m.SendWithPriority(m.Parent(), MessageKafkaWriterWriteResult{
 		source: m.ID(), operationID: job.operationID, err: err, ambiguous: err != nil,
-	}); sendErr != nil {
+	}, gen.MessagePriorityHigh); sendErr != nil {
 		return fmt.Errorf("kafka writer meta: send completion: %w", sendErr)
 	}
 	return nil
