@@ -251,7 +251,6 @@ func (s *supervisor[P, M]) Init(...any) (act.SupervisorSpec, error) {
 				Factory: func() gen.ProcessBehavior {
 					return newCatalogActor(s.opts.CatalogOptions, s.adapter, s.labels)
 				},
-				Options: gen.ProcessOptions{},
 			},
 		},
 	}, nil

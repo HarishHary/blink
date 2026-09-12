@@ -64,7 +64,7 @@ type SnapshotUpdate struct {
 // executor's PID is the authoritative removal path.
 type UnsubscribeRequest struct{ ExecutorID string }
 
-type MessageSubscribeRestart struct{ token uint64 }
+type MessageSubscribeRetry struct{ token uint64 }
 
 // --- messages ---
 
@@ -73,15 +73,15 @@ type MessageSubscribeRestart struct{ token uint64 }
 type readerActor struct {
 	act.Actor
 	opts           ReaderActorOptions
-	labels         telemetry.Labels
 	snapshotEvent  eventPublication
 	activated      bool
 	controllerPID  gen.PID
 	subscribed     bool
 	lastGeneration int64
-	lastError      error
-	restart        *runtime.ScheduledBackoff
+	retry          *runtime.ScheduledBackoff
 	lastStatus     ReaderActorStatus
+	lastError      error
+	labels         telemetry.Labels
 }
 
 // newReaderActor constructs the reader for one subscription; it publishes every snapshot it
@@ -95,11 +95,11 @@ func (a *readerActor) Init(...any) error {
 	if !a.snapshotEvent.registered() {
 		return fmt.Errorf("snapshot reader: a registered snapshot event is required")
 	}
-	a.restart = runtime.NewScheduledBackoff(a.opts.RestartMin, a.opts.RestartMax)
+	a.retry = runtime.NewScheduledBackoff(a.opts.RetryMin, a.opts.RetryMax)
 	return nil
 }
 
-// HandleMessage processes activation, pushed snapshot updates, controller-loss, and restart messages.
+// HandleMessage processes activation, pushed snapshot updates, controller-loss, and retry messages.
 func (a *readerActor) HandleMessage(from gen.PID, message any) error {
 	defer a.reconcileStatus()
 	switch m := message.(type) {
@@ -119,12 +119,12 @@ func (a *readerActor) HandleMessage(from gen.PID, message any) error {
 		a.lastError = nil
 		a.publishSnapshot(m.Snapshot)
 		return nil
-	case MessageSubscribeRestart:
-		if !a.restart.Pending || a.restart.Token != m.token || a.subscribed {
+	case MessageSubscribeRetry:
+		if !a.retry.Pending || a.retry.Token != m.token || a.subscribed {
 			return nil
 		}
-		a.restart.Pending = false
-		a.restart.Cancel = nil
+		a.retry.Pending = false
+		a.retry.Cancel = nil
 		return a.subscribe()
 	case gen.MessageDownPID:
 		if !a.subscribed || m.PID != a.controllerPID {
@@ -135,7 +135,7 @@ func (a *readerActor) HandleMessage(from gen.PID, message any) error {
 		a.subscribed = false
 		a.lastError = m.Reason
 		a.Log().Error("snapshot reader actor: controller %s stopped: %v", m.PID, m.Reason)
-		return a.scheduleSubscribeRestart()
+		return a.scheduleSubscribeRetry()
 	case gen.MessageDownNode:
 		if !a.subscribed || m.Name != a.opts.Endpoint.Node {
 			return nil
@@ -145,7 +145,7 @@ func (a *readerActor) HandleMessage(from gen.PID, message any) error {
 		a.subscribed = false
 		a.lastError = fmt.Errorf("controller node %s down", m.Name)
 		a.Log().Error("snapshot reader actor: controller node %s down", m.Name)
-		return a.scheduleSubscribeRestart()
+		return a.scheduleSubscribeRetry()
 	}
 	return nil
 }
@@ -158,8 +158,8 @@ func (a *readerActor) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error)
 // Terminate cancels any pending resubscribe and notifies the controller, best effort.
 func (a *readerActor) Terminate(error) {
 	defer a.reconcileStatus()
-	if a.restart != nil {
-		a.restart.CancelScheduled(false)
+	if a.retry != nil {
+		a.retry.CancelScheduled(false)
 	}
 	if a.subscribed {
 		_ = a.SendProcessID(a.opts.Endpoint, UnsubscribeRequest{ExecutorID: a.opts.ExecutorID})
@@ -178,23 +178,23 @@ func (a *readerActor) subscribe() error {
 	if err != nil {
 		a.labels.Count(a, metricSubscribeAttempts, "unreachable")
 		a.lastError = fmt.Errorf("%w: subscribe: %w", runtime.ErrSnapshotSubscribe, err)
-		return a.scheduleSubscribeRestart()
+		return a.scheduleSubscribeRetry()
 	}
 	sub, ok := response.(SubscribeResponse)
 	if !ok {
 		a.labels.Count(a, metricSubscribeAttempts, "bad_response")
 		a.lastError = fmt.Errorf("%w: subscribe: unexpected response %T", runtime.ErrSnapshotSubscribe, response)
-		return a.scheduleSubscribeRestart()
+		return a.scheduleSubscribeRetry()
 	}
 	if err := a.MonitorPID(sub.ControllerPID); err != nil {
 		a.labels.Count(a, metricSubscribeAttempts, "unmonitorable")
 		a.lastError = fmt.Errorf("%w: monitor controller: %w", runtime.ErrSnapshotSubscribe, err)
-		return a.scheduleSubscribeRestart()
+		return a.scheduleSubscribeRetry()
 	}
 	_ = a.MonitorNode(a.opts.Endpoint.Node)
 
 	a.labels.Count(a, metricSubscribeAttempts, "ok")
-	a.restart.CancelScheduled(true)
+	a.retry.CancelScheduled(true)
 	a.controllerPID = sub.ControllerPID
 	a.subscribed = true
 	a.lastError = nil
@@ -221,23 +221,23 @@ func (a *readerActor) updateRejection(from gen.PID, update SnapshotUpdate) strin
 	}
 }
 
-// scheduleSubscribeRestart schedules a backoff-delayed resubscribe.
-func (a *readerActor) scheduleSubscribeRestart() error {
-	if a.restart.Pending {
+// scheduleSubscribeRetry schedules a backoff-delayed resubscribe.
+func (a *readerActor) scheduleSubscribeRetry() error {
+	if a.retry.Pending {
 		return nil
 	}
-	delay := a.restart.Strategy.NextBackOff()
+	delay := a.retry.Strategy.NextBackOff()
 	if delay == backoff.Stop {
-		return fmt.Errorf("snapshot reader restart: %w", runtime.ErrBackoffStopped)
+		return fmt.Errorf("snapshot reader retry: %w", runtime.ErrBackoffStopped)
 	}
-	a.restart.Token++
-	token := a.restart.Token
-	cancel, err := a.SendAfter(a.PID(), MessageSubscribeRestart{token: token}, delay)
+	a.retry.Token++
+	token := a.retry.Token
+	cancel, err := a.SendAfter(a.PID(), MessageSubscribeRetry{token: token}, delay)
 	if err != nil {
-		return fmt.Errorf("schedule snapshot reader restart: %w", err)
+		return fmt.Errorf("schedule snapshot reader retry: %w", err)
 	}
-	a.restart.Pending = true
-	a.restart.Cancel = cancel
+	a.retry.Pending = true
+	a.retry.Cancel = cancel
 	return nil
 }
 

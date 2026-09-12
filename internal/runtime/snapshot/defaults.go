@@ -7,8 +7,8 @@ import (
 )
 
 const (
-	DefaultRestartMin = 100 * time.Millisecond
-	DefaultRestartMax = 5 * time.Second
+	DefaultRetryMin = 100 * time.Millisecond
+	DefaultRetryMax = 5 * time.Second
 )
 
 // Every process in a subtree is named from its namespace, mirroring controller-<namespace>-*.
@@ -39,14 +39,14 @@ func supervisorOptionsWithDefaults(opts SupervisorOptions) SupervisorOptions {
 
 // readerOptionsWithDefaults fills reader actor option defaults.
 func readerOptionsWithDefaults(opts ReaderActorOptions) ReaderActorOptions {
-	if opts.RestartMin <= 0 {
-		opts.RestartMin = DefaultRestartMin
+	if opts.RetryMin <= 0 {
+		opts.RetryMin = DefaultRetryMin
 	}
-	if opts.RestartMax <= 0 {
-		opts.RestartMax = DefaultRestartMax
+	if opts.RetryMax <= 0 {
+		opts.RetryMax = DefaultRetryMax
 	}
-	if opts.RestartMax < opts.RestartMin {
-		opts.RestartMax = opts.RestartMin
+	if opts.RetryMax < opts.RetryMin {
+		opts.RetryMax = opts.RetryMin
 	}
 	return opts
 }

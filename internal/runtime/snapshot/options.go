@@ -20,6 +20,6 @@ type SupervisorOptions struct {
 type ReaderActorOptions struct {
 	Endpoint   gen.ProcessID
 	ExecutorID string
-	RestartMin time.Duration
-	RestartMax time.Duration
+	RetryMin   time.Duration
+	RetryMax   time.Duration
 }
