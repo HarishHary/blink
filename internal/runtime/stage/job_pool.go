@@ -17,9 +17,6 @@ import (
 // MessageJobPoolStarted marks completion of job-pool worker startup.
 type MessageJobPoolStarted struct{}
 
-// MessageJobPoolMetricsTick requests job-pool metric publication.
-type MessageJobPoolMetricsTick struct{}
-
 // MessageJobPoolStatusRequest requests a job pool's current status.
 type MessageJobPoolStatusRequest struct{}
 
@@ -98,6 +95,7 @@ func (p *jobPool) HandleMessage(from gen.PID, message any) error {
 		if from != p.Parent() {
 			return nil
 		}
+		p.publishGauges()
 		_ = p.SendWithPriority(from, MessageJobPoolStatusChanged{Status: p.status()}, gen.MessagePriorityHigh)
 		return nil
 	case MessageJobPoolStarted:
@@ -107,18 +105,6 @@ func (p *jobPool) HandleMessage(from gen.PID, message any) error {
 		p.lifecycle = JobPoolRunning
 		p.publishGauges()
 		p.reconcileStatus()
-		if _, err := p.SendWithPriorityAfter(p.PID(), MessageJobPoolMetricsTick{}, gen.MessagePriorityHigh, telemetry.RadarTickInterval); err != nil {
-			return fmt.Errorf("job pool: schedule initial metrics tick: %w", err)
-		}
-		return nil
-	case MessageJobPoolMetricsTick:
-		if from != p.PID() || p.lifecycle != JobPoolRunning {
-			return nil
-		}
-		p.publishGauges()
-		if _, err := p.SendWithPriorityAfter(p.PID(), MessageJobPoolMetricsTick{}, gen.MessagePriorityHigh, telemetry.RadarTickInterval); err != nil {
-			return fmt.Errorf("job pool: reschedule metrics tick: %w", err)
-		}
 		return nil
 	}
 	return nil
