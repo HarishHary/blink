@@ -13,6 +13,8 @@ import (
 	"github.com/harishhary/blink/internal/runtime/telemetry"
 )
 
+const projectionStateTimeoutSeconds = 1
+
 var (
 	// ErrProjectionNotPrepared means the requested generation is not prepared.
 	ErrProjectionNotPrepared = errors.New("snapshot projection: generation is not prepared")
@@ -411,7 +413,7 @@ func (c *ProjectionClient[T]) State(ctx context.Context) (ProjectionState[T], er
 	if err := ctx.Err(); err != nil {
 		return ProjectionState[T]{}, err
 	}
-	response, err := c.node.CallProcessID(c.endpoint, ProjectionStateRequest{}, 1)
+	response, err := c.node.CallProcessID(c.endpoint, ProjectionStateRequest{}, projectionStateTimeoutSeconds)
 	if err != nil {
 		return ProjectionState[T]{}, err
 	}

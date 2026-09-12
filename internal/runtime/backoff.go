@@ -26,6 +26,7 @@ var (
 	ErrProcessUnhealthy  = errors.New("plugin process health check failed")
 )
 
+// ScheduledBackoff tracks a bounded retry or replacement schedule and its pending timer.
 type ScheduledBackoff struct {
 	Strategy backoff.BackOff
 	Pending  bool
@@ -33,9 +34,9 @@ type ScheduledBackoff struct {
 	Cancel   gen.CancelFunc
 }
 
-const scheduledRestartLimit uint64 = 5
+const scheduledRetryLimit uint64 = 5
 
-// NewScheduledBackoff returns an exponential backoff bounded by scheduledRestartLimit retries.
+// NewScheduledBackoff allows five scheduled retries or replacements after the initial attempt.
 func NewScheduledBackoff(minDelay, maxDelay time.Duration) *ScheduledBackoff {
 	return &ScheduledBackoff{
 		Strategy: backoff.WithMaxRetries(backoff.NewExponentialBackOff(
@@ -43,7 +44,7 @@ func NewScheduledBackoff(minDelay, maxDelay time.Duration) *ScheduledBackoff {
 			backoff.WithMaxInterval(maxDelay),
 			backoff.WithMultiplier(2),
 			backoff.WithMaxElapsedTime(0),
-		), scheduledRestartLimit),
+		), scheduledRetryLimit),
 	}
 }
 

@@ -26,7 +26,7 @@ func kafkaReaderActorOptionsWithDefaults(opts KafkaReaderActorOptions) KafkaRead
 	if opts.RestartMin <= 0 {
 		opts.RestartMin = defaultKafkaRestartMin
 	}
-	if opts.RestartMax < opts.RestartMin {
+	if opts.RestartMax <= 0 {
 		opts.RestartMax = defaultKafkaRestartMax
 	}
 	if opts.RestartMax < opts.RestartMin {
@@ -35,7 +35,7 @@ func kafkaReaderActorOptionsWithDefaults(opts KafkaReaderActorOptions) KafkaRead
 	if opts.RetryMin <= 0 {
 		opts.RetryMin = defaultKafkaReaderRetryMin
 	}
-	if opts.RetryMax < opts.RetryMin {
+	if opts.RetryMax <= 0 {
 		opts.RetryMax = defaultKafkaReaderRetryMax
 	}
 	if opts.RetryMax < opts.RetryMin {
@@ -49,7 +49,7 @@ func kafkaWriterActorOptionsWithDefaults(opts KafkaWriterActorOptions) KafkaWrit
 	if opts.RestartMin <= 0 {
 		opts.RestartMin = defaultKafkaRestartMin
 	}
-	if opts.RestartMax < opts.RestartMin {
+	if opts.RestartMax <= 0 {
 		opts.RestartMax = defaultKafkaRestartMax
 	}
 	if opts.RestartMax < opts.RestartMin {
@@ -58,7 +58,7 @@ func kafkaWriterActorOptionsWithDefaults(opts KafkaWriterActorOptions) KafkaWrit
 	if opts.RetryMin <= 0 {
 		opts.RetryMin = defaultKafkaWriterRetryMin
 	}
-	if opts.RetryMax < opts.RetryMin {
+	if opts.RetryMax <= 0 {
 		opts.RetryMax = defaultKafkaWriterRetryMax
 	}
 	if opts.RetryMax < opts.RetryMin {
@@ -69,6 +69,7 @@ func kafkaWriterActorOptionsWithDefaults(opts KafkaWriterActorOptions) KafkaWrit
 
 // processorSupervisorOptionsWithDefaults applies processor supervisor defaults.
 func processorSupervisorOptionsWithDefaults(opts ProcessorSupervisorOptions) ProcessorSupervisorOptions {
+	opts.Reader = kafkaReaderActorOptionsWithDefaults(opts.Reader)
 	for i := range opts.Writers {
 		opts.Writers[i] = kafkaWriterActorOptionsWithDefaults(opts.Writers[i])
 	}

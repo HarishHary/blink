@@ -46,14 +46,20 @@ func actorOptionsWithDefaults(opts ActorOptions) ActorOptions {
 	if opts.RestartMin <= 0 {
 		opts.RestartMin = DefaultRestartMin
 	}
-	if opts.RestartMax < opts.RestartMin {
+	if opts.RestartMax <= 0 {
 		opts.RestartMax = DefaultRestartMax
+	}
+	if opts.RestartMax < opts.RestartMin {
+		opts.RestartMax = opts.RestartMin
 	}
 	if opts.RetryMin <= 0 {
 		opts.RetryMin = opts.RestartMin
 	}
-	if opts.RetryMax < opts.RetryMin {
+	if opts.RetryMax <= 0 {
 		opts.RetryMax = opts.RestartMax
+	}
+	if opts.RetryMax < opts.RetryMin {
+		opts.RetryMax = opts.RetryMin
 	}
 	return opts
 }
