@@ -396,7 +396,7 @@ stateDiagram-v2
 
 ### Readiness
 
-Each route has its own `MessageRetryRouteStep` backoff. A pending route made obsolete is deleted directly. On active-manager loss the retry timer runs before `RespawnRoute`. Draining with no live manager respawns a draining manager so the drain protocol can complete.
+Each route has its own `MessageRetryRouteStep` backoff for failed lifecycle operations. A pending route made obsolete is deleted directly. Ergo's router may automatically replace a lost manager immediately; `RouterOptions.RetryMin/RetryMax` govern the explicit lifecycle retry path, not that automatic replacement. Draining with no live manager respawns a draining manager so the drain protocol can complete.
 
 ## Deployment manager
 
@@ -478,10 +478,10 @@ stateDiagram-v2
 
 Two recovery budgets are independent:
 
-| Budget                             | Paces                                           | Owner   |
-| ---------------------------------- | ----------------------------------------------- | ------- |
-| `ProcessOptions.RetryMin/RetryMax` | one process restarting its own subprocess       | process |
-| manager `RetryMin/RetryMax`        | refilling a slot whose process the manager lost | slot    |
+| Budget                                       | Paces                                           | Owner   |
+| -------------------------------------------- | ----------------------------------------------- | ------- |
+| `PluginProcessOptions.RestartMin/RestartMax` | one process restarting its own subprocess       | process |
+| manager `RestartMin/RestartMax`              | refilling a slot whose process the manager lost | slot    |
 
 Each slot owns one manager budget; a process reporting ready resets it. A process reporting restart exhaustion is retired alone and its replacement owed rather than started: the slot counts toward `runningProcs` until its DOWN arrives, then waits on its own backoff. The rest keep serving, so a partially broken deployment reports `running` with degraded availability.
 
