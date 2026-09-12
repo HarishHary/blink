@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"ergo.services/ergo/act"
 	"ergo.services/ergo/gen"
@@ -582,7 +581,7 @@ func (a *routerActor[T]) routeInvocation(call MessageInvokePlugin[T]) gen.Atom {
 	tracked := &routerInvocation{route: ref.name, ackToken: 1}
 	timeout := a.opts.DeploymentManagerOptions.DispatchTimeout
 	if timeout <= 0 {
-		timeout = 30 * time.Second
+		timeout = DefaultDeploymentManagerDispatchTimeout
 	}
 	cancel, err := a.SendAfter(a.PID(), MessageInvocationTimedOut{callID: call.CallID, token: tracked.ackToken}, timeout)
 	if err != nil {

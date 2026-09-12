@@ -476,7 +476,7 @@ func (a *catalogActor[T]) routerRestartState(id string) *runtime.ScheduledBackof
 		a.routers[id] = ref
 	}
 	if ref.restart == nil {
-		ref.restart = runtime.NewScheduledBackoff(a.opts.RetryMin, a.opts.RetryMax)
+		ref.restart = runtime.NewScheduledBackoff(a.opts.RestartMin, a.opts.RestartMax)
 	}
 	return ref.restart
 }

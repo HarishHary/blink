@@ -760,7 +760,7 @@ func (m *deploymentManager[T]) openSlot() bool {
 	slot := m.nextSlot
 	m.nextSlot++
 	m.processes[slot] = &pluginProcessState{
-		restart: runtime.NewScheduledBackoff(m.options.RetryMin, m.options.RetryMax),
+		restart: runtime.NewScheduledBackoff(m.options.RestartMin, m.options.RestartMax),
 		status: pluginProcessStatus{
 			lifecycle:    PluginProcessStarting,
 			availability: runtime.AvailabilityUnavailable,

@@ -242,6 +242,8 @@ func (s *supervisor[P, M]) Init(...any) (act.SupervisorSpec, error) {
 						s.opts.Directory,
 						s.opts.RetryMin,
 						s.opts.RetryMax,
+						s.opts.RestartMin,
+						s.opts.RestartMax,
 						s.labels,
 					)
 				},

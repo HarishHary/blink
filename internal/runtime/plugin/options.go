@@ -28,6 +28,8 @@ type SupervisorOptions struct {
 	Directory      string
 	RetryMin       time.Duration
 	RetryMax       time.Duration
+	RestartMin     time.Duration
+	RestartMax     time.Duration
 	ControlTimeout time.Duration
 	CatalogOptions CatalogOptions
 	SnapshotReader snapshot.ReaderActorOptions
@@ -35,20 +37,20 @@ type SupervisorOptions struct {
 
 // CatalogOptions configures one plugin catalog and the routers it spawns.
 type CatalogOptions struct {
-	RetryMin      time.Duration // router-level restart backoff
-	RetryMax      time.Duration
+	RestartMin    time.Duration
+	RestartMax    time.Duration
 	RouterOptions RouterOptions // handed straight to each spawned router
 }
 
-// RouterOptions configures one deployment router and the managers it spawns.
+// RouterOptions configures one deployment router and its route lifecycle-step retries.
 type RouterOptions struct {
-	RetryMin                 time.Duration // route-level restart backoff
+	RetryMin                 time.Duration
 	RetryMax                 time.Duration
 	DeploymentManagerOptions DeploymentManagerOptions // handed straight to each spawned manager
 }
 
-// DeploymentManagerOptions configures one deployment manager. RetryMin and RetryMax pace replacing a
-// lost plugin process and are the budget the circuit opens on; ProcessBudget is shared by every manager
+// DeploymentManagerOptions configures one deployment manager. Restart bounds pace replacing a lost process;
+// exhaustion opens its circuit. ProcessBudget is shared by every manager
 // in the process and bounds their combined scale-up past min_procs, nil leaving each to its max_procs.
 type DeploymentManagerOptions struct {
 	QueueSize            int
@@ -57,8 +59,8 @@ type DeploymentManagerOptions struct {
 	IdleTimeout          time.Duration
 	DrainTimeout         time.Duration
 	CircuitCooldown      time.Duration // how long an open circuit waits before admitting calls again
-	RetryMin             time.Duration
-	RetryMax             time.Duration
+	RestartMin           time.Duration
+	RestartMax           time.Duration
 	ProcessBudget        *ProcessBudget
 	PluginProcessOptions PluginProcessOptions // handed to each spawned plugin process
 }
@@ -67,6 +69,6 @@ type DeploymentManagerOptions struct {
 type PluginProcessOptions struct {
 	InvocationTimeout time.Duration
 	HealthInterval    time.Duration
-	RetryMin          time.Duration
-	RetryMax          time.Duration
+	RestartMin        time.Duration
+	RestartMax        time.Duration
 }

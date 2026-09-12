@@ -117,8 +117,8 @@ type MessagePluginMetaHealthTimeout struct {
 func (p *pluginProcess[T]) Init(...any) error {
 	p.options = pluginProcessOptionsWithDefaults(p.options)
 	p.calls = make(map[uint64]*pluginProcessCall)
-	p.pluginMeta.restart = runtime.NewScheduledBackoff(p.options.RetryMin, p.options.RetryMax)
-	p.pluginMeta.healthRestart = runtime.NewScheduledBackoff(p.options.RetryMin, p.options.RetryMax)
+	p.pluginMeta.restart = runtime.NewScheduledBackoff(p.options.RestartMin, p.options.RestartMax)
+	p.pluginMeta.healthRestart = runtime.NewScheduledBackoff(p.options.RestartMin, p.options.RestartMax)
 	p.pluginMeta.status = pluginMetaStatus{
 		lifecycle:    PluginMetaStarting,
 		availability: runtime.AvailabilityUnavailable,

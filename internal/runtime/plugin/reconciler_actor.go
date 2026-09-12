@@ -95,8 +95,8 @@ type MessageDesiredStateFreshness struct {
 // Constructor & actor lifecycle
 // ---------------------------------------------------------------------------
 
-// newReconcilerActor constructs a reconciler actor with independent retry policies.
-func newReconcilerActor(snapshotEvent, statusEvent gen.Event, directory string, retryMin, retryMax time.Duration, labels telemetry.Labels) gen.ProcessBehavior {
+// newReconcilerActor constructs a reconciler actor with independent retry and restart policies.
+func newReconcilerActor(snapshotEvent, statusEvent gen.Event, directory string, retryMin, retryMax, restartMin, restartMax time.Duration, labels telemetry.Labels) gen.ProcessBehavior {
 	return &reconcilerActor{
 		snapshotEvent:   snapshotEvent,
 		statusEvent:     statusEvent,
@@ -104,14 +104,14 @@ func newReconcilerActor(snapshotEvent, statusEvent gen.Event, directory string, 
 		labels:          labels,
 		resolutionRetry: runtime.NewScheduledBackoff(retryMin, retryMax),
 		resolver: artifactResolverMetaState{
-			restart: runtime.NewScheduledBackoff(retryMin, retryMax),
+			restart: runtime.NewScheduledBackoff(restartMin, restartMax),
 			status: artifactResolverMetaStatus{
 				lifecycle:    ArtifactResolverMetaStarting,
 				availability: runtime.AvailabilityUnavailable,
 			},
 		},
 		watcher: artifactWatcherMetaState{
-			restart: runtime.NewScheduledBackoff(retryMin, retryMax),
+			restart: runtime.NewScheduledBackoff(restartMin, restartMax),
 			status: artifactWatcherMetaStatus{
 				lifecycle:    ArtifactWatcherMetaStarting,
 				availability: runtime.AvailabilityUnavailable,

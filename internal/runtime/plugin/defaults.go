@@ -33,17 +33,19 @@ const (
 	DefaultDeploymentManagerIdleTimeout     = 30 * time.Second
 	DefaultDeploymentManagerDrainTimeout    = 30 * time.Second
 	DefaultDeploymentManagerCircuitCooldown = 5 * time.Minute
-	DefaultDeploymentManagerRetryMin        = DefaultRetryMin
-	DefaultDeploymentManagerRetryMax        = DefaultRetryMax
+	DefaultDeploymentManagerRestartMin      = DefaultRetryMin
+	DefaultDeploymentManagerRestartMax      = DefaultRetryMax
 	DefaultPluginProcessInvocationTimeout   = 120 * time.Second
 	DefaultPluginProcessHealthInterval      = 20 * time.Second
-	DefaultPluginProcessRetryMin            = DefaultRetryMin
-	DefaultPluginProcessRetryMax            = DefaultRetryMax
+	DefaultPluginProcessRestartMin          = DefaultRetryMin
+	DefaultPluginProcessRestartMax          = DefaultRetryMax
 	DefaultSupervisorRetryMin               = DefaultRetryMin
 	DefaultSupervisorRetryMax               = DefaultRetryMax
+	DefaultSupervisorRestartMin             = DefaultRetryMin
+	DefaultSupervisorRestartMax             = DefaultRetryMax
 	DefaultSupervisorControlTimeout         = 120 * time.Second
-	DefaultCatalogRetryMin                  = DefaultRetryMin
-	DefaultCatalogRetryMax                  = DefaultRetryMax
+	DefaultCatalogRestartMin                = DefaultRetryMin
+	DefaultCatalogRestartMax                = DefaultRetryMax
 	DefaultRouterRetryMin                   = DefaultRetryMin
 	DefaultRouterRetryMax                   = DefaultRetryMax
 )
@@ -113,6 +115,15 @@ func supervisorOptionsWithDefaults(opts SupervisorOptions) SupervisorOptions {
 	if opts.RetryMax < opts.RetryMin {
 		opts.RetryMax = opts.RetryMin
 	}
+	if opts.RestartMin <= 0 {
+		opts.RestartMin = opts.RetryMin
+	}
+	if opts.RestartMax <= 0 {
+		opts.RestartMax = opts.RetryMax
+	}
+	if opts.RestartMax < opts.RestartMin {
+		opts.RestartMax = opts.RestartMin
+	}
 	if opts.ControlTimeout <= 0 {
 		opts.ControlTimeout = DefaultSupervisorControlTimeout
 	}
@@ -122,14 +133,14 @@ func supervisorOptionsWithDefaults(opts SupervisorOptions) SupervisorOptions {
 
 // catalogOptionsWithDefaults fills catalog and router defaults.
 func catalogOptionsWithDefaults(opts CatalogOptions) CatalogOptions {
-	if opts.RetryMin <= 0 {
-		opts.RetryMin = DefaultCatalogRetryMin
+	if opts.RestartMin <= 0 {
+		opts.RestartMin = DefaultCatalogRestartMin
 	}
-	if opts.RetryMax <= 0 {
-		opts.RetryMax = DefaultCatalogRetryMax
+	if opts.RestartMax <= 0 {
+		opts.RestartMax = DefaultCatalogRestartMax
 	}
-	if opts.RetryMax < opts.RetryMin {
-		opts.RetryMax = opts.RetryMin
+	if opts.RestartMax < opts.RestartMin {
+		opts.RestartMax = opts.RestartMin
 	}
 	opts.RouterOptions = routerOptionsWithDefaults(opts.RouterOptions)
 	return opts
@@ -170,14 +181,14 @@ func deploymentManagerOptionsWithDefaults(opts DeploymentManagerOptions) Deploym
 	if opts.CircuitCooldown <= 0 {
 		opts.CircuitCooldown = DefaultDeploymentManagerCircuitCooldown
 	}
-	if opts.RetryMin <= 0 {
-		opts.RetryMin = DefaultDeploymentManagerRetryMin
+	if opts.RestartMin <= 0 {
+		opts.RestartMin = DefaultDeploymentManagerRestartMin
 	}
-	if opts.RetryMax <= 0 {
-		opts.RetryMax = DefaultDeploymentManagerRetryMax
+	if opts.RestartMax <= 0 {
+		opts.RestartMax = DefaultDeploymentManagerRestartMax
 	}
-	if opts.RetryMax < opts.RetryMin {
-		opts.RetryMax = opts.RetryMin
+	if opts.RestartMax < opts.RestartMin {
+		opts.RestartMax = opts.RestartMin
 	}
 	opts.PluginProcessOptions = pluginProcessOptionsWithDefaults(opts.PluginProcessOptions)
 	return opts
@@ -191,14 +202,14 @@ func pluginProcessOptionsWithDefaults(opts PluginProcessOptions) PluginProcessOp
 	if opts.HealthInterval <= 0 {
 		opts.HealthInterval = DefaultPluginProcessHealthInterval
 	}
-	if opts.RetryMin <= 0 {
-		opts.RetryMin = DefaultPluginProcessRetryMin
+	if opts.RestartMin <= 0 {
+		opts.RestartMin = DefaultPluginProcessRestartMin
 	}
-	if opts.RetryMax <= 0 {
-		opts.RetryMax = DefaultPluginProcessRetryMax
+	if opts.RestartMax <= 0 {
+		opts.RestartMax = DefaultPluginProcessRestartMax
 	}
-	if opts.RetryMax < opts.RetryMin {
-		opts.RetryMax = opts.RetryMin
+	if opts.RestartMax < opts.RestartMin {
+		opts.RestartMax = opts.RestartMin
 	}
 	return opts
 }
