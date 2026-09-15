@@ -36,7 +36,7 @@ type deploymentRouteStatus struct {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Status
 // ---------------------------------------------------------------------------
 
 // clone copies a route status and its process map.

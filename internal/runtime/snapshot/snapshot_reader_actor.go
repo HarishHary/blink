@@ -10,6 +10,10 @@ import (
 	"github.com/harishhary/blink/internal/runtime/telemetry"
 )
 
+// ---------------------------------------------------------------------------
+// Types & state
+// ---------------------------------------------------------------------------
+
 const subscribeTimeoutSeconds = 5
 
 // ReaderActorLifecycle describes the stable snapshot-reader actor subtree.
@@ -30,7 +34,25 @@ type ReaderActorStatus struct {
 	LastError    string
 }
 
-// --- messages ---
+// readerActor makes one bounded Call to subscribe and then receives pushed SnapshotUpdate messages;
+// Ergo remote delivery is push-based, so there is no read loop or meta to supervise.
+type readerActor struct {
+	act.Actor
+	opts           ReaderActorOptions
+	snapshotEvent  eventPublication
+	activated      bool
+	controllerPID  gen.PID
+	subscribed     bool
+	lastGeneration int64
+	retry          *runtime.ScheduledBackoff
+	lastStatus     ReaderActorStatus
+	lastError      error
+	labels         telemetry.Labels
+}
+
+// ---------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------
 
 // MessageReaderActorActivate tells the reader child its parent recorded its PID and it may subscribe.
 type MessageReaderActorActivate struct{}
@@ -66,23 +88,9 @@ type UnsubscribeRequest struct{ ExecutorID string }
 
 type MessageSubscribeRetry struct{ token uint64 }
 
-// --- messages ---
-
-// readerActor makes one bounded Call to subscribe and then receives pushed SnapshotUpdate messages;
-// Ergo remote delivery is push-based, so there is no read loop or meta to supervise.
-type readerActor struct {
-	act.Actor
-	opts           ReaderActorOptions
-	snapshotEvent  eventPublication
-	activated      bool
-	controllerPID  gen.PID
-	subscribed     bool
-	lastGeneration int64
-	retry          *runtime.ScheduledBackoff
-	lastStatus     ReaderActorStatus
-	lastError      error
-	labels         telemetry.Labels
-}
+// ---------------------------------------------------------------------------
+// Actor lifecycle & handlers
+// ---------------------------------------------------------------------------
 
 // newReaderActor constructs the reader for one subscription; it publishes every snapshot it
 // receives, so it takes the publication its supervisor registered for it.
@@ -168,6 +176,10 @@ func (a *readerActor) Terminate(error) {
 	a.subscribed = false
 }
 
+// ---------------------------------------------------------------------------
+// Work
+// ---------------------------------------------------------------------------
+
 // subscribe issues a bounded Call to the controller, then monitors it for loss detection.
 func (a *readerActor) subscribe() error {
 	request := SubscribeRequest{
@@ -221,6 +233,16 @@ func (a *readerActor) updateRejection(from gen.PID, update SnapshotUpdate) strin
 	}
 }
 
+// publishSnapshot publishes a cloned snapshot.
+func (a *readerActor) publishSnapshot(snap *Snapshot) {
+	//argus:allow A1001 cloned snapshot transfers to the event; subscribers treat the shared event as immutable
+	_ = a.SendEvent(a.snapshotEvent.name, a.snapshotEvent.token, snap.Clone())
+}
+
+// ---------------------------------------------------------------------------
+// Recovery
+// ---------------------------------------------------------------------------
+
 // scheduleSubscribeRetry schedules a backoff-delayed resubscribe.
 func (a *readerActor) scheduleSubscribeRetry() error {
 	if a.retry.Pending {
@@ -241,11 +263,9 @@ func (a *readerActor) scheduleSubscribeRetry() error {
 	return nil
 }
 
-// publishSnapshot publishes a cloned snapshot.
-func (a *readerActor) publishSnapshot(snap *Snapshot) {
-	//argus:allow A1001 cloned snapshot transfers to the event; subscribers treat the shared event as immutable
-	_ = a.SendEvent(a.snapshotEvent.name, a.snapshotEvent.token, snap.Clone())
-}
+// ---------------------------------------------------------------------------
+// Status
+// ---------------------------------------------------------------------------
 
 // reconcileStatus recomputes and, on change, sends the current reader status to the supervisor.
 func (a *readerActor) reconcileStatus() {

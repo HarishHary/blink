@@ -107,7 +107,7 @@ type MessageKafkaReaderIOStarted struct {
 type MessageKafkaReaderIOStopped struct{ Alias gen.Alias }
 
 // ---------------------------------------------------------------------------
-// Meta lifecycle & handlers
+// Actor lifecycle & handlers
 // ---------------------------------------------------------------------------
 
 // Init reserves this whole Start invocation before the framework launches it. Start owns release.

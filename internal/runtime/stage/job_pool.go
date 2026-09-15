@@ -11,19 +11,6 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Messages
-// ---------------------------------------------------------------------------
-
-// MessageJobPoolStarted marks completion of job-pool worker startup.
-type MessageJobPoolStarted struct{}
-
-// MessageJobPoolStatusRequest requests a job pool's current status.
-type MessageJobPoolStatusRequest struct{}
-
-// MessageJobPoolStatusChanged reports a job pool's current status.
-type MessageJobPoolStatusChanged struct{ Status JobPoolStatus }
-
-// ---------------------------------------------------------------------------
 // Types & state
 // ---------------------------------------------------------------------------
 
@@ -52,7 +39,20 @@ type jobPool struct {
 }
 
 // ---------------------------------------------------------------------------
-// Pool lifecycle & handlers
+// Messages
+// ---------------------------------------------------------------------------
+
+// MessageJobPoolStarted marks completion of job-pool worker startup.
+type MessageJobPoolStarted struct{}
+
+// MessageJobPoolStatusRequest requests a job pool's current status.
+type MessageJobPoolStatusRequest struct{}
+
+// MessageJobPoolStatusChanged reports a job pool's current status.
+type MessageJobPoolStatusChanged struct{ Status JobPoolStatus }
+
+// ---------------------------------------------------------------------------
+// Actor lifecycle & handlers
 // ---------------------------------------------------------------------------
 
 // NewJobPool creates a job pool with a copy of its worker arguments.
@@ -123,7 +123,7 @@ func (p *jobPool) Terminate(error) {
 }
 
 // ---------------------------------------------------------------------------
-// Status & inspection
+// Status
 // ---------------------------------------------------------------------------
 
 // status returns the pool lifecycle and availability.
@@ -153,10 +153,6 @@ func (p *jobPool) HandleInspect(from gen.PID, item ...string) map[string]string 
 	result["job_pool:availability"] = string(status.Availability)
 	return result
 }
-
-// ---------------------------------------------------------------------------
-// Metrics
-// ---------------------------------------------------------------------------
 
 // publishGauges publishes the current worker count and availability.
 func (p *jobPool) publishGauges() {

@@ -91,6 +91,19 @@ type pluginProcessMeta[T Artifact] struct {
 	session    atomic.Pointer[pluginMetaSession[T]]
 }
 
+const pluginRetryPolicy = `{
+  "methodConfig": [{
+    "name": [{}],
+    "retryPolicy": {
+      "maxAttempts": 3,
+      "initialBackoff": "0.1s",
+      "maxBackoff": "1s",
+      "backoffMultiplier": 2.0,
+      "retryableStatusCodes": ["UNAVAILABLE"]
+    }
+  }]
+}`
+
 // ---------------------------------------------------------------------------
 // Messages
 // ---------------------------------------------------------------------------
@@ -130,24 +143,7 @@ type pluginMetaInvokeResult struct {
 }
 
 // ---------------------------------------------------------------------------
-// Plugin configuration
-// ---------------------------------------------------------------------------
-
-const pluginRetryPolicy = `{
-  "methodConfig": [{
-    "name": [{}],
-    "retryPolicy": {
-      "maxAttempts": 3,
-      "initialBackoff": "0.1s",
-      "maxBackoff": "1s",
-      "backoffMultiplier": 2.0,
-      "retryableStatusCodes": ["UNAVAILABLE"]
-    }
-  }]
-}`
-
-// ---------------------------------------------------------------------------
-// Meta lifecycle
+// Actor lifecycle & handlers
 // ---------------------------------------------------------------------------
 
 // Init initializes the meta process and its lifecycle context.
@@ -186,10 +182,6 @@ func (m *pluginProcessMeta[T]) Start() error {
 
 // Terminate requests plugin session shutdown.
 func (m *pluginProcessMeta[T]) Terminate(error) { m.close() }
-
-// ---------------------------------------------------------------------------
-// Message handling
-// ---------------------------------------------------------------------------
 
 // HandleMessage processes parent-issued plugin invocations and health checks.
 func (m *pluginProcessMeta[T]) HandleMessage(from gen.PID, message any) error {
@@ -301,7 +293,7 @@ func (m *pluginProcessMeta[T]) HandleInspect(gen.PID, ...string) map[string]stri
 }
 
 // ---------------------------------------------------------------------------
-// Plugin session management
+// Work
 // ---------------------------------------------------------------------------
 
 // close idempotently signals the session to stop.

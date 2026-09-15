@@ -13,6 +13,10 @@ import (
 	"github.com/harishhary/blink/internal/runtime/telemetry"
 )
 
+// ---------------------------------------------------------------------------
+// Types & state
+// ---------------------------------------------------------------------------
+
 const projectionStateTimeoutSeconds = 1
 
 var (
@@ -84,34 +88,6 @@ type Rollout struct {
 	Shadow          bool
 }
 
-// Capacity is the invocations this id's deployment can run at once: the two bounds multiplied, a
-// ceiling not a promise.
-func (r Rollout) Capacity() int {
-	return max(1, r.MaxProcs) * max(1, r.CallsPerProcess)
-}
-
-// clone returns an independently owned copy of the projection data.
-func (s ProjectionData[T]) clone(loader Loader[T]) ProjectionData[T] {
-	clone := s
-	clone.Primaries = cloneValues(s.Primaries, loader.Clone)
-	clone.Candidates = cloneValues(s.Candidates, loader.Clone)
-	clone.ByFileName = make(map[string]T, len(s.ByFileName))
-	for name, value := range s.ByFileName {
-		clone.ByFileName[name] = loader.Clone(value)
-	}
-	clone.RolloutByID = maps.Clone(s.RolloutByID)
-	return clone
-}
-
-// cloneValues returns independently cloned values.
-func cloneValues[T any](values []T, clone func(T) T) []T {
-	valuesCopy := make([]T, len(values))
-	for i, value := range values {
-		valuesCopy[i] = clone(value)
-	}
-	return valuesCopy
-}
-
 type projectionActor[T any] struct {
 	act.Actor
 	snapshotEvent      gen.Event
@@ -128,13 +104,21 @@ type projectionActor[T any] struct {
 	labels             telemetry.Labels
 }
 
-// newProjectionActor constructs one subtree's typed view; it monitors both events and publishes
-// through neither, so it takes names and no token.
-func newProjectionActor[T any](snapshotEvent, statusEvent gen.Event, loader Loader[T], mode ProjectionCommitMode, labels telemetry.Labels) gen.ProcessBehavior {
-	return &projectionActor[T]{snapshotEvent: snapshotEvent, statusEvent: statusEvent, loader: loader, mode: mode, labels: labels}
+type parsedProjection[T any] struct {
+	generation int64
+	data       ProjectionData[T]
+	failures   int
 }
 
-// --- messages ---
+// ProjectionClient performs bounded reads against the stable projection endpoint.
+type ProjectionClient[T any] struct {
+	node     gen.Node
+	endpoint gen.ProcessID
+}
+
+// ---------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------
 
 // ProjectionStateRequest reads the current immutable projection state.
 type ProjectionStateRequest struct{}
@@ -163,7 +147,15 @@ type MessageProjectionCommitResult struct {
 // monitor snapshot events.
 type MessageProjectionActorActivate struct{}
 
-// --- messages ---
+// ---------------------------------------------------------------------------
+// Actor lifecycle & handlers
+// ---------------------------------------------------------------------------
+
+// newProjectionActor constructs one subtree's typed view; it monitors both events and publishes
+// through neither, so it takes names and no token.
+func newProjectionActor[T any](snapshotEvent, statusEvent gen.Event, loader Loader[T], mode ProjectionCommitMode, labels telemetry.Labels) gen.ProcessBehavior {
+	return &projectionActor[T]{snapshotEvent: snapshotEvent, statusEvent: statusEvent, loader: loader, mode: mode, labels: labels}
+}
 
 // Init validates the projection actor's required events.
 func (a *projectionActor[T]) Init(...any) error {
@@ -243,6 +235,38 @@ func (a *projectionActor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any,
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Work
+// ---------------------------------------------------------------------------
+
+// Capacity is the invocations this id's deployment can run at once: the two bounds multiplied, a
+// ceiling not a promise.
+func (r Rollout) Capacity() int {
+	return max(1, r.MaxProcs) * max(1, r.CallsPerProcess)
+}
+
+// clone returns an independently owned copy of the projection data.
+func (s ProjectionData[T]) clone(loader Loader[T]) ProjectionData[T] {
+	clone := s
+	clone.Primaries = cloneValues(s.Primaries, loader.Clone)
+	clone.Candidates = cloneValues(s.Candidates, loader.Clone)
+	clone.ByFileName = make(map[string]T, len(s.ByFileName))
+	for name, value := range s.ByFileName {
+		clone.ByFileName[name] = loader.Clone(value)
+	}
+	clone.RolloutByID = maps.Clone(s.RolloutByID)
+	return clone
+}
+
+// cloneValues returns independently cloned values.
+func cloneValues[T any](values []T, clone func(T) T) []T {
+	valuesCopy := make([]T, len(values))
+	for i, value := range values {
+		valuesCopy[i] = clone(value)
+	}
+	return valuesCopy
+}
+
 // applyEvent updates projection state from a monitored event.
 func (a *projectionActor[T]) applyEvent(event gen.MessageEvent) error {
 	switch event.Event {
@@ -279,66 +303,6 @@ func (a *projectionActor[T]) applyEvent(event gen.MessageEvent) error {
 		}
 	}
 	return nil
-}
-
-// status derives the projection actor's current availability.
-func (a *projectionActor[T]) status() ProjectionActorStatus {
-	status := ProjectionActorStatus{Lifecycle: ProjectionActorRunning, Availability: runtime.AvailabilityUnavailable}
-	if a.mode == ProjectionCommitExternal && a.prepared != nil {
-		status.PreparedGeneration = a.prepared.generation
-	}
-	if a.committed == nil {
-		return status
-	}
-	status.CommittedGeneration = a.committed.generation
-	if a.lastError != nil {
-		status.Availability = runtime.AvailabilityDegraded
-		return status
-	}
-	if a.readerActorReady && a.readerGeneration >= a.committed.generation && a.observedGeneration >= a.committed.generation {
-		status.Availability = runtime.AvailabilityReady
-	}
-	return status
-}
-
-// reportState returns an independently owned projection view.
-func (a *projectionActor[T]) reportState() ProjectionState[T] {
-	state := ProjectionState[T]{ProjectionActorStatus: a.status()}
-	if a.committed == nil {
-		return state
-	}
-	state.ProjectionData = a.committed.data.clone(a.loader)
-	return state
-}
-
-// reconcileStatus recomputes and, on change, sends the current projection status to the supervisor
-func (a *projectionActor[T]) reconcileStatus() {
-	next := a.status()
-	if next == a.lastStatus {
-		return
-	}
-	a.lastStatus = next
-	_ = a.Send(a.Parent(), MessageProjectionActorStatusChanged{Status: next})
-}
-
-// HandleInspect exposes lifecycle and availability plus the generation at each stage.
-func (a *projectionActor[T]) HandleInspect(gen.PID, ...string) map[string]string {
-	status := a.status()
-	return map[string]string{
-		"projection:lifecycle":            string(status.Lifecycle),
-		"projection:availability":         string(status.Availability),
-		"projection:committed_generation": fmt.Sprintf("%d", status.CommittedGeneration),
-		"projection:prepared_generation":  fmt.Sprintf("%d", status.PreparedGeneration),
-		"projection:observed_generation":  fmt.Sprintf("%d", a.observedGeneration),
-		"projection:reader_ready":         fmt.Sprintf("%t", a.readerActorReady),
-		"projection:reader_generation":    fmt.Sprintf("%d", a.readerGeneration),
-	}
-}
-
-type parsedProjection[T any] struct {
-	generation int64
-	data       ProjectionData[T]
-	failures   int
 }
 
 // parseResult grades a parse: a generation that lost some specs still serves, one that lost all of
@@ -394,12 +358,6 @@ func newParsedProjection[T any](snap *Snapshot, loader Loader[T]) (parsedProject
 	return parsedProjection[T]{generation: snap.Generation, data: data, failures: len(parseErrs)}, errors.Join(parseErrs...)
 }
 
-// ProjectionClient performs bounded reads against the stable projection endpoint.
-type ProjectionClient[T any] struct {
-	node     gen.Node
-	endpoint gen.ProcessID
-}
-
 // NewProjectionClient creates a client for the projection child of a namespace's subtree.
 func NewProjectionClient[T any](node gen.Node, namespace string) *ProjectionClient[T] {
 	return &ProjectionClient[T]{
@@ -425,4 +383,62 @@ func (c *ProjectionClient[T]) State(ctx context.Context) (ProjectionState[T], er
 		return ProjectionState[T]{}, fmt.Errorf("snapshot projection: unexpected response %T", response)
 	}
 	return state, nil
+}
+
+// ---------------------------------------------------------------------------
+// Status
+// ---------------------------------------------------------------------------
+
+// status derives the projection actor's current availability.
+func (a *projectionActor[T]) status() ProjectionActorStatus {
+	status := ProjectionActorStatus{Lifecycle: ProjectionActorRunning, Availability: runtime.AvailabilityUnavailable}
+	if a.mode == ProjectionCommitExternal && a.prepared != nil {
+		status.PreparedGeneration = a.prepared.generation
+	}
+	if a.committed == nil {
+		return status
+	}
+	status.CommittedGeneration = a.committed.generation
+	if a.lastError != nil {
+		status.Availability = runtime.AvailabilityDegraded
+		return status
+	}
+	if a.readerActorReady && a.readerGeneration >= a.committed.generation && a.observedGeneration >= a.committed.generation {
+		status.Availability = runtime.AvailabilityReady
+	}
+	return status
+}
+
+// reportState returns an independently owned projection view.
+func (a *projectionActor[T]) reportState() ProjectionState[T] {
+	state := ProjectionState[T]{ProjectionActorStatus: a.status()}
+	if a.committed == nil {
+		return state
+	}
+	state.ProjectionData = a.committed.data.clone(a.loader)
+	return state
+}
+
+// reconcileStatus recomputes and, on change, sends the current projection status to the supervisor
+func (a *projectionActor[T]) reconcileStatus() {
+	next := a.status()
+	if next == a.lastStatus {
+		return
+	}
+	a.lastStatus = next
+	_ = a.Send(a.Parent(), MessageProjectionActorStatusChanged{Status: next})
+}
+
+// HandleInspect exposes lifecycle and availability plus the generation at each stage.
+func (a *projectionActor[T]) HandleInspect(gen.PID, ...string) map[string]string {
+	status := a.status()
+	return map[string]string{
+		"projection:lifecycle":            string(status.Lifecycle),
+		"projection:availability":         string(status.Availability),
+		"projection:committed_generation": fmt.Sprintf("%d", status.CommittedGeneration),
+		"projection:prepared_generation":  fmt.Sprintf("%d", status.PreparedGeneration),
+		"projection:observed_generation":  fmt.Sprintf("%d", a.observedGeneration),
+		"projection:reader_ready":         fmt.Sprintf("%t", a.readerActorReady),
+		"projection:reader_generation":    fmt.Sprintf("%d", a.readerGeneration),
+	}
 }

@@ -110,7 +110,7 @@ type MessagePluginMetaHealthTimeout struct {
 }
 
 // ---------------------------------------------------------------------------
-// Actor lifecycle
+// Actor lifecycle & handlers
 // ---------------------------------------------------------------------------
 
 // Init configures retry state and starts the process meta-process.
@@ -139,10 +139,6 @@ func (p *pluginProcess[T]) Terminate(error) {
 	}
 	_ = p.SendWithPriority(p.Parent(), MessagePluginProcessStopped{process: p.PID()}, gen.MessagePriorityHigh)
 }
-
-// ---------------------------------------------------------------------------
-// Message handling
-// ---------------------------------------------------------------------------
 
 // HandleMessage processes process lifecycle, health, and invocation messages.
 func (p *pluginProcess[T]) HandleMessage(from gen.PID, message any) error {
@@ -296,7 +292,7 @@ func (p *pluginProcess[T]) HandleInspect(gen.PID, ...string) map[string]string {
 }
 
 // ---------------------------------------------------------------------------
-// Invocation handling
+// Work
 // ---------------------------------------------------------------------------
 
 // invoke hands one invocation to the active meta-process without waiting; the answer arrives later as
@@ -439,7 +435,7 @@ func (p *pluginProcess[T]) refreshActivity() {
 }
 
 // ---------------------------------------------------------------------------
-// Plugin meta lifecycle
+// Recovery
 // ---------------------------------------------------------------------------
 
 // startPluginMeta creates and monitors the meta-process that owns the subprocess.
@@ -474,10 +470,6 @@ func (p *pluginProcess[T]) startPluginMeta() error {
 	p.pluginMeta.alias = alias
 	return nil
 }
-
-// ---------------------------------------------------------------------------
-// Plugin meta recovery
-// ---------------------------------------------------------------------------
 
 // schedulePluginMetaRestart schedules normal or health recovery.
 func (p *pluginProcess[T]) schedulePluginMetaRestart(health bool) error {
@@ -546,10 +538,6 @@ func (p *pluginProcess[T]) retirePluginMeta(alias gen.Alias, err error, health b
 	_ = p.schedulePluginMetaRestart(health)
 }
 
-// ---------------------------------------------------------------------------
-// Health monitoring
-// ---------------------------------------------------------------------------
-
 // scheduleHealthCheck queues a health check for the active meta-process.
 func (p *pluginProcess[T]) scheduleHealthCheck(alias gen.Alias) {
 	if p.pluginMeta.status.availability != runtime.AvailabilityReady || alias != p.pluginMeta.alias {
@@ -570,7 +558,7 @@ func (p *pluginProcess[T]) cancelHealthCheck() {
 }
 
 // ---------------------------------------------------------------------------
-// Status projection
+// Status
 // ---------------------------------------------------------------------------
 
 // reportUnavailable records a recoverable meta-process failure, idempotently: the recycle path reports
@@ -601,10 +589,6 @@ func (p *pluginProcess[T]) reportStatus(lifecycle PluginProcessLifecycle) {
 		},
 	}, gen.MessagePriorityHigh)
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 // samePluginProcessStatus dedups status publishes, ignoring sampled load: the activity label already
 // carries the crossings that matter (see pluginMetaStatus).

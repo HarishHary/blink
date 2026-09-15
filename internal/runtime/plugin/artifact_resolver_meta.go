@@ -67,7 +67,7 @@ type MessageArtifactResolutionResult struct {
 }
 
 // ---------------------------------------------------------------------------
-// Meta lifecycle
+// Actor lifecycle & handlers
 // ---------------------------------------------------------------------------
 
 // Init initializes the artifact resolver meta-process.
@@ -108,10 +108,6 @@ func (m *artifactResolverMeta) Terminate(error) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Message handling
-// ---------------------------------------------------------------------------
-
 // HandleMessage queues artifact resolution requests.
 func (m *artifactResolverMeta) HandleMessage(_ gen.PID, message any) error {
 	request, ok := message.(MessageResolveArtifacts)
@@ -140,7 +136,7 @@ func (m *artifactResolverMeta) HandleInspect(gen.PID, ...string) map[string]stri
 }
 
 // ---------------------------------------------------------------------------
-// Artifact resolution
+// Work
 // ---------------------------------------------------------------------------
 
 // buildDesiredRoutes resolves all enabled snapshot entries into desired routes.

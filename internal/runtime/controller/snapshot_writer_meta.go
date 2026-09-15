@@ -13,6 +13,10 @@ import (
 	"github.com/harishhary/blink/internal/runtime/telemetry"
 )
 
+// ---------------------------------------------------------------------------
+// Types & state
+// ---------------------------------------------------------------------------
+
 // SnapshotWriterMetaLifecycle describes the controller-owned writer meta lifecycle.
 type SnapshotWriterMetaLifecycle string
 
@@ -46,7 +50,11 @@ type snapshotWriterMeta struct {
 	labels     telemetry.Labels
 }
 
-// --- messages ---
+const writeRetryAttemptBudget = 5
+
+// ---------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------
 
 type MessageSnapshotLoadResult struct {
 	source     gen.Alias
@@ -67,7 +75,9 @@ type MessageSnapshotWriterIOStarted struct{ Alias gen.Alias }
 // MessageSnapshotWriterIOStopped proves an accepted meta Start invocation returned.
 type MessageSnapshotWriterIOStopped struct{ Alias gen.Alias }
 
-// --- messages ---
+// ---------------------------------------------------------------------------
+// Actor lifecycle & handlers
+// ---------------------------------------------------------------------------
 
 // Init reserves writer I/O and initializes the work queue.
 func (m *snapshotWriterMeta) Init(process gen.MetaProcess) error {
@@ -88,8 +98,6 @@ func (m *snapshotWriterMeta) Init(process gen.MetaProcess) error {
 	m.Log().Debug("snapshot writer initialized: alias=%s supervisor=%s", m.ID(), m.supervisor)
 	return nil
 }
-
-const writeRetryAttemptBudget = 5
 
 // Start loads persisted state and writes queued updates.
 func (m *snapshotWriterMeta) Start() (runErr error) {
@@ -214,19 +222,16 @@ func (m *snapshotWriterMeta) HandleCall(_ gen.PID, _ gen.Ref, request any) (any,
 	return fmt.Errorf("snapshot writer meta: unsupported call %T", request), nil
 }
 
-// HandleInspect exposes the writer's job queue depth; richer health
-func (m *snapshotWriterMeta) HandleInspect(gen.PID, ...string) map[string]string {
-	return map[string]string{
-		"writer:queue": fmt.Sprintf("%d/%d", len(m.jobs), cap(m.jobs)),
-	}
-}
-
 // Terminate cancels active writer work.
 func (m *snapshotWriterMeta) Terminate(error) {
 	if m.cancelRun != nil {
 		m.cancelRun()
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Work
+// ---------------------------------------------------------------------------
 
 // write persists records and, when changed, the new committed snapshot and generation; this meta owns
 // durable persistence, not distribution, which is notifySubscribers' job.
@@ -244,4 +249,15 @@ func (m *snapshotWriterMeta) write(job MessageWriteSnapshot) error {
 		return fmt.Errorf("%w: save snapshot: %w", runtime.ErrSnapshotWrite, err)
 	}
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Status
+// ---------------------------------------------------------------------------
+
+// HandleInspect exposes the writer's job queue depth; richer health
+func (m *snapshotWriterMeta) HandleInspect(gen.PID, ...string) map[string]string {
+	return map[string]string{
+		"writer:queue": fmt.Sprintf("%d/%d", len(m.jobs), cap(m.jobs)),
+	}
 }

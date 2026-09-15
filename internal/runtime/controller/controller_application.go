@@ -14,6 +14,10 @@ import (
 	"github.com/harishhary/blink/internal/runtime/telemetry"
 )
 
+// ---------------------------------------------------------------------------
+// Types & state
+// ---------------------------------------------------------------------------
+
 // Application owns the resources for one plugin-type controller application.
 type Application[T plugin.Artifact] struct {
 	app.Application
@@ -24,6 +28,10 @@ type Application[T plugin.Artifact] struct {
 	stopped  chan error
 	labels   telemetry.Labels
 }
+
+// ---------------------------------------------------------------------------
+// Actor lifecycle & handlers
+// ---------------------------------------------------------------------------
 
 // NewApplication creates an unloaded application for one plugin type, with the loader its actor
 // parses artifacts through.
@@ -102,18 +110,6 @@ func (a *Application[T]) Load(_ ...any) (gen.ApplicationSpec, error) {
 	}, nil
 }
 
-// registerMetrics creates every controller collector on radar's registry through the node, which owns
-// them for the node's lifetime.
-func (a *Application[T]) registerMetrics() {
-	node := a.Node()
-	if node == nil {
-		return
-	}
-	if err := telemetry.Register(node, controllerMetrics); err != nil {
-		a.Log().Debug("radar telemetry unavailable: namespace=%q error=%v", a.opts.Namespace, err)
-	}
-}
-
 // Terminate only seals and reports. Waiting and closing belong to the service.
 func (a *Application[T]) Terminate(reason error) {
 	a.Seal()
@@ -159,5 +155,21 @@ func (a *Application[T]) Close(ctx context.Context) error {
 		a.labels.Count(a.Node(), metricApplicationCloses, "timeout")
 		a.Log().Debug("controller application close wait interrupted: name=%s namespace=%q error=%v", a.Name(), a.opts.Namespace, ctx.Err())
 		return ctx.Err()
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Work
+// ---------------------------------------------------------------------------
+
+// registerMetrics creates every controller collector on radar's registry through the node, which owns
+// them for the node's lifetime.
+func (a *Application[T]) registerMetrics() {
+	node := a.Node()
+	if node == nil {
+		return
+	}
+	if err := telemetry.Register(node, controllerMetrics); err != nil {
+		a.Log().Debug("radar telemetry unavailable: namespace=%q error=%v", a.opts.Namespace, err)
 	}
 }

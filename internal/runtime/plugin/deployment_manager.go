@@ -44,10 +44,6 @@ type deploymentManagerStatus struct {
 	processes         map[gen.PID]pluginProcessStatus
 }
 
-// ---------------------------------------------------------------------------
-// Invocation State
-// ---------------------------------------------------------------------------
-
 // deploymentManagerCallPhase tracks one invocation through the manager pipeline.
 type deploymentManagerCallPhase uint8
 
@@ -120,10 +116,6 @@ func (q *pendingQueue[T]) remove(entry *deploymentManagerCall[T]) {
 	q.length--
 }
 
-// ---------------------------------------------------------------------------
-// Process State
-// ---------------------------------------------------------------------------
-
 // pluginProcessState is one process slot: a stable identity that outlives the PIDs filling it, what the
 // current process reported, and the backoff that owns its next start. A zero pid waits on that backoff,
 // assigned is the outstanding invocation count the manager schedules from, retiring stops a process once
@@ -136,10 +128,6 @@ type pluginProcessState struct {
 	retiring bool
 	replace  bool
 }
-
-// ---------------------------------------------------------------------------
-// Deployment Manager
-// ---------------------------------------------------------------------------
 
 // deploymentManager owns invocation, scaling, and process lifecycle for one concrete deployment.
 type deploymentManager[T Artifact] struct {
@@ -234,7 +222,7 @@ type MessageDeploymentManagerTerminated struct {
 }
 
 // ---------------------------------------------------------------------------
-// Actor lifecycle
+// Actor lifecycle & handlers
 // ---------------------------------------------------------------------------
 
 // Init validates configuration and starts the deployment's minimum process count.
@@ -283,10 +271,6 @@ func (m *deploymentManager[T]) Terminate(reason error) {
 		route: m.route, manager: m.PID(), reason: reason,
 	}, gen.MessagePriorityHigh)
 }
-
-// ---------------------------------------------------------------------------
-// Message handling
-// ---------------------------------------------------------------------------
 
 // HandleMessage processes invocations, child facts, timers, scaling, and drain controls.
 func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
@@ -489,7 +473,7 @@ func (m *deploymentManager[T]) HandleInspect(_ gen.PID, _ ...string) map[string]
 }
 
 // ---------------------------------------------------------------------------
-// Invocation Handling
+// Work
 // ---------------------------------------------------------------------------
 
 // acceptInvocation records one invocation or rejects it with an exact completion.
@@ -571,10 +555,6 @@ func (m *deploymentManager[T]) selectProcess() (int, *pluginProcessState) {
 	}
 	return selected, best
 }
-
-// ---------------------------------------------------------------------------
-// Reconciliation and Scaling
-// ---------------------------------------------------------------------------
 
 // reconcile advances drain, process lifecycle, dispatch, scaling, and status publication.
 func (m *deploymentManager[T]) reconcile() {
@@ -742,8 +722,75 @@ func (m *deploymentManager[T]) releaseGrowthProcs() {
 	m.growthProcs = 0
 }
 
+// failProcessCalls completes every invocation dispatched to one process.
+func (m *deploymentManager[T]) failProcessCalls(pid gen.PID, err error) {
+	for callID, entry := range m.inFlightCalls {
+		if entry.phase != deploymentManagerPending && entry.process == pid {
+			if entry.call.Cancel != nil {
+				entry.call.Cancel()
+			}
+			m.removeCall(callID, err)
+		}
+	}
+}
+
+// removeCall releases all state for one invocation and completes it once.
+func (m *deploymentManager[T]) removeCall(callID uint64, err error) {
+	entry := m.inFlightCalls[callID]
+	if entry == nil {
+		return
+	}
+	if entry.dispatchStop != nil {
+		entry.dispatchStop()
+		entry.dispatchStop = nil
+	}
+	m.pendingCalls.remove(entry)
+	delete(m.inFlightCalls, callID)
+	if _, process := m.slotFor(entry.process); process != nil && entry.phase != deploymentManagerPending {
+		// The capacity this call held returns to the process that held it, and a retiring one that just
+		// finished its last call is free to stop.
+		if process.assigned > 0 {
+			process.assigned--
+		}
+		if process.retiring && process.assigned == 0 {
+			if err := m.Send(entry.process, MessageStop{}); err != nil {
+				_ = m.Node().SendExit(entry.process, gen.TerminateReasonShutdown)
+			}
+		}
+	}
+	m.completeInvocation(entry, err)
+}
+
+// completeInvocation publishes one idempotent invocation result to the Router.
+func (m *deploymentManager[T]) completeInvocation(entry *deploymentManagerCall[T], err error) {
+	if entry.completed {
+		return
+	}
+	entry.completed = true
+	// A rejected call was never accepted, so it has no duration to report.
+	if elapsed, ok := telemetry.ElapsedSeconds(entry.accepted); ok {
+		m.labels.Observe(m, metricInvocationTime, elapsed)
+	}
+	_ = m.SendWithPriority(m.Parent(), MessageInvocationCompleted{
+		CallID: entry.call.CallID,
+		Err:    err, Route: m.route, Manager: m.PID(),
+	}, gen.MessagePriorityHigh)
+}
+
+// reportDrained publishes the manager's terminal graceful-drain fact once.
+func (m *deploymentManager[T]) reportDrained() {
+	if m.drained {
+		return
+	}
+	m.drained = true
+	_ = m.SendWithPriority(m.Parent(), MessageDeploymentManagerDrained{
+		route: m.route, manager: m.PID(),
+	}, gen.MessagePriorityHigh)
+	m.reconcileStatus()
+}
+
 // ---------------------------------------------------------------------------
-// Process Lifecycle
+// Recovery
 // ---------------------------------------------------------------------------
 
 // slotFor resolves one plugin process to the slot it fills, and nil for a PID this manager does not own.
@@ -933,10 +980,6 @@ func (m *deploymentManager[T]) idleProcs() bool {
 	return false
 }
 
-// ---------------------------------------------------------------------------
-// Circuit Breaker
-// ---------------------------------------------------------------------------
-
 // openCircuit stops process recovery, fails all tracked invocations, and arms the cooldown.
 func (m *deploymentManager[T]) openCircuit(err error) {
 	if m.circuitOpen {
@@ -981,78 +1024,7 @@ func (m *deploymentManager[T]) cancelCircuitCooldown() {
 }
 
 // ---------------------------------------------------------------------------
-// Invocation Bookkeeping
-// ---------------------------------------------------------------------------
-
-// failProcessCalls completes every invocation dispatched to one process.
-func (m *deploymentManager[T]) failProcessCalls(pid gen.PID, err error) {
-	for callID, entry := range m.inFlightCalls {
-		if entry.phase != deploymentManagerPending && entry.process == pid {
-			if entry.call.Cancel != nil {
-				entry.call.Cancel()
-			}
-			m.removeCall(callID, err)
-		}
-	}
-}
-
-// removeCall releases all state for one invocation and completes it once.
-func (m *deploymentManager[T]) removeCall(callID uint64, err error) {
-	entry := m.inFlightCalls[callID]
-	if entry == nil {
-		return
-	}
-	if entry.dispatchStop != nil {
-		entry.dispatchStop()
-		entry.dispatchStop = nil
-	}
-	m.pendingCalls.remove(entry)
-	delete(m.inFlightCalls, callID)
-	if _, process := m.slotFor(entry.process); process != nil && entry.phase != deploymentManagerPending {
-		// The capacity this call held returns to the process that held it, and a retiring one that just
-		// finished its last call is free to stop.
-		if process.assigned > 0 {
-			process.assigned--
-		}
-		if process.retiring && process.assigned == 0 {
-			if err := m.Send(entry.process, MessageStop{}); err != nil {
-				_ = m.Node().SendExit(entry.process, gen.TerminateReasonShutdown)
-			}
-		}
-	}
-	m.completeInvocation(entry, err)
-}
-
-// completeInvocation publishes one idempotent invocation result to the Router.
-func (m *deploymentManager[T]) completeInvocation(entry *deploymentManagerCall[T], err error) {
-	if entry.completed {
-		return
-	}
-	entry.completed = true
-	// A rejected call was never accepted, so it has no duration to report.
-	if elapsed, ok := telemetry.ElapsedSeconds(entry.accepted); ok {
-		m.labels.Observe(m, metricInvocationTime, elapsed)
-	}
-	_ = m.SendWithPriority(m.Parent(), MessageInvocationCompleted{
-		CallID: entry.call.CallID,
-		Err:    err, Route: m.route, Manager: m.PID(),
-	}, gen.MessagePriorityHigh)
-}
-
-// reportDrained publishes the manager's terminal graceful-drain fact once.
-func (m *deploymentManager[T]) reportDrained() {
-	if m.drained {
-		return
-	}
-	m.drained = true
-	_ = m.SendWithPriority(m.Parent(), MessageDeploymentManagerDrained{
-		route: m.route, manager: m.PID(),
-	}, gen.MessagePriorityHigh)
-	m.reconcileStatus()
-}
-
-// ---------------------------------------------------------------------------
-// Status Reporting
+// Status
 // ---------------------------------------------------------------------------
 
 // committedCapacity is what this deployment can execute at once, counting only ready processes and each

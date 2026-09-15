@@ -92,7 +92,7 @@ type MessageDesiredStateFreshness struct {
 }
 
 // ---------------------------------------------------------------------------
-// Constructor & actor lifecycle
+// Actor lifecycle & handlers
 // ---------------------------------------------------------------------------
 
 // newReconcilerActor constructs a reconciler actor with independent retry and restart policies.
@@ -136,10 +136,6 @@ func (a *reconcilerActor) Terminate(error) {
 	a.stopArtifactResolverMeta(gen.TerminateReasonShutdown)
 	a.stopArtifactWatcherMeta(gen.TerminateReasonShutdown)
 }
-
-// ---------------------------------------------------------------------------
-// Message ingress
-// ---------------------------------------------------------------------------
 
 // HandleMessage processes reconciler control messages and meta-process lifecycle events.
 func (a *reconcilerActor) HandleMessage(from gen.PID, message any) error {
@@ -347,7 +343,70 @@ func (a *reconcilerActor) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, er
 }
 
 // ---------------------------------------------------------------------------
-// Artifact meta-process lifecycle
+// Work
+// ---------------------------------------------------------------------------
+
+// applyEvent incorporates monitored snapshot and reader-status events.
+func (a *reconcilerActor) applyEvent(event gen.MessageEvent) error {
+	switch event.Event {
+	case a.statusEvent:
+		status, ok := event.Message.(snapshot.ReaderActorStatus)
+		if !ok {
+			return nil
+		}
+		a.readerActorReady = status.Availability == runtime.AvailabilityReady
+		a.reconcileStatus()
+		return nil
+
+	case a.snapshotEvent:
+		snap, ok := event.Message.(*snapshot.Snapshot)
+		if !ok || snap == nil {
+			return nil
+		}
+		if a.snapshot != nil && snap.Generation < a.snapshot.Generation {
+			return nil
+		}
+		if a.snapshot == nil || snap.Generation > a.snapshot.Generation {
+			// A new desired generation should not inherit the previous generation's retry penalty.
+			a.resolutionRetry.CancelScheduled(true)
+		} else {
+			a.resolutionRetry.CancelScheduled(false)
+		}
+
+		a.snapshot = snap.Clone()
+		a.dirty = true
+		a.deferred = false
+		a.reconcileStatus()
+		return a.requestResolve()
+
+	default:
+		return nil
+	}
+}
+
+// requestResolve starts artifact resolution when current state requires it.
+func (a *reconcilerActor) requestResolve() error {
+	if a.resolving || !a.dirty || a.snapshot == nil || a.resolver.alias == (gen.Alias{}) {
+		return nil
+	}
+	a.resolving = true
+	a.dirty = false
+	a.reconcileStatus()
+	snap := a.snapshot.Clone()
+	if err := a.Send(a.resolver.alias, MessageResolveArtifacts{snapshot: *snap}); err != nil {
+		a.resolving = false
+		a.dirty = true
+		a.resolver.status.availability = runtime.AvailabilityDegraded
+		a.reconcileStatus()
+		if retryErr := a.scheduleResolutionRetry(); retryErr != nil {
+			return fmt.Errorf("send artifact resolve request: %v; schedule retry: %w", err, retryErr)
+		}
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Recovery
 // ---------------------------------------------------------------------------
 
 // startArtifactResolverMeta starts and monitors the artifact resolver meta-process.
@@ -448,73 +507,6 @@ func (a *reconcilerActor) stopArtifactWatcherMeta(reason error) {
 	_ = a.SendExitMeta(alias, reason)
 }
 
-// ---------------------------------------------------------------------------
-// Snapshot & resolution reconciliation
-// ---------------------------------------------------------------------------
-
-// applyEvent incorporates monitored snapshot and reader-status events.
-func (a *reconcilerActor) applyEvent(event gen.MessageEvent) error {
-	switch event.Event {
-	case a.statusEvent:
-		status, ok := event.Message.(snapshot.ReaderActorStatus)
-		if !ok {
-			return nil
-		}
-		a.readerActorReady = status.Availability == runtime.AvailabilityReady
-		a.reconcileStatus()
-		return nil
-
-	case a.snapshotEvent:
-		snap, ok := event.Message.(*snapshot.Snapshot)
-		if !ok || snap == nil {
-			return nil
-		}
-		if a.snapshot != nil && snap.Generation < a.snapshot.Generation {
-			return nil
-		}
-		if a.snapshot == nil || snap.Generation > a.snapshot.Generation {
-			// A new desired generation should not inherit the previous generation's retry penalty.
-			a.resolutionRetry.CancelScheduled(true)
-		} else {
-			a.resolutionRetry.CancelScheduled(false)
-		}
-
-		a.snapshot = snap.Clone()
-		a.dirty = true
-		a.deferred = false
-		a.reconcileStatus()
-		return a.requestResolve()
-
-	default:
-		return nil
-	}
-}
-
-// requestResolve starts artifact resolution when current state requires it.
-func (a *reconcilerActor) requestResolve() error {
-	if a.resolving || !a.dirty || a.snapshot == nil || a.resolver.alias == (gen.Alias{}) {
-		return nil
-	}
-	a.resolving = true
-	a.dirty = false
-	a.reconcileStatus()
-	snap := a.snapshot.Clone()
-	if err := a.Send(a.resolver.alias, MessageResolveArtifacts{snapshot: *snap}); err != nil {
-		a.resolving = false
-		a.dirty = true
-		a.resolver.status.availability = runtime.AvailabilityDegraded
-		a.reconcileStatus()
-		if retryErr := a.scheduleResolutionRetry(); retryErr != nil {
-			return fmt.Errorf("send artifact resolve request: %v; schedule retry: %w", err, retryErr)
-		}
-	}
-	return nil
-}
-
-// ---------------------------------------------------------------------------
-// Retry scheduling
-// ---------------------------------------------------------------------------
-
 // scheduleResolutionRetry schedules a delayed artifact-resolution retry.
 func (a *reconcilerActor) scheduleResolutionRetry() error {
 	if a.resolutionRetry.Pending {
@@ -591,7 +583,7 @@ func (a *reconcilerActor) scheduleWatcherRestart() error {
 }
 
 // ---------------------------------------------------------------------------
-// Status projection
+// Status
 // ---------------------------------------------------------------------------
 
 // status computes the reconciler's publishable status, shared by reconcileStatus and HandleInspect.
@@ -652,10 +644,6 @@ func (a *reconcilerActor) HandleInspect(gen.PID, ...string) map[string]string {
 		"reconciler:watcher:availability":  string(a.watcher.status.availability),
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 // errorText returns an empty string for nil errors and the error text otherwise.
 func errorText(err error) string {

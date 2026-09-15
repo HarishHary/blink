@@ -81,10 +81,6 @@ type deploymentRouteState struct {
 	managers   map[gen.PID]struct{}
 }
 
-// ---------------------------------------------------------------------------
-// Router actor
-// ---------------------------------------------------------------------------
-
 // routerActor owns one dynamic Ergo route per concrete DeploymentRouteKey.
 type routerActor[T Artifact] struct {
 	act.Router
@@ -171,7 +167,7 @@ type MessageRetryRouteStep struct {
 }
 
 // ---------------------------------------------------------------------------
-// Actor lifecycle
+// Actor lifecycle & handlers
 // ---------------------------------------------------------------------------
 
 // Init allocates the router's route and in-flight-call indexes.
@@ -197,10 +193,6 @@ func (a *routerActor[T]) Terminate(error) {
 		}
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Message handling
-// ---------------------------------------------------------------------------
 
 // RouteMessage is the only normal-priority ingress path, timers included, so an expiry is consumed
 // here rather than forwarded to a route.
@@ -357,7 +349,7 @@ func (a *routerActor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, err
 }
 
 // ---------------------------------------------------------------------------
-// Desired-state reconciliation
+// Work
 // ---------------------------------------------------------------------------
 
 // applyDeployment creates or updates the route backing one desired deployment.
@@ -416,8 +408,196 @@ func (a *routerActor[T]) activateDesired(active **Deployment, desired *Deploymen
 	}
 }
 
+// routeInvocation selects the rollout target route and tracks the call awaiting acceptance.
+func (a *routerActor[T]) routeInvocation(call MessageInvokePlugin[T]) gen.Atom {
+	if a.isDraining() {
+		a.labels.Count(a, metricUnroutable)
+		_ = a.SendWithPriority(a.Parent(), MessageInvocationCompleted{CallID: call.CallID, Err: runtime.ErrPluginUnavailable}, gen.MessagePriorityHigh)
+		return act.RouteDiscard
+	}
+	// Shadow goes to the shadow candidate; else primary, unless a canary wins this call's bucket.
+	var ref *deploymentRouteState
+	target := "shadow"
+	if call.Shadow {
+		if a.activeCandidate != nil && a.activeCandidate.Mode == runtime.RolloutModeShadow {
+			ref = a.routesByKey[a.activeCandidate.RouteKey()]
+		}
+	} else {
+		deployment := a.activePrimary
+		target = "primary"
+		if a.activeCandidate != nil && a.activeCandidate.Mode == runtime.RolloutModeCanary &&
+			float64(runtime.RolloutBucket(call.RolloutKey)) <= a.activeCandidate.RolloutPct {
+			deployment, target = a.activeCandidate, "candidate"
+		}
+		if deployment != nil {
+			ref = a.routesByKey[deployment.RouteKey()]
+		}
+	}
+	if ref == nil || ref.phase != deploymentRouteActive || a.refreshRoutePID(ref) == (gen.PID{}) {
+		a.labels.Count(a, metricUnroutable)
+		_ = a.SendWithPriority(a.Parent(), MessageInvocationCompleted{CallID: call.CallID, Err: runtime.ErrPluginUnavailable}, gen.MessagePriorityHigh)
+		return act.RouteDiscard
+	}
+	if _, exists := a.inFlightCalls[call.CallID]; exists {
+		return act.RouteDiscard
+	}
+	tracked := &routerInvocation{route: ref.name, ackToken: 1}
+	timeout := a.opts.DeploymentManagerOptions.DispatchTimeout
+	if timeout <= 0 {
+		timeout = DefaultDeploymentManagerDispatchTimeout
+	}
+	cancel, err := a.SendAfter(a.PID(), MessageInvocationTimedOut{callID: call.CallID, token: tracked.ackToken}, timeout)
+	if err != nil {
+		a.labels.Count(a, metricUnroutable)
+		_ = a.SendWithPriority(a.Parent(), MessageInvocationCompleted{CallID: call.CallID, Err: runtime.ErrPluginUnavailable}, gen.MessagePriorityHigh)
+		return act.RouteDiscard
+	}
+	tracked.ackStop = cancel
+	a.inFlightCalls[call.CallID] = tracked
+	a.labels.Count(a, metricRouted, target)
+	return ref.name
+}
+
+// acceptInvocation binds an in-flight call to the manager that accepted it.
+func (a *routerActor[T]) acceptInvocation(message MessageInvocationAccepted) {
+	call := a.inFlightCalls[message.callID]
+	if call == nil || call.accepted || call.route != message.route {
+		return
+	}
+	if call.ackStop != nil {
+		call.ackStop()
+		call.ackStop = nil
+	}
+	call.accepted, call.manager = true, message.manager
+}
+
+// completeInvocation finishes an in-flight call reported done by its bound manager.
+func (a *routerActor[T]) completeInvocation(from gen.PID, message MessageInvocationCompleted) {
+	call := a.inFlightCalls[message.CallID]
+	if call == nil || !call.accepted || call.route != message.Route || call.manager != from ||
+		call.manager != message.Manager {
+		return
+	}
+	a.finishTrackedCall(message.CallID, message.Err)
+}
+
+// cancelInvocation forwards a cancellation to the call's manager, or fails it locally.
+func (a *routerActor[T]) cancelInvocation(message MessageCancelInvocation) {
+	call := a.inFlightCalls[message.CallID]
+	if call == nil {
+		return
+	}
+	target := call.manager
+	if !call.accepted {
+		if key, ok := a.routesByName[call.route]; ok {
+			target = a.refreshRoutePID(a.routesByKey[key])
+		}
+	}
+	if target == (gen.PID{}) || a.SendWithPriority(target, message, gen.MessagePriorityHigh) != nil {
+		err := message.Err
+		if err == nil {
+			err = context.Canceled
+		}
+		a.finishTrackedCall(message.CallID, err)
+	}
+}
+
+// finishTrackedCall stops the acceptance timer and reports the call complete to the catalog.
+func (a *routerActor[T]) finishTrackedCall(callID uint64, err error) {
+	call := a.inFlightCalls[callID]
+	if call == nil {
+		return
+	}
+	if call.ackStop != nil {
+		call.ackStop()
+	}
+	delete(a.inFlightCalls, callID)
+	_ = a.SendWithPriority(a.Parent(), MessageInvocationCompleted{CallID: callID, Err: err}, gen.MessagePriorityHigh)
+}
+
+// drainRoute advances one route toward teardown: quiesce its manager, then let it be removed.
+func (a *routerActor[T]) drainRoute(ref *deploymentRouteState) {
+	switch ref.phase {
+	case deploymentRoutePending:
+		if ref.restart != nil {
+			ref.restart.CancelScheduled(false)
+		}
+		delete(a.routesByKey, ref.key)
+		delete(a.routesByName, ref.name)
+		if a.activePrimary != nil && a.activePrimary.RouteKey() == ref.key {
+			a.activePrimary = nil
+		}
+		if a.activeCandidate != nil && a.activeCandidate.RouteKey() == ref.key {
+			a.activeCandidate = nil
+		}
+		return
+	case deploymentRouteActive:
+		ref.phase = deploymentRouteDraining
+	case deploymentRouteRemoving:
+		return
+	}
+	if ref.restart != nil {
+		ref.restart.CancelScheduled(false)
+	}
+	if pid := a.refreshRoutePID(ref); pid != (gen.PID{}) {
+		_ = a.Send(pid, MessageDrain{})
+		return
+	}
+	// No live manager: respawn one, already draining, so it can finish the drain protocol.
+	if err := a.RespawnRoute(ref.name); err != nil {
+		_ = a.scheduleRouteStep(ref)
+		return
+	}
+	// Respawn may not have registered the PID yet; retry the drain once it appears.
+	if pid := a.refreshRoutePID(ref); pid != (gen.PID{}) {
+		_ = a.Send(pid, MessageDrain{})
+		return
+	}
+	_ = a.scheduleRouteStep(ref)
+}
+
+// beginDrain starts a global drain of every route and reports if it is already complete.
+func (a *routerActor[T]) beginDrain() {
+	if a.isDraining() {
+		return
+	}
+	a.lifecycle = RouterActorDraining
+	for _, ref := range a.routesByKey {
+		a.drainRoute(ref)
+	}
+	a.reconcileStatus()
+	a.reportDrained()
+}
+
+// reportDrained announces router drain completion to the catalog once no routes remain.
+func (a *routerActor[T]) reportDrained() {
+	if a.lifecycle != RouterActorDraining || len(a.routesByKey) > 0 {
+		return
+	}
+	a.lifecycle = RouterActorStopped
+	a.reconcileStatus()
+	_ = a.SendWithPriority(a.Parent(), MessageRouterDrained{pluginID: a.pluginID, pid: a.PID(), generation: a.generation}, gen.MessagePriorityHigh)
+}
+
+// removeDrainedRoute unregisters a drained route and clears any active pointer to it.
+func (a *routerActor[T]) removeDrainedRoute(ref *deploymentRouteState) {
+	ref.phase = deploymentRouteRemoving
+	if err := a.RemoveRoute(ref.name); err != nil {
+		_ = a.scheduleRouteStep(ref)
+		return
+	}
+	delete(a.routesByKey, ref.key)
+	delete(a.routesByName, ref.name)
+	if a.activePrimary != nil && a.activePrimary.RouteKey() == ref.key {
+		a.activePrimary = nil
+	}
+	if a.activeCandidate != nil && a.activeCandidate.RouteKey() == ref.key {
+		a.activeCandidate = nil
+	}
+}
+
 // ---------------------------------------------------------------------------
-// Route lifecycle
+// Recovery
 // ---------------------------------------------------------------------------
 
 // addRoute registers the dynamic route and schedules a retry step if registration fails.
@@ -541,121 +721,6 @@ func (a *routerActor[T]) currentManager(route gen.Atom, from, manager gen.PID) (
 	return ref, true
 }
 
-// ---------------------------------------------------------------------------
-// Invocation routing
-// ---------------------------------------------------------------------------
-
-// routeInvocation selects the rollout target route and tracks the call awaiting acceptance.
-func (a *routerActor[T]) routeInvocation(call MessageInvokePlugin[T]) gen.Atom {
-	if a.isDraining() {
-		a.labels.Count(a, metricUnroutable)
-		_ = a.SendWithPriority(a.Parent(), MessageInvocationCompleted{CallID: call.CallID, Err: runtime.ErrPluginUnavailable}, gen.MessagePriorityHigh)
-		return act.RouteDiscard
-	}
-	// Shadow goes to the shadow candidate; else primary, unless a canary wins this call's bucket.
-	var ref *deploymentRouteState
-	target := "shadow"
-	if call.Shadow {
-		if a.activeCandidate != nil && a.activeCandidate.Mode == runtime.RolloutModeShadow {
-			ref = a.routesByKey[a.activeCandidate.RouteKey()]
-		}
-	} else {
-		deployment := a.activePrimary
-		target = "primary"
-		if a.activeCandidate != nil && a.activeCandidate.Mode == runtime.RolloutModeCanary &&
-			float64(runtime.RolloutBucket(call.RolloutKey)) <= a.activeCandidate.RolloutPct {
-			deployment, target = a.activeCandidate, "candidate"
-		}
-		if deployment != nil {
-			ref = a.routesByKey[deployment.RouteKey()]
-		}
-	}
-	if ref == nil || ref.phase != deploymentRouteActive || a.refreshRoutePID(ref) == (gen.PID{}) {
-		a.labels.Count(a, metricUnroutable)
-		_ = a.SendWithPriority(a.Parent(), MessageInvocationCompleted{CallID: call.CallID, Err: runtime.ErrPluginUnavailable}, gen.MessagePriorityHigh)
-		return act.RouteDiscard
-	}
-	if _, exists := a.inFlightCalls[call.CallID]; exists {
-		return act.RouteDiscard
-	}
-	tracked := &routerInvocation{route: ref.name, ackToken: 1}
-	timeout := a.opts.DeploymentManagerOptions.DispatchTimeout
-	if timeout <= 0 {
-		timeout = DefaultDeploymentManagerDispatchTimeout
-	}
-	cancel, err := a.SendAfter(a.PID(), MessageInvocationTimedOut{callID: call.CallID, token: tracked.ackToken}, timeout)
-	if err != nil {
-		a.labels.Count(a, metricUnroutable)
-		_ = a.SendWithPriority(a.Parent(), MessageInvocationCompleted{CallID: call.CallID, Err: runtime.ErrPluginUnavailable}, gen.MessagePriorityHigh)
-		return act.RouteDiscard
-	}
-	tracked.ackStop = cancel
-	a.inFlightCalls[call.CallID] = tracked
-	a.labels.Count(a, metricRouted, target)
-	return ref.name
-}
-
-// acceptInvocation binds an in-flight call to the manager that accepted it.
-func (a *routerActor[T]) acceptInvocation(message MessageInvocationAccepted) {
-	call := a.inFlightCalls[message.callID]
-	if call == nil || call.accepted || call.route != message.route {
-		return
-	}
-	if call.ackStop != nil {
-		call.ackStop()
-		call.ackStop = nil
-	}
-	call.accepted, call.manager = true, message.manager
-}
-
-// completeInvocation finishes an in-flight call reported done by its bound manager.
-func (a *routerActor[T]) completeInvocation(from gen.PID, message MessageInvocationCompleted) {
-	call := a.inFlightCalls[message.CallID]
-	if call == nil || !call.accepted || call.route != message.Route || call.manager != from ||
-		call.manager != message.Manager {
-		return
-	}
-	a.finishTrackedCall(message.CallID, message.Err)
-}
-
-// cancelInvocation forwards a cancellation to the call's manager, or fails it locally.
-func (a *routerActor[T]) cancelInvocation(message MessageCancelInvocation) {
-	call := a.inFlightCalls[message.CallID]
-	if call == nil {
-		return
-	}
-	target := call.manager
-	if !call.accepted {
-		if key, ok := a.routesByName[call.route]; ok {
-			target = a.refreshRoutePID(a.routesByKey[key])
-		}
-	}
-	if target == (gen.PID{}) || a.SendWithPriority(target, message, gen.MessagePriorityHigh) != nil {
-		err := message.Err
-		if err == nil {
-			err = context.Canceled
-		}
-		a.finishTrackedCall(message.CallID, err)
-	}
-}
-
-// finishTrackedCall stops the acceptance timer and reports the call complete to the catalog.
-func (a *routerActor[T]) finishTrackedCall(callID uint64, err error) {
-	call := a.inFlightCalls[callID]
-	if call == nil {
-		return
-	}
-	if call.ackStop != nil {
-		call.ackStop()
-	}
-	delete(a.inFlightCalls, callID)
-	_ = a.SendWithPriority(a.Parent(), MessageInvocationCompleted{CallID: callID, Err: err}, gen.MessagePriorityHigh)
-}
-
-// ---------------------------------------------------------------------------
-// Manager failure
-// ---------------------------------------------------------------------------
-
 // deploymentManagerTerminated fences a manager-death fact, fails its calls, and recovers the route.
 func (a *routerActor[T]) deploymentManagerTerminated(from gen.PID, message MessageDeploymentManagerTerminated) {
 	key, ok := a.routesByName[message.route]
@@ -687,92 +752,7 @@ func (a *routerActor[T]) deploymentManagerTerminated(from gen.PID, message Messa
 }
 
 // ---------------------------------------------------------------------------
-// Draining
-// ---------------------------------------------------------------------------
-
-// drainRoute advances one route toward teardown: quiesce its manager, then let it be removed.
-func (a *routerActor[T]) drainRoute(ref *deploymentRouteState) {
-	switch ref.phase {
-	case deploymentRoutePending:
-		if ref.restart != nil {
-			ref.restart.CancelScheduled(false)
-		}
-		delete(a.routesByKey, ref.key)
-		delete(a.routesByName, ref.name)
-		if a.activePrimary != nil && a.activePrimary.RouteKey() == ref.key {
-			a.activePrimary = nil
-		}
-		if a.activeCandidate != nil && a.activeCandidate.RouteKey() == ref.key {
-			a.activeCandidate = nil
-		}
-		return
-	case deploymentRouteActive:
-		ref.phase = deploymentRouteDraining
-	case deploymentRouteRemoving:
-		return
-	}
-	if ref.restart != nil {
-		ref.restart.CancelScheduled(false)
-	}
-	if pid := a.refreshRoutePID(ref); pid != (gen.PID{}) {
-		_ = a.Send(pid, MessageDrain{})
-		return
-	}
-	// No live manager: respawn one, already draining, so it can finish the drain protocol.
-	if err := a.RespawnRoute(ref.name); err != nil {
-		_ = a.scheduleRouteStep(ref)
-		return
-	}
-	// Respawn may not have registered the PID yet; retry the drain once it appears.
-	if pid := a.refreshRoutePID(ref); pid != (gen.PID{}) {
-		_ = a.Send(pid, MessageDrain{})
-		return
-	}
-	_ = a.scheduleRouteStep(ref)
-}
-
-// beginDrain starts a global drain of every route and reports if it is already complete.
-func (a *routerActor[T]) beginDrain() {
-	if a.isDraining() {
-		return
-	}
-	a.lifecycle = RouterActorDraining
-	for _, ref := range a.routesByKey {
-		a.drainRoute(ref)
-	}
-	a.reconcileStatus()
-	a.reportDrained()
-}
-
-// reportDrained announces router drain completion to the catalog once no routes remain.
-func (a *routerActor[T]) reportDrained() {
-	if a.lifecycle != RouterActorDraining || len(a.routesByKey) > 0 {
-		return
-	}
-	a.lifecycle = RouterActorStopped
-	a.reconcileStatus()
-	_ = a.SendWithPriority(a.Parent(), MessageRouterDrained{pluginID: a.pluginID, pid: a.PID(), generation: a.generation}, gen.MessagePriorityHigh)
-}
-
-// removeDrainedRoute unregisters a drained route and clears any active pointer to it.
-func (a *routerActor[T]) removeDrainedRoute(ref *deploymentRouteState) {
-	ref.phase = deploymentRouteRemoving
-	if err := a.RemoveRoute(ref.name); err != nil {
-		_ = a.scheduleRouteStep(ref)
-		return
-	}
-	delete(a.routesByKey, ref.key)
-	delete(a.routesByName, ref.name)
-	if a.activePrimary != nil && a.activePrimary.RouteKey() == ref.key {
-		a.activePrimary = nil
-	}
-	if a.activeCandidate != nil && a.activeCandidate.RouteKey() == ref.key {
-		a.activeCandidate = nil
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Status projection
+// Status
 // ---------------------------------------------------------------------------
 
 // deploymentStatusFor projects a deployment's route into the catalog-facing route status.
@@ -909,10 +889,6 @@ func sameRouterStatus(left, right routerActorStatus) bool {
 		sameDeploymentRouteStatus(left.primary, right.primary) &&
 		sameDeploymentRouteStatus(left.candidate, right.candidate)
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 // sameDesiredState reports whether two resolved catalogs ask for the same thing, keyed by plugin id.
 func sameDesiredState(left, right map[string]routerDesiredState) bool {

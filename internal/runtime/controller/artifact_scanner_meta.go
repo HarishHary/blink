@@ -20,6 +20,10 @@ import (
 	"github.com/harishhary/blink/internal/runtime/telemetry"
 )
 
+// ---------------------------------------------------------------------------
+// Types & state
+// ---------------------------------------------------------------------------
+
 const (
 	scannerDebounce = 400 * time.Millisecond
 	scannerPoll     = 5 * time.Second
@@ -65,12 +69,9 @@ type fileIndex[T any] struct {
 	modTime time.Time
 }
 
-// current reports whether info still matches the file the value was derived from.
-func (f fileIndex[T]) current(info fs.FileInfo) bool {
-	return f.size == info.Size() && f.modTime.Equal(info.ModTime())
-}
-
-// --- messages ---
+// ---------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------
 
 type MessageArtifactScanResult struct {
 	source     gen.Alias
@@ -80,7 +81,9 @@ type MessageArtifactScanResult struct {
 	err        error
 }
 
-// --- messages ---
+// ---------------------------------------------------------------------------
+// Actor lifecycle & handlers
+// ---------------------------------------------------------------------------
 
 // Init prepares scanner state and its cancellation context.
 func (m *artifactScannerMeta[T]) Init(process gen.MetaProcess) error {
@@ -187,20 +190,20 @@ func (m *artifactScannerMeta[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (
 	return fmt.Errorf("artifact scanner meta: unsupported call %T", request), nil
 }
 
-// HandleInspect exposes the last completed scan's file-index sizes.
-func (m *artifactScannerMeta[T]) HandleInspect(gen.PID, ...string) map[string]string {
-	return map[string]string{
-		"scanner:directory": m.directory,
-		"scanner:parsed":    fmt.Sprintf("%d", m.parsedCount.Load()),
-		"scanner:binaries":  fmt.Sprintf("%d", m.digestCount.Load()),
-	}
-}
-
 // Terminate cancels active filesystem observation.
 func (m *artifactScannerMeta[T]) Terminate(error) {
 	if m.cancelRun != nil {
 		m.cancelRun()
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Work
+// ---------------------------------------------------------------------------
+
+// current reports whether info still matches the file the value was derived from.
+func (f fileIndex[T]) current(info fs.FileInfo) bool {
+	return f.size == info.Size() && f.modTime.Equal(info.ModTime())
 }
 
 // sendScan observes the directory and forwards its effective catalog.
@@ -367,4 +370,17 @@ func (m *artifactScannerMeta[T]) scan() ([]snapshot.EffectiveEntry, []string, bo
 // isYAML reports whether name has a supported YAML extension.
 func isYAML(name string) bool {
 	return strings.HasSuffix(name, ".yaml") || strings.HasSuffix(name, ".yml")
+}
+
+// ---------------------------------------------------------------------------
+// Status
+// ---------------------------------------------------------------------------
+
+// HandleInspect exposes the last completed scan's file-index sizes.
+func (m *artifactScannerMeta[T]) HandleInspect(gen.PID, ...string) map[string]string {
+	return map[string]string{
+		"scanner:directory": m.directory,
+		"scanner:parsed":    fmt.Sprintf("%d", m.parsedCount.Load()),
+		"scanner:binaries":  fmt.Sprintf("%d", m.digestCount.Load()),
+	}
 }

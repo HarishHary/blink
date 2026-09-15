@@ -57,10 +57,6 @@ func (s catalogActorStatus) clone() catalogActorStatus {
 	return clone
 }
 
-// ---------------------------------------------------------------------------
-// Catalog actor
-// ---------------------------------------------------------------------------
-
 // catalogActor owns router actors and projects their aggregate status.
 type catalogActor[T Artifact] struct {
 	act.Actor
@@ -111,14 +107,14 @@ type MessageRouterRestart struct {
 	token           uint64
 }
 
+// ---------------------------------------------------------------------------
+// Actor lifecycle & handlers
+// ---------------------------------------------------------------------------
+
 // newCatalogActor creates a catalog actor with its runtime options.
 func newCatalogActor[T Artifact](opts CatalogOptions, adapter *Adapter[T], labels telemetry.Labels) gen.ProcessBehavior {
 	return &catalogActor[T]{opts: opts, adapter: adapter, labels: labels}
 }
-
-// ---------------------------------------------------------------------------
-// Actor lifecycle
-// ---------------------------------------------------------------------------
 
 // Init allocates the catalog actor's router, desired-state, and call indexes.
 func (a *catalogActor[T]) Init(...any) error {
@@ -128,10 +124,6 @@ func (a *catalogActor[T]) Init(...any) error {
 	a.inFlightCalls = make(map[uint64]gen.PID)
 	return nil
 }
-
-// ---------------------------------------------------------------------------
-// Message ingress
-// ---------------------------------------------------------------------------
 
 // HandleMessage receives catalog administration, router facts, and lifecycle messages.
 func (a *catalogActor[T]) HandleMessage(from gen.PID, message any) error {
@@ -328,7 +320,7 @@ func (a *catalogActor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, er
 }
 
 // ---------------------------------------------------------------------------
-// Desired-state reconciliation
+// Work
 // ---------------------------------------------------------------------------
 
 // sendDesiredToRouter ensures a router is running and sends it the desired state.
@@ -355,8 +347,43 @@ func (a *catalogActor[T]) sendDesiredToRouter(id string) error {
 	return nil
 }
 
+// liveRouterCount returns the number of routers with live actor PIDs.
+func (a *catalogActor[T]) liveRouterCount() int {
+	count := 0
+	for _, ref := range a.routers {
+		if ref.pid != (gen.PID{}) {
+			count++
+		}
+	}
+	return count
+}
+
+// finishUntrackedCall reports an unavailable invocation that was never routed.
+func (a *catalogActor[T]) finishUntrackedCall(call MessageInvokePlugin[T], err error) {
+	_ = a.Send(a.Parent(), MessageInvocationCompleted{CallID: call.CallID, Err: err})
+}
+
+// finishTrackedCall removes and reports a completed invocation.
+func (a *catalogActor[T]) finishTrackedCall(callID uint64, err error) {
+	if _, ok := a.inFlightCalls[callID]; !ok {
+		return
+	}
+	delete(a.inFlightCalls, callID)
+	_ = a.Send(a.Parent(), MessageInvocationCompleted{CallID: callID, Err: err})
+}
+
+// reportDrained announces catalog drain completion to the parent actor.
+func (a *catalogActor[T]) reportDrained() {
+	if a.drainReported {
+		return
+	}
+	a.drainReported = true
+	a.reconcileStatus()
+	_ = a.Send(a.Parent(), MessageCatalogDrained{pid: a.PID()})
+}
+
 // ---------------------------------------------------------------------------
-// Router lifecycle
+// Recovery
 // ---------------------------------------------------------------------------
 
 // startRouter creates, monitors, and activates the router for one plugin.
@@ -464,10 +491,6 @@ func (a *catalogActor[T]) retireRouter(id string, callErr error) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Router restart scheduling
-// ---------------------------------------------------------------------------
-
 // routerRestartState returns the restart backoff state for a router.
 func (a *catalogActor[T]) routerRestartState(id string) *runtime.ScheduledBackoff {
 	ref := a.routers[id]
@@ -533,36 +556,7 @@ func (a *catalogActor[T]) cancelAllRouterRestarts(reset bool) {
 }
 
 // ---------------------------------------------------------------------------
-// Invocation routing
-// ---------------------------------------------------------------------------
-
-// liveRouterCount returns the number of routers with live actor PIDs.
-func (a *catalogActor[T]) liveRouterCount() int {
-	count := 0
-	for _, ref := range a.routers {
-		if ref.pid != (gen.PID{}) {
-			count++
-		}
-	}
-	return count
-}
-
-// finishUntrackedCall reports an unavailable invocation that was never routed.
-func (a *catalogActor[T]) finishUntrackedCall(call MessageInvokePlugin[T], err error) {
-	_ = a.Send(a.Parent(), MessageInvocationCompleted{CallID: call.CallID, Err: err})
-}
-
-// finishTrackedCall removes and reports a completed invocation.
-func (a *catalogActor[T]) finishTrackedCall(callID uint64, err error) {
-	if _, ok := a.inFlightCalls[callID]; !ok {
-		return
-	}
-	delete(a.inFlightCalls, callID)
-	_ = a.Send(a.Parent(), MessageInvocationCompleted{CallID: callID, Err: err})
-}
-
-// ---------------------------------------------------------------------------
-// Status projection
+// Status
 // ---------------------------------------------------------------------------
 
 // status computes the aggregate catalog status, shared by reconcileStatus and HandleInspect.
@@ -702,18 +696,4 @@ func sameCatalogStatus(left, right catalogActorStatus) bool {
 		}
 	}
 	return true
-}
-
-// ---------------------------------------------------------------------------
-// Draining
-// ---------------------------------------------------------------------------
-
-// reportDrained announces catalog drain completion to the parent actor.
-func (a *catalogActor[T]) reportDrained() {
-	if a.drainReported {
-		return
-	}
-	a.drainReported = true
-	a.reconcileStatus()
-	_ = a.Send(a.Parent(), MessageCatalogDrained{pid: a.PID()})
 }

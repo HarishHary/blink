@@ -10,6 +10,10 @@ import (
 	"github.com/harishhary/blink/internal/runtime/telemetry"
 )
 
+// ---------------------------------------------------------------------------
+// Types & state
+// ---------------------------------------------------------------------------
+
 const (
 	readerActorRestartIntensity uint16 = 5
 	readerActorRestartPeriod    uint16 = 10
@@ -33,21 +37,6 @@ const (
 type eventPublication struct {
 	name  gen.Atom
 	token gen.Ref
-}
-
-// registered reports whether the event was registered and its token handed over.
-func (p eventPublication) registered() bool { return p.token != (gen.Ref{}) }
-
-// ArtifactsEventFor names the buffered event a namespace's reader publishes *Snapshot through,
-// derived on either side rather than configured.
-func ArtifactsEventFor(node gen.Node, namespace string) gen.Event {
-	return gen.Event{Name: subtreeName(namespace, "artifacts"), Node: node.Name()}
-}
-
-// ReaderActorStatusEventFor names the buffered event the supervisor publishes ReaderActorStatus
-// through, derived the same way.
-func ReaderActorStatusEventFor(node gen.Node, namespace string) gen.Event {
-	return gen.Event{Name: subtreeName(namespace, "reader-actor-status"), Node: node.Name()}
 }
 
 type readerActorState struct {
@@ -84,6 +73,10 @@ type Supervisor[T any] struct {
 	radarLogged          bool
 }
 
+// ---------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------
+
 // ExecutorHeartbeat is this executor's periodic liveness/generation report to the controller.
 type ExecutorHeartbeat struct {
 	CommittedGeneration int64
@@ -112,6 +105,10 @@ type MessageExecutorReportTick struct{}
 
 // MessageRadarTick drives the supervisor's periodic radar reconcile.
 type MessageRadarTick struct{}
+
+// ---------------------------------------------------------------------------
+// Actor lifecycle & handlers
+// ---------------------------------------------------------------------------
 
 // NewSupervisor creates a reader/projection supervisor named after the namespace it follows.
 func NewSupervisor[T any](opts SupervisorOptions, loader Loader[T]) *Supervisor[T] {
@@ -348,24 +345,6 @@ func (s *Supervisor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, erro
 	return fmt.Errorf("snapshot supervisor: unsupported call %T", request), nil
 }
 
-// HandleInspect exposes both children's identity and last-reported status plus any in-flight commit.
-func (s *Supervisor[T]) HandleInspect(gen.PID, ...string) map[string]string {
-	return map[string]string{
-		"supervisor:lifecycle":                       string(s.lifecycle),
-		"supervisor:reader":                          fmt.Sprintf("%s", s.readerActor.pid),
-		"supervisor:reader_lifecycle":                string(s.readerActor.status.Lifecycle),
-		"supervisor:reader_availability":             string(s.readerActor.status.Availability),
-		"supervisor:reader_generation":               fmt.Sprintf("%d", s.readerActor.status.Generation),
-		"supervisor:reader_last_error":               s.readerActor.status.LastError,
-		"supervisor:reported_availability":           string(s.executorAvailability()),
-		"supervisor:projection":                      fmt.Sprintf("%s", s.projectionActor.pid),
-		"supervisor:projection_lifecycle":            string(s.projectionActor.status.Lifecycle),
-		"supervisor:projection_availability":         string(s.projectionActor.status.Availability),
-		"supervisor:projection_committed_generation": fmt.Sprintf("%d", s.projectionActor.status.CommittedGeneration),
-		"supervisor:commit_pending":                  fmt.Sprintf("%d", s.projectionActor.commitGeneration),
-	}
-}
-
 // Terminate marks children stopped and reports the shutdown reason.
 func (s *Supervisor[T]) Terminate(reason error) {
 	defer s.publishStatus()
@@ -382,6 +361,25 @@ func (s *Supervisor[T]) Terminate(reason error) {
 		default:
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Work
+// ---------------------------------------------------------------------------
+
+// registered reports whether the event was registered and its token handed over.
+func (p eventPublication) registered() bool { return p.token != (gen.Ref{}) }
+
+// ArtifactsEventFor names the buffered event a namespace's reader publishes *Snapshot through,
+// derived on either side rather than configured.
+func ArtifactsEventFor(node gen.Node, namespace string) gen.Event {
+	return gen.Event{Name: subtreeName(namespace, "artifacts"), Node: node.Name()}
+}
+
+// ReaderActorStatusEventFor names the buffered event the supervisor publishes ReaderActorStatus
+// through, derived the same way.
+func ReaderActorStatusEventFor(node gen.Node, namespace string) gen.Event {
+	return gen.Event{Name: subtreeName(namespace, "reader-actor-status"), Node: node.Name()}
 }
 
 // reportExecutor sends this executor's current convergence report.
@@ -416,6 +414,28 @@ func (s *Supervisor[T]) cancelExecutorReport() {
 	if s.reportCancel != nil {
 		s.reportCancel()
 		s.reportCancel = nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Status
+// ---------------------------------------------------------------------------
+
+// HandleInspect exposes both children's identity and last-reported status plus any in-flight commit.
+func (s *Supervisor[T]) HandleInspect(gen.PID, ...string) map[string]string {
+	return map[string]string{
+		"supervisor:lifecycle":                       string(s.lifecycle),
+		"supervisor:reader":                          fmt.Sprintf("%s", s.readerActor.pid),
+		"supervisor:reader_lifecycle":                string(s.readerActor.status.Lifecycle),
+		"supervisor:reader_availability":             string(s.readerActor.status.Availability),
+		"supervisor:reader_generation":               fmt.Sprintf("%d", s.readerActor.status.Generation),
+		"supervisor:reader_last_error":               s.readerActor.status.LastError,
+		"supervisor:reported_availability":           string(s.executorAvailability()),
+		"supervisor:projection":                      fmt.Sprintf("%s", s.projectionActor.pid),
+		"supervisor:projection_lifecycle":            string(s.projectionActor.status.Lifecycle),
+		"supervisor:projection_availability":         string(s.projectionActor.status.Availability),
+		"supervisor:projection_committed_generation": fmt.Sprintf("%d", s.projectionActor.status.CommittedGeneration),
+		"supervisor:commit_pending":                  fmt.Sprintf("%d", s.projectionActor.commitGeneration),
 	}
 }
 

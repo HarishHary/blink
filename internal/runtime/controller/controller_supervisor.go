@@ -12,6 +12,10 @@ import (
 	"github.com/harishhary/blink/internal/runtime/telemetry"
 )
 
+// ---------------------------------------------------------------------------
+// Types & state
+// ---------------------------------------------------------------------------
+
 const (
 	actorRestartIntensity uint16 = 5
 	actorRestartPeriod    uint16 = 10
@@ -48,6 +52,21 @@ type supervisor[T plugin.Artifact] struct {
 	radarLogged          bool
 }
 
+// ---------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------
+
+type MessageActorStatusChanged struct {
+	status actorStatus
+}
+
+// MessageRadarTick drives the supervisor's periodic radar reconcile.
+type MessageRadarTick struct{}
+
+// ---------------------------------------------------------------------------
+// Actor lifecycle & handlers
+// ---------------------------------------------------------------------------
+
 // newSupervisor constructs the controller supervisor with the namespace its application configured,
 // normalized options, and its typed loader.
 func newSupervisor[T plugin.Artifact](namespace string, opts SupervisorOptions, loader plugin.Loader[T], database backends.Database, barrier *runtime.IOBarrier) gen.ProcessBehavior {
@@ -61,17 +80,6 @@ func newSupervisor[T plugin.Artifact](namespace string, opts SupervisorOptions, 
 		signal:    newHealthSignal(namespace),
 	}
 }
-
-// --- messages ---
-
-type MessageActorStatusChanged struct {
-	status actorStatus
-}
-
-// MessageRadarTick drives the supervisor's periodic radar reconcile.
-type MessageRadarTick struct{}
-
-// --- messages ---
 
 // Init configures the supervised controller actor and opens this namespace's radar session.
 func (s *supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
@@ -229,57 +237,14 @@ func (s *supervisor[T]) HandleChildTerminate(name gen.Atom, pid gen.PID, reason 
 	return nil
 }
 
-// publishState reports supervisor lifecycle and writer fences, then moves the readiness signal.
-func (s *supervisor[T]) publishState() {
-	s.labels.Set(s, metricSupervisorLifecycle, supervisorLifecycleValue(s.lifecycle))
-	s.labels.Set(s, metricWriterFences, float64(len(s.writerFences)))
-	s.signal.SetReady(s, s.readyToServe())
+// HandleCall rejects unsupported supervisor calls.
+func (s *supervisor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
+	return fmt.Errorf("controller supervisor: unsupported call %T", request), nil
 }
 
-// readyToServe reports whether this namespace can answer snapshot requests: running, live child, ready child.
-func (s *supervisor[T]) readyToServe() bool {
-	return s.lifecycle == SupervisorRunning &&
-		s.actor.pid != (gen.PID{}) &&
-		s.actor.status.Availability == runtime.AvailabilityReady
-}
-
-// reconcileRadar registers whatever radar is still missing, then heartbeats the readiness signal.
-func (s *supervisor[T]) reconcileRadar() {
-	if !s.collectorsRegistered {
-		if err := telemetry.Register(s.Node(), controllerMetrics); err != nil {
-			s.radarUnavailableOnce(err)
-			return
-		}
-		s.collectorsRegistered = true
-		s.watchRadar(telemetry.MetricsProcess)
-	}
-	if !s.signal.Registered() {
-		if err := s.signal.Register(s); err != nil {
-			s.radarUnavailableOnce(err)
-			return
-		}
-		s.watchRadar(telemetry.HealthProcess)
-	}
-	s.radarLogged = false
-	s.signal.SetReady(s, s.readyToServe())
-	s.signal.Heartbeat(s)
-}
-
-// watchRadar monitors one radar process so a restart that drops these registrations announces itself.
-func (s *supervisor[T]) watchRadar(name gen.Atom) {
-	if err := s.MonitorProcessID(gen.ProcessID{Name: name, Node: s.Node().Name()}); err != nil {
-		s.Log().Debug("radar monitor unavailable: namespace=%q process=%s error=%v", s.namespace, name, err)
-	}
-}
-
-// radarUnavailableOnce logs only the first failure of an outage.
-func (s *supervisor[T]) radarUnavailableOnce(err error) {
-	if s.radarLogged {
-		return
-	}
-	s.radarLogged = true
-	s.Log().Debug("radar telemetry unavailable: namespace=%q error=%v", s.namespace, err)
-}
+// ---------------------------------------------------------------------------
+// Recovery
+// ---------------------------------------------------------------------------
 
 // advanceShutdown stops the actor after draining writer I/O.
 func (s *supervisor[T]) advanceShutdown() error {
@@ -374,9 +339,60 @@ func stalePIDSendFailure(err error) bool {
 	return errors.Is(err, gen.ErrProcessUnknown) || errors.Is(err, gen.ErrProcessTerminated)
 }
 
-// HandleCall rejects unsupported supervisor calls.
-func (s *supervisor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
-	return fmt.Errorf("controller supervisor: unsupported call %T", request), nil
+// ---------------------------------------------------------------------------
+// Status
+// ---------------------------------------------------------------------------
+
+// publishState reports supervisor lifecycle and writer fences, then moves the readiness signal.
+func (s *supervisor[T]) publishState() {
+	s.labels.Set(s, metricSupervisorLifecycle, supervisorLifecycleValue(s.lifecycle))
+	s.labels.Set(s, metricWriterFences, float64(len(s.writerFences)))
+	s.signal.SetReady(s, s.readyToServe())
+}
+
+// readyToServe reports whether this namespace can answer snapshot requests: running, live child, ready child.
+func (s *supervisor[T]) readyToServe() bool {
+	return s.lifecycle == SupervisorRunning &&
+		s.actor.pid != (gen.PID{}) &&
+		s.actor.status.Availability == runtime.AvailabilityReady
+}
+
+// reconcileRadar registers whatever radar is still missing, then heartbeats the readiness signal.
+func (s *supervisor[T]) reconcileRadar() {
+	if !s.collectorsRegistered {
+		if err := telemetry.Register(s.Node(), controllerMetrics); err != nil {
+			s.radarUnavailableOnce(err)
+			return
+		}
+		s.collectorsRegistered = true
+		s.watchRadar(telemetry.MetricsProcess)
+	}
+	if !s.signal.Registered() {
+		if err := s.signal.Register(s); err != nil {
+			s.radarUnavailableOnce(err)
+			return
+		}
+		s.watchRadar(telemetry.HealthProcess)
+	}
+	s.radarLogged = false
+	s.signal.SetReady(s, s.readyToServe())
+	s.signal.Heartbeat(s)
+}
+
+// watchRadar monitors one radar process so a restart that drops these registrations announces itself.
+func (s *supervisor[T]) watchRadar(name gen.Atom) {
+	if err := s.MonitorProcessID(gen.ProcessID{Name: name, Node: s.Node().Name()}); err != nil {
+		s.Log().Debug("radar monitor unavailable: namespace=%q process=%s error=%v", s.namespace, name, err)
+	}
+}
+
+// radarUnavailableOnce logs only the first failure of an outage.
+func (s *supervisor[T]) radarUnavailableOnce(err error) {
+	if s.radarLogged {
+		return
+	}
+	s.radarLogged = true
+	s.Log().Debug("radar telemetry unavailable: namespace=%q error=%v", s.namespace, err)
 }
 
 // HandleInspect exposes supervisor lifecycle, the child's identity and status, and pending writer fences.

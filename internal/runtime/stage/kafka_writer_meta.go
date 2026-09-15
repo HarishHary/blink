@@ -90,7 +90,7 @@ type MessageKafkaWriterIOStarted struct {
 type MessageKafkaWriterIOStopped struct{ Alias gen.Alias }
 
 // ---------------------------------------------------------------------------
-// Meta lifecycle & handlers
+// Actor lifecycle & handlers
 // ---------------------------------------------------------------------------
 
 // Init validates and initializes the writer meta-process.

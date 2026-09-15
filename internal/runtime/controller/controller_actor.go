@@ -16,6 +16,10 @@ import (
 	"github.com/harishhary/blink/internal/runtime/telemetry"
 )
 
+// ---------------------------------------------------------------------------
+// Types & state
+// ---------------------------------------------------------------------------
+
 type ActorLifecycle string
 
 const (
@@ -79,18 +83,42 @@ type actor[T plugin.Artifact] struct {
 	labels              telemetry.Labels
 }
 
-// newActor constructs the controller actor with normalized options, its typed loader, and the labels
-// its supervisor built from the namespace.
-func newActor[T plugin.Artifact](opts ActorOptions, loader plugin.Loader[T], labels telemetry.Labels, database backends.Database, barrier *runtime.IOBarrier) gen.ProcessBehavior {
-	return &actor[T]{opts: actorOptionsWithDefaults(opts), loader: loader, labels: labels, database: database, barrier: barrier}
+// ExecutorStatus is one executor's last-known convergence state, tracked per namespace controller
+// actor; local for the same reason as StatusRequest.
+type ExecutorStatus struct {
+	ExecutorID          string
+	LastSeen            time.Time
+	CommittedGeneration int64
+	ReadyGeneration     int64
+	Availability        string
+	LastError           string
+	DriftSince          time.Time // zero if not currently drifting
 }
 
-// --- messages ---
+const writeUnavailableThreshold = writeRetryAttemptBudget
+
+const (
+	// executorDriftCheckInterval is how often the actor re-evaluates every registered executor.
+	executorDriftCheckInterval = 30 * time.Second
+	// executorStaleThreshold is how long an executor may go without a report before drift evaluation
+	// excludes it.
+	executorStaleThreshold = 2 * time.Minute
+	// executorDriftGrace is how long an executor may lag before it's flagged as drifting.
+	executorDriftGrace = 2 * time.Minute
+)
+
+// ---------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------
 
 type MessageActorActivate struct{}
+
 type MessageArtifactScannerMetaRestart struct{ token uint64 }
+
 type MessageSnapshotWriterMetaRestart struct{ token uint64 }
+
 type MessageExecutorDriftCheck struct{}
+
 type MessageWriteSnapshot struct {
 	records    []backends.ControllerRecord
 	next       snapshot.Snapshot
@@ -110,49 +138,15 @@ type StatusResponse struct {
 	Executors  []ExecutorStatus
 }
 
-// ExecutorStatus is one executor's last-known convergence state, tracked per namespace controller
-// actor; local for the same reason as StatusRequest.
-type ExecutorStatus struct {
-	ExecutorID          string
-	LastSeen            time.Time
-	CommittedGeneration int64
-	ReadyGeneration     int64
-	Availability        string
-	LastError           string
-	DriftSince          time.Time // zero if not currently drifting
+// ---------------------------------------------------------------------------
+// Actor lifecycle & handlers
+// ---------------------------------------------------------------------------
+
+// newActor constructs the controller actor with normalized options, its typed loader, and the labels
+// its supervisor built from the namespace.
+func newActor[T plugin.Artifact](opts ActorOptions, loader plugin.Loader[T], labels telemetry.Labels, database backends.Database, barrier *runtime.IOBarrier) gen.ProcessBehavior {
+	return &actor[T]{opts: actorOptionsWithDefaults(opts), loader: loader, labels: labels, database: database, barrier: barrier}
 }
-
-// Apply folds one convergence report into status for its executor.
-func (status ExecutorStatus) Apply(report snapshot.MessageExecutorReport) ExecutorStatus {
-	status.ExecutorID = report.ExecutorID
-	status.LastSeen = time.Now()
-	if report.Heartbeat != nil {
-		status.CommittedGeneration = report.Heartbeat.CommittedGeneration
-		status.ReadyGeneration = report.Heartbeat.ReadyGeneration
-		status.Availability = report.Heartbeat.Availability
-	}
-	if report.Applied != nil {
-		status.ReadyGeneration = report.Applied.Generation
-	}
-	if report.LastError != "" {
-		status.LastError = report.LastError
-	}
-	return status
-}
-
-// --- messages ---
-
-const writeUnavailableThreshold = writeRetryAttemptBudget
-
-const (
-	// executorDriftCheckInterval is how often the actor re-evaluates every registered executor.
-	executorDriftCheckInterval = 30 * time.Second
-	// executorStaleThreshold is how long an executor may go without a report before drift evaluation
-	// excludes it.
-	executorStaleThreshold = 2 * time.Minute
-	// executorDriftGrace is how long an executor may lag before it's flagged as drifting.
-	executorDriftGrace = 2 * time.Minute
-)
 
 // Init validates dependencies and initializes controller state.
 func (a *actor[T]) Init(...any) error {
@@ -421,6 +415,258 @@ func (a *actor[T]) Terminate(error) {
 	a.writer.status.Writing = false
 }
 
+// HandleCall answers a subscribing executor's request; everything else is rejected.
+func (a *actor[T]) HandleCall(from gen.PID, _ gen.Ref, request any) (any, error) {
+	switch m := request.(type) {
+	case snapshot.SubscribeRequest:
+		a.subscribers[m.ExecutorID] = from
+		_ = a.MonitorPID(from)
+		return snapshot.SubscribeResponse{
+			Current:       a.committed.Clone(),
+			Changes:       ClassifyChanges(a.loader, nil, a.committedUpserts()),
+			ControllerPID: a.PID(),
+		}, nil
+	case StatusRequest:
+		executors := make([]ExecutorStatus, 0, len(a.executors))
+		for _, status := range a.executors {
+			executors = append(executors, status)
+		}
+		sort.Slice(executors, func(i, j int) bool { return executors[i].ExecutorID < executors[j].ExecutorID })
+		return StatusResponse{Generation: a.generation, Executors: executors}, nil
+	}
+	return fmt.Errorf("controller actor: unsupported call %T", request), nil
+}
+
+// ---------------------------------------------------------------------------
+// Work
+// ---------------------------------------------------------------------------
+
+// Apply folds one convergence report into status for its executor.
+func (status ExecutorStatus) Apply(report snapshot.MessageExecutorReport) ExecutorStatus {
+	status.ExecutorID = report.ExecutorID
+	status.LastSeen = time.Now()
+	if report.Heartbeat != nil {
+		status.CommittedGeneration = report.Heartbeat.CommittedGeneration
+		status.ReadyGeneration = report.Heartbeat.ReadyGeneration
+		status.Availability = report.Heartbeat.Availability
+	}
+	if report.Applied != nil {
+		status.ReadyGeneration = report.Applied.Generation
+	}
+	if report.LastError != "" {
+		status.LastError = report.LastError
+	}
+	return status
+}
+
+// reconcile builds and queues a plan when both inputs are ready.
+func (a *actor[T]) reconcile() error {
+	if !a.bootstrapped || !a.scanner.status.Complete || a.pending != nil {
+		return nil
+	}
+	plan := makePlan(a.committed, a.generation, a.records, a.scanner.entries, a.scanner.presentIDs, a.fullRewriteRequired, time.Now())
+	a.pending = &plan
+	return a.sendPending()
+}
+
+// sendPending queues the current plan with the active writer.
+func (a *actor[T]) sendPending() error {
+	if a.pending == nil || a.writer.status.Writing || a.writer.alias == (gen.Alias{}) || !a.writer.status.Loaded || a.lifecycle != ActorRunning {
+		return nil
+	}
+	a.writer.status.Writing = true
+	a.writer.writeDispatchedAt = time.Now()
+	message := MessageWriteSnapshot{
+		records:    append([]backends.ControllerRecord(nil), a.pending.recordUpserts...),
+		next:       *a.pending.next.Clone(),
+		changed:    a.pending.next.Generation != a.generation,
+		upserts:    snapshot.CloneEntries(a.pending.entryUpserts),
+		tombstones: append([]string(nil), a.pending.tombstones...),
+	}
+	for i := range message.records {
+		message.records[i] = message.records[i].Clone()
+	}
+	//argus:allow A1001 deep-cloned records, snapshot, upserts, and tombstones transfer exclusively to the writer
+	if err := a.Send(a.writer.alias, message); err != nil {
+		a.Log().Error("pending write dispatch failed: name=%s generation=%d error=%v", a.Name(), message.next.Generation, err)
+		a.writer.status.Writing = false
+		a.recordWriteFailure(fmt.Errorf("%w: queue write: %w", runtime.ErrSnapshotWrite, err))
+		a.writer.status.Availability = runtime.AvailabilityUnavailable
+		a.writer.status.Loaded = false
+		a.writer.replacementPending = true
+		a.stopWriter(gen.TerminateReasonShutdown)
+		return a.scheduleWriterRestart()
+	}
+	a.Log().Debug("pending write dispatched: name=%s generation=%d changed=%t upserts=%d tombstones=%d", a.Name(), message.next.Generation, message.changed, len(message.upserts), len(message.tombstones))
+	return nil
+}
+
+// recordWriteFailure updates writer health after a failed write.
+func (a *actor[T]) recordWriteFailure(err error) {
+	a.writer.consecutiveFailures++
+	a.writer.status.Availability = runtime.AvailabilityDegraded
+	a.writer.status.LastError = err
+	if a.writer.consecutiveFailures >= writeUnavailableThreshold {
+		a.writer.status.Availability = runtime.AvailabilityUnavailable
+	}
+}
+
+// beginDrain stops workers and waits for accepted writer I/O.
+func (a *actor[T]) beginDrain() error {
+	if a.lifecycle == ActorDraining || a.lifecycle == ActorDrained || a.lifecycle == ActorStopped {
+		return nil
+	}
+	a.lifecycle = ActorDraining
+	a.Log().Info("controller draining: name=%s writer_active_io=%d", a.Name(), len(a.writer.activeIO))
+	a.scanner.restart.CancelScheduled(false)
+	a.writer.restart.CancelScheduled(false)
+	a.stopScanner(gen.TerminateReasonShutdown)
+	a.stopWriter(gen.TerminateReasonShutdown)
+	return a.maybeDrained()
+}
+
+// maybeDrained marks the controller drained after writer I/O completes.
+func (a *actor[T]) maybeDrained() error {
+	if len(a.writer.activeIO) != 0 {
+		return nil
+	}
+	if a.lifecycle != ActorDrained {
+		a.lifecycle = ActorDrained
+		a.Log().Info("controller drained: name=%s", a.Name())
+	}
+	return nil
+}
+
+// makePlan derives persistence updates and keyed snapshot changes.
+func makePlan(prior *snapshot.Snapshot, generation int64, records map[string]backends.ControllerRecord, entries []snapshot.EffectiveEntry, presentIDs []string, fullRewriteRequired bool, now time.Time) reconcilePlan {
+	present := make(map[string]struct{}, len(presentIDs))
+	for _, id := range presentIDs {
+		present[id] = struct{}{}
+	}
+	priorRecords := make(map[string]*backends.ControllerRecord, len(records))
+	for id, record := range records {
+		copy := record
+		priorRecords[id] = &copy
+	}
+	upsertRecords := make([]backends.ControllerRecord, 0, len(records)+len(presentIDs))
+	for _, id := range presentIDs {
+		record, ok := records[id]
+		if !ok {
+			record = backends.ControllerRecord{Id: id, FirstSeenAt: now}
+		}
+		record.LastSeenAt = now
+		record.Status = backends.StatusActive
+		upsertRecords = append(upsertRecords, record)
+		copy := record
+		priorRecords[id] = &copy
+	}
+	previousIDs := make([]string, 0, len(records))
+	for id := range records {
+		previousIDs = append(previousIDs, id)
+	}
+	sort.Strings(previousIDs)
+	for _, id := range previousIDs {
+		if _, ok := present[id]; ok || records[id].Status != backends.StatusActive {
+			continue
+		}
+		record := records[id]
+		record.Status = backends.StatusAbsent
+		upsertRecords = append(upsertRecords, record)
+		copy := record
+		priorRecords[id] = &copy
+	}
+	nextEntries := snapshot.CloneEntries(entries)
+	valid := make(map[string]struct{}, len(nextEntries))
+	for _, entry := range nextEntries {
+		valid[entry.Id] = struct{}{}
+	}
+	if prior != nil {
+		for _, entry := range prior.Entries {
+			if _, ok := valid[entry.Id]; !ok {
+				if _, present := present[entry.Id]; present {
+					nextEntries = append(nextEntries, entry)
+				}
+			}
+		}
+	}
+	sort.Slice(nextEntries, func(i, j int) bool { return nextEntries[i].Id < nextEntries[j].Id })
+	changed := fullRewriteRequired || SnapshotChanged(nextEntries, prior)
+	nextGeneration := generation
+	if changed {
+		nextGeneration++
+	}
+	next := snapshot.Snapshot{Generation: nextGeneration, Entries: nextEntries}
+	diffPrior := prior
+	if fullRewriteRequired {
+		diffPrior = nil
+	}
+	upserts, tombstones := DiffEntries(diffPrior, nextEntries, priorRecords)
+	sort.Slice(upserts, func(i, j int) bool { return upserts[i].Id < upserts[j].Id })
+	sort.Strings(tombstones)
+	return reconcilePlan{recordUpserts: upsertRecords, next: next, entryUpserts: upserts, tombstones: tombstones}
+}
+
+// committedUpserts returns every committed entry as an upsert, for a fresh subscriber's initial burst
+// (nil prior in ClassifyChanges makes each one ChangeAdded).
+func (a *actor[T]) committedUpserts() []snapshot.EffectiveEntry {
+	if a.committed == nil {
+		return nil
+	}
+	return snapshot.CloneEntries(a.committed.Entries)
+}
+
+// notifySubscribers pushes a new commit to every subscriber PID; a failed send is logged, not
+// unregistered, since MonitorPID's MessageDownPID is the removal path.
+func (a *actor[T]) notifySubscribers(update snapshot.SnapshotUpdate) {
+	for id, pid := range a.subscribers {
+		delivery := update
+		delivery.Snapshot = update.Snapshot.Clone()
+		delivery.Changes = snapshot.CloneEntryChanges(update.Changes)
+		delivery.Tombstones = append([]string(nil), update.Tombstones...)
+		//argus:allow A1001 each subscriber receives an exclusive deep copy of the original update
+		if err := a.SendImportant(pid, delivery); err != nil {
+			a.Log().Error("snapshot push failed: name=%s executor_id=%s pid=%s error=%v", a.Name(), id, pid, err)
+		}
+	}
+}
+
+// checkExecutorDrift updates DriftSince against the committed generation, skipping executors silent
+// past executorStaleThreshold, since silence is a liveness problem rather than drift evidence.
+func (a *actor[T]) checkExecutorDrift() {
+	now := time.Now()
+	for id, status := range a.executors {
+		stale := now.Sub(status.LastSeen) > executorStaleThreshold
+		// A stale executor holding no subscription is gone: its ID is its pod name, so that ID never
+		// returns, and keeping it would inflate the executor gauge for the life of the controller.
+		if _, subscribed := a.subscribers[id]; stale && !subscribed {
+			delete(a.executors, id)
+			a.Log().Debug("executor forgotten: name=%s executor_id=%s last_seen=%s", a.Name(), id, status.LastSeen)
+			continue
+		}
+		behind := status.ReadyGeneration < a.generation
+		switch {
+		case stale || !behind:
+			if !status.DriftSince.IsZero() {
+				status.DriftSince = time.Time{}
+				a.executors[id] = status
+			}
+		case status.DriftSince.IsZero():
+			status.DriftSince = now
+			a.executors[id] = status
+		default:
+			driftDuration := now.Sub(status.DriftSince)
+			// Log once around the grace threshold crossing, not on every tick it stays drifting.
+			if driftDuration > executorDriftGrace && driftDuration-executorDriftCheckInterval <= executorDriftGrace {
+				a.Log().Error("executor drift detected: name=%s executor_id=%s ready_generation=%d committed_generation=%d drift=%s", a.Name(), id, status.ReadyGeneration, a.generation, driftDuration)
+			}
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Recovery
+// ---------------------------------------------------------------------------
+
 // startScanner starts a new artifact scanner instance.
 func (a *actor[T]) startScanner() error {
 	if a.scanner.alias != (gen.Alias{}) {
@@ -557,83 +803,9 @@ func (a *actor[T]) scheduleWriterRestart() error {
 	return nil
 }
 
-// reconcile builds and queues a plan when both inputs are ready.
-func (a *actor[T]) reconcile() error {
-	if !a.bootstrapped || !a.scanner.status.Complete || a.pending != nil {
-		return nil
-	}
-	plan := makePlan(a.committed, a.generation, a.records, a.scanner.entries, a.scanner.presentIDs, a.fullRewriteRequired, time.Now())
-	a.pending = &plan
-	return a.sendPending()
-}
-
-// sendPending queues the current plan with the active writer.
-func (a *actor[T]) sendPending() error {
-	if a.pending == nil || a.writer.status.Writing || a.writer.alias == (gen.Alias{}) || !a.writer.status.Loaded || a.lifecycle != ActorRunning {
-		return nil
-	}
-	a.writer.status.Writing = true
-	a.writer.writeDispatchedAt = time.Now()
-	message := MessageWriteSnapshot{
-		records:    append([]backends.ControllerRecord(nil), a.pending.recordUpserts...),
-		next:       *a.pending.next.Clone(),
-		changed:    a.pending.next.Generation != a.generation,
-		upserts:    snapshot.CloneEntries(a.pending.entryUpserts),
-		tombstones: append([]string(nil), a.pending.tombstones...),
-	}
-	for i := range message.records {
-		message.records[i] = message.records[i].Clone()
-	}
-	//argus:allow A1001 deep-cloned records, snapshot, upserts, and tombstones transfer exclusively to the writer
-	if err := a.Send(a.writer.alias, message); err != nil {
-		a.Log().Error("pending write dispatch failed: name=%s generation=%d error=%v", a.Name(), message.next.Generation, err)
-		a.writer.status.Writing = false
-		a.recordWriteFailure(fmt.Errorf("%w: queue write: %w", runtime.ErrSnapshotWrite, err))
-		a.writer.status.Availability = runtime.AvailabilityUnavailable
-		a.writer.status.Loaded = false
-		a.writer.replacementPending = true
-		a.stopWriter(gen.TerminateReasonShutdown)
-		return a.scheduleWriterRestart()
-	}
-	a.Log().Debug("pending write dispatched: name=%s generation=%d changed=%t upserts=%d tombstones=%d", a.Name(), message.next.Generation, message.changed, len(message.upserts), len(message.tombstones))
-	return nil
-}
-
-// recordWriteFailure updates writer health after a failed write.
-func (a *actor[T]) recordWriteFailure(err error) {
-	a.writer.consecutiveFailures++
-	a.writer.status.Availability = runtime.AvailabilityDegraded
-	a.writer.status.LastError = err
-	if a.writer.consecutiveFailures >= writeUnavailableThreshold {
-		a.writer.status.Availability = runtime.AvailabilityUnavailable
-	}
-}
-
-// beginDrain stops workers and waits for accepted writer I/O.
-func (a *actor[T]) beginDrain() error {
-	if a.lifecycle == ActorDraining || a.lifecycle == ActorDrained || a.lifecycle == ActorStopped {
-		return nil
-	}
-	a.lifecycle = ActorDraining
-	a.Log().Info("controller draining: name=%s writer_active_io=%d", a.Name(), len(a.writer.activeIO))
-	a.scanner.restart.CancelScheduled(false)
-	a.writer.restart.CancelScheduled(false)
-	a.stopScanner(gen.TerminateReasonShutdown)
-	a.stopWriter(gen.TerminateReasonShutdown)
-	return a.maybeDrained()
-}
-
-// maybeDrained marks the controller drained after writer I/O completes.
-func (a *actor[T]) maybeDrained() error {
-	if len(a.writer.activeIO) != 0 {
-		return nil
-	}
-	if a.lifecycle != ActorDrained {
-		a.lifecycle = ActorDrained
-		a.Log().Info("controller drained: name=%s", a.Name())
-	}
-	return nil
-}
+// ---------------------------------------------------------------------------
+// Status
+// ---------------------------------------------------------------------------
 
 // reconcileStatus recomputes and, on change, sends the current status to the supervisor.
 func (a *actor[T]) reconcileStatus() {
@@ -708,153 +880,5 @@ func (a *actor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 		"controller:writer:availability":         string(a.writer.status.Availability),
 		"controller:writer:writing":              fmt.Sprintf("%t", a.writer.status.Writing),
 		"controller:writer:consecutive_failures": fmt.Sprintf("%d", a.writer.consecutiveFailures),
-	}
-}
-
-// makePlan derives persistence updates and keyed snapshot changes.
-func makePlan(prior *snapshot.Snapshot, generation int64, records map[string]backends.ControllerRecord, entries []snapshot.EffectiveEntry, presentIDs []string, fullRewriteRequired bool, now time.Time) reconcilePlan {
-	present := make(map[string]struct{}, len(presentIDs))
-	for _, id := range presentIDs {
-		present[id] = struct{}{}
-	}
-	priorRecords := make(map[string]*backends.ControllerRecord, len(records))
-	for id, record := range records {
-		copy := record
-		priorRecords[id] = &copy
-	}
-	upsertRecords := make([]backends.ControllerRecord, 0, len(records)+len(presentIDs))
-	for _, id := range presentIDs {
-		record, ok := records[id]
-		if !ok {
-			record = backends.ControllerRecord{Id: id, FirstSeenAt: now}
-		}
-		record.LastSeenAt = now
-		record.Status = backends.StatusActive
-		upsertRecords = append(upsertRecords, record)
-		copy := record
-		priorRecords[id] = &copy
-	}
-	previousIDs := make([]string, 0, len(records))
-	for id := range records {
-		previousIDs = append(previousIDs, id)
-	}
-	sort.Strings(previousIDs)
-	for _, id := range previousIDs {
-		if _, ok := present[id]; ok || records[id].Status != backends.StatusActive {
-			continue
-		}
-		record := records[id]
-		record.Status = backends.StatusAbsent
-		upsertRecords = append(upsertRecords, record)
-		copy := record
-		priorRecords[id] = &copy
-	}
-	nextEntries := snapshot.CloneEntries(entries)
-	valid := make(map[string]struct{}, len(nextEntries))
-	for _, entry := range nextEntries {
-		valid[entry.Id] = struct{}{}
-	}
-	if prior != nil {
-		for _, entry := range prior.Entries {
-			if _, ok := valid[entry.Id]; !ok {
-				if _, present := present[entry.Id]; present {
-					nextEntries = append(nextEntries, entry)
-				}
-			}
-		}
-	}
-	sort.Slice(nextEntries, func(i, j int) bool { return nextEntries[i].Id < nextEntries[j].Id })
-	changed := fullRewriteRequired || SnapshotChanged(nextEntries, prior)
-	nextGeneration := generation
-	if changed {
-		nextGeneration++
-	}
-	next := snapshot.Snapshot{Generation: nextGeneration, Entries: nextEntries}
-	diffPrior := prior
-	if fullRewriteRequired {
-		diffPrior = nil
-	}
-	upserts, tombstones := DiffEntries(diffPrior, nextEntries, priorRecords)
-	sort.Slice(upserts, func(i, j int) bool { return upserts[i].Id < upserts[j].Id })
-	sort.Strings(tombstones)
-	return reconcilePlan{recordUpserts: upsertRecords, next: next, entryUpserts: upserts, tombstones: tombstones}
-}
-
-// HandleCall answers a subscribing executor's request; everything else is rejected.
-func (a *actor[T]) HandleCall(from gen.PID, _ gen.Ref, request any) (any, error) {
-	switch m := request.(type) {
-	case snapshot.SubscribeRequest:
-		a.subscribers[m.ExecutorID] = from
-		_ = a.MonitorPID(from)
-		return snapshot.SubscribeResponse{
-			Current:       a.committed.Clone(),
-			Changes:       ClassifyChanges(a.loader, nil, a.committedUpserts()),
-			ControllerPID: a.PID(),
-		}, nil
-	case StatusRequest:
-		executors := make([]ExecutorStatus, 0, len(a.executors))
-		for _, status := range a.executors {
-			executors = append(executors, status)
-		}
-		sort.Slice(executors, func(i, j int) bool { return executors[i].ExecutorID < executors[j].ExecutorID })
-		return StatusResponse{Generation: a.generation, Executors: executors}, nil
-	}
-	return fmt.Errorf("controller actor: unsupported call %T", request), nil
-}
-
-// committedUpserts returns every committed entry as an upsert, for a fresh subscriber's initial burst
-// (nil prior in ClassifyChanges makes each one ChangeAdded).
-func (a *actor[T]) committedUpserts() []snapshot.EffectiveEntry {
-	if a.committed == nil {
-		return nil
-	}
-	return snapshot.CloneEntries(a.committed.Entries)
-}
-
-// notifySubscribers pushes a new commit to every subscriber PID; a failed send is logged, not
-// unregistered, since MonitorPID's MessageDownPID is the removal path.
-func (a *actor[T]) notifySubscribers(update snapshot.SnapshotUpdate) {
-	for id, pid := range a.subscribers {
-		delivery := update
-		delivery.Snapshot = update.Snapshot.Clone()
-		delivery.Changes = snapshot.CloneEntryChanges(update.Changes)
-		delivery.Tombstones = append([]string(nil), update.Tombstones...)
-		//argus:allow A1001 each subscriber receives an exclusive deep copy of the original update
-		if err := a.SendImportant(pid, delivery); err != nil {
-			a.Log().Error("snapshot push failed: name=%s executor_id=%s pid=%s error=%v", a.Name(), id, pid, err)
-		}
-	}
-}
-
-// checkExecutorDrift updates DriftSince against the committed generation, skipping executors silent
-// past executorStaleThreshold, since silence is a liveness problem rather than drift evidence.
-func (a *actor[T]) checkExecutorDrift() {
-	now := time.Now()
-	for id, status := range a.executors {
-		stale := now.Sub(status.LastSeen) > executorStaleThreshold
-		// A stale executor holding no subscription is gone: its ID is its pod name, so that ID never
-		// returns, and keeping it would inflate the executor gauge for the life of the controller.
-		if _, subscribed := a.subscribers[id]; stale && !subscribed {
-			delete(a.executors, id)
-			a.Log().Debug("executor forgotten: name=%s executor_id=%s last_seen=%s", a.Name(), id, status.LastSeen)
-			continue
-		}
-		behind := status.ReadyGeneration < a.generation
-		switch {
-		case stale || !behind:
-			if !status.DriftSince.IsZero() {
-				status.DriftSince = time.Time{}
-				a.executors[id] = status
-			}
-		case status.DriftSince.IsZero():
-			status.DriftSince = now
-			a.executors[id] = status
-		default:
-			driftDuration := now.Sub(status.DriftSince)
-			// Log once around the grace threshold crossing, not on every tick it stays drifting.
-			if driftDuration > executorDriftGrace && driftDuration-executorDriftCheckInterval <= executorDriftGrace {
-				a.Log().Error("executor drift detected: name=%s executor_id=%s ready_generation=%d committed_generation=%d drift=%s", a.Name(), id, status.ReadyGeneration, a.generation, driftDuration)
-			}
-		}
 	}
 }

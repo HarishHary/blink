@@ -82,7 +82,7 @@ type MessageArtifactWatcherStateChanged struct {
 }
 
 // ---------------------------------------------------------------------------
-// Meta lifecycle
+// Actor lifecycle & handlers
 // ---------------------------------------------------------------------------
 
 // Init validates the watcher directory and initializes its cancellation context.
@@ -201,10 +201,6 @@ func (m *artifactWatcherMeta) Terminate(error) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Message handling
-// ---------------------------------------------------------------------------
-
 // HandleMessage ignores asynchronous messages because the watcher receives none.
 func (m *artifactWatcherMeta) HandleMessage(gen.PID, any) error { return nil }
 
@@ -222,7 +218,7 @@ func (m *artifactWatcherMeta) HandleInspect(gen.PID, ...string) map[string]strin
 }
 
 // ---------------------------------------------------------------------------
-// Watcher operations
+// Work
 // ---------------------------------------------------------------------------
 
 // notifyOnDirectoryChange notifies the reconciler only when the fingerprint moved, for both
@@ -307,10 +303,6 @@ func (m *artifactWatcherMeta) publishWatchState(state *artifactWatcherRunState) 
 	state.publishedWatching = state.watchingDirectory
 	return nil
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 // artifactDirectoryFingerprint hashes metadata, not contents: it only detects change, while
 // artifactResolverMeta verifies content before a deployment is applied.

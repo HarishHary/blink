@@ -19,7 +19,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Runtime state
+// Types & state
 // ---------------------------------------------------------------------------
 
 // applicationLifecycle tracks only caller-visible application boundaries.
@@ -62,7 +62,7 @@ type outstandingCalls struct {
 }
 
 // ---------------------------------------------------------------------------
-// Application lifecycle
+// Actor lifecycle & handlers
 // ---------------------------------------------------------------------------
 
 // NewApplication creates an unloaded plugin application.
@@ -218,94 +218,7 @@ func (a *Application[P, M]) Wait(ctx context.Context) error {
 }
 
 // ---------------------------------------------------------------------------
-// Runtime status
-// ---------------------------------------------------------------------------
-
-// Status returns a live snapshot owned by the runtime supervisor.
-func (a *Application[P, M]) Status(ctx context.Context) (SupervisorStatus, error) {
-	if err := ctx.Err(); err != nil {
-		return SupervisorStatus{}, err
-	}
-
-	a.mu.Lock()
-	switch {
-	case a.lifecycle == applicationTerminated:
-		a.mu.Unlock()
-		return SupervisorStatus{}, runtime.ErrRuntimeStopped
-	case a.lifecycle == applicationNew:
-		a.mu.Unlock()
-		return SupervisorStatus{}, runtime.ErrRuntimeNotStarted
-	}
-	n, supervisor, done := a.Node(), a.supervisor, a.supervisorDone.done
-	a.mu.Unlock()
-
-	response, err := callPIDWithContext(ctx, n, supervisor, SupervisorStatusRequest{}, a.opts.SupervisorOptions.ControlTimeout)
-	if err != nil {
-		// The supervisor may have terminated since the liveness check; prefer its terminal error.
-		select {
-		case <-done:
-			return SupervisorStatus{}, runtime.ErrRuntimeStopped
-		default:
-		}
-		return SupervisorStatus{}, err
-	}
-
-	status, ok := response.(SupervisorStatusResponse)
-	if !ok {
-		return SupervisorStatus{}, fmt.Errorf(
-			"unexpected status response %T",
-			response,
-		)
-	}
-	return status.Status, nil
-}
-
-// State returns the typed snapshot state once this runtime committed and admitted that generation.
-func (a *Application[P, M]) State(ctx context.Context) (snapshot.ProjectionState[M], error) {
-	if err := ctx.Err(); err != nil {
-		return snapshot.ProjectionState[M]{}, err
-	}
-	a.mu.Lock()
-	if a.lifecycle == applicationTerminated {
-		a.mu.Unlock()
-		return snapshot.ProjectionState[M]{}, runtime.ErrRuntimeStopped
-	}
-	if a.lifecycle == applicationNew {
-		a.mu.Unlock()
-		return snapshot.ProjectionState[M]{}, runtime.ErrRuntimeNotStarted
-	}
-	n, supervisor, done := a.Node(), a.supervisor, a.supervisorDone.done
-	a.mu.Unlock()
-	response, err := callPIDWithContext(ctx, n, supervisor, SupervisorStateRequest{}, a.opts.SupervisorOptions.ControlTimeout)
-	if err != nil {
-		select {
-		case <-done:
-			return snapshot.ProjectionState[M]{}, runtime.ErrRuntimeStopped
-		default:
-		}
-		return snapshot.ProjectionState[M]{}, err
-	}
-	metadata, ok := response.(SupervisorStateResponse)
-	if !ok {
-		return snapshot.ProjectionState[M]{}, fmt.Errorf("unexpected state response %T", response)
-	}
-	state, err := snapshot.NewProjectionClient[M](n, a.opts.Namespace).State(ctx)
-	if err != nil {
-		select {
-		case <-done:
-			return snapshot.ProjectionState[M]{}, runtime.ErrRuntimeStopped
-		default:
-		}
-		return snapshot.ProjectionState[M]{}, err
-	}
-	if state.CommittedGeneration != metadata.Generation || !state.Availability.Routable() {
-		return snapshot.ProjectionState[M]{}, runtime.ErrPluginUnavailable
-	}
-	return state, nil
-}
-
-// ---------------------------------------------------------------------------
-// Invocation admission
+// Work
 // ---------------------------------------------------------------------------
 
 // ErrShadowDropped means shadow admission was full; production is unaffected and nothing was sent.
@@ -316,10 +229,6 @@ var ErrShadowDropped = errors.New("shadow invocation dropped")
 func (a *Application[P, M]) CallBudget(rollout snapshot.Rollout) int {
 	return min(rollout.Capacity(), max(1, a.opts.callFanOut))
 }
-
-// ---------------------------------------------------------------------------
-// Invocation submission
-// ---------------------------------------------------------------------------
 
 // Submit admits and submits a production plugin invocation.
 func (a *Application[P, M]) Submit(ctx context.Context, pluginID string, rolloutKey string, expectedGeneration int64, fn func(context.Context, P) error) (runtime.Invocation, error) {
@@ -497,10 +406,6 @@ func (a *Application[P, M]) submit(ctx context.Context, pluginID string, rollout
 	return runtime.Invocation{Id: callID, State: state}, nil
 }
 
-// ---------------------------------------------------------------------------
-// Control helpers
-// ---------------------------------------------------------------------------
-
 // controlOutcome holds the result of a control-plane request.
 type controlOutcome struct {
 	response any
@@ -544,4 +449,91 @@ func callTimeoutSeconds(ctx context.Context, fallback time.Duration) int {
 		return maxInt
 	}
 	return int(seconds)
+}
+
+// ---------------------------------------------------------------------------
+// Status
+// ---------------------------------------------------------------------------
+
+// Status returns a live snapshot owned by the runtime supervisor.
+func (a *Application[P, M]) Status(ctx context.Context) (SupervisorStatus, error) {
+	if err := ctx.Err(); err != nil {
+		return SupervisorStatus{}, err
+	}
+
+	a.mu.Lock()
+	switch {
+	case a.lifecycle == applicationTerminated:
+		a.mu.Unlock()
+		return SupervisorStatus{}, runtime.ErrRuntimeStopped
+	case a.lifecycle == applicationNew:
+		a.mu.Unlock()
+		return SupervisorStatus{}, runtime.ErrRuntimeNotStarted
+	}
+	n, supervisor, done := a.Node(), a.supervisor, a.supervisorDone.done
+	a.mu.Unlock()
+
+	response, err := callPIDWithContext(ctx, n, supervisor, SupervisorStatusRequest{}, a.opts.SupervisorOptions.ControlTimeout)
+	if err != nil {
+		// The supervisor may have terminated since the liveness check; prefer its terminal error.
+		select {
+		case <-done:
+			return SupervisorStatus{}, runtime.ErrRuntimeStopped
+		default:
+		}
+		return SupervisorStatus{}, err
+	}
+
+	status, ok := response.(SupervisorStatusResponse)
+	if !ok {
+		return SupervisorStatus{}, fmt.Errorf(
+			"unexpected status response %T",
+			response,
+		)
+	}
+	return status.Status, nil
+}
+
+// State returns the typed snapshot state once this runtime committed and admitted that generation.
+func (a *Application[P, M]) State(ctx context.Context) (snapshot.ProjectionState[M], error) {
+	if err := ctx.Err(); err != nil {
+		return snapshot.ProjectionState[M]{}, err
+	}
+	a.mu.Lock()
+	if a.lifecycle == applicationTerminated {
+		a.mu.Unlock()
+		return snapshot.ProjectionState[M]{}, runtime.ErrRuntimeStopped
+	}
+	if a.lifecycle == applicationNew {
+		a.mu.Unlock()
+		return snapshot.ProjectionState[M]{}, runtime.ErrRuntimeNotStarted
+	}
+	n, supervisor, done := a.Node(), a.supervisor, a.supervisorDone.done
+	a.mu.Unlock()
+	response, err := callPIDWithContext(ctx, n, supervisor, SupervisorStateRequest{}, a.opts.SupervisorOptions.ControlTimeout)
+	if err != nil {
+		select {
+		case <-done:
+			return snapshot.ProjectionState[M]{}, runtime.ErrRuntimeStopped
+		default:
+		}
+		return snapshot.ProjectionState[M]{}, err
+	}
+	metadata, ok := response.(SupervisorStateResponse)
+	if !ok {
+		return snapshot.ProjectionState[M]{}, fmt.Errorf("unexpected state response %T", response)
+	}
+	state, err := snapshot.NewProjectionClient[M](n, a.opts.Namespace).State(ctx)
+	if err != nil {
+		select {
+		case <-done:
+			return snapshot.ProjectionState[M]{}, runtime.ErrRuntimeStopped
+		default:
+		}
+		return snapshot.ProjectionState[M]{}, err
+	}
+	if state.CommittedGeneration != metadata.Generation || !state.Availability.Routable() {
+		return snapshot.ProjectionState[M]{}, runtime.ErrPluginUnavailable
+	}
+	return state, nil
 }
