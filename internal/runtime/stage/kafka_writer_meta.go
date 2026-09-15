@@ -40,7 +40,7 @@ type kafkaWriterMetaStatus struct {
 type kafkaWriterMeta struct {
 	gen.MetaProcess
 	newWriter    func() brokers.Writer
-	ioBarrier    *runtime.IOBarrier
+	barrier      *runtime.IOBarrier
 	completion   *runtime.IOBarrier
 	supervisor   gen.PID
 	writeTimeout time.Duration
@@ -95,28 +95,28 @@ type MessageKafkaWriterIOStopped struct{ Alias gen.Alias }
 
 // Init validates and initializes the writer meta-process.
 func (m *kafkaWriterMeta) Init(process gen.MetaProcess) error {
-	if m.newWriter == nil || m.ioBarrier == nil || m.writeTimeout <= 0 || m.retryMin <= 0 || m.retryMax < m.retryMin {
+	if m.newWriter == nil || m.barrier == nil || m.writeTimeout <= 0 || m.retryMin <= 0 || m.retryMax < m.retryMin {
 		return fmt.Errorf("kafka writer meta: writer factory, I/O barrier, positive timeout/retry minimum, and bounded retry maximum are required")
 	}
 	m.MetaProcess = process
 	m.runCtx, m.cancelRun = context.WithCancel(context.Background())
 	m.jobs = make(chan MessageKafkaWriterWrite, 1)
 	m.labels.Set(m, metricKafkaWriterQueueDepth, 0)
-	if !m.ioBarrier.Acquire() {
+	if !m.barrier.Acquire() {
 		m.cancelRun()
 		return fmt.Errorf("kafka writer meta: I/O barrier is sealed")
 	}
 	m.completion = runtime.NewIOBarrier()
 	if !m.completion.Acquire() {
 		m.cancelRun()
-		m.ioBarrier.Release()
+		m.barrier.Release()
 		return fmt.Errorf("kafka writer meta: reserve completion proof")
 	}
 	m.completion.Seal()
 	if err := m.SendWithPriority(m.supervisor, MessageKafkaWriterIOStarted{Alias: m.ID(), completion: m.completion}, gen.MessagePriorityHigh); err != nil {
 		m.cancelRun()
 		m.completion.Release()
-		m.ioBarrier.Release()
+		m.barrier.Release()
 		return fmt.Errorf("kafka writer meta: register I/O: %w", err)
 	}
 	return nil
@@ -128,7 +128,7 @@ func (m *kafkaWriterMeta) Start() (runErr error) {
 		_ = m.SendWithPriority(m.supervisor, MessageKafkaWriterIOStopped{Alias: m.ID()}, gen.MessagePriorityHigh)
 	}()
 	defer m.completion.Release()
-	defer m.ioBarrier.Release()
+	defer m.barrier.Release()
 	writer := m.newWriter()
 	if writer == nil {
 		return fmt.Errorf("kafka writer meta: writer factory returned nil")

@@ -40,7 +40,7 @@ type kafkaReaderMetaStatus struct {
 type kafkaReaderMeta struct {
 	gen.MetaProcess
 	newReader     func() brokers.Reader
-	ioBarrier     *runtime.IOBarrier
+	barrier       *runtime.IOBarrier
 	completion    *runtime.IOBarrier
 	supervisor    gen.PID
 	fetchTimeout  time.Duration
@@ -112,28 +112,28 @@ type MessageKafkaReaderIOStopped struct{ Alias gen.Alias }
 
 // Init reserves this whole Start invocation before the framework launches it. Start owns release.
 func (m *kafkaReaderMeta) Init(process gen.MetaProcess) error {
-	if m.newReader == nil || m.ioBarrier == nil || m.fetchTimeout <= 0 || m.commitTimeout <= 0 || m.retryMin <= 0 || m.retryMax < m.retryMin {
+	if m.newReader == nil || m.barrier == nil || m.fetchTimeout <= 0 || m.commitTimeout <= 0 || m.retryMin <= 0 || m.retryMax < m.retryMin {
 		return fmt.Errorf("kafka reader meta: factory, I/O barrier, positive timeouts/retry minimum, and bounded retry maximum are required")
 	}
 	m.MetaProcess = process
 	m.runCtx, m.cancelRun = context.WithCancel(context.Background())
 	m.jobs = make(chan any, 1)
 	m.labels.Set(m, metricKafkaReaderQueue, 0)
-	if !m.ioBarrier.Acquire() {
+	if !m.barrier.Acquire() {
 		m.cancelRun()
 		return fmt.Errorf("kafka reader meta: I/O barrier is sealed")
 	}
 	m.completion = runtime.NewIOBarrier()
 	if !m.completion.Acquire() {
 		m.cancelRun()
-		m.ioBarrier.Release()
+		m.barrier.Release()
 		return fmt.Errorf("kafka reader meta: reserve completion proof")
 	}
 	m.completion.Seal()
 	if err := m.SendWithPriority(m.supervisor, MessageKafkaReaderIOStarted{Alias: m.ID(), completion: m.completion}, gen.MessagePriorityHigh); err != nil {
 		m.cancelRun()
 		m.completion.Release()
-		m.ioBarrier.Release()
+		m.barrier.Release()
 		return fmt.Errorf("kafka reader meta: register I/O: %w", err)
 	}
 	return nil
@@ -145,7 +145,7 @@ func (m *kafkaReaderMeta) Start() (runErr error) {
 		_ = m.SendWithPriority(m.supervisor, MessageKafkaReaderIOStopped{Alias: m.ID()}, gen.MessagePriorityHigh)
 	}()
 	defer m.completion.Release()
-	defer m.ioBarrier.Release()
+	defer m.barrier.Release()
 	reader := m.newReader()
 	if reader == nil {
 		return fmt.Errorf("kafka reader meta: factory returned nil reader")

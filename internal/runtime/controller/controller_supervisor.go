@@ -36,6 +36,12 @@ type actorState struct {
 	activationSent bool
 }
 
+// writerIOFence tracks a writer's owner and proof that its I/O has finished.
+type writerIOFence struct {
+	owner      gen.PID
+	completion *runtime.IOBarrier
+}
+
 type supervisor[T plugin.Artifact] struct {
 	act.Supervisor
 	opts                 SupervisorOptions
@@ -45,7 +51,7 @@ type supervisor[T plugin.Artifact] struct {
 	barrier              *runtime.IOBarrier
 	lifecycle            SupervisorLifecycle
 	actor                actorState
-	writerFences         map[gen.Alias]gen.PID
+	writerFences         map[gen.Alias]writerIOFence
 	labels               telemetry.Labels
 	signal               telemetry.Signal
 	collectorsRegistered bool
@@ -61,6 +67,7 @@ type MessageActorStatusChanged struct {
 }
 
 // MessageRadarTick drives the supervisor's periodic radar reconcile.
+// It stays high priority because it also releases completed I/O fences and unblocks replacements.
 type MessageRadarTick struct{}
 
 // ---------------------------------------------------------------------------
@@ -92,10 +99,10 @@ func (s *supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 		Availability: runtime.AvailabilityUnavailable,
 	}
 	s.lifecycle = SupervisorStarting
-	s.writerFences = make(map[gen.Alias]gen.PID)
+	s.writerFences = make(map[gen.Alias]writerIOFence)
 	// A message, not an inline call: the signal must exist before any probe reads it, but radar must
 	// not delay the spec.
-	if err := s.Send(s.PID(), MessageRadarTick{}); err != nil {
+	if err := s.SendWithPriority(s.PID(), MessageRadarTick{}, gen.MessagePriorityHigh); err != nil {
 		return act.SupervisorSpec{}, fmt.Errorf("controller supervisor: schedule radar tick: %w", err)
 	}
 	return act.SupervisorSpec{
@@ -127,9 +134,12 @@ func (s *supervisor[T]) HandleMessage(from gen.PID, message any) error {
 		if from != s.PID() {
 			return nil
 		}
+		if err := s.pollIOCompletions(); err != nil {
+			return err
+		}
 		s.reconcileRadar()
 		if s.lifecycle != SupervisorStopping {
-			if _, err := s.SendAfter(s.PID(), MessageRadarTick{}, telemetry.RadarTickInterval); err != nil {
+			if _, err := s.SendWithPriorityAfter(s.PID(), MessageRadarTick{}, gen.MessagePriorityHigh, telemetry.RadarTickInterval); err != nil {
 				return fmt.Errorf("reschedule radar tick: %w", err)
 			}
 		}
@@ -170,29 +180,19 @@ func (s *supervisor[T]) HandleMessage(from gen.PID, message any) error {
 			return s.advanceShutdown()
 		}
 	case MessageSnapshotWriterIOStarted:
-		if s.actor.pid != from {
+		if s.actor.pid != from || m.Alias == (gen.Alias{}) || m.completion == nil {
+			return nil
+		}
+		if _, exists := s.writerFences[m.Alias]; exists {
 			return nil
 		}
 		if s.writerFences == nil {
-			s.writerFences = make(map[gen.Alias]gen.PID)
+			s.writerFences = make(map[gen.Alias]writerIOFence)
 		}
-		s.writerFences[m.Alias] = from
+		s.writerFences[m.Alias] = writerIOFence{owner: from, completion: m.completion}
 		s.Log().Debug("snapshot writer I/O fence registered: name=%s child=%s alias=%s active=%d", s.Name(), from, m.Alias, len(s.writerFences))
 	case MessageSnapshotWriterIOStopped:
-		owner, ok := s.writerFences[m.Alias]
-		if !ok || owner != from {
-			return nil
-		}
-		delete(s.writerFences, m.Alias)
-		s.Log().Debug("snapshot writer I/O fence released: name=%s child=%s alias=%s active=%d", s.Name(), from, m.Alias, len(s.writerFences))
-		if s.actor.pid == from {
-			if err := s.SendWithPriority(from, m, gen.MessagePriorityHigh); err != nil && !stalePIDSendFailure(err) {
-				s.Log().Error("snapshot writer I/O completion forwarding failed: name=%s child=%s alias=%s error=%v", s.Name(), from, m.Alias, err)
-				//argus:allow A2012 forwarding failure is fatal because losing this completion blocks writer replacement and drain
-				return fmt.Errorf("forward snapshot writer I/O completion to %s: %w", from, err)
-			}
-		}
-		return s.reconcileActor()
+		return s.completeIOFence(from, m.Alias)
 	}
 	return nil
 }
@@ -245,6 +245,36 @@ func (s *supervisor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, erro
 // ---------------------------------------------------------------------------
 // Recovery
 // ---------------------------------------------------------------------------
+
+// completeIOFence releases a writer fence only after its I/O completion is proven.
+func (s *supervisor[T]) completeIOFence(from gen.PID, alias gen.Alias) error {
+	fence, ok := s.writerFences[alias]
+	if !ok || fence.owner != from || !fence.completion.Quiesced() {
+		return nil
+	}
+	if s.actor.pid == from {
+		if err := s.SendWithPriority(from, MessageSnapshotWriterIOStopped{Alias: alias}, gen.MessagePriorityHigh); err != nil && !stalePIDSendFailure(err) {
+			s.Log().Error("snapshot writer I/O completion forwarding failed: name=%s child=%s alias=%s error=%v", s.Name(), from, alias, err)
+			//argus:allow A2012 forwarding failure is fatal because losing this completion blocks writer replacement and drain
+			return fmt.Errorf("forward snapshot writer I/O completion to %s: %w", from, err)
+		}
+	}
+	delete(s.writerFences, alias)
+	s.Log().Debug("snapshot writer I/O fence released: name=%s child=%s alias=%s active=%d", s.Name(), from, alias, len(s.writerFences))
+	return s.reconcileActor()
+}
+
+// pollIOCompletions recovers completed writer fences when an I/O-stopped notification was lost.
+func (s *supervisor[T]) pollIOCompletions() error {
+	for alias, fence := range s.writerFences {
+		if fence.completion.Quiesced() {
+			if err := s.completeIOFence(fence.owner, alias); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
 
 // advanceShutdown stops the actor after draining writer I/O.
 func (s *supervisor[T]) advanceShutdown() error {

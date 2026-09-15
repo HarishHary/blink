@@ -41,6 +41,7 @@ type snapshotWriterMeta struct {
 	gen.MetaProcess
 	database   backends.Database
 	barrier    *runtime.IOBarrier
+	completion *runtime.IOBarrier
 	supervisor gen.PID
 	runCtx     context.Context
 	cancelRun  context.CancelFunc
@@ -69,10 +70,13 @@ type MessageSnapshotWriteResult struct {
 	err    error
 }
 
-// MessageSnapshotWriterIOStarted proves an accepted meta Start invocation may access application resources.
-type MessageSnapshotWriterIOStarted struct{ Alias gen.Alias }
+// MessageSnapshotWriterIOStarted reports an accepted reservation and its local completion proof.
+type MessageSnapshotWriterIOStarted struct {
+	Alias      gen.Alias
+	completion *runtime.IOBarrier
+}
 
-// MessageSnapshotWriterIOStopped proves an accepted meta Start invocation returned.
+// MessageSnapshotWriterIOStopped reports that the writer meta released its I/O reservation.
 type MessageSnapshotWriterIOStopped struct{ Alias gen.Alias }
 
 // ---------------------------------------------------------------------------
@@ -91,8 +95,16 @@ func (m *snapshotWriterMeta) Init(process gen.MetaProcess) error {
 	m.runCtx, m.cancelRun = context.WithCancel(context.Background())
 	m.jobs = make(chan MessageWriteSnapshot, 1)
 	m.labels.Set(m, metricWriteQueue, 0)
-	if err := m.SendWithPriority(m.supervisor, MessageSnapshotWriterIOStarted{Alias: m.ID()}, gen.MessagePriorityHigh); err != nil {
+	m.completion = runtime.NewIOBarrier()
+	if !m.completion.Acquire() {
 		m.cancelRun()
+		m.barrier.Release()
+		return fmt.Errorf("snapshot writer meta: reserve completion proof")
+	}
+	m.completion.Seal()
+	if err := m.SendWithPriority(m.supervisor, MessageSnapshotWriterIOStarted{Alias: m.ID(), completion: m.completion}, gen.MessagePriorityHigh); err != nil {
+		m.cancelRun()
+		m.completion.Release()
 		m.barrier.Release()
 		return fmt.Errorf("snapshot writer meta: register I/O: %w", err)
 	}
@@ -105,6 +117,7 @@ func (m *snapshotWriterMeta) Start() (runErr error) {
 	defer func() {
 		_ = m.SendWithPriority(m.supervisor, MessageSnapshotWriterIOStopped{Alias: m.ID()}, gen.MessagePriorityHigh)
 	}()
+	defer m.completion.Release()
 	defer m.barrier.Release()
 	defer func() {
 		if runErr == nil {
