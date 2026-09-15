@@ -70,7 +70,7 @@ type supervisor[T plugin.Artifact] struct {
 // ---------------------------------------------------------------------------
 
 type MessageActorStatusChanged struct {
-	Epoch  uint64
+	epoch  uint64
 	status actorStatus
 }
 
@@ -176,10 +176,10 @@ func (s *supervisor[T]) HandleMessage(from gen.PID, message any) error {
 		}
 		return s.advanceShutdown()
 	case MessageActorStatusChanged:
-		if s.actor.pid != from || m.Epoch <= s.actor.lastStatusEpoch {
+		if s.actor.pid != from || m.epoch <= s.actor.lastStatusEpoch {
 			return nil
 		}
-		s.actor.lastStatusEpoch = m.Epoch
+		s.actor.lastStatusEpoch = m.epoch
 		previous := s.actor.status.Lifecycle
 		s.actor.status = m.status
 		if previous != m.status.Lifecycle {

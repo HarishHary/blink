@@ -820,7 +820,7 @@ func (a *actor[T]) reconcileStatus() {
 
 // propagateStatus sends the supplied snapshot without reconciling state or publishing gauges.
 func (a *actor[T]) propagateStatus(next actorStatus) {
-	_ = a.SendWithPriority(a.Parent(), MessageActorStatusChanged{Epoch: a.lastStatusEpoch, status: next}, gen.MessagePriorityHigh)
+	_ = a.SendWithPriority(a.Parent(), MessageActorStatusChanged{epoch: a.lastStatusEpoch, status: next}, gen.MessagePriorityHigh)
 }
 
 // publishGauges publishes current values even when the controller status is unchanged.
