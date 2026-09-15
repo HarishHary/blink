@@ -76,8 +76,8 @@ Radar, `RADAR_HOST:RADAR_PORT`, default `0.0.0.0:9090`, carried for every servic
 
 | Endpoint        | Current behavior                                                                                                                                                              |
 | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/health/live`  | Always HTTP 200: no radar readiness signal is registered, and radar reads a signal-less node as healthy.                                                                      |
-| `/health/ready` | Always HTTP 200, for the same reason.                                                                                                                                         |
+| `/health/live`  | HTTP 200 while Radar is serving; subtree signals affect readiness only. |
+| `/health/ready` | HTTP 503 if any registered subtree readiness signal is down or expires (90 s without a heartbeat). |
 | `/metrics`      | `blink_plugin_*` ([plugin runtime](../internals/plugin-runtime.md#telemetry)) and `blink_snapshot_*` ([snapshot runtime](../internals/snapshot-runtime.md#telemetry)) series. |
 
 ### Readiness and admission
