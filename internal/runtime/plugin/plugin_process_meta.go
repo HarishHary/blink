@@ -157,13 +157,13 @@ func (m *pluginProcessMeta[T]) Init(process gen.MetaProcess) error {
 func (m *pluginProcessMeta[T]) Start() error {
 	instance, client, rpc, err := m.launchPlugin(m.runCtx)
 	if err != nil {
-		_ = m.Send(m.Parent(), MessagePluginMetaStartResult{alias: m.ID(), err: err})
+		_ = m.SendWithPriority(m.Parent(), MessagePluginMetaStartResult{alias: m.ID(), err: err}, gen.MessagePriorityHigh)
 		return fmt.Errorf("launch plugin process: %w", err)
 	}
 
 	m.session.Store(&pluginMetaSession[T]{instance: instance, client: client, rpc: rpc})
 
-	if err := m.Send(m.Parent(), MessagePluginMetaStartResult{alias: m.ID()}); err != nil {
+	if err := m.SendWithPriority(m.Parent(), MessagePluginMetaStartResult{alias: m.ID()}, gen.MessagePriorityHigh); err != nil {
 		m.close()
 	}
 
@@ -204,10 +204,10 @@ func (m *pluginProcessMeta[T]) HandleMessage(from gen.PID, message any) error {
 		ctx, cancel := context.WithTimeout(context.Background(), pluginMetaPingTimeout)
 		_, err := session.rpc.Ping(ctx, &emptypb.Empty{})
 		cancel()
-		_ = m.Send(m.Parent(), MessagePluginMetaPingResult{
+		_ = m.SendWithPriority(m.Parent(), MessagePluginMetaPingResult{
 			alias: m.ID(),
 			err:   err,
-		})
+		}, gen.MessagePriorityHigh)
 		if err != nil {
 			m.close()
 		}
@@ -259,9 +259,10 @@ func (m *pluginProcessMeta[T]) invoke(msg pluginMetaInvoke[T]) {
 
 // answerInvocation reports the outcome before acting on a fatal one, since closing first would race
 // this message against the DOWN and the owner would report a generic recycle.
+// Match DOWN's high priority so it cannot overtake a result already queued for the owner.
 func (m *pluginProcessMeta[T]) answerInvocation(msg pluginMetaInvoke[T], result pluginMetaInvokeResult) {
 	result.alias, result.callID, result.generation = m.ID(), msg.callID, msg.generation
-	_ = m.Send(m.Parent(), result)
+	_ = m.SendWithPriority(m.Parent(), result, gen.MessagePriorityHigh)
 	if result.recycle {
 		m.close()
 	}

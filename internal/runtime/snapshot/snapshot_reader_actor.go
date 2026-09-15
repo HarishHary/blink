@@ -170,7 +170,7 @@ func (a *readerActor) Terminate(error) {
 		a.retry.CancelScheduled(false)
 	}
 	if a.subscribed {
-		_ = a.SendProcessID(a.opts.Endpoint, UnsubscribeRequest{ExecutorID: a.opts.ExecutorID})
+		_ = a.SendWithPriority(a.opts.Endpoint, UnsubscribeRequest{ExecutorID: a.opts.ExecutorID}, gen.MessagePriorityHigh)
 	}
 	a.controllerPID = gen.PID{}
 	a.subscribed = false
@@ -254,7 +254,7 @@ func (a *readerActor) scheduleSubscribeRetry() error {
 	}
 	a.retry.Token++
 	token := a.retry.Token
-	cancel, err := a.SendAfter(a.PID(), MessageSubscribeRetry{token: token}, delay)
+	cancel, err := a.SendWithPriorityAfter(a.PID(), MessageSubscribeRetry{token: token}, gen.MessagePriorityHigh, delay)
 	if err != nil {
 		return fmt.Errorf("schedule snapshot reader retry: %w", err)
 	}
@@ -277,7 +277,7 @@ func (a *readerActor) reconcileStatus() {
 		return
 	}
 	a.lastStatus = next
-	_ = a.Send(a.Parent(), MessageReaderActorStatusChanged{status: next})
+	_ = a.SendWithPriority(a.Parent(), MessageReaderActorStatusChanged{status: next}, gen.MessagePriorityHigh)
 }
 
 // status derives the reader's current publishable status, shared by reconcileStatus (to the

@@ -244,7 +244,7 @@ func (m *deploymentManager[T]) Init(...any) error {
 		m.Log().Warning("reserved plugin processes exceed the process budget: reserved=%d budget=%d route=%s", reserved, limit, m.route)
 	}
 	if m.draining {
-		_, _ = m.SendAfter(m.PID(), MessageDeploymentManagerDrainDeadline{}, m.options.DrainTimeout)
+		_, _ = m.SendWithPriorityAfter(m.PID(), MessageDeploymentManagerDrainDeadline{}, gen.MessagePriorityHigh, m.options.DrainTimeout)
 		m.reconcile()
 		return nil
 	}
@@ -419,7 +419,7 @@ func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 			m.draining = true
 			m.cancelPluginProcessRestarts(false)
 			m.cancelCircuitCooldown()
-			_, _ = m.SendAfter(m.PID(), MessageDeploymentManagerDrainDeadline{}, m.options.DrainTimeout)
+			_, _ = m.SendWithPriorityAfter(m.PID(), MessageDeploymentManagerDrainDeadline{}, gen.MessagePriorityHigh, m.options.DrainTimeout)
 		}
 		m.reconcile()
 
@@ -525,7 +525,7 @@ func (m *deploymentManager[T]) dispatchInvocation() {
 		}
 		entry.phase, entry.process = deploymentManagerDispatching, pid
 		entry.dispatchToken++
-		cancel, err := m.SendAfter(m.PID(), MessageDeploymentManagerDispatchDeadline{callID: callID, token: entry.dispatchToken}, m.options.DispatchTimeout)
+		cancel, err := m.SendWithPriorityAfter(m.PID(), MessageDeploymentManagerDispatchDeadline{callID: callID, token: entry.dispatchToken}, gen.MessagePriorityHigh, m.options.DispatchTimeout)
 		if err != nil {
 			m.removeCall(callID, runtime.ErrPluginUnavailable)
 			continue
@@ -692,7 +692,7 @@ func (m *deploymentManager[T]) scheduleScaleReconcile() {
 		m.reconcileStop()
 	}
 	m.reconcileToken++
-	cancel, err := m.SendAfter(m.PID(), MessageDeploymentManagerReconcile{token: m.reconcileToken}, delay)
+	cancel, err := m.SendWithPriorityAfter(m.PID(), MessageDeploymentManagerReconcile{token: m.reconcileToken}, gen.MessagePriorityHigh, delay)
 	if err == nil {
 		m.reconcileStop = cancel
 	}
@@ -753,7 +753,7 @@ func (m *deploymentManager[T]) removeCall(callID uint64, err error) {
 			process.assigned--
 		}
 		if process.retiring && process.assigned == 0 {
-			if err := m.Send(entry.process, MessageStop{}); err != nil {
+			if err := m.SendWithPriority(entry.process, MessageStop{}, gen.MessagePriorityHigh); err != nil {
 				_ = m.Node().SendExit(entry.process, gen.TerminateReasonShutdown)
 			}
 		}
@@ -843,7 +843,7 @@ func (m *deploymentManager[T]) retireSlot(slot int, replace bool, reason error) 
 	// MessageStop lets a process holding nothing finish on its own terms, and a send that fails means it
 	// cannot be asked, so the signal it cannot refuse is the fallback.
 	if process.assigned == 0 {
-		if err := m.Send(process.pid, MessageStop{}); err != nil {
+		if err := m.SendWithPriority(process.pid, MessageStop{}, gen.MessagePriorityHigh); err != nil {
 			m.Log().Warning("retiring plugin process slot via forced exit: slot=%d route=%s sendErr=%v", slot, m.route, err)
 			_ = m.Node().SendExit(process.pid, gen.TerminateReasonShutdown)
 		}
@@ -917,7 +917,7 @@ func (m *deploymentManager[T]) schedulePluginProcessRestart(slot int) {
 	}
 	process.restart.Token++
 	m.Log().Info("plugin process restart scheduled: slot=%d route=%s delay=%s token=%d", slot, m.route, delay, process.restart.Token)
-	cancel, err := m.SendAfter(m.PID(), MessageDeploymentManagerRestart{slot: slot, token: process.restart.Token}, delay)
+	cancel, err := m.SendWithPriorityAfter(m.PID(), MessageDeploymentManagerRestart{slot: slot, token: process.restart.Token}, gen.MessagePriorityHigh, delay)
 	if err != nil {
 		m.Log().Error("plugin process restart schedule failed: slot=%d route=%s err=%v", slot, m.route, err)
 		m.openCircuit(fmt.Errorf("schedule plugin process restart: %w", err))
@@ -1001,7 +1001,7 @@ func (m *deploymentManager[T]) openCircuit(err error) {
 	// Nothing else clears the circuit, so the cooldown gives the deployment fresh slots with fresh budgets
 	// and a genuinely broken one just re-opens it.
 	m.cancelCircuitCooldown()
-	if cancel, sendErr := m.SendAfter(m.PID(), MessageDeploymentManagerCircuitCooldown{token: m.circuitToken}, m.options.CircuitCooldown); sendErr == nil {
+	if cancel, sendErr := m.SendWithPriorityAfter(m.PID(), MessageDeploymentManagerCircuitCooldown{token: m.circuitToken}, gen.MessagePriorityHigh, m.options.CircuitCooldown); sendErr == nil {
 		m.circuitStop = cancel
 	}
 	m.reconcileStatus()

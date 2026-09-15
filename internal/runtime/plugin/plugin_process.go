@@ -224,13 +224,13 @@ func (p *pluginProcess[T]) HandleMessage(from gen.PID, message any) error {
 			return nil
 		}
 		p.pluginMeta.pingPending = true
-		_, err := p.SendAfter(p.PID(), MessagePluginMetaHealthTimeout{alias: msg.alias, token: msg.token}, pluginMetaPingTimeout)
+		_, err := p.SendWithPriorityAfter(p.PID(), MessagePluginMetaHealthTimeout{alias: msg.alias, token: msg.token}, gen.MessagePriorityHigh, pluginMetaPingTimeout)
 		if err != nil {
 			p.pluginMeta.pingPending = false
 			p.retirePluginMeta(msg.alias, fmt.Errorf("schedule plugin process ping timeout: %w", err), true)
 			return nil
 		}
-		if err := p.Send(msg.alias, MessagePluginMetaPing{}); err != nil {
+		if err := p.SendWithPriority(msg.alias, MessagePluginMetaPing{}, gen.MessagePriorityHigh); err != nil {
 			p.retirePluginMeta(msg.alias, fmt.Errorf("send plugin process ping: %w", err), true)
 		}
 
@@ -334,7 +334,7 @@ func (p *pluginProcess[T]) invoke(manager gen.PID, call MessageInvokePlugin[T]) 
 		context:    ctx,
 		cancel:     cancel,
 	}
-	timeout, err := p.SendAfter(p.PID(), MessagePluginMetaInvokeTimeout{callID: call.CallID}, p.invokeBackstop(ctx))
+	timeout, err := p.SendWithPriorityAfter(p.PID(), MessagePluginMetaInvokeTimeout{callID: call.CallID}, gen.MessagePriorityHigh, p.invokeBackstop(ctx))
 	if err != nil {
 		cancel()
 		p.retirePluginMeta(alias, fmt.Errorf("schedule plugin process invocation timeout: %w", err), false)
@@ -493,7 +493,7 @@ func (p *pluginProcess[T]) schedulePluginMetaRestart(health bool) error {
 	restart.Token++
 	token := restart.Token
 	p.Log().Info("scheduling plugin meta restart: health=%v delay=%s token=%d", health, delay, token)
-	cancel, err := p.SendAfter(p.PID(), MessagePluginMetaRestart{token: token, health: health}, delay)
+	cancel, err := p.SendWithPriorityAfter(p.PID(), MessagePluginMetaRestart{token: token, health: health}, gen.MessagePriorityHigh, delay)
 	if err != nil {
 		p.Log().Error("schedule plugin meta restart failed: health=%v err=%v", health, err)
 		p.failPluginMeta(fmt.Errorf("schedule plugin process restart: %w", err))
@@ -546,7 +546,7 @@ func (p *pluginProcess[T]) scheduleHealthCheck(alias gen.Alias) {
 	delay := p.options.HealthInterval
 	p.pluginMeta.healthRestart.Token++
 	token := p.pluginMeta.healthRestart.Token
-	if _, err := p.SendAfter(p.PID(), MessagePluginMetaHealthTick{alias: alias, token: token}, delay); err != nil {
+	if _, err := p.SendWithPriorityAfter(p.PID(), MessagePluginMetaHealthTick{alias: alias, token: token}, gen.MessagePriorityHigh, delay); err != nil {
 		p.retirePluginMeta(alias, fmt.Errorf("schedule plugin process health check: %w", err), true)
 	}
 }

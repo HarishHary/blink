@@ -188,7 +188,7 @@ func (a *catalogActor[T]) HandleMessage(from gen.PID, message any) error {
 	case MessageInvocationCompleted:
 		if routerPID, ok := a.inFlightCalls[m.CallID]; ok && from == routerPID {
 			delete(a.inFlightCalls, m.CallID)
-			_ = a.Send(a.Parent(), m)
+			_ = a.SendWithPriority(a.Parent(), m, gen.MessagePriorityHigh)
 		}
 
 	case MessageDrain:
@@ -360,7 +360,7 @@ func (a *catalogActor[T]) liveRouterCount() int {
 
 // finishUntrackedCall reports an unavailable invocation that was never routed.
 func (a *catalogActor[T]) finishUntrackedCall(call MessageInvokePlugin[T], err error) {
-	_ = a.Send(a.Parent(), MessageInvocationCompleted{CallID: call.CallID, Err: err})
+	_ = a.SendWithPriority(a.Parent(), MessageInvocationCompleted{CallID: call.CallID, Err: err}, gen.MessagePriorityHigh)
 }
 
 // finishTrackedCall removes and reports a completed invocation.
@@ -369,7 +369,7 @@ func (a *catalogActor[T]) finishTrackedCall(callID uint64, err error) {
 		return
 	}
 	delete(a.inFlightCalls, callID)
-	_ = a.Send(a.Parent(), MessageInvocationCompleted{CallID: callID, Err: err})
+	_ = a.SendWithPriority(a.Parent(), MessageInvocationCompleted{CallID: callID, Err: err}, gen.MessagePriorityHigh)
 }
 
 // reportDrained announces catalog drain completion to the parent actor.
@@ -379,7 +379,7 @@ func (a *catalogActor[T]) reportDrained() {
 	}
 	a.drainReported = true
 	a.reconcileStatus()
-	_ = a.Send(a.Parent(), MessageCatalogDrained{pid: a.PID()})
+	_ = a.SendWithPriority(a.Parent(), MessageCatalogDrained{pid: a.PID()}, gen.MessagePriorityHigh)
 }
 
 // ---------------------------------------------------------------------------
@@ -520,9 +520,10 @@ func (a *catalogActor[T]) scheduleRouterRestart(id string) error {
 	}
 	state.Token++
 	token := state.Token
-	cancel, err := a.SendAfter(
+	cancel, err := a.SendWithPriorityAfter(
 		a.PID(),
 		MessageRouterRestart{pluginID: id, desiredRevision: a.desiredRevision, token: token},
+		gen.MessagePriorityHigh,
 		delay,
 	)
 	if err != nil {
@@ -641,11 +642,11 @@ func (a *catalogActor[T]) reconcileStatus() {
 	if !a.activated {
 		return
 	}
-	_ = a.Send(a.Parent(), MessageCatalogStatusChanged{
+	_ = a.SendWithPriority(a.Parent(), MessageCatalogStatusChanged{
 		pid:    a.PID(),
 		epoch:  a.statusEpoch,
 		status: next.clone(),
-	})
+	}, gen.MessagePriorityHigh)
 }
 
 // HandleInspect exposes aggregate router health plus the desired-vs-actual router count and call depth

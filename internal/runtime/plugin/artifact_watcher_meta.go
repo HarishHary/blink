@@ -253,7 +253,7 @@ func (m *artifactWatcherMeta) notifyOnDirectoryChange(state *artifactWatcherRunS
 		state.fingerprint = fingerprint
 	}
 
-	if err := m.Send(m.Parent(), MessageArtifactDirectoryChanged{source: m.ID()}); err != nil {
+	if err := m.SendWithPriority(m.Parent(), MessageArtifactDirectoryChanged{source: m.ID()}, gen.MessagePriorityHigh); err != nil {
 		return fmt.Errorf("%w: notify directory change: %w", runtime.ErrArtifactWatch, err)
 	}
 	return nil
@@ -290,11 +290,11 @@ func (m *artifactWatcherMeta) publishWatchState(state *artifactWatcherRunState) 
 		return nil
 	}
 
-	if err := m.Send(m.Parent(), MessageArtifactWatcherStateChanged{
+	if err := m.SendWithPriority(m.Parent(), MessageArtifactWatcherStateChanged{
 		source:            m.ID(),
 		directoryReadable: state.directoryReadable,
 		watchingDirectory: state.watchingDirectory,
-	}); err != nil {
+	}, gen.MessagePriorityHigh); err != nil {
 		return fmt.Errorf("%w: publish watcher state: %w", runtime.ErrArtifactWatch, err)
 	}
 

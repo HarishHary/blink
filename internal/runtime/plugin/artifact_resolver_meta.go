@@ -89,12 +89,12 @@ func (m *artifactResolverMeta) Start() error {
 			return nil
 		case request := <-m.jobs:
 			desired, deferred := m.buildDesiredRoutes(request.snapshot)
-			if err := m.Send(m.Parent(), MessageArtifactResolutionResult{
+			if err := m.SendWithPriority(m.Parent(), MessageArtifactResolutionResult{
 				source:             m.ID(),
 				snapshotGeneration: request.snapshot.Generation,
 				desired:            desired,
 				deferred:           deferred,
-			}); err != nil {
+			}, gen.MessagePriorityHigh); err != nil {
 				return fmt.Errorf("%w: send result: %w", runtime.ErrArtifactResolve, err)
 			}
 		}

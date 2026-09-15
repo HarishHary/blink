@@ -120,7 +120,7 @@ func (s *Service[T]) gracefulStop(app *Application[T], name gen.Atom) error {
 	if err != nil {
 		return errors.Join(fmt.Errorf("lookup supervisor %s: %w", app.SupervisorName(), err), s.forceStop(name))
 	}
-	if err := s.node.Send(pid, plugin.MessageStop{}); err != nil {
+	if err := s.node.SendWithPriority(pid, plugin.MessageStop{}, gen.MessagePriorityHigh); err != nil {
 		return errors.Join(fmt.Errorf("stop supervisor %s: %w", app.SupervisorName(), err), s.forceStop(name))
 	}
 

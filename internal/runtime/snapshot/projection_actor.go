@@ -205,7 +205,7 @@ func (a *projectionActor[T]) HandleMessage(from gen.PID, message any) error {
 		}
 		a.labels.Count(a, metricCommits, telemetry.Result(err))
 		a.reconcileStatus()
-		return a.Send(a.Parent(), MessageProjectionCommitResult{Generation: m.Generation, ProjectionPID: m.ProjectionPID, Err: err})
+		return a.SendWithPriority(a.Parent(), MessageProjectionCommitResult{Generation: m.Generation, ProjectionPID: m.ProjectionPID, Err: err}, gen.MessagePriorityHigh)
 	case gen.MessageDownEvent:
 		if m.Event == a.snapshotEvent || m.Event == a.statusEvent {
 			return fmt.Errorf("snapshot projection event terminated: %w", m.Reason)
@@ -426,7 +426,7 @@ func (a *projectionActor[T]) reconcileStatus() {
 		return
 	}
 	a.lastStatus = next
-	_ = a.Send(a.Parent(), MessageProjectionActorStatusChanged{Status: next})
+	_ = a.SendWithPriority(a.Parent(), MessageProjectionActorStatusChanged{Status: next}, gen.MessagePriorityHigh)
 }
 
 // HandleInspect exposes lifecycle and availability plus the generation at each stage.

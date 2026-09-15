@@ -256,6 +256,7 @@ func (s *supervisor[P, M]) HandleCall(from gen.PID, ref gen.Ref, request any) (a
 		s.cancelProjectionDeadline()
 		s.refreshStatus()
 		if s.catalog.pid != (gen.PID{}) {
+			// Keep the drain behind invocations already forwarded to the catalog.
 			_ = s.Send(s.catalog.pid, MessageDrain{})
 		}
 		return nil, nil
@@ -558,7 +559,7 @@ func (s *supervisor[P, M]) promotePendingDesiredState() error {
 	s.pendingDesiredState = MessageApplyCatalogDesiredState{}
 	s.labels.Count(s, metricPromotions)
 	if s.catalog.pid != (gen.PID{}) {
-		if err := s.Send(s.catalog.pid, s.desiredState); err != nil {
+		if err := s.SendWithPriority(s.catalog.pid, s.desiredState, gen.MessagePriorityHigh); err != nil {
 			_ = s.Node().SendExit(
 				s.catalog.pid,
 				fmt.Errorf("apply desired state to catalog: %w", err),
@@ -608,10 +609,10 @@ func (s *supervisor[P, M]) completeDesiredStateTransition() {
 	if !s.desiredStateTransitionReadyToCommit() {
 		return
 	}
-	if err := s.Send(s.reconciler.pid, MessageDesiredStateFreshness{
+	if err := s.SendWithPriority(s.reconciler.pid, MessageDesiredStateFreshness{
 		snapshotGeneration: s.transitionGeneration,
 		desiredRevision:    s.desiredState.desiredRevision,
-	}); err == nil {
+	}, gen.MessagePriorityHigh); err == nil {
 		s.transition = SupervisorTransitionAwaitingFreshness
 	}
 }
@@ -730,7 +731,7 @@ func (s *supervisor[P, M]) startReconcilerActor(pid gen.PID) error {
 	s.refreshStatus()
 
 	revisionBase := max(s.pendingDesiredState.desiredRevision, s.desiredState.desiredRevision)
-	if err := s.Send(pid, MessageReconcilerActorActivate{revisionBase: revisionBase}); err != nil {
+	if err := s.SendWithPriority(pid, MessageReconcilerActorActivate{revisionBase: revisionBase}, gen.MessagePriorityHigh); err != nil {
 		_ = s.Node().SendExit(
 			pid,
 			fmt.Errorf("activate desired-state reconciler: %w", err),
@@ -747,12 +748,12 @@ func (s *supervisor[P, M]) startCatalogActor(pid gen.PID) error {
 	state.status = newCatalogStatus(state.status.lastError)
 	s.refreshStatus()
 
-	if err := s.Send(pid, MessageCatalogActivate{}); err != nil {
+	if err := s.SendWithPriority(pid, MessageCatalogActivate{}, gen.MessagePriorityHigh); err != nil {
 		_ = s.Node().SendExit(pid, fmt.Errorf("activate catalog: %w", err))
 		return nil
 	}
 	if s.desiredState.desiredRevision != 0 {
-		if err := s.Send(pid, s.desiredState); err != nil {
+		if err := s.SendWithPriority(pid, s.desiredState, gen.MessagePriorityHigh); err != nil {
 			_ = s.Node().SendExit(pid, fmt.Errorf("replay desired state to catalog: %w", err))
 			return nil
 		}
@@ -908,10 +909,10 @@ func (s *supervisor[P, M]) requestProjectionCommit() error {
 		s.projection.PendingGeneration = s.projection.CommittedGeneration
 		s.projection.PendingPID = s.projection.Pid
 	}
-	if err := s.Send(s.snapshot.Pid, snapshot.MessageProjectionCommit{
+	if err := s.SendWithPriority(s.snapshot.Pid, snapshot.MessageProjectionCommit{
 		Generation:    s.projection.PendingGeneration,
 		ProjectionPID: s.projection.PendingPID,
-	}); err != nil {
+	}, gen.MessagePriorityHigh); err != nil {
 		return s.scheduleProjectionCommitRetry()
 	}
 	if err := s.scheduleProjectionDeadline(); err != nil {
@@ -936,7 +937,7 @@ func (s *supervisor[P, M]) scheduleProjectionCommitRetry() error {
 	}
 	s.projection.Retry.Token++
 	token := s.projection.Retry.Token
-	cancel, err := s.SendAfter(s.PID(), MessageProjectionCommitRetry{token: token}, delay)
+	cancel, err := s.SendWithPriorityAfter(s.PID(), MessageProjectionCommitRetry{token: token}, gen.MessagePriorityHigh, delay)
 	if err != nil {
 		return fmt.Errorf("schedule projection commit retry: %w", err)
 	}
@@ -958,11 +959,11 @@ func (s *supervisor[P, M]) scheduleProjectionDeadline() error {
 	s.cancelProjectionDeadline()
 	s.projection.DeadlineToken++
 	token := s.projection.DeadlineToken
-	cancel, err := s.SendAfter(s.PID(), MessageProjectionCommitDeadline{
+	cancel, err := s.SendWithPriorityAfter(s.PID(), MessageProjectionCommitDeadline{
 		token:         token,
 		generation:    s.projection.PendingGeneration,
 		projectionPID: s.projection.PendingPID,
-	}, delay)
+	}, gen.MessagePriorityHigh, delay)
 	if err == nil {
 		s.projection.DeadlineCancel = cancel
 	}

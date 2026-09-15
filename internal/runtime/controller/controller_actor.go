@@ -768,7 +768,7 @@ func (a *actor[T]) scheduleScannerRestart() error {
 	}
 	a.scanner.restart.Token++
 	token := a.scanner.restart.Token
-	cancel, err := a.SendAfter(a.PID(), MessageArtifactScannerMetaRestart{token: token}, delay)
+	cancel, err := a.SendWithPriorityAfter(a.PID(), MessageArtifactScannerMetaRestart{token: token}, gen.MessagePriorityHigh, delay)
 	if err != nil {
 		return fmt.Errorf("schedule artifact scanner restart: %w", err)
 	}
@@ -791,7 +791,7 @@ func (a *actor[T]) scheduleWriterRestart() error {
 	}
 	a.writer.restart.Token++
 	token := a.writer.restart.Token
-	cancel, err := a.SendAfter(a.PID(), MessageSnapshotWriterMetaRestart{token: token}, delay)
+	cancel, err := a.SendWithPriorityAfter(a.PID(), MessageSnapshotWriterMetaRestart{token: token}, gen.MessagePriorityHigh, delay)
 	if err != nil {
 		return fmt.Errorf("schedule snapshot writer restart: %w", err)
 	}
@@ -815,7 +815,7 @@ func (a *actor[T]) reconcileStatus() {
 	}
 	a.lastStatus = next
 	a.actorGauges().publish(a.labels, a)
-	_ = a.Send(a.Parent(), MessageActorStatusChanged{status: next})
+	_ = a.SendWithPriority(a.Parent(), MessageActorStatusChanged{status: next}, gen.MessagePriorityHigh)
 }
 
 // actorGauges collects the current gauge values; the drift-check tick republishes them so a

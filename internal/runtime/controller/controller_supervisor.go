@@ -186,7 +186,7 @@ func (s *supervisor[T]) HandleMessage(from gen.PID, message any) error {
 		delete(s.writerFences, m.Alias)
 		s.Log().Debug("snapshot writer I/O fence released: name=%s child=%s alias=%s active=%d", s.Name(), from, m.Alias, len(s.writerFences))
 		if s.actor.pid == from {
-			if err := s.Send(from, m); err != nil && !stalePIDSendFailure(err) {
+			if err := s.SendWithPriority(from, m, gen.MessagePriorityHigh); err != nil && !stalePIDSendFailure(err) {
 				s.Log().Error("snapshot writer I/O completion forwarding failed: name=%s child=%s alias=%s error=%v", s.Name(), from, m.Alias, err)
 				//argus:allow A2012 forwarding failure is fatal because losing this completion blocks writer replacement and drain
 				return fmt.Errorf("forward snapshot writer I/O completion to %s: %w", from, err)
@@ -289,7 +289,7 @@ func (s *supervisor[T]) reconcileActor() error {
 		}
 		return nil
 	}
-	err := s.Send(s.actor.pid, MessageActorActivate{})
+	err := s.SendWithPriority(s.actor.pid, MessageActorActivate{}, gen.MessagePriorityHigh)
 	if err != nil && !stalePIDSendFailure(err) {
 		s.Log().Error("controller activation failed: name=%s child=%s error=%v", s.Name(), s.actor.pid, err)
 		return fmt.Errorf("activate controller %s: %w", s.actor.pid, err)
@@ -307,7 +307,7 @@ func (s *supervisor[T]) sendDrain() error {
 	if s.actor.pid == (gen.PID{}) {
 		return nil
 	}
-	err := s.Send(s.actor.pid, plugin.MessageDrain{})
+	err := s.SendWithPriority(s.actor.pid, plugin.MessageDrain{}, gen.MessagePriorityHigh)
 	if err != nil && !stalePIDSendFailure(err) {
 		s.Log().Error("controller drain request failed: name=%s child=%s error=%v", s.Name(), s.actor.pid, err)
 		return fmt.Errorf("drain controller %s: %w", s.actor.pid, err)
@@ -323,7 +323,7 @@ func (s *supervisor[T]) sendStop() error {
 	if s.actor.pid == (gen.PID{}) {
 		return nil
 	}
-	err := s.Send(s.actor.pid, plugin.MessageStop{})
+	err := s.SendWithPriority(s.actor.pid, plugin.MessageStop{}, gen.MessagePriorityHigh)
 	if err != nil && !stalePIDSendFailure(err) {
 		s.Log().Error("controller stop request failed: name=%s child=%s error=%v", s.Name(), s.actor.pid, err)
 		return fmt.Errorf("stop controller %s: %w", s.actor.pid, err)

@@ -204,7 +204,7 @@ func (s *Supervisor[T]) HandleChildStart(name gen.Atom, pid gen.PID) error {
 		s.projectionActor.commitGeneration = 0
 		s.projectionActor.status = newProjectionActorStatus()
 		// Stale child-start callbacks may race a replacement and fail to send.
-		_ = s.Send(pid, MessageProjectionActorActivate{})
+		_ = s.SendWithPriority(pid, MessageProjectionActorActivate{}, gen.MessagePriorityHigh)
 		return nil
 	case ReaderActorName(s.opts.Namespace):
 		if s.readerActor.pid != (gen.PID{}) {
@@ -217,7 +217,7 @@ func (s *Supervisor[T]) HandleChildStart(name gen.Atom, pid gen.PID) error {
 			s.readerActor.status = status
 			s.publishStatus()
 		}
-		return s.Send(pid, MessageReaderActorActivate{})
+		return s.SendWithPriority(pid, MessageReaderActorActivate{}, gen.MessagePriorityHigh)
 	default:
 		return nil
 	}
@@ -234,13 +234,13 @@ func (s *Supervisor[T]) HandleChildTerminate(_ gen.Atom, pid gen.PID, reason err
 		s.projectionActor.status.Availability = runtime.AvailabilityUnavailable
 		s.projectionActor.status.PreparedGeneration = 0
 		if s.opts.ProjectionMode == ProjectionCommitExternal {
-			_ = s.Send(s.Parent(), MessageProjectionActorStatusChanged{Status: s.projectionActor.status, ProjectionPID: pid})
+			_ = s.SendWithPriority(s.Parent(), MessageProjectionActorStatusChanged{Status: s.projectionActor.status, ProjectionPID: pid}, gen.MessagePriorityHigh)
 		}
 		if generation := s.projectionActor.commitGeneration; generation != 0 {
 			s.projectionActor.commitGeneration = 0
-			_ = s.Send(s.Parent(), MessageProjectionCommitResult{
+			_ = s.SendWithPriority(s.Parent(), MessageProjectionCommitResult{
 				Generation: generation, ProjectionPID: pid, Err: ErrProjectionNotPrepared,
-			})
+			}, gen.MessagePriorityHigh)
 		}
 		return nil
 	case s.readerActor.pid:
@@ -311,7 +311,7 @@ func (s *Supervisor[T]) HandleMessage(from gen.PID, message any) error {
 			}
 			if s.opts.ProjectionMode == ProjectionCommitExternal {
 				message.ProjectionPID = s.projectionActor.pid
-				_ = s.Send(s.Parent(), message)
+				_ = s.SendWithPriority(s.Parent(), message, gen.MessagePriorityHigh)
 			}
 		}
 	case MessageProjectionCommit:
@@ -319,22 +319,22 @@ func (s *Supervisor[T]) HandleMessage(from gen.PID, message any) error {
 			return nil
 		}
 		if s.projectionActor.pid == (gen.PID{}) || message.ProjectionPID != s.projectionActor.pid {
-			_ = s.Send(s.Parent(), MessageProjectionCommitResult{
+			_ = s.SendWithPriority(s.Parent(), MessageProjectionCommitResult{
 				Generation:    message.Generation,
 				ProjectionPID: s.projectionActor.pid,
 				Err:           ErrProjectionNotPrepared,
-			})
+			}, gen.MessagePriorityHigh)
 			return nil
 		}
 		s.projectionActor.commitGeneration = message.Generation
-		if err := s.Send(s.projectionActor.pid, message); err != nil {
+		if err := s.SendWithPriority(s.projectionActor.pid, message, gen.MessagePriorityHigh); err != nil {
 			s.projectionActor.commitGeneration = 0
-			_ = s.Send(s.Parent(), MessageProjectionCommitResult{Generation: message.Generation, ProjectionPID: message.ProjectionPID, Err: err})
+			_ = s.SendWithPriority(s.Parent(), MessageProjectionCommitResult{Generation: message.Generation, ProjectionPID: message.ProjectionPID, Err: err}, gen.MessagePriorityHigh)
 		}
 	case MessageProjectionCommitResult:
 		if s.projectionActor.commitGeneration != 0 && from == s.projectionActor.pid && message.Generation == s.projectionActor.commitGeneration && message.ProjectionPID == s.projectionActor.pid {
 			s.projectionActor.commitGeneration = 0
-			_ = s.Send(s.Parent(), message)
+			_ = s.SendWithPriority(s.Parent(), message, gen.MessagePriorityHigh)
 		}
 	}
 	return nil
@@ -383,10 +383,11 @@ func ReaderActorStatusEventFor(node gen.Node, namespace string) gen.Event {
 }
 
 // reportExecutor sends this executor's current convergence report.
+// Both periodic and on-change reports are normal-priority bookkeeping, not commit acknowledgements.
 func (s *Supervisor[T]) reportExecutor(applied *ExecutorAppliedGeneration) {
 	s.labels.Count(s, metricExecutorReports)
 	//argus:allow A1001 fresh heartbeat and applied generation transfer exclusively to the controller
-	_ = s.SendProcessID(s.opts.ReaderActorOptions.Endpoint, MessageExecutorReport{
+	_ = s.Send(s.opts.ReaderActorOptions.Endpoint, MessageExecutorReport{
 		ExecutorID: s.opts.ReaderActorOptions.ExecutorID,
 		Heartbeat: &ExecutorHeartbeat{
 			CommittedGeneration: s.readerActor.status.Generation,

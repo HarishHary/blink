@@ -194,20 +194,9 @@ func (a *routerActor[T]) Terminate(error) {
 	}
 }
 
-// RouteMessage is the only normal-priority ingress path, timers included, so an expiry is consumed
-// here rather than forwarded to a route.
+// RouteMessage routes normal-priority plugin invocations.
 func (a *routerActor[T]) RouteMessage(_ gen.PID, message any) gen.Atom {
 	switch m := message.(type) {
-	case MessageInvocationTimedOut:
-		call := a.inFlightCalls[m.callID]
-		if call != nil && !call.accepted && call.ackToken == m.token {
-			a.labels.Count(a, metricAcceptanceTimeouts)
-			a.finishTrackedCall(m.callID, runtime.ErrPluginUnavailable)
-		}
-		return act.RouteDiscard
-	case MessageRetryRouteStep:
-		a.retryRouteStep(m)
-		return act.RouteDiscard
 	case MessageInvokePlugin[T]:
 		return a.routeInvocation(m)
 	default:
@@ -221,6 +210,16 @@ func (a *routerActor[T]) RouteCall(_ gen.PID, _ gen.Ref, _ any) gen.Atom { retur
 // HandleMessage receives every administration and route-lifecycle fact at High/Max priority.
 func (a *routerActor[T]) HandleMessage(from gen.PID, message any) error {
 	switch m := message.(type) {
+	case MessageInvocationTimedOut:
+		call := a.inFlightCalls[m.callID]
+		if call != nil && !call.accepted && call.ackToken == m.token {
+			a.labels.Count(a, metricAcceptanceTimeouts)
+			a.finishTrackedCall(m.callID, runtime.ErrPluginUnavailable)
+		}
+
+	case MessageRetryRouteStep:
+		a.retryRouteStep(m)
+
 	case MessageRouterActivate:
 		if m.generation <= a.generation {
 			return nil
@@ -446,7 +445,7 @@ func (a *routerActor[T]) routeInvocation(call MessageInvokePlugin[T]) gen.Atom {
 	if timeout <= 0 {
 		timeout = DefaultDeploymentManagerDispatchTimeout
 	}
-	cancel, err := a.SendAfter(a.PID(), MessageInvocationTimedOut{callID: call.CallID, token: tracked.ackToken}, timeout)
+	cancel, err := a.SendWithPriorityAfter(a.PID(), MessageInvocationTimedOut{callID: call.CallID, token: tracked.ackToken}, gen.MessagePriorityHigh, timeout)
 	if err != nil {
 		a.labels.Count(a, metricUnroutable)
 		_ = a.SendWithPriority(a.Parent(), MessageInvocationCompleted{CallID: call.CallID, Err: runtime.ErrPluginUnavailable}, gen.MessagePriorityHigh)
@@ -517,6 +516,7 @@ func (a *routerActor[T]) finishTrackedCall(callID uint64, err error) {
 
 // drainRoute advances one route toward teardown: quiesce its manager, then let it be removed.
 func (a *routerActor[T]) drainRoute(ref *deploymentRouteState) {
+	// The normal-priority drain must follow invocations already forwarded to this manager.
 	switch ref.phase {
 	case deploymentRoutePending:
 		if ref.restart != nil {
@@ -661,7 +661,7 @@ func (a *routerActor[T]) scheduleRouteStep(ref *deploymentRouteState) error {
 		return fmt.Errorf("deployment route step for %v: %w", ref.key, runtime.ErrBackoffStopped)
 	}
 	ref.restart.Token++
-	cancel, err := a.SendAfter(a.PID(), MessageRetryRouteStep{route: ref.name, token: ref.restart.Token}, delay)
+	cancel, err := a.SendWithPriorityAfter(a.PID(), MessageRetryRouteStep{route: ref.name, token: ref.restart.Token}, gen.MessagePriorityHigh, delay)
 	if err != nil {
 		return fmt.Errorf("schedule deployment route step: %w", err)
 	}

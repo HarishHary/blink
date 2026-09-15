@@ -178,10 +178,10 @@ func (a *reconcilerActor) HandleMessage(from gen.PID, message any) error {
 			a.watcher.status.availability != runtime.AvailabilityReady {
 			return nil
 		}
-		return a.Send(a.Parent(), MessageDesiredStateFreshness{
+		return a.SendWithPriority(a.Parent(), MessageDesiredStateFreshness{
 			snapshotGeneration: m.snapshotGeneration,
 			desiredRevision:    m.desiredRevision,
-		})
+		}, gen.MessagePriorityHigh)
 
 	case MessageArtifactWatcherStateChanged:
 		if from != a.PID() || m.source != a.watcher.alias || a.watcher.alias == (gen.Alias{}) {
@@ -248,13 +248,13 @@ func (a *reconcilerActor) HandleMessage(from gen.PID, message any) error {
 
 		a.labels.Count(a, metricResolutions, "proposed")
 		a.revision++
-		if err := a.Send(a.Parent(), MessageProposeDesiredState{
+		if err := a.SendWithPriority(a.Parent(), MessageProposeDesiredState{
 			desired: MessageApplyCatalogDesiredState{
 				desiredRevision:    a.revision,
 				snapshotGeneration: a.snapshot.Generation,
 				desired:            m.desired,
 			},
-		}); err != nil {
+		}, gen.MessagePriorityHigh); err != nil {
 			return fmt.Errorf("propose resolved desired state: %w", err)
 		}
 		a.proposed = m.desired
@@ -520,7 +520,7 @@ func (a *reconcilerActor) scheduleResolutionRetry() error {
 
 	a.resolutionRetry.Token++
 	token := a.resolutionRetry.Token
-	cancel, err := a.SendAfter(a.PID(), MessageResolutionRetry{token: token}, delay)
+	cancel, err := a.SendWithPriorityAfter(a.PID(), MessageResolutionRetry{token: token}, gen.MessagePriorityHigh, delay)
 	if err != nil {
 		return fmt.Errorf("schedule desired-state resolution retry: %w", err)
 	}
@@ -543,7 +543,7 @@ func (a *reconcilerActor) scheduleResolverRestart() error {
 
 	a.resolver.restart.Token++
 	token := a.resolver.restart.Token
-	cancel, err := a.SendAfter(a.PID(), MessageArtifactResolverMetaRestart{token: token}, delay)
+	cancel, err := a.SendWithPriorityAfter(a.PID(), MessageArtifactResolverMetaRestart{token: token}, gen.MessagePriorityHigh, delay)
 	if err != nil {
 		return fmt.Errorf("schedule artifact resolver restart: %w", err)
 	}
@@ -569,7 +569,7 @@ func (a *reconcilerActor) scheduleWatcherRestart() error {
 
 	a.watcher.restart.Token++
 	token := a.watcher.restart.Token
-	cancel, err := a.SendAfter(a.PID(), MessageArtifactWatcherMetaRestart{token: token}, delay)
+	cancel, err := a.SendWithPriorityAfter(a.PID(), MessageArtifactWatcherMetaRestart{token: token}, gen.MessagePriorityHigh, delay)
 	if err != nil {
 		return fmt.Errorf("schedule artifact watcher restart: %w", err)
 	}
@@ -622,7 +622,7 @@ func (a *reconcilerActor) reconcileStatus() {
 		return
 	}
 	a.lastStatus = next
-	_ = a.Send(a.Parent(), MessageReconcilerActorStatusChanged{status: next})
+	_ = a.SendWithPriority(a.Parent(), MessageReconcilerActorStatusChanged{status: next}, gen.MessagePriorityHigh)
 }
 
 // HandleInspect exposes lifecycle, both sub-workers' health, and the gates deciding a re-resolution.

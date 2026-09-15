@@ -231,13 +231,13 @@ func (m *artifactScannerMeta[T]) sendScan(watcher *fsnotify.Watcher) error {
 	}
 	entries = snapshot.CloneEntries(entries)
 	//argus:allow A1001 CloneEntries deep-copies entries and fresh IDs transfer; post-send only len reads
-	if sendErr := m.Send(m.Parent(), MessageArtifactScanResult{
+	if sendErr := m.SendWithPriority(m.Parent(), MessageArtifactScanResult{
 		source:     m.ID(),
 		complete:   complete,
 		entries:    entries,
 		presentIDs: ids,
 		err:        err,
-	}); sendErr != nil {
+	}, gen.MessagePriorityHigh); sendErr != nil {
 		err := fmt.Errorf("artifact scanner meta: send scan: %w", sendErr)
 		m.Log().Error("artifact scan result delivery failed: alias=%s error=%v", m.ID(), err)
 		return err

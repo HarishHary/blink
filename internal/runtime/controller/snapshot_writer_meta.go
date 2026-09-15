@@ -91,7 +91,7 @@ func (m *snapshotWriterMeta) Init(process gen.MetaProcess) error {
 	m.runCtx, m.cancelRun = context.WithCancel(context.Background())
 	m.jobs = make(chan MessageWriteSnapshot, 1)
 	m.labels.Set(m, metricWriteQueue, 0)
-	if err := m.Send(m.supervisor, MessageSnapshotWriterIOStarted{Alias: m.ID()}); err != nil {
+	if err := m.SendWithPriority(m.supervisor, MessageSnapshotWriterIOStarted{Alias: m.ID()}, gen.MessagePriorityHigh); err != nil {
 		m.cancelRun()
 		m.barrier.Release()
 		return fmt.Errorf("snapshot writer meta: register I/O: %w", err)
@@ -102,7 +102,9 @@ func (m *snapshotWriterMeta) Init(process gen.MetaProcess) error {
 
 // Start loads persisted state and writes queued updates.
 func (m *snapshotWriterMeta) Start() (runErr error) {
-	defer func() { _ = m.Send(m.supervisor, MessageSnapshotWriterIOStopped{Alias: m.ID()}) }()
+	defer func() {
+		_ = m.SendWithPriority(m.supervisor, MessageSnapshotWriterIOStopped{Alias: m.ID()}, gen.MessagePriorityHigh)
+	}()
 	defer m.barrier.Release()
 	defer func() {
 		if runErr == nil {
@@ -139,13 +141,13 @@ func (m *snapshotWriterMeta) Start() (runErr error) {
 		m.Log().Info("snapshot writer loaded: alias=%s records=%d generation=%d entries=%d", m.ID(), len(records), generation, savedEntries)
 	}
 	//argus:allow A1001 record and snapshot clones are exclusively transferred to the receiver
-	if sendErr := m.Send(m.Parent(), MessageSnapshotLoadResult{
+	if sendErr := m.SendWithPriority(m.Parent(), MessageSnapshotLoadResult{
 		source:     m.ID(),
 		records:    records,
 		generation: generation,
 		snapshot:   saved.Clone(),
 		err:        err,
-	}); sendErr != nil {
+	}, gen.MessagePriorityHigh); sendErr != nil {
 		return fmt.Errorf("%w: send result: %w", runtime.ErrSnapshotLoad, sendErr)
 	}
 
@@ -193,7 +195,7 @@ func (m *snapshotWriterMeta) Start() (runErr error) {
 			} else {
 				m.Log().Debug("snapshot write skipped unchanged commit: alias=%s generation=%d records=%d", m.ID(), job.next.Generation, len(job.records))
 			}
-			if sendErr := m.Send(m.Parent(), MessageSnapshotWriteResult{source: m.ID()}); sendErr != nil {
+			if sendErr := m.SendWithPriority(m.Parent(), MessageSnapshotWriteResult{source: m.ID()}, gen.MessagePriorityHigh); sendErr != nil {
 				return fmt.Errorf("%w: send result: %w", runtime.ErrSnapshotWrite, sendErr)
 			}
 		}
