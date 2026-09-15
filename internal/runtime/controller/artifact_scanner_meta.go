@@ -214,12 +214,9 @@ func (m *artifactScannerMeta[T]) sendScan(watcher *fsnotify.Watcher) error {
 	}
 	started := time.Now()
 	entries, ids, complete, err := m.scan()
-	parsedCount, digestCount := len(m.parsed), len(m.digests)
-	m.parsedCount.Store(int64(parsedCount))
-	m.digestCount.Store(int64(digestCount))
-	m.labels.Observe(m, metricArtifactScanTime, time.Since(started).Seconds())
-	m.labels.Set(m, metricArtifactSpecs, float64(parsedCount))
-	m.labels.Set(m, metricArtifactBinaries, float64(digestCount))
+	elapsed := time.Since(started).Seconds()
+	m.reconcileStatus()
+	m.labels.Observe(m, metricArtifactScanTime, elapsed)
 	if attachErr != nil {
 		m.labels.Count(m, metricArtifactScanFailures, "watch")
 	}
@@ -375,6 +372,20 @@ func isYAML(name string) bool {
 // ---------------------------------------------------------------------------
 // Status
 // ---------------------------------------------------------------------------
+
+// reconcileStatus snapshots completed work on the Start goroutine, then refreshes its gauges.
+// The owner actor derives health from scan results; inspection reads only these atomic counts.
+func (m *artifactScannerMeta[T]) reconcileStatus() {
+	m.parsedCount.Store(int64(len(m.parsed)))
+	m.digestCount.Store(int64(len(m.digests)))
+	m.publishGauges()
+}
+
+// publishGauges publishes the last completed scan without reading mutable file-index maps.
+func (m *artifactScannerMeta[T]) publishGauges() {
+	m.labels.Set(m, metricArtifactSpecs, float64(m.parsedCount.Load()))
+	m.labels.Set(m, metricArtifactBinaries, float64(m.digestCount.Load()))
+}
 
 // HandleInspect exposes the last completed scan's file-index sizes.
 func (m *artifactScannerMeta[T]) HandleInspect(gen.PID, ...string) map[string]string {

@@ -94,7 +94,7 @@ func (m *snapshotWriterMeta) Init(process gen.MetaProcess) error {
 	m.MetaProcess = process
 	m.runCtx, m.cancelRun = context.WithCancel(context.Background())
 	m.jobs = make(chan MessageWriteSnapshot, 1)
-	m.labels.Set(m, metricWriteQueue, 0)
+	m.reconcileStatus()
 	m.completion = runtime.NewIOBarrier()
 	if !m.completion.Acquire() {
 		m.cancelRun()
@@ -170,7 +170,7 @@ func (m *snapshotWriterMeta) Start() (runErr error) {
 			return nil
 		//argus:allow A1005 jobs is initialized only by Init; channel send/receive/len/cap are concurrency-safe
 		case job := <-m.jobs:
-			m.labels.Set(m, metricWriteQueue, float64(len(m.jobs)))
+			m.reconcileStatus()
 			m.Log().Debug("snapshot write started: alias=%s generation=%d changed=%t upserts=%d tombstones=%d", m.ID(), job.next.Generation, job.changed, len(job.upserts), len(job.tombstones))
 			retry := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(
 				backoff.WithInitialInterval(m.retryMin),
@@ -221,7 +221,7 @@ func (m *snapshotWriterMeta) HandleMessage(_ gen.PID, message any) error {
 	case MessageWriteSnapshot:
 		select {
 		case m.jobs <- message:
-			m.labels.Set(m, metricWriteQueue, float64(len(m.jobs)))
+			m.reconcileStatus()
 			m.Log().Debug("snapshot write queued: alias=%s generation=%d", m.ID(), message.next.Generation)
 			return nil
 		default:
@@ -270,6 +270,17 @@ func (m *snapshotWriterMeta) write(job MessageWriteSnapshot) error {
 // ---------------------------------------------------------------------------
 // Status
 // ---------------------------------------------------------------------------
+
+// reconcileStatus refreshes owned gauges; the parent actor derives health from operation results.
+// Queue mutations do not produce a second status stream.
+func (m *snapshotWriterMeta) reconcileStatus() {
+	m.publishGauges()
+}
+
+// publishGauges reads the concurrency-safe queue depth without changing state or sending status.
+func (m *snapshotWriterMeta) publishGauges() {
+	m.labels.Set(m, metricWriteQueue, float64(len(m.jobs)))
+}
 
 // HandleInspect exposes the writer's job queue depth; richer health
 func (m *snapshotWriterMeta) HandleInspect(gen.PID, ...string) map[string]string {

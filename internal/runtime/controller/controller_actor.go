@@ -213,7 +213,6 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 		if _, err := a.SendAfter(a.PID(), MessageExecutorDriftCheck{}, executorDriftCheckInterval); err != nil {
 			return fmt.Errorf("schedule executor drift check: %w", err)
 		}
-		a.actorGauges().publish(a.labels, a)
 		a.Log().Info("controller activated: name=%s scanner_alias=%s writer_alias=%s", a.Name(), a.scanner.alias, a.writer.alias)
 		return nil
 	case snapshot.MessageExecutorReport:
@@ -221,7 +220,6 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 		return nil
 	case MessageExecutorDriftCheck:
 		a.checkExecutorDrift()
-		a.actorGauges().publish(a.labels, a)
 		if a.lifecycle == ActorRunning {
 			if _, err := a.SendAfter(a.PID(), MessageExecutorDriftCheck{}, executorDriftCheckInterval); err != nil {
 				return fmt.Errorf("reschedule executor drift check: %w", err)
@@ -807,19 +805,28 @@ func (a *actor[T]) scheduleWriterRestart() error {
 // Status
 // ---------------------------------------------------------------------------
 
-// reconcileStatus recomputes and, on change, sends the current status to the supervisor.
+// reconcileStatus refreshes gauges on every reconciliation and propagates status only on change.
 func (a *actor[T]) reconcileStatus() {
+	a.publishGauges()
 	next := a.status()
 	if next == a.lastStatus {
 		return
 	}
 	a.lastStatus = next
-	a.actorGauges().publish(a.labels, a)
+	a.propagateStatus(next)
+}
+
+// propagateStatus sends the supplied snapshot without reconciling state or publishing gauges.
+func (a *actor[T]) propagateStatus(next actorStatus) {
 	_ = a.SendWithPriority(a.Parent(), MessageActorStatusChanged{status: next}, gen.MessagePriorityHigh)
 }
 
-// actorGauges collects the current gauge values; the drift-check tick republishes them so a
-// namespace whose status is steady still reports fresh series.
+// publishGauges publishes current values even when the controller status is unchanged.
+func (a *actor[T]) publishGauges() {
+	a.actorGauges().publish(a.labels, a)
+}
+
+// actorGauges derives the current gauge values without publishing them.
 func (a *actor[T]) actorGauges() actorGauges {
 	drifting := 0
 	for _, status := range a.executors {

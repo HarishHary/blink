@@ -30,6 +30,12 @@ const (
 	SupervisorStopping SupervisorLifecycle = "stopping"
 )
 
+// supervisorStatus is the controller subtree's current lifecycle and availability.
+type supervisorStatus struct {
+	Lifecycle    SupervisorLifecycle
+	Availability runtime.Availability
+}
+
 type actorState struct {
 	pid            gen.PID
 	status         actorStatus
@@ -100,6 +106,7 @@ func (s *supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 	}
 	s.lifecycle = SupervisorStarting
 	s.writerFences = make(map[gen.Alias]writerIOFence)
+	s.reconcileStatus()
 	// A message, not an inline call: the signal must exist before any probe reads it, but radar must
 	// not delay the spec.
 	if err := s.SendWithPriority(s.PID(), MessageRadarTick{}, gen.MessagePriorityHigh); err != nil {
@@ -128,7 +135,7 @@ func (s *supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 
 // HandleMessage coordinates controller lifecycle and writer I/O fences.
 func (s *supervisor[T]) HandleMessage(from gen.PID, message any) error {
-	defer s.publishState()
+	defer s.reconcileStatus()
 	switch m := message.(type) {
 	case MessageRadarTick:
 		if from != s.PID() {
@@ -202,7 +209,7 @@ func (s *supervisor[T]) HandleChildStart(name gen.Atom, pid gen.PID) error {
 	if name != ActorName(s.namespace) || s.actor.pid != (gen.PID{}) {
 		return nil
 	}
-	defer s.publishState()
+	defer s.reconcileStatus()
 	s.labels.Count(s, metricChildStarts)
 	s.actor = actorState{
 		pid: pid,
@@ -220,7 +227,7 @@ func (s *supervisor[T]) HandleChildTerminate(name gen.Atom, pid gen.PID, reason 
 	if name != ActorName(s.namespace) || s.actor.pid != pid {
 		return nil
 	}
-	defer s.publishState()
+	defer s.reconcileStatus()
 	s.labels.Count(s, metricChildTerminations, telemetry.TerminationReason(reason))
 	s.actor.pid = gen.PID{}
 	if reason == gen.TerminateReasonNormal || reason == gen.TerminateReasonShutdown {
@@ -373,18 +380,41 @@ func stalePIDSendFailure(err error) bool {
 // Status
 // ---------------------------------------------------------------------------
 
-// publishState reports supervisor lifecycle and writer fences, then moves the readiness signal.
-func (s *supervisor[T]) publishState() {
-	s.labels.Set(s, metricSupervisorLifecycle, supervisorLifecycleValue(s.lifecycle))
-	s.labels.Set(s, metricWriterFences, float64(len(s.writerFences)))
-	s.signal.SetReady(s, s.readyToServe())
+// status derives the controller subtree's current status without changing state.
+func (s *supervisor[T]) status() supervisorStatus {
+	return supervisorStatus{Lifecycle: s.lifecycle, Availability: s.availability()}
 }
 
-// readyToServe reports whether this namespace can answer snapshot requests: running, live child, ready child.
-func (s *supervisor[T]) readyToServe() bool {
-	return s.lifecycle == SupervisorRunning &&
-		s.actor.pid != (gen.PID{}) &&
-		s.actor.status.Availability == runtime.AvailabilityReady
+// availability follows the live child's health only while the supervisor is running.
+func (s *supervisor[T]) availability() runtime.Availability {
+	if s.lifecycle != SupervisorRunning || s.actor.pid == (gen.PID{}) {
+		return runtime.AvailabilityUnavailable
+	}
+	switch s.actor.status.Availability {
+	case runtime.AvailabilityReady, runtime.AvailabilityDegraded:
+		return s.actor.status.Availability
+	default:
+		return runtime.AvailabilityUnavailable
+	}
+}
+
+// reconcileStatus refreshes gauges, then propagates readiness through the deduplicating signal.
+func (s *supervisor[T]) reconcileStatus() {
+	next := s.status()
+	s.publishGauges()
+	s.propagateStatus(next)
+}
+
+// propagateStatus updates the readiness signal only when its state changes.
+func (s *supervisor[T]) propagateStatus(next supervisorStatus) {
+	s.signal.SetReady(s, next.Availability == runtime.AvailabilityReady)
+}
+
+// publishGauges publishes current values without changing lifecycle or readiness.
+func (s *supervisor[T]) publishGauges() {
+	status := s.status()
+	s.labels.Set(s, metricSupervisorLifecycle, supervisorLifecycleValue(status.Lifecycle))
+	s.labels.Set(s, metricWriterFences, float64(len(s.writerFences)))
 }
 
 // reconcileRadar registers whatever radar is still missing, then heartbeats the readiness signal.
@@ -405,7 +435,7 @@ func (s *supervisor[T]) reconcileRadar() {
 		s.watchRadar(telemetry.HealthProcess)
 	}
 	s.radarLogged = false
-	s.signal.SetReady(s, s.readyToServe())
+	s.propagateStatus(s.status())
 	s.signal.Heartbeat(s)
 }
 
@@ -427,8 +457,10 @@ func (s *supervisor[T]) radarUnavailableOnce(err error) {
 
 // HandleInspect exposes supervisor lifecycle, the child's identity and status, and pending writer fences.
 func (s *supervisor[T]) HandleInspect(gen.PID, ...string) map[string]string {
+	status := s.status()
 	return map[string]string{
-		"supervisor:lifecycle":          string(s.lifecycle),
+		"supervisor:lifecycle":          string(status.Lifecycle),
+		"supervisor:availability":       string(status.Availability),
 		"supervisor:child":              fmt.Sprintf("%s", s.actor.pid),
 		"supervisor:child_lifecycle":    string(s.actor.status.Lifecycle),
 		"supervisor:child_availability": string(s.actor.status.Availability),
