@@ -38,16 +38,17 @@ type ReaderActorStatus struct {
 // Ergo remote delivery is push-based, so there is no read loop or meta to supervise.
 type readerActor struct {
 	act.Actor
-	opts           ReaderActorOptions
-	snapshotEvent  eventPublication
-	activated      bool
-	controllerPID  gen.PID
-	subscribed     bool
-	lastGeneration int64
-	retry          *runtime.ScheduledBackoff
-	lastStatus     ReaderActorStatus
-	lastError      error
-	labels         telemetry.Labels
+	opts            ReaderActorOptions
+	snapshotEvent   eventPublication
+	activated       bool
+	controllerPID   gen.PID
+	subscribed      bool
+	lastGeneration  int64
+	retry           *runtime.ScheduledBackoff
+	lastStatus      ReaderActorStatus
+	lastStatusEpoch uint64
+	lastError       error
+	labels          telemetry.Labels
 }
 
 // ---------------------------------------------------------------------------
@@ -57,7 +58,10 @@ type readerActor struct {
 // MessageReaderActorActivate tells the reader child its parent recorded its PID and it may subscribe.
 type MessageReaderActorActivate struct{}
 
-type MessageReaderActorStatusChanged struct{ status ReaderActorStatus }
+type MessageReaderActorStatusChanged struct {
+	Epoch  uint64
+	Status ReaderActorStatus
+}
 
 // SubscribeRequest asks for the committed snapshot and registers the caller for pushed SnapshotUpdate
 // commits; its PID arrives as HandleCall's "from" rather than a field here.
@@ -273,16 +277,17 @@ func (a *readerActor) reconcileStatus() {
 		return
 	}
 	next := a.status()
-	if next == a.lastStatus {
+	if sameReaderActorStatus(a.lastStatus, next) {
 		return
 	}
+	a.lastStatusEpoch++
 	a.lastStatus = next
 	a.propagateStatus(next)
 }
 
 // propagateStatus sends the supplied snapshot without reconciling state or publishing gauges.
 func (a *readerActor) propagateStatus(next ReaderActorStatus) {
-	_ = a.SendWithPriority(a.Parent(), MessageReaderActorStatusChanged{status: next}, gen.MessagePriorityHigh)
+	_ = a.SendWithPriority(a.Parent(), MessageReaderActorStatusChanged{Epoch: a.lastStatusEpoch, Status: next}, gen.MessagePriorityHigh)
 }
 
 // status derives the reader's current publishable status, shared by reconcileStatus (to the
@@ -314,4 +319,9 @@ func (a *readerActor) HandleInspect(gen.PID, ...string) map[string]string {
 		"reader:executor_id":  a.opts.ExecutorID,
 		"reader:last_error":   status.LastError,
 	}
+}
+
+// sameReaderActorStatus compares the status fields that trigger publication.
+func sameReaderActorStatus(left, right ReaderActorStatus) bool {
+	return left == right
 }

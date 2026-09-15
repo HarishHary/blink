@@ -90,18 +90,20 @@ type Rollout struct {
 
 type projectionActor[T any] struct {
 	act.Actor
-	snapshotEvent      gen.Event
-	statusEvent        gen.Event
-	loader             Loader[T]
-	mode               ProjectionCommitMode
-	readerActorReady   bool
-	readerGeneration   int64
-	observedGeneration int64
-	committed          *parsedProjection[T]
-	prepared           *parsedProjection[T]
-	lastError          error
-	lastStatus         ProjectionActorStatus
-	labels             telemetry.Labels
+	snapshotEvent         gen.Event
+	statusEvent           gen.Event
+	loader                Loader[T]
+	mode                  ProjectionCommitMode
+	readerActorReady      bool
+	lastReaderStatusEpoch uint64
+	readerGeneration      int64
+	observedGeneration    int64
+	committed             *parsedProjection[T]
+	prepared              *parsedProjection[T]
+	lastError             error
+	lastStatus            ProjectionActorStatus
+	lastStatusEpoch       uint64
+	labels                telemetry.Labels
 }
 
 type parsedProjection[T any] struct {
@@ -126,6 +128,7 @@ type ProjectionStateRequest struct{}
 // MessageProjectionActorStatusChanged reports projection status, with a zero PID from the child and
 // stamped by Supervisor.
 type MessageProjectionActorStatusChanged struct {
+	Epoch         uint64
 	Status        ProjectionActorStatus
 	ProjectionPID gen.PID
 }
@@ -296,10 +299,11 @@ func (a *projectionActor[T]) applyEvent(event gen.MessageEvent) error {
 			a.committed = &parsed
 		}
 	case a.statusEvent:
-		status, ok := event.Message.(ReaderActorStatus)
-		if ok {
-			a.readerActorReady = status.Availability == runtime.AvailabilityReady
-			a.readerGeneration = status.Generation
+		message, ok := event.Message.(MessageReaderActorStatusChanged)
+		if ok && message.Epoch > a.lastReaderStatusEpoch {
+			a.lastReaderStatusEpoch = message.Epoch
+			a.readerActorReady = message.Status.Availability == runtime.AvailabilityReady
+			a.readerGeneration = message.Status.Generation
 		}
 	}
 	return nil
@@ -422,16 +426,17 @@ func (a *projectionActor[T]) state() ProjectionState[T] {
 // reconcileStatus recomputes and, on change, sends the current projection status to the supervisor
 func (a *projectionActor[T]) reconcileStatus() {
 	next := a.status()
-	if next == a.lastStatus {
+	if sameProjectionActorStatus(a.lastStatus, next) {
 		return
 	}
+	a.lastStatusEpoch++
 	a.lastStatus = next
 	a.propagateStatus(next)
 }
 
 // propagateStatus sends the supplied snapshot without reconciling state or publishing gauges.
 func (a *projectionActor[T]) propagateStatus(next ProjectionActorStatus) {
-	_ = a.SendWithPriority(a.Parent(), MessageProjectionActorStatusChanged{Status: next}, gen.MessagePriorityHigh)
+	_ = a.SendWithPriority(a.Parent(), MessageProjectionActorStatusChanged{Epoch: a.lastStatusEpoch, Status: next}, gen.MessagePriorityHigh)
 }
 
 // HandleInspect exposes lifecycle and availability plus the generation at each stage.
@@ -446,4 +451,9 @@ func (a *projectionActor[T]) HandleInspect(gen.PID, ...string) map[string]string
 		"projection:reader_ready":         fmt.Sprintf("%t", a.readerActorReady),
 		"projection:reader_generation":    fmt.Sprintf("%d", a.readerGeneration),
 	}
+}
+
+// sameProjectionActorStatus compares the status fields that trigger publication.
+func sameProjectionActorStatus(left, right ProjectionActorStatus) bool {
+	return left == right
 }
