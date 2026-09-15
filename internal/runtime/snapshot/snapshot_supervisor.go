@@ -67,6 +67,7 @@ type Supervisor[T any] struct {
 	projectionActor      projectionActorState
 	snapshotEvent        eventPublication
 	statusEvent          eventPublication
+	lastStatus           ReaderActorStatus
 	reportCancel         gen.CancelFunc
 	labels               telemetry.Labels
 	collectorsRegistered bool
@@ -118,8 +119,7 @@ func NewSupervisor[T any](opts SupervisorOptions, loader Loader[T]) *Supervisor[
 
 // Init validates options and configures the supervised reader and projection actors.
 func (s *Supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
-	defer s.publishStatus()
-	defer s.publishState()
+	defer s.reconcileStatus()
 
 	// Namespace is required: every process name in this subtree, and every metric label, comes from it.
 	if s.opts.Namespace == "" || s.opts.ReaderActorOptions.Endpoint.Name == "" || s.opts.ReaderActorOptions.ExecutorID == "" {
@@ -193,7 +193,7 @@ func (s *Supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 
 // HandleChildStart tracks and activates a started reader or projection child.
 func (s *Supervisor[T]) HandleChildStart(name gen.Atom, pid gen.PID) error {
-	defer s.publishState()
+	defer s.reconcileStatus()
 	switch name {
 	case ProjectionActorName(s.opts.Namespace):
 		if s.projectionActor.pid != (gen.PID{}) {
@@ -212,11 +212,7 @@ func (s *Supervisor[T]) HandleChildStart(name gen.Atom, pid gen.PID) error {
 		}
 		s.labels.Count(s, metricChildStarts, "reader")
 		s.readerActor.pid = pid
-		status := newReaderActorStatus()
-		if s.readerActor.status != status {
-			s.readerActor.status = status
-			s.publishStatus()
-		}
+		s.readerActor.status = newReaderActorStatus()
 		return s.SendWithPriority(pid, MessageReaderActorActivate{}, gen.MessagePriorityHigh)
 	default:
 		return nil
@@ -225,7 +221,7 @@ func (s *Supervisor[T]) HandleChildStart(name gen.Atom, pid gen.PID) error {
 
 // HandleChildTerminate records a terminated child and reports external commit failures.
 func (s *Supervisor[T]) HandleChildTerminate(_ gen.Atom, pid gen.PID, reason error) error {
-	defer s.publishState()
+	defer s.reconcileStatus()
 	switch pid {
 	case s.projectionActor.pid:
 		s.labels.Count(s, metricChildTerminations, "projection", telemetry.TerminationReason(reason))
@@ -233,9 +229,7 @@ func (s *Supervisor[T]) HandleChildTerminate(_ gen.Atom, pid gen.PID, reason err
 		s.projectionActor.status.Lifecycle = ProjectionActorRestarting
 		s.projectionActor.status.Availability = runtime.AvailabilityUnavailable
 		s.projectionActor.status.PreparedGeneration = 0
-		if s.opts.ProjectionMode == ProjectionCommitExternal {
-			_ = s.SendWithPriority(s.Parent(), MessageProjectionActorStatusChanged{Status: s.projectionActor.status, ProjectionPID: pid}, gen.MessagePriorityHigh)
-		}
+		s.propagateProjectionStatus(s.projectionActor.status, pid)
 		if generation := s.projectionActor.commitGeneration; generation != 0 {
 			s.projectionActor.commitGeneration = 0
 			_ = s.SendWithPriority(s.Parent(), MessageProjectionCommitResult{
@@ -253,8 +247,7 @@ func (s *Supervisor[T]) HandleChildTerminate(_ gen.Atom, pid gen.PID, reason err
 			status.LastError = reason.Error()
 		}
 		s.readerActor.status = status
-		s.publishStatus()
-		s.reportExecutor(nil)
+		s.propagateExecutorStatus(nil)
 		return nil
 	default:
 		return nil
@@ -263,13 +256,13 @@ func (s *Supervisor[T]) HandleChildTerminate(_ gen.Atom, pid gen.PID, reason err
 
 // HandleMessage routes child status and external projection commit messages.
 func (s *Supervisor[T]) HandleMessage(from gen.PID, message any) error {
-	defer s.publishState()
+	defer s.reconcileStatus()
 	switch message := message.(type) {
 	case MessageExecutorReportTick:
 		if from != s.PID() {
 			return nil
 		}
-		s.reportExecutor(nil)
+		s.propagateExecutorStatus(nil)
 		return s.scheduleExecutorReport()
 	case MessageRadarTick:
 		if from != s.PID() {
@@ -293,9 +286,8 @@ func (s *Supervisor[T]) HandleMessage(from gen.PID, message any) error {
 			if s.readerActor.status != message.status {
 				attached := s.readerActor.status.Availability != message.status.Availability
 				s.readerActor.status = message.status
-				s.publishStatus()
 				if attached {
-					s.reportExecutor(nil)
+					s.propagateExecutorStatus(nil)
 				}
 			}
 		}
@@ -304,15 +296,12 @@ func (s *Supervisor[T]) HandleMessage(from gen.PID, message any) error {
 			applied := message.Status.CommittedGeneration > s.projectionActor.status.CommittedGeneration
 			s.projectionActor.status = message.Status
 			if applied {
-				s.reportExecutor(&ExecutorAppliedGeneration{
+				s.propagateExecutorStatus(&ExecutorAppliedGeneration{
 					Generation: message.Status.CommittedGeneration,
 					Admitted:   message.Status.Availability == runtime.AvailabilityReady,
 				})
 			}
-			if s.opts.ProjectionMode == ProjectionCommitExternal {
-				message.ProjectionPID = s.projectionActor.pid
-				_ = s.SendWithPriority(s.Parent(), message, gen.MessagePriorityHigh)
-			}
+			s.propagateProjectionStatus(message.Status, s.projectionActor.pid)
 		}
 	case MessageProjectionCommit:
 		if s.opts.ProjectionMode != ProjectionCommitExternal || from != s.Parent() {
@@ -347,8 +336,7 @@ func (s *Supervisor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, erro
 
 // Terminate marks children stopped and reports the shutdown reason.
 func (s *Supervisor[T]) Terminate(reason error) {
-	defer s.publishStatus()
-	defer s.publishState()
+	defer s.reconcileStatus()
 	s.lifecycle = SupervisorStopping
 	s.cancelExecutorReport()
 	s.projectionActor.status.Lifecycle = ProjectionActorStopped
@@ -380,23 +368,6 @@ func ArtifactsEventFor(node gen.Node, namespace string) gen.Event {
 // through, derived the same way.
 func ReaderActorStatusEventFor(node gen.Node, namespace string) gen.Event {
 	return gen.Event{Name: subtreeName(namespace, "reader-actor-status"), Node: node.Name()}
-}
-
-// reportExecutor sends this executor's current convergence report.
-// Both periodic and on-change reports are normal-priority bookkeeping, not commit acknowledgements.
-func (s *Supervisor[T]) reportExecutor(applied *ExecutorAppliedGeneration) {
-	s.labels.Count(s, metricExecutorReports)
-	//argus:allow A1001 fresh heartbeat and applied generation transfer exclusively to the controller
-	_ = s.Send(s.opts.ReaderActorOptions.Endpoint, MessageExecutorReport{
-		ExecutorID: s.opts.ReaderActorOptions.ExecutorID,
-		Heartbeat: &ExecutorHeartbeat{
-			CommittedGeneration: s.readerActor.status.Generation,
-			ReadyGeneration:     s.projectionActor.status.CommittedGeneration,
-			Availability:        string(s.executorAvailability()),
-		},
-		Applied:   applied,
-		LastError: s.readerActor.status.LastError,
-	})
 }
 
 // scheduleExecutorReport arms the next periodic report, replacing any already scheduled.
@@ -440,12 +411,22 @@ func (s *Supervisor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 	}
 }
 
-// publishState reports every gauge this subtree owns, from the one process holding both statuses.
-func (s *Supervisor[T]) publishState() {
+// reconcileStatus advances lifecycle, refreshes gauges, and propagates reader status only on change.
+func (s *Supervisor[T]) reconcileStatus() {
 	// Both children up promotes the subtree once, and a rest-for-one restart never demotes it.
 	if s.lifecycle == SupervisorStarting && s.readerActor.pid != (gen.PID{}) && s.projectionActor.pid != (gen.PID{}) {
 		s.lifecycle = SupervisorRunning
 	}
+	s.publishGauges()
+	if !s.statusEvent.registered() || s.readerActor.status == s.lastStatus {
+		return
+	}
+	s.lastStatus = s.readerActor.status
+	s.propagateStatus(s.lastStatus)
+}
+
+// publishGauges publishes current values without changing lifecycle or propagating status.
+func (s *Supervisor[T]) publishGauges() {
 	subtreeGauges{
 		lifecycle:              s.lifecycle,
 		readerAvailability:     s.readerActor.status.Availability,
@@ -472,17 +453,27 @@ func (s *Supervisor[T]) reconcileRadar() {
 	}
 	// Registered through the node: radar deletes a dead registrant's metrics.
 	if err := telemetry.Register(s.Node(), subtreeMetrics); err != nil {
-		if !s.radarLogged {
-			s.radarLogged = true
-			s.Log().Debug("radar telemetry unavailable: namespace=%q error=%v", s.opts.Namespace, err)
-		}
+		s.radarUnavailableOnce(err)
 		return
 	}
 	s.collectorsRegistered, s.radarLogged = true, false
-	// Monitored so a radar restart does not leave this subtree publishing into dropped collectors.
-	if err := s.MonitorProcessID(gen.ProcessID{Name: telemetry.MetricsProcess, Node: s.Node().Name()}); err != nil {
-		s.Log().Debug("radar monitor unavailable: namespace=%q error=%v", s.opts.Namespace, err)
+	s.watchRadar(telemetry.MetricsProcess)
+}
+
+// watchRadar monitors one radar process so a restart that drops these registrations announces itself.
+func (s *Supervisor[T]) watchRadar(name gen.Atom) {
+	if err := s.MonitorProcessID(gen.ProcessID{Name: name, Node: s.Node().Name()}); err != nil {
+		s.Log().Debug("radar monitor unavailable: namespace=%q process=%s error=%v", s.opts.Namespace, name, err)
 	}
+}
+
+// radarUnavailableOnce logs only the first failure of an outage.
+func (s *Supervisor[T]) radarUnavailableOnce(err error) {
+	if s.radarLogged {
+		return
+	}
+	s.radarLogged = true
+	s.Log().Debug("radar telemetry unavailable: namespace=%q error=%v", s.opts.Namespace, err)
 }
 
 // executorAvailability is the projection's health, capped at degraded while the reader is detached.
@@ -494,11 +485,34 @@ func (s *Supervisor[T]) executorAvailability() runtime.Availability {
 	return availability
 }
 
-// publishStatus publishes the reader actor's current status.
-func (s *Supervisor[T]) publishStatus() {
-	if s.statusEvent.registered() {
-		_ = s.SendEvent(s.statusEvent.name, s.statusEvent.token, s.readerActor.status)
+// propagateStatus forwards the supplied reader status through the registered event.
+func (s *Supervisor[T]) propagateStatus(next ReaderActorStatus) {
+	_ = s.SendEvent(s.statusEvent.name, s.statusEvent.token, next)
+}
+
+// propagateProjectionStatus immediately forwards the external commit protocol's status facts.
+// These retain the child PID fence and must not be deduplicated with the reader status stream.
+func (s *Supervisor[T]) propagateProjectionStatus(next ProjectionActorStatus, pid gen.PID) {
+	if s.opts.ProjectionMode == ProjectionCommitExternal {
+		_ = s.SendWithPriority(s.Parent(), MessageProjectionActorStatusChanged{Status: next, ProjectionPID: pid}, gen.MessagePriorityHigh)
 	}
+}
+
+// propagateExecutorStatus sends this executor's current convergence report.
+// Both periodic and on-change reports are normal-priority bookkeeping, not commit acknowledgements.
+func (s *Supervisor[T]) propagateExecutorStatus(applied *ExecutorAppliedGeneration) {
+	s.labels.Count(s, metricExecutorReports)
+	//argus:allow A1001 fresh heartbeat and applied generation transfer exclusively to the controller
+	_ = s.Send(s.opts.ReaderActorOptions.Endpoint, MessageExecutorReport{
+		ExecutorID: s.opts.ReaderActorOptions.ExecutorID,
+		Heartbeat: &ExecutorHeartbeat{
+			CommittedGeneration: s.readerActor.status.Generation,
+			ReadyGeneration:     s.projectionActor.status.CommittedGeneration,
+			Availability:        string(s.executorAvailability()),
+		},
+		Applied:   applied,
+		LastError: s.readerActor.status.LastError,
+	})
 }
 
 // newReaderActorStatus returns the initial unavailable reader status.

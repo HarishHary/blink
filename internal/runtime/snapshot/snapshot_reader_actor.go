@@ -277,6 +277,11 @@ func (a *readerActor) reconcileStatus() {
 		return
 	}
 	a.lastStatus = next
+	a.propagateStatus(next)
+}
+
+// propagateStatus sends the supplied snapshot without reconciling state or publishing gauges.
+func (a *readerActor) propagateStatus(next ReaderActorStatus) {
 	_ = a.SendWithPriority(a.Parent(), MessageReaderActorStatusChanged{status: next}, gen.MessagePriorityHigh)
 }
 

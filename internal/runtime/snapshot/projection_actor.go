@@ -229,7 +229,7 @@ func (a *projectionActor[T]) HandleEvent(event gen.MessageEvent) error {
 func (a *projectionActor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
 	switch request := request.(type) {
 	case ProjectionStateRequest:
-		return a.reportState(), nil
+		return a.state(), nil
 	default:
 		return fmt.Errorf("snapshot projection: unsupported call %T", request), nil
 	}
@@ -409,8 +409,8 @@ func (a *projectionActor[T]) status() ProjectionActorStatus {
 	return status
 }
 
-// reportState returns an independently owned projection view.
-func (a *projectionActor[T]) reportState() ProjectionState[T] {
+// state returns an independently owned projection view.
+func (a *projectionActor[T]) state() ProjectionState[T] {
 	state := ProjectionState[T]{ProjectionActorStatus: a.status()}
 	if a.committed == nil {
 		return state
@@ -426,6 +426,11 @@ func (a *projectionActor[T]) reconcileStatus() {
 		return
 	}
 	a.lastStatus = next
+	a.propagateStatus(next)
+}
+
+// propagateStatus sends the supplied snapshot without reconciling state or publishing gauges.
+func (a *projectionActor[T]) propagateStatus(next ProjectionActorStatus) {
 	_ = a.SendWithPriority(a.Parent(), MessageProjectionActorStatusChanged{Status: next}, gen.MessagePriorityHigh)
 }
 
