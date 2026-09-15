@@ -74,8 +74,8 @@ type artifactWatcherRunState struct {
 // MessageArtifactDirectoryChanged reports possible filesystem drift.
 type MessageArtifactDirectoryChanged struct{ source gen.Alias }
 
-// MessageArtifactWatcherStateChanged reports watcher readability and attachment state.
-type MessageArtifactWatcherStateChanged struct {
+// MessageArtifactWatcherStatusChanged reports watcher readability and attachment state.
+type MessageArtifactWatcherStatusChanged struct {
 	source            gen.Alias
 	directoryReadable bool
 	watchingDirectory bool
@@ -117,7 +117,7 @@ func (m *artifactWatcherMeta) Start() error {
 		m.Log().Warning("artifact watcher unavailable: directory=%q alias=%s error=%v", m.directory, m.ID(), err)
 	}
 
-	if err := m.publishWatchState(&state); err != nil {
+	if err := m.reconcileStatus(&state, nil); err != nil {
 		return err
 	}
 
@@ -161,7 +161,7 @@ func (m *artifactWatcherMeta) Start() error {
 			if filepath.Clean(event.Name) == filepath.Clean(m.directory) &&
 				event.Op&(fsnotify.Remove|fsnotify.Rename) != 0 {
 				state.watchingDirectory = false
-				if err := m.publishWatchError(&state, fmt.Errorf("%w: directory watch invalidated for %q: %s", runtime.ErrArtifactWatch, m.directory, event.Op)); err != nil {
+				if err := m.reconcileStatus(&state, fmt.Errorf("%w: directory watch invalidated for %q: %s", runtime.ErrArtifactWatch, m.directory, event.Op)); err != nil {
 					return err
 				}
 			}
@@ -230,7 +230,7 @@ func (m *artifactWatcherMeta) notifyOnDirectoryChange(state *artifactWatcherRunS
 		wasReadable := state.directoryReadable
 		state.directoryReadable = false
 		state.watchingDirectory = false
-		if err := m.publishWatchError(state, fmt.Errorf("%w: fingerprint directory %q: %w", runtime.ErrArtifactWatch, m.directory, err)); err != nil {
+		if err := m.reconcileStatus(state, fmt.Errorf("%w: fingerprint directory %q: %w", runtime.ErrArtifactWatch, m.directory, err)); err != nil {
 			return err
 		}
 		if !wasReadable {
@@ -241,10 +241,10 @@ func (m *artifactWatcherMeta) notifyOnDirectoryChange(state *artifactWatcherRunS
 		state.directoryReadable = true
 		if err := m.tryAttachWatch(state); err != nil {
 			state.watchingDirectory = false
-			if err := m.publishWatchError(state, err); err != nil {
+			if err := m.reconcileStatus(state, err); err != nil {
 				return err
 			}
-		} else if err := m.publishWatchState(state); err != nil {
+		} else if err := m.reconcileStatus(state, nil); err != nil {
 			return err
 		}
 		if wasReadable && fingerprint == state.fingerprint {
@@ -269,38 +269,6 @@ func (m *artifactWatcherMeta) tryAttachWatch(state *artifactWatcherRunState) err
 		return fmt.Errorf("%w: watch directory %q: %w", runtime.ErrArtifactWatch, m.directory, err)
 	}
 	state.watchingDirectory = true
-	return nil
-}
-
-// publishWatchError logs a watcher error when state changes and publishes the state.
-func (m *artifactWatcherMeta) publishWatchError(state *artifactWatcherRunState, err error) error {
-	if !state.statePublished ||
-		state.publishedReadable != state.directoryReadable ||
-		state.publishedWatching != state.watchingDirectory {
-		m.Log().Warning("artifact watcher unavailable: directory=%q alias=%s error=%v", m.directory, m.ID(), err)
-	}
-	return m.publishWatchState(state)
-}
-
-// publishWatchState publishes changed watcher readability and attachment state.
-func (m *artifactWatcherMeta) publishWatchState(state *artifactWatcherRunState) error {
-	if state.statePublished &&
-		state.publishedReadable == state.directoryReadable &&
-		state.publishedWatching == state.watchingDirectory {
-		return nil
-	}
-
-	if err := m.SendWithPriority(m.Parent(), MessageArtifactWatcherStateChanged{
-		source:            m.ID(),
-		directoryReadable: state.directoryReadable,
-		watchingDirectory: state.watchingDirectory,
-	}, gen.MessagePriorityHigh); err != nil {
-		return fmt.Errorf("%w: publish watcher state: %w", runtime.ErrArtifactWatch, err)
-	}
-
-	state.statePublished = true
-	state.publishedReadable = state.directoryReadable
-	state.publishedWatching = state.watchingDirectory
 	return nil
 }
 
@@ -336,4 +304,41 @@ func artifactDirectoryFingerprint(directory string) ([sha256.Size]byte, error) {
 	var fingerprint [sha256.Size]byte
 	copy(fingerprint[:], h.Sum(nil))
 	return fingerprint, nil
+}
+
+// ---------------------------------------------------------------------------
+// Status
+// ---------------------------------------------------------------------------
+
+// reconcileStatus propagates changed directory facts; the owner actor derives health and gauges.
+// The cache stays in Start's run state, never in fields shared with concurrent meta callbacks.
+func (m *artifactWatcherMeta) reconcileStatus(state *artifactWatcherRunState, watchErr error) error {
+	if state.statePublished &&
+		state.publishedReadable == state.directoryReadable &&
+		state.publishedWatching == state.watchingDirectory {
+		return nil
+	}
+	if watchErr != nil {
+		m.Log().Warning("artifact watcher unavailable: directory=%q alias=%s error=%v", m.directory, m.ID(), watchErr)
+	}
+	if err := m.propagateStatus(state); err != nil {
+		return err
+	}
+
+	state.statePublished = true
+	state.publishedReadable = state.directoryReadable
+	state.publishedWatching = state.watchingDirectory
+	return nil
+}
+
+// propagateStatus sends directory facts without changing the reconciliation cache.
+func (m *artifactWatcherMeta) propagateStatus(state *artifactWatcherRunState) error {
+	if err := m.SendWithPriority(m.Parent(), MessageArtifactWatcherStatusChanged{
+		source:            m.ID(),
+		directoryReadable: state.directoryReadable,
+		watchingDirectory: state.watchingDirectory,
+	}, gen.MessagePriorityHigh); err != nil {
+		return fmt.Errorf("%w: publish watcher state: %w", runtime.ErrArtifactWatch, err)
+	}
+	return nil
 }

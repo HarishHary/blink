@@ -849,6 +849,11 @@ func (a *routerActor[T]) reconcileStatus() {
 		return
 	}
 	a.statusEpoch, a.lastStatus = a.statusEpoch+1, next
+	a.propagateStatus(next)
+}
+
+// propagateStatus sends the supplied snapshot without reconciling state or publishing gauges.
+func (a *routerActor[T]) propagateStatus(next routerActorStatus) {
 	if a.generation != 0 {
 		_ = a.SendWithPriority(a.Parent(), MessageRouterStatusChanged{pluginID: a.pluginID, pid: a.PID(), generation: a.generation, epoch: a.statusEpoch, status: next.clone()}, gen.MessagePriorityHigh)
 	}

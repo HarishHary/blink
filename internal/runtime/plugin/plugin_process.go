@@ -49,6 +49,7 @@ type pluginProcess[T Artifact] struct {
 	options    PluginProcessOptions
 	deployment Deployment
 	pluginMeta pluginMetaState
+	lastStatus pluginProcessStatus
 	calls      map[uint64]*pluginProcessCall
 }
 
@@ -203,7 +204,7 @@ func (p *pluginProcess[T]) HandleMessage(from gen.PID, message any) error {
 			capacity:     p.deployment.CapacityPerProcess(),
 		}
 		p.scheduleHealthCheck(p.pluginMeta.alias)
-		p.reportStatus(PluginProcessRunning)
+		p.reconcileStatus()
 
 	case MessagePluginMetaRestart:
 		restart := p.pluginMeta.restart
@@ -431,7 +432,7 @@ func (p *pluginProcess[T]) refreshActivity() {
 		return
 	}
 	p.pluginMeta.status.activity = activity
-	p.reportStatus(PluginProcessRunning)
+	p.reconcileStatus()
 }
 
 // ---------------------------------------------------------------------------
@@ -450,7 +451,7 @@ func (p *pluginProcess[T]) startPluginMeta() error {
 		activity:     PluginMetaIdle,
 		capacity:     p.deployment.CapacityPerProcess(),
 	}
-	p.reportStatus(PluginProcessStarting)
+	p.reconcileStatus()
 	alias, err := p.SpawnMeta(&pluginProcessMeta[T]{
 		adapter:    p.adapter,
 		deployment: p.deployment,
@@ -520,7 +521,7 @@ func (p *pluginProcess[T]) failPluginMeta(err error) {
 		capacity:     p.deployment.CapacityPerProcess(),
 		lastError:    err,
 	}
-	p.reportStatus(PluginProcessFailed)
+	p.reconcileStatus()
 	_ = p.SendWithPriority(p.Parent(), MessagePluginProcessRestartExhausted{err: err}, gen.MessagePriorityHigh)
 }
 
@@ -575,18 +576,41 @@ func (p *pluginProcess[T]) reportUnavailable(err error) {
 		return
 	}
 	p.pluginMeta.status = status
-	p.reportStatus(PluginProcessRestarting)
+	p.reconcileStatus()
 }
 
-// reportStatus sends the current process status to its manager.
-func (p *pluginProcess[T]) reportStatus(lifecycle PluginProcessLifecycle) {
+// status derives process health from the meta status owned by this actor.
+func (p *pluginProcess[T]) status() pluginProcessStatus {
+	lifecycle := PluginProcessStarting
+	switch p.pluginMeta.status.lifecycle {
+	case PluginMetaRunning:
+		lifecycle = PluginProcessRunning
+	case PluginMetaRestarting:
+		lifecycle = PluginProcessRestarting
+	case PluginMetaFailed:
+		lifecycle = PluginProcessFailed
+	}
+	return pluginProcessStatus{
+		lifecycle: lifecycle, availability: p.pluginMeta.status.availability, meta: p.pluginMeta.status,
+	}
+}
+
+// reconcileStatus propagates changed health immediately; the runtime supervisor owns the gauges.
+// Failure status must precede invocation completion, which can reopen manager admission.
+func (p *pluginProcess[T]) reconcileStatus() {
+	next := p.status()
+	if samePluginProcessStatus(p.lastStatus, next) {
+		return
+	}
+	p.lastStatus = next
+	p.propagateStatus(next)
+}
+
+// propagateStatus sends the supplied snapshot without reconciling state or publishing gauges.
+func (p *pluginProcess[T]) propagateStatus(next pluginProcessStatus) {
 	_ = p.SendWithPriority(p.Parent(), MessagePluginProcessStatusChanged{
 		process: p.PID(),
-		status: pluginProcessStatus{
-			lifecycle:    lifecycle,
-			availability: p.pluginMeta.status.availability,
-			meta:         p.pluginMeta.status,
-		},
+		status:  next,
 	}, gen.MessagePriorityHigh)
 }
 

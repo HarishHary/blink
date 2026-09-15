@@ -183,7 +183,7 @@ func (a *reconcilerActor) HandleMessage(from gen.PID, message any) error {
 			desiredRevision:    m.desiredRevision,
 		}, gen.MessagePriorityHigh)
 
-	case MessageArtifactWatcherStateChanged:
+	case MessageArtifactWatcherStatusChanged:
 		if from != a.PID() || m.source != a.watcher.alias || a.watcher.alias == (gen.Alias{}) {
 			return nil
 		}
@@ -622,6 +622,11 @@ func (a *reconcilerActor) reconcileStatus() {
 		return
 	}
 	a.lastStatus = next
+	a.propagateStatus(next)
+}
+
+// propagateStatus sends the supplied snapshot without reconciling state or publishing gauges.
+func (a *reconcilerActor) propagateStatus(next reconcilerActorStatus) {
 	_ = a.SendWithPriority(a.Parent(), MessageReconcilerActorStatusChanged{status: next}, gen.MessagePriorityHigh)
 }
 

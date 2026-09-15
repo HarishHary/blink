@@ -455,7 +455,8 @@ func callTimeoutSeconds(ctx context.Context, fallback time.Duration) int {
 // Status
 // ---------------------------------------------------------------------------
 
-// Status returns a live snapshot owned by the runtime supervisor.
+// Status queries the supervisor's reconciled status without publishing gauges or propagating it.
+// Application lifecycle is synchronized separately; health and its metrics belong to the supervisor.
 func (a *Application[P, M]) Status(ctx context.Context) (SupervisorStatus, error) {
 	if err := ctx.Err(); err != nil {
 		return SupervisorStatus{}, err

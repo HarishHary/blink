@@ -1138,6 +1138,11 @@ func (m *deploymentManager[T]) reconcileStatus() {
 		return
 	}
 	m.statusEpoch, m.lastStatus = m.statusEpoch+1, next
+	m.propagateStatus(next)
+}
+
+// propagateStatus sends the supplied snapshot without reconciling state or publishing gauges.
+func (m *deploymentManager[T]) propagateStatus(next deploymentManagerStatus) {
 	_ = m.SendWithPriority(m.Parent(), MessageDeploymentManagerStatusChanged{
 		route: m.route, manager: m.PID(),
 		status: next,

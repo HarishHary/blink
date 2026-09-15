@@ -639,6 +639,11 @@ func (a *catalogActor[T]) reconcileStatus() {
 
 	a.statusEpoch++
 	a.lastStatus = next
+	a.propagateStatus(next)
+}
+
+// propagateStatus sends the supplied snapshot without reconciling state or publishing gauges.
+func (a *catalogActor[T]) propagateStatus(next catalogActorStatus) {
 	if !a.activated {
 		return
 	}
