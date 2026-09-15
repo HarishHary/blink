@@ -1017,12 +1017,12 @@ func (s *supervisor[P, M]) status() SupervisorStatus {
 func (s *supervisor[P, M]) reconcileStatus() {
 	s.liveStatus = s.status()
 	s.publishGauges()
-	s.propagateStatus(s.liveStatus)
+	s.propagateReadiness()
 }
 
-// propagateStatus updates Radar readiness; public status remains queryable rather than pushed.
-func (s *supervisor[P, M]) propagateStatus(next SupervisorStatus) {
-	s.signal.SetReady(s, next.Lifecycle == SupervisorRunning && next.Availability == runtime.AvailabilityReady)
+// propagateReadiness updates Radar from current subtree health without publishing status messages.
+func (s *supervisor[P, M]) propagateReadiness() {
+	s.signal.SetReady(s, s.lifecycle == SupervisorRunning && s.runtimeAvailability() == runtime.AvailabilityReady)
 }
 
 // publishGauges publishes current values without changing state or propagating status.
@@ -1086,7 +1086,7 @@ func (s *supervisor[P, M]) reconcileRadar() {
 		}
 	}
 	s.radarLogged = false
-	s.propagateStatus(s.status())
+	s.propagateReadiness()
 	s.signal.Heartbeat(s)
 }
 

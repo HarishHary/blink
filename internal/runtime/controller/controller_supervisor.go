@@ -399,14 +399,13 @@ func (s *supervisor[T]) availability() runtime.Availability {
 
 // reconcileStatus refreshes gauges, then propagates readiness through the deduplicating signal.
 func (s *supervisor[T]) reconcileStatus() {
-	next := s.status()
 	s.publishGauges()
-	s.propagateStatus(next)
+	s.propagateReadiness()
 }
 
-// propagateStatus updates the readiness signal only when its state changes.
-func (s *supervisor[T]) propagateStatus(next supervisorStatus) {
-	s.signal.SetReady(s, next.Availability == runtime.AvailabilityReady)
+// propagateReadiness updates Radar from current subtree health without publishing status messages.
+func (s *supervisor[T]) propagateReadiness() {
+	s.signal.SetReady(s, s.availability() == runtime.AvailabilityReady)
 }
 
 // publishGauges publishes current values without changing lifecycle or readiness.
@@ -436,7 +435,7 @@ func (s *supervisor[T]) reconcileRadar() {
 		}
 	}
 	s.radarLogged = false
-	s.propagateStatus(s.status())
+	s.propagateReadiness()
 	s.signal.Heartbeat(s)
 }
 
