@@ -80,6 +80,7 @@ type actor[T plugin.Artifact] struct {
 	subscribers         map[string]gen.PID
 	executors           map[string]ExecutorStatus
 	lastStatus          actorStatus
+	lastStatusEpoch     uint64
 	labels              telemetry.Labels
 }
 
@@ -809,16 +810,17 @@ func (a *actor[T]) scheduleWriterRestart() error {
 func (a *actor[T]) reconcileStatus() {
 	a.publishGauges()
 	next := a.status()
-	if next == a.lastStatus {
+	if sameActorStatus(a.lastStatus, next) {
 		return
 	}
+	a.lastStatusEpoch++
 	a.lastStatus = next
 	a.propagateStatus(next)
 }
 
 // propagateStatus sends the supplied snapshot without reconciling state or publishing gauges.
 func (a *actor[T]) propagateStatus(next actorStatus) {
-	_ = a.SendWithPriority(a.Parent(), MessageActorStatusChanged{status: next}, gen.MessagePriorityHigh)
+	_ = a.SendWithPriority(a.Parent(), MessageActorStatusChanged{Epoch: a.lastStatusEpoch, status: next}, gen.MessagePriorityHigh)
 }
 
 // publishGauges publishes current values even when the controller status is unchanged.
@@ -888,4 +890,9 @@ func (a *actor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 		"controller:writer:writing":              fmt.Sprintf("%t", a.writer.status.Writing),
 		"controller:writer:consecutive_failures": fmt.Sprintf("%d", a.writer.consecutiveFailures),
 	}
+}
+
+// sameActorStatus compares the status fields that trigger publication.
+func sameActorStatus(left, right actorStatus) bool {
+	return left == right
 }

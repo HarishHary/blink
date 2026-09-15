@@ -37,9 +37,10 @@ type supervisorStatus struct {
 }
 
 type actorState struct {
-	pid            gen.PID
-	status         actorStatus
-	activationSent bool
+	pid             gen.PID
+	lastStatusEpoch uint64
+	status          actorStatus
+	activationSent  bool
 }
 
 // writerIOFence tracks a writer's owner and proof that its I/O has finished.
@@ -69,6 +70,7 @@ type supervisor[T plugin.Artifact] struct {
 // ---------------------------------------------------------------------------
 
 type MessageActorStatusChanged struct {
+	Epoch  uint64
 	status actorStatus
 }
 
@@ -174,9 +176,10 @@ func (s *supervisor[T]) HandleMessage(from gen.PID, message any) error {
 		}
 		return s.advanceShutdown()
 	case MessageActorStatusChanged:
-		if s.actor.pid != from {
+		if s.actor.pid != from || m.Epoch <= s.actor.lastStatusEpoch {
 			return nil
 		}
+		s.actor.lastStatusEpoch = m.Epoch
 		previous := s.actor.status.Lifecycle
 		s.actor.status = m.status
 		if previous != m.status.Lifecycle {
