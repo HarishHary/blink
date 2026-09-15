@@ -80,7 +80,7 @@ type actor[T plugin.Artifact] struct {
 	subscribers         map[string]gen.PID
 	executors           map[string]ExecutorStatus
 	lastStatus          actorStatus
-	lastStatusEpoch     uint64
+	lastStatusEpoch     int64
 	labels              telemetry.Labels
 }
 
@@ -813,7 +813,7 @@ func (a *actor[T]) reconcileStatus() {
 	if sameActorStatus(a.lastStatus, next) {
 		return
 	}
-	a.lastStatusEpoch++
+	a.lastStatusEpoch = runtime.NextStatusEpoch(a.lastStatusEpoch)
 	a.lastStatus = next
 	a.propagateStatus(next)
 }

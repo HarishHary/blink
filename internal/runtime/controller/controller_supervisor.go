@@ -38,7 +38,7 @@ type supervisorStatus struct {
 
 type actorState struct {
 	pid             gen.PID
-	lastStatusEpoch uint64
+	lastStatusEpoch int64
 	status          actorStatus
 	activationSent  bool
 }
@@ -70,7 +70,7 @@ type supervisor[T plugin.Artifact] struct {
 // ---------------------------------------------------------------------------
 
 type MessageActorStatusChanged struct {
-	epoch  uint64
+	epoch  int64
 	status actorStatus
 }
 

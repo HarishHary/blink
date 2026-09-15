@@ -2,6 +2,14 @@
 // actor subtrees without coupling those subtrees to each other's packages.
 package runtime
 
+import "time"
+
+// NextStatusEpoch returns a Unix-nanosecond status version. Repeated or backward
+// clock readings advance one nanosecond past the previous version instead.
+func NextStatusEpoch(previous int64) int64 {
+	return max(time.Now().UnixNano(), previous+1)
+}
+
 // Availability describes whether a component currently has usable serving
 // capacity. Component-specific lifecycle enums remain separate.
 type Availability string
