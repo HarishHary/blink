@@ -95,14 +95,14 @@ type projectionActor[T any] struct {
 	loader                Loader[T]
 	mode                  ProjectionCommitMode
 	readerActorReady      bool
-	lastReaderStatusEpoch uint64
+	lastReaderStatusEpoch int64
 	readerGeneration      int64
 	observedGeneration    int64
 	committed             *parsedProjection[T]
 	prepared              *parsedProjection[T]
 	lastError             error
 	lastStatus            ProjectionActorStatus
-	lastStatusEpoch       uint64
+	lastStatusEpoch       int64
 	labels                telemetry.Labels
 }
 
@@ -128,7 +128,7 @@ type ProjectionStateRequest struct{}
 // MessageProjectionActorStatusChanged reports projection status, with a zero PID from the child and
 // stamped by Supervisor.
 type MessageProjectionActorStatusChanged struct {
-	Epoch         uint64
+	Epoch         int64
 	Status        ProjectionActorStatus
 	ProjectionPID gen.PID
 }
@@ -429,7 +429,7 @@ func (a *projectionActor[T]) reconcileStatus() {
 	if sameProjectionActorStatus(a.lastStatus, next) {
 		return
 	}
-	a.lastStatusEpoch++
+	a.lastStatusEpoch = runtime.NextStatusEpoch(a.lastStatusEpoch)
 	a.lastStatus = next
 	a.propagateStatus(next)
 }

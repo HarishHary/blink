@@ -46,7 +46,7 @@ type readerActor struct {
 	lastGeneration  int64
 	retry           *runtime.ScheduledBackoff
 	lastStatus      ReaderActorStatus
-	lastStatusEpoch uint64
+	lastStatusEpoch int64
 	lastError       error
 	labels          telemetry.Labels
 }
@@ -59,7 +59,7 @@ type readerActor struct {
 type MessageReaderActorActivate struct{}
 
 type MessageReaderActorStatusChanged struct {
-	Epoch  uint64
+	Epoch  int64
 	Status ReaderActorStatus
 }
 
@@ -280,7 +280,7 @@ func (a *readerActor) reconcileStatus() {
 	if sameReaderActorStatus(a.lastStatus, next) {
 		return
 	}
-	a.lastStatusEpoch++
+	a.lastStatusEpoch = runtime.NextStatusEpoch(a.lastStatusEpoch)
 	a.lastStatus = next
 	a.propagateStatus(next)
 }
