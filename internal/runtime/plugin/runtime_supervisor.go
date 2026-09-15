@@ -1065,11 +1065,6 @@ func (s *supervisor[P, M]) routeTotals() (ready, desired, queued, active int) {
 	return ready, desired, queued, active
 }
 
-// newHealthSignal names this runtime's readiness signal independently of other subtrees.
-func newHealthSignal(namespace string) telemetry.Signal {
-	return telemetry.NewSignal(gen.Atom("plugin-" + namespace))
-}
-
 // reconcileRadar registers whatever radar is still missing, then heartbeats the readiness signal.
 func (s *supervisor[P, M]) reconcileRadar() {
 	if !s.collectorsRegistered {

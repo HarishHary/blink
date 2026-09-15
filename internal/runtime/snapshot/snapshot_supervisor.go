@@ -459,11 +459,6 @@ func (s *Supervisor[T]) generationLag() int64 {
 	return max(0, s.readerActor.status.Generation-s.projectionActor.status.CommittedGeneration)
 }
 
-// newHealthSignal names this snapshot subtree's readiness signal.
-func newHealthSignal(namespace string) telemetry.Signal {
-	return telemetry.NewSignal(gen.Atom("snapshot-" + namespace))
-}
-
 // reconcileRadar registers whatever radar is still missing, then heartbeats the readiness signal.
 func (s *Supervisor[T]) reconcileRadar() {
 	if !s.collectorsRegistered {

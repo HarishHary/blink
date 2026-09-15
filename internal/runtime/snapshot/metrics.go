@@ -1,6 +1,7 @@
 package snapshot
 
 import (
+	"ergo.services/ergo/gen"
 	"github.com/harishhary/blink/internal/runtime"
 	"github.com/harishhary/blink/internal/runtime/telemetry"
 )
@@ -101,6 +102,11 @@ func (g subtreeGauges) publish(labels telemetry.Labels, sender telemetry.Sender)
 	labels.Set(sender, metricReportedAvailability, telemetry.AvailabilityValue(g.reportedAvailability))
 	labels.Set(sender, metricGenerationLag, float64(g.generationLag))
 	labels.Set(sender, metricCommitPending, float64(g.commitPending))
+}
+
+// newHealthSignal names this snapshot subtree's readiness signal.
+func newHealthSignal(namespace string) telemetry.Signal {
+	return telemetry.NewSignal(gen.Atom("snapshot-" + namespace))
 }
 
 // supervisorLifecycleValue orders the lifecycle so a dashboard reads it as progress towards a stop.

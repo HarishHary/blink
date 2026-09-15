@@ -1,6 +1,7 @@
 package stage
 
 import (
+	"ergo.services/ergo/gen"
 	"github.com/harishhary/blink/internal/runtime"
 	"github.com/harishhary/blink/internal/runtime/telemetry"
 )
@@ -154,4 +155,9 @@ type processorSupervisorGauges struct {
 func (g processorSupervisorGauges) publish(labels telemetry.Labels, sender telemetry.Sender) {
 	labels.Set(sender, metricProcessorAvailability, telemetry.AvailabilityValue(g.availability))
 	labels.Set(sender, metricProcessorChildren, float64(g.children))
+}
+
+// newHealthSignal names this processor subtree's readiness signal.
+func newHealthSignal(namespace string) telemetry.Signal {
+	return telemetry.NewSignal(gen.Atom("processor-" + namespace))
 }

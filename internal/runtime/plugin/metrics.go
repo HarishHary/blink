@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"ergo.services/ergo/gen"
 	"github.com/harishhary/blink/internal/runtime"
 	"github.com/harishhary/blink/internal/runtime/telemetry"
 )
@@ -182,6 +183,11 @@ func (g runtimeGauges) publish(labels telemetry.Labels, sender telemetry.Sender)
 	labels.Set(sender, metricProcessesDesired, float64(g.processesDesired))
 	labels.Set(sender, metricQueueDepth, float64(g.queueDepth))
 	labels.Set(sender, metricActiveCalls, float64(g.activeCalls))
+}
+
+// newHealthSignal names this runtime's readiness signal independently of other subtrees.
+func newHealthSignal(namespace string) telemetry.Signal {
+	return telemetry.NewSignal(gen.Atom("plugin-" + namespace))
 }
 
 // supervisorLifecycleValue orders the lifecycle so a dashboard reads it as progress towards a stop.
