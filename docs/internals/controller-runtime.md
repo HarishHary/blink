@@ -397,7 +397,9 @@ All emission is best-effort: an unreachable radar produces a discarded `Send` er
 
 The supervisor owns `controller-<namespace>`, not the actor. `MessageActorStatusChanged` reports the actor's availability upward, so the supervisor marks a crashed or draining controller unready immediately; actor-owned, radar would infer it only 90 seconds later from a lapsed heartbeat.
 
-`MessageRadarTick` drives the session: sent from `Init` to itself so the signal exists before any probe reads it, then rescheduled every `telemetry.RadarTickInterval` (30 s), radar's deadline at three ticks so one missed beat does not flip readiness.
+The supervisor constructor creates the namespace-bound labels and named signal. `Init` sets up lifecycle state and schedules registration; it does not recreate that telemetry identity.
+
+`MessageRadarTick` drives the session: sent from `Init` to itself without delaying supervisor initialization, then rescheduled every `telemetry.RadarTickInterval` (30 s), radar's deadline at three ticks so one missed beat does not flip readiness. Health registration waits for a successful monitor so a failed watch cannot disable restart recovery. Until the first registration completes, Radar cannot account for this namespace's readiness.
 
 - Registered **once**: `handleRegister` overwrites the signal with `up: true`.
 - Heartbeaten **only while up**: `handleHeartbeat` treats a beat on a down signal as recovery and raises it.

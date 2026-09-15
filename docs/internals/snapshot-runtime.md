@@ -194,7 +194,9 @@ Every layer publishes into the node's radar application, labelled by `namespace`
 | `blink_snapshot_parses_total{result}`, `blink_snapshot_parse_failures_total`, `blink_snapshot_parse_seconds`                                                           | projection actor | A generation parses `ok`, `partial`, or `failed`. The failure counter is per spec.                             |
 | `blink_snapshot_commits_total{result}`                                                                                                                                 | projection actor | External commit requests; `error` when not prepared.                                                           |
 
-`MessageRadarTick` drives registration: sent from `Init`, retried every `telemetry.RadarTickInterval` (30 s) until radar accepts them. The supervisor monitors `radar_metrics` and clears `collectorsRegistered` on `gen.MessageDownProcessID`. No readiness signal here; the subtree reports through `MessageExecutorReport`.
+`MessageRadarTick` drives registration: sent from `Init`, retried every `telemetry.RadarTickInterval` (30 s). The supervisor owns the readiness-only `snapshot-<namespace>` signal: up only while running with live reader and projection children that both report ready. Projection-only status changes update readiness even when the reader status event is unchanged. Up signals are heartbeaten every tick and expire after 90 s; a stopping or unavailable subtree holds its signal down rather than unregistering it.
+
+The supervisor monitors `radar_metrics` and `radar_health`, re-registering only what a restarted process lost. Health registration waits for its monitor to succeed. `MessageExecutorReport` remains the separate controller convergence protocol; Radar readiness does not replace it or affect liveness.
 
 Emission is best-effort: an unreachable radar discards the `Send` error, a zero `telemetry.Labels` stays silent. Gauges republish on state changes and on each executor-report tick.
 
