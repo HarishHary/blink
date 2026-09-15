@@ -22,7 +22,6 @@ import (
 type routerState struct {
 	pid        gen.PID
 	generation uint64
-	lastEpoch  uint64
 	restart    *runtime.ScheduledBackoff
 	status     routerActorStatus
 	retiring   bool
@@ -90,7 +89,6 @@ type routerActor[T Artifact] struct {
 	pluginID         string
 	generation       uint64
 	desiredRevision  uint64
-	statusEpoch      uint64
 	adapter          *Adapter[T]
 	routesByKey      map[DeploymentRouteKey]*deploymentRouteState
 	routesByName     map[gen.Atom]DeploymentRouteKey
@@ -151,12 +149,11 @@ type MessageRouterDrained struct {
 	generation uint64
 }
 
-// MessageRouterStatusChanged publishes an epoch-ordered router status to the catalog.
+// MessageRouterStatusChanged publishes a changed router status to the catalog.
 type MessageRouterStatusChanged struct {
 	pluginID   string
 	pid        gen.PID
 	generation uint64
-	epoch      uint64
 	status     routerActorStatus
 }
 
@@ -839,23 +836,23 @@ func (a *routerActor[T]) status() routerActorStatus {
 		normalRoutable: normalRoutable, shadowRoutable: shadowRoutable, primary: primaryStatus, candidate: candidateStatus}
 }
 
-// reconcileStatus recomputes router status and publishes an epoch-tagged update on change.
+// reconcileStatus recomputes router status and publishes it on change.
 func (a *routerActor[T]) reconcileStatus() {
 	if _, _, normalRoutable, _, _ := a.routeAvailability(); normalRoutable && a.lifecycle == RouterActorStarting {
 		a.lifecycle = RouterActorRunning
 	}
 	next := a.status()
-	if sameRouterStatus(a.lastStatus, next) && a.statusEpoch != 0 {
+	if sameRouterActorStatus(a.lastStatus, next) {
 		return
 	}
-	a.statusEpoch, a.lastStatus = a.statusEpoch+1, next
+	a.lastStatus = next
 	a.propagateStatus(next)
 }
 
 // propagateStatus sends the supplied snapshot without reconciling state or publishing gauges.
 func (a *routerActor[T]) propagateStatus(next routerActorStatus) {
 	if a.generation != 0 {
-		_ = a.SendWithPriority(a.Parent(), MessageRouterStatusChanged{pluginID: a.pluginID, pid: a.PID(), generation: a.generation, epoch: a.statusEpoch, status: next.clone()}, gen.MessagePriorityHigh)
+		_ = a.SendWithPriority(a.Parent(), MessageRouterStatusChanged{pluginID: a.pluginID, pid: a.PID(), generation: a.generation, status: next.clone()}, gen.MessagePriorityHigh)
 	}
 }
 
@@ -883,8 +880,8 @@ func (a *routerActor[T]) isDraining() bool {
 	return a.lifecycle == RouterActorDraining || a.lifecycle == RouterActorStopped
 }
 
-// sameRouterStatus reports whether two router statuses are equal, for publish deduplication.
-func sameRouterStatus(left, right routerActorStatus) bool {
+// sameRouterActorStatus reports whether two router statuses are equal, for publish deduplication.
+func sameRouterActorStatus(left, right routerActorStatus) bool {
 	return left.lifecycle == right.lifecycle &&
 		left.availability == right.availability &&
 		errorText(left.lastError) == errorText(right.lastError) &&

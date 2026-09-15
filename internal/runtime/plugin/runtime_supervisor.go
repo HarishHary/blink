@@ -444,12 +444,10 @@ func (s *supervisor[P, M]) HandleMessage(from gen.PID, message any) error {
 
 	case MessageCatalogStatusChanged:
 		if from != s.catalog.pid ||
-			m.pid != s.catalog.pid ||
-			m.epoch <= s.catalog.lastEpoch {
+			m.pid != s.catalog.pid {
 			return nil
 		}
 
-		s.catalog.lastEpoch = m.epoch
 		s.mergeCatalogStatus(m.status)
 		s.completeDesiredStateTransition()
 		s.finishDesiredStateTransition()
@@ -738,7 +736,6 @@ func (s *supervisor[P, M]) startReconcilerActor(pid gen.PID) error {
 func (s *supervisor[P, M]) startCatalogActor(pid gen.PID) error {
 	state := &s.catalog
 	state.pid = pid
-	state.lastEpoch = 0
 	state.status = newCatalogStatus(state.status.lastError)
 
 	if err := s.SendWithPriority(pid, MessageCatalogActivate{}, gen.MessagePriorityHigh); err != nil {
@@ -785,7 +782,6 @@ func (s *supervisor[P, M]) retireCatalogActor(pid gen.PID, reason error) {
 	}
 
 	state.pid = gen.PID{}
-	state.lastEpoch = 0
 	state.status.lifecycle = CatalogActorRestarting
 	state.status.availability = runtime.AvailabilityUnavailable
 	state.status.lastError = reason

@@ -150,7 +150,6 @@ type deploymentManager[T Artifact] struct {
 	inFlightCalls  map[uint64]*deploymentManagerCall[T]
 	pendingCalls   pendingQueue[T]
 	lastStatus     deploymentManagerStatus
-	statusEpoch    uint64
 	circuitOpen    bool
 	circuitToken   uint64
 	circuitStop    gen.CancelFunc
@@ -1134,10 +1133,10 @@ func sameDeploymentManagerStatus(left, right deploymentManagerStatus) bool {
 // invocation reconciles this manager, and an unchanged status would walk the whole chain twice.
 func (m *deploymentManager[T]) reconcileStatus() {
 	next := m.status()
-	if m.statusEpoch != 0 && sameDeploymentManagerStatus(m.lastStatus, next) {
+	if sameDeploymentManagerStatus(m.lastStatus, next) {
 		return
 	}
-	m.statusEpoch, m.lastStatus = m.statusEpoch+1, next
+	m.lastStatus = next
 	m.propagateStatus(next)
 }
 

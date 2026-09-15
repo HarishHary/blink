@@ -311,14 +311,14 @@ stateDiagram-v2
 | `gen.MessageDownPID`              | Ergo monitor → catalog | A router incarnation death, for PID/generation fencing.     |
 | `MessageRouterRestart`            | catalog → catalog      | Token-fenced retry creating a desired router.               |
 | `MessageDrain`                    | supervisor → catalog   | Retires/drains every live router, suppresses restart.       |
-| `MessageRouterStatusChanged`      | router → catalog       | Updates the PID/generation/epoch-fenced router aggregate.   |
+| `MessageRouterStatusChanged`      | router → catalog       | Updates the PID/generation-fenced router aggregate.         |
 | `MessageRouterDrained`            | router → catalog       | Retires a draining router, advances drain/replacement work. |
-| `MessageCatalogStatusChanged`     | catalog → supervisor   | Publishes the epoch-ordered aggregate catalog state.        |
+| `MessageCatalogStatusChanged`     | catalog → supervisor   | Publishes changed aggregate catalog state.                  |
 | `MessageCatalogDrained`           | catalog → supervisor   | Every live router has drained.                              |
 
 ### Readiness
 
-Router facts are accepted only from the current PID, generation, and increasing epoch. PID identifies the live process, generation the catalog-created incarnation, and epoch orders that incarnation's status facts. On router loss the catalog fails calls assigned to that PID.
+Router status is accepted only from the current sender PID and catalog-created generation. Catalog status is likewise checked against the current catalog PID. Each actor sends status to its local parent through one high-priority FIFO stream, so no status epoch is needed. `reconcileStatus` compares against `lastStatus` and publishes only changes; the process/meta comparisons ignore sampled load counters. On router loss the catalog fails calls assigned to that PID.
 
 ## Router actor
 
@@ -638,7 +638,7 @@ stateDiagram-v2
 
 Submission requires a running application and a runtime whose expected generation is exactly ready and committed; draining or a desired-state barrier rejects it as unavailable. Every terminal path enters the idempotent `runtime.AsyncResult`, and `Invocation` closes `Done` only when that result completes.
 
-Call IDs bind one supervisor, catalog, router, manager, and plugin-process path. PID/alias plus generation/epoch checks reject stale completion, status, and recovery facts. The manager accepts an invocation fact only from the process it dispatched that call to.
+Call IDs bind one supervisor, catalog, router, manager, and plugin-process path. PID/alias plus generation/token checks reject stale completion, status, and recovery facts. The manager accepts an invocation fact only from the process it dispatched that call to.
 
 ## Telemetry
 

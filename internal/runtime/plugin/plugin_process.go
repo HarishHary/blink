@@ -562,20 +562,15 @@ func (p *pluginProcess[T]) cancelHealthCheck() {
 // Status
 // ---------------------------------------------------------------------------
 
-// reportUnavailable records a recoverable meta-process failure, idempotently: the recycle path reports
-// it twice, and republishing the second would cost a reconcile per recycle.
+// reportUnavailable records a recoverable meta-process failure; reconcileStatus deduplicates repeats.
 func (p *pluginProcess[T]) reportUnavailable(err error) {
-	status := pluginMetaStatus{
+	p.pluginMeta.status = pluginMetaStatus{
 		lifecycle:    PluginMetaRestarting,
 		availability: runtime.AvailabilityUnavailable,
 		activity:     PluginMetaIdle,
 		capacity:     p.deployment.CapacityPerProcess(),
 		lastError:    err,
 	}
-	if samePluginMetaStatus(p.pluginMeta.status, status) {
-		return
-	}
-	p.pluginMeta.status = status
 	p.reconcileStatus()
 }
 

@@ -27,9 +27,8 @@ const (
 
 // catalogActorState tracks the catalog actor incarnation and status.
 type catalogActorState struct {
-	pid       gen.PID
-	lastEpoch uint64
-	status    catalogActorStatus
+	pid    gen.PID
+	status catalogActorStatus
 }
 
 // catalogActorStatus is owned by catalogActor, except LastError, which the supervisor owns because
@@ -67,7 +66,6 @@ type catalogActor[T Artifact] struct {
 	draining        bool
 	drainReported   bool
 	lastStatus      catalogActorStatus
-	statusEpoch     uint64
 	routers         map[string]*routerState
 	desired         map[string]routerDesiredState
 	inFlightCalls   map[uint64]gen.PID
@@ -93,10 +91,9 @@ type MessageCatalogDrained struct {
 	pid gen.PID
 }
 
-// MessageCatalogStatusChanged publishes an epoch-ordered catalog status update.
+// MessageCatalogStatusChanged publishes a changed catalog status to the supervisor.
 type MessageCatalogStatusChanged struct {
 	pid    gen.PID
-	epoch  uint64
 	status catalogActorStatus
 }
 
@@ -242,12 +239,11 @@ func (a *catalogActor[T]) HandleMessage(from gen.PID, message any) error {
 	case MessageRouterStatusChanged:
 		ref := a.routers[m.pluginID]
 		if ref == nil ||
+			from != ref.pid ||
 			ref.pid != m.pid ||
-			ref.generation != m.generation ||
-			m.epoch <= ref.lastEpoch {
+			ref.generation != m.generation {
 			return nil
 		}
-		ref.lastEpoch = m.epoch
 
 		next := m.status.clone()
 		a.cancelRouterRestartBackoff(m.pluginID, true)
@@ -297,7 +293,6 @@ func (a *catalogActor[T]) HandleMessage(from gen.PID, message any) error {
 				}
 			} else {
 				ref.pid = gen.PID{}
-				ref.lastEpoch = 0
 				for callID, routerPID := range a.inFlightCalls {
 					if routerPID == m.PID {
 						a.finishTrackedCall(callID, runtime.ErrPluginUnavailable)
@@ -399,7 +394,6 @@ func (a *catalogActor[T]) startRouter(id string) (*routerState, error) {
 
 	ref.generation++
 	generation := ref.generation
-	ref.lastEpoch = 0
 	ref.retiring = false
 	prevErr := ref.status.lastError
 	ref.status = routerActorStatus{
@@ -470,7 +464,6 @@ func (a *catalogActor[T]) retireRouter(id string, callErr error) {
 	}
 
 	ref.pid = gen.PID{}
-	ref.lastEpoch = 0
 	ref.retiring = false
 	prevErr := ref.status.lastError
 	ref.status = routerActorStatus{
@@ -633,11 +626,9 @@ func (a *catalogActor[T]) status() catalogActorStatus {
 // reconcileStatus recomputes and publishes the aggregate catalog status.
 func (a *catalogActor[T]) reconcileStatus() {
 	next := a.status()
-	if sameCatalogStatus(a.lastStatus, next) && a.statusEpoch != 0 {
+	if sameCatalogActorStatus(a.lastStatus, next) {
 		return
 	}
-
-	a.statusEpoch++
 	a.lastStatus = next
 	a.propagateStatus(next)
 }
@@ -649,7 +640,6 @@ func (a *catalogActor[T]) propagateStatus(next catalogActorStatus) {
 	}
 	_ = a.SendWithPriority(a.Parent(), MessageCatalogStatusChanged{
 		pid:    a.PID(),
-		epoch:  a.statusEpoch,
 		status: next.clone(),
 	}, gen.MessagePriorityHigh)
 }
@@ -682,8 +672,8 @@ func routerSettled(status routerActorStatus, revision uint64) bool {
 		status.candidate.lifecycle == DeploymentRouteFailed
 }
 
-// sameCatalogStatus reports whether two catalog statuses are equal.
-func sameCatalogStatus(left, right catalogActorStatus) bool {
+// sameCatalogActorStatus compares publishable status, excluding the supervisor-owned lastError.
+func sameCatalogActorStatus(left, right catalogActorStatus) bool {
 	if left.lifecycle != right.lifecycle ||
 		left.availability != right.availability ||
 		left.desiredRevision != right.desiredRevision ||
@@ -697,7 +687,7 @@ func sameCatalogStatus(left, right catalogActorStatus) bool {
 	}
 	for id, leftRouter := range left.routers {
 		rightRouter, ok := right.routers[id]
-		if !ok || !sameRouterStatus(leftRouter, rightRouter) {
+		if !ok || !sameRouterActorStatus(leftRouter, rightRouter) {
 			return false
 		}
 	}
