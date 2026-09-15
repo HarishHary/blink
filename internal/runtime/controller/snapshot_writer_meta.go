@@ -90,6 +90,7 @@ func (m *snapshotWriterMeta) Init(process gen.MetaProcess) error {
 	m.MetaProcess = process
 	m.runCtx, m.cancelRun = context.WithCancel(context.Background())
 	m.jobs = make(chan MessageWriteSnapshot, 1)
+	m.labels.Set(m, metricWriteQueue, 0)
 	if err := m.Send(m.supervisor, MessageSnapshotWriterIOStarted{Alias: m.ID()}); err != nil {
 		m.cancelRun()
 		m.barrier.Release()

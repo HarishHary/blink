@@ -84,12 +84,12 @@ var (
 		{Kind: telemetry.Counter, Name: metricKafkaWriterQueueRejects, Help: "Kafka writer admission or meta queue rejections", Labels: stageWriterLabels},
 
 		// Processor supervisor and job pool
-		{Kind: telemetry.Gauge, Name: metricProcessorAvailability, Help: "Processing session availability", Labels: stageNamespaceLabels},
+		{Kind: telemetry.Gauge, Name: metricProcessorAvailability, Help: "Processing session availability: 0 unavailable, 1 degraded, 2 ready", Labels: stageNamespaceLabels},
 		{Kind: telemetry.Gauge, Name: metricProcessorChildren, Help: "Live processing-session children", Labels: stageNamespaceLabels},
 		{Kind: telemetry.Counter, Name: metricProcessorChildStarts, Help: "Processing child starts", Labels: []string{"namespace", "child"}},
 		{Kind: telemetry.Counter, Name: metricProcessorChildTerminations, Help: "Processing child terminations", Labels: []string{"namespace", "child", "reason"}},
 		{Kind: telemetry.Gauge, Name: metricJobPoolWorkers, Help: "Configured job-pool workers", Labels: stageNamespaceLabels},
-		{Kind: telemetry.Gauge, Name: metricJobPoolAvailability, Help: "Job-pool availability", Labels: stageNamespaceLabels},
+		{Kind: telemetry.Gauge, Name: metricJobPoolAvailability, Help: "Job-pool availability: 0 unavailable, 1 degraded, 2 ready", Labels: stageNamespaceLabels},
 	}
 )
 
