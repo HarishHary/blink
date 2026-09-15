@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -94,6 +95,7 @@ type supervisor[P Artifact, M any] struct {
 	drainWaiters         []runtimeDrainWaiter
 	transitionGeneration int64
 	labels               telemetry.Labels
+	signal               telemetry.Signal
 	collectorsRegistered bool
 	radarLogged          bool
 }
@@ -161,6 +163,8 @@ func newRuntimeSupervisor[P Artifact, M any](namespace string, opts SupervisorOp
 		opts:      opts,
 		adapter:   adapter,
 		loader:    loader,
+		labels:    telemetry.NewLabels(namespace),
+		signal:    newHealthSignal(namespace),
 	}
 }
 
@@ -177,7 +181,6 @@ func (s *supervisor[P, M]) Init(...any) (act.SupervisorSpec, error) {
 			"namespace, adapter, reader options, projection, and directory are required",
 		)
 	}
-	s.labels = telemetry.NewLabels(s.namespace)
 	name := SupervisorName(s.namespace)
 	if err := s.RegisterName(name); err != nil {
 		return act.SupervisorSpec{}, fmt.Errorf("register runtime supervisor %q: %w", name, err)
@@ -290,11 +293,15 @@ func (s *supervisor[P, M]) HandleMessage(from gen.PID, message any) error {
 
 	case gen.MessageDownProcessID:
 		// Forget what a restarted radar lost so the next tick registers it again.
-		if m.ProcessID.Name != telemetry.MetricsProcess {
+		switch m.ProcessID.Name {
+		case telemetry.MetricsProcess:
+			s.collectorsRegistered = false
+		case telemetry.HealthProcess:
+			s.signal = newHealthSignal(s.namespace)
+		default:
 			return nil
 		}
-		s.collectorsRegistered = false
-		s.Log().Debug("radar process down, re-registering on next tick: namespace=%q", s.namespace)
+		s.Log().Debug("radar process down, re-registering on next tick: namespace=%q process=%s", s.namespace, m.ProcessID.Name)
 		return nil
 
 	case MessageSubmitInvocation[P]:
@@ -1006,11 +1013,16 @@ func (s *supervisor[P, M]) status() SupervisorStatus {
 	}
 }
 
-// reconcileStatus refreshes the queryable status and gauges after each callback.
-// This supervisor answers status requests; it has no parent status stream to propagate.
+// reconcileStatus refreshes the queryable status, gauges, and readiness after each callback.
 func (s *supervisor[P, M]) reconcileStatus() {
 	s.liveStatus = s.status()
 	s.publishGauges()
+	s.propagateStatus(s.liveStatus)
+}
+
+// propagateStatus updates Radar readiness; public status remains queryable rather than pushed.
+func (s *supervisor[P, M]) propagateStatus(next SupervisorStatus) {
+	s.signal.SetReady(s, next.Lifecycle == SupervisorRunning && next.Availability == runtime.AvailabilityReady)
 }
 
 // publishGauges publishes current values without changing state or propagating status.
@@ -1053,25 +1065,43 @@ func (s *supervisor[P, M]) routeTotals() (ready, desired, queued, active int) {
 	return ready, desired, queued, active
 }
 
-// reconcileRadar registers this runtime's collectors, retried on every tick until radar accepts them.
-func (s *supervisor[P, M]) reconcileRadar() {
-	if s.collectorsRegistered {
-		return
-	}
-	// Registered through the node: radar deletes a dead registrant's metrics.
-	if err := telemetry.Register(s.Node(), runtimeMetrics); err != nil {
-		s.radarUnavailableOnce(err)
-		return
-	}
-	s.collectorsRegistered, s.radarLogged = true, false
-	s.watchRadar(telemetry.MetricsProcess)
+// newHealthSignal names this runtime's readiness signal independently of other subtrees.
+func newHealthSignal(namespace string) telemetry.Signal {
+	return telemetry.NewSignal(gen.Atom("plugin-" + namespace))
 }
 
-// watchRadar monitors one radar process so a restart that drops these registrations announces itself.
-func (s *supervisor[P, M]) watchRadar(name gen.Atom) {
-	if err := s.MonitorProcessID(gen.ProcessID{Name: name, Node: s.Node().Name()}); err != nil {
-		s.Log().Debug("radar monitor unavailable: namespace=%q process=%s error=%v", s.namespace, name, err)
+// reconcileRadar registers whatever radar is still missing, then heartbeats the readiness signal.
+func (s *supervisor[P, M]) reconcileRadar() {
+	if !s.collectorsRegistered {
+		// Registered through the node: radar deletes a dead registrant's metrics.
+		if err := telemetry.Register(s.Node(), runtimeMetrics); err != nil {
+			s.radarUnavailableOnce(err)
+			return
+		}
+		s.collectorsRegistered = true
+		s.watchRadar(telemetry.MetricsProcess)
 	}
+	if !s.signal.Registered() {
+		if !s.watchRadar(telemetry.HealthProcess) {
+			return
+		}
+		if err := s.signal.Register(s); err != nil {
+			s.radarUnavailableOnce(err)
+			return
+		}
+	}
+	s.radarLogged = false
+	s.propagateStatus(s.status())
+	s.signal.Heartbeat(s)
+}
+
+// watchRadar monitors one radar process and reports whether the watch is installed.
+func (s *supervisor[P, M]) watchRadar(name gen.Atom) bool {
+	if err := s.MonitorProcessID(gen.ProcessID{Name: name, Node: s.Node().Name()}); err != nil && !errors.Is(err, gen.ErrTargetExist) {
+		s.Log().Debug("radar monitor unavailable: namespace=%q process=%s error=%v", s.namespace, name, err)
+		return false
+	}
+	return true
 }
 
 // radarUnavailableOnce logs only the first failure of an outage.
@@ -1090,6 +1120,7 @@ func (s *supervisor[P, M]) HandleInspect(gen.PID, ...string) map[string]string {
 	return map[string]string{
 		"runtime:lifecycle":                       string(status.Lifecycle),
 		"runtime:availability":                    string(status.Availability),
+		"runtime:readiness_signal":                s.signal.State(),
 		"runtime:desired_revision":                fmt.Sprintf("%d", status.DesiredRevision),
 		"runtime:transition":                      fmt.Sprintf("%d", status.Transition),
 		"runtime:catalog:lifecycle":               string(status.Catalog.lifecycle),

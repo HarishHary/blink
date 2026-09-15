@@ -1,6 +1,7 @@
 package snapshot
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -70,6 +71,7 @@ type Supervisor[T any] struct {
 	lastStatus           ReaderActorStatus
 	reportCancel         gen.CancelFunc
 	labels               telemetry.Labels
+	signal               telemetry.Signal
 	collectorsRegistered bool
 	radarLogged          bool
 }
@@ -114,7 +116,12 @@ type MessageRadarTick struct{}
 // NewSupervisor creates a reader/projection supervisor named after the namespace it follows.
 func NewSupervisor[T any](opts SupervisorOptions, loader Loader[T]) *Supervisor[T] {
 	normalized := supervisorOptionsWithDefaults(opts)
-	return &Supervisor[T]{opts: normalized, loader: loader, labels: telemetry.NewLabels(normalized.Namespace)}
+	return &Supervisor[T]{
+		opts:   normalized,
+		loader: loader,
+		labels: telemetry.NewLabels(normalized.Namespace),
+		signal: newHealthSignal(normalized.Namespace),
+	}
 }
 
 // Init validates options and configures the supervised reader and projection actors.
@@ -275,11 +282,15 @@ func (s *Supervisor[T]) HandleMessage(from gen.PID, message any) error {
 		return nil
 	case gen.MessageDownProcessID:
 		// Forget what a restarted radar lost so the next tick registers it again.
-		if message.ProcessID.Name != telemetry.MetricsProcess {
+		switch message.ProcessID.Name {
+		case telemetry.MetricsProcess:
+			s.collectorsRegistered = false
+		case telemetry.HealthProcess:
+			s.signal = newHealthSignal(s.opts.Namespace)
+		default:
 			return nil
 		}
-		s.collectorsRegistered = false
-		s.Log().Debug("radar process down, re-registering on next tick: namespace=%q", s.opts.Namespace)
+		s.Log().Debug("radar process down, re-registering on next tick: namespace=%q process=%s", s.opts.Namespace, message.ProcessID.Name)
 		return nil
 	case MessageReaderActorStatusChanged:
 		if from == s.readerActor.pid {
@@ -397,6 +408,7 @@ func (s *Supervisor[T]) cancelExecutorReport() {
 func (s *Supervisor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 	return map[string]string{
 		"supervisor:lifecycle":                       string(s.lifecycle),
+		"supervisor:readiness_signal":                s.signal.State(),
 		"supervisor:reader":                          fmt.Sprintf("%s", s.readerActor.pid),
 		"supervisor:reader_lifecycle":                string(s.readerActor.status.Lifecycle),
 		"supervisor:reader_availability":             string(s.readerActor.status.Availability),
@@ -411,13 +423,14 @@ func (s *Supervisor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 	}
 }
 
-// reconcileStatus advances lifecycle, refreshes gauges, and propagates reader status only on change.
+// reconcileStatus advances lifecycle, refreshes gauges/readiness, and propagates reader status only on change.
 func (s *Supervisor[T]) reconcileStatus() {
 	// Both children up promotes the subtree once, and a rest-for-one restart never demotes it.
 	if s.lifecycle == SupervisorStarting && s.readerActor.pid != (gen.PID{}) && s.projectionActor.pid != (gen.PID{}) {
 		s.lifecycle = SupervisorRunning
 	}
 	s.publishGauges()
+	s.propagateReadiness()
 	if !s.statusEvent.registered() || s.readerActor.status == s.lastStatus {
 		return
 	}
@@ -446,25 +459,43 @@ func (s *Supervisor[T]) generationLag() int64 {
 	return max(0, s.readerActor.status.Generation-s.projectionActor.status.CommittedGeneration)
 }
 
-// reconcileRadar registers this subtree's collectors, retried on every tick until radar accepts them.
-func (s *Supervisor[T]) reconcileRadar() {
-	if s.collectorsRegistered {
-		return
-	}
-	// Registered through the node: radar deletes a dead registrant's metrics.
-	if err := telemetry.Register(s.Node(), subtreeMetrics); err != nil {
-		s.radarUnavailableOnce(err)
-		return
-	}
-	s.collectorsRegistered, s.radarLogged = true, false
-	s.watchRadar(telemetry.MetricsProcess)
+// newHealthSignal names this snapshot subtree's readiness signal.
+func newHealthSignal(namespace string) telemetry.Signal {
+	return telemetry.NewSignal(gen.Atom("snapshot-" + namespace))
 }
 
-// watchRadar monitors one radar process so a restart that drops these registrations announces itself.
-func (s *Supervisor[T]) watchRadar(name gen.Atom) {
-	if err := s.MonitorProcessID(gen.ProcessID{Name: name, Node: s.Node().Name()}); err != nil {
-		s.Log().Debug("radar monitor unavailable: namespace=%q process=%s error=%v", s.opts.Namespace, name, err)
+// reconcileRadar registers whatever radar is still missing, then heartbeats the readiness signal.
+func (s *Supervisor[T]) reconcileRadar() {
+	if !s.collectorsRegistered {
+		// Registered through the node: radar deletes a dead registrant's metrics.
+		if err := telemetry.Register(s.Node(), subtreeMetrics); err != nil {
+			s.radarUnavailableOnce(err)
+			return
+		}
+		s.collectorsRegistered = true
+		s.watchRadar(telemetry.MetricsProcess)
 	}
+	if !s.signal.Registered() {
+		if !s.watchRadar(telemetry.HealthProcess) {
+			return
+		}
+		if err := s.signal.Register(s); err != nil {
+			s.radarUnavailableOnce(err)
+			return
+		}
+	}
+	s.radarLogged = false
+	s.propagateReadiness()
+	s.signal.Heartbeat(s)
+}
+
+// watchRadar monitors one radar process and reports whether the watch is installed.
+func (s *Supervisor[T]) watchRadar(name gen.Atom) bool {
+	if err := s.MonitorProcessID(gen.ProcessID{Name: name, Node: s.Node().Name()}); err != nil && !errors.Is(err, gen.ErrTargetExist) {
+		s.Log().Debug("radar monitor unavailable: namespace=%q process=%s error=%v", s.opts.Namespace, name, err)
+		return false
+	}
+	return true
 }
 
 // radarUnavailableOnce logs only the first failure of an outage.
@@ -488,6 +519,13 @@ func (s *Supervisor[T]) executorAvailability() runtime.Availability {
 // propagateStatus forwards the supplied reader status through the registered event.
 func (s *Supervisor[T]) propagateStatus(next ReaderActorStatus) {
 	_ = s.SendEvent(s.statusEvent.name, s.statusEvent.token, next)
+}
+
+// propagateReadiness includes both children, independently of reader-event deduplication.
+func (s *Supervisor[T]) propagateReadiness() {
+	s.signal.SetReady(s, s.lifecycle == SupervisorRunning &&
+		s.readerActor.pid != (gen.PID{}) && s.projectionActor.pid != (gen.PID{}) &&
+		s.executorAvailability() == runtime.AvailabilityReady)
 }
 
 // propagateProjectionStatus immediately forwards the external commit protocol's status facts.

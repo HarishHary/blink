@@ -107,8 +107,7 @@ func (s *supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 	s.lifecycle = SupervisorStarting
 	s.writerFences = make(map[gen.Alias]writerIOFence)
 	s.reconcileStatus()
-	// A message, not an inline call: the signal must exist before any probe reads it, but radar must
-	// not delay the spec.
+	// A message, not an inline call: radar must not delay the spec.
 	if err := s.SendWithPriority(s.PID(), MessageRadarTick{}, gen.MessagePriorityHigh); err != nil {
 		return act.SupervisorSpec{}, fmt.Errorf("controller supervisor: schedule radar tick: %w", err)
 	}
@@ -428,22 +427,26 @@ func (s *supervisor[T]) reconcileRadar() {
 		s.watchRadar(telemetry.MetricsProcess)
 	}
 	if !s.signal.Registered() {
+		if !s.watchRadar(telemetry.HealthProcess) {
+			return
+		}
 		if err := s.signal.Register(s); err != nil {
 			s.radarUnavailableOnce(err)
 			return
 		}
-		s.watchRadar(telemetry.HealthProcess)
 	}
 	s.radarLogged = false
 	s.propagateStatus(s.status())
 	s.signal.Heartbeat(s)
 }
 
-// watchRadar monitors one radar process so a restart that drops these registrations announces itself.
-func (s *supervisor[T]) watchRadar(name gen.Atom) {
-	if err := s.MonitorProcessID(gen.ProcessID{Name: name, Node: s.Node().Name()}); err != nil {
+// watchRadar monitors one radar process and reports whether the watch is installed.
+func (s *supervisor[T]) watchRadar(name gen.Atom) bool {
+	if err := s.MonitorProcessID(gen.ProcessID{Name: name, Node: s.Node().Name()}); err != nil && !errors.Is(err, gen.ErrTargetExist) {
 		s.Log().Debug("radar monitor unavailable: namespace=%q process=%s error=%v", s.namespace, name, err)
+		return false
 	}
+	return true
 }
 
 // radarUnavailableOnce logs only the first failure of an outage.
