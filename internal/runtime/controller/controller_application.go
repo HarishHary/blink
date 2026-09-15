@@ -92,7 +92,7 @@ func (a *Application[T]) Load(_ ...any) (gen.ApplicationSpec, error) {
 	a.database = database
 	supervisorOpts := a.opts.SupervisorOptions
 	a.labels.Count(a.Node(), metricApplicationLoads, "ok")
-	a.labels.Set(a.Node(), metricApplicationState, 1)
+	a.reconcileStatus(true, nil)
 	a.Log().Info("controller application loaded: name=%s namespace=%q supervisor=%s", a.Name(), a.opts.Namespace, a.SupervisorName())
 
 	return gen.ApplicationSpec{
@@ -114,12 +114,8 @@ func (a *Application[T]) Load(_ ...any) (gen.ApplicationSpec, error) {
 func (a *Application[T]) Terminate(reason error) {
 	a.Seal()
 	a.labels.Count(a.Node(), metricApplicationTerminations, telemetry.TerminationReason(reason))
-	a.labels.Set(a.Node(), metricApplicationState, 0)
 	a.Log().Info("controller application terminated: name=%s namespace=%q reason=%v", a.Name(), a.opts.Namespace, reason)
-	select {
-	case a.stopped <- reason:
-	default:
-	}
+	a.reconcileStatus(false, reason)
 }
 
 // Close closes the application-owned resources after Seal and quiescence are proven.
@@ -159,8 +155,34 @@ func (a *Application[T]) Close(ctx context.Context) error {
 }
 
 // ---------------------------------------------------------------------------
-// Work
+// Status
 // ---------------------------------------------------------------------------
+
+// reconcileStatus publishes the application lifecycle callback's state.
+// Load and Terminate are one-shot boundaries; only termination has a status consumer.
+func (a *Application[T]) reconcileStatus(loaded bool, reason error) {
+	a.publishGauges(loaded)
+	if !loaded {
+		a.propagateStatus(reason)
+	}
+}
+
+// publishGauges publishes lifecycle metrics without changing resources or notifying waiters.
+func (a *Application[T]) publishGauges(loaded bool) {
+	var state float64
+	if loaded {
+		state = 1
+	}
+	a.labels.Set(a.Node(), metricApplicationState, state)
+}
+
+// propagateStatus notifies the stopped consumer without blocking the application callback.
+func (a *Application[T]) propagateStatus(reason error) {
+	select {
+	case a.stopped <- reason:
+	default:
+	}
+}
 
 // registerMetrics creates every controller collector on radar's registry through the node, which owns
 // them for the node's lifetime.

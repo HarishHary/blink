@@ -74,7 +74,6 @@ func (p *jobPool) Init(...any) (act.PoolOptions, error) {
 		return act.PoolOptions{}, fmt.Errorf("job pool: mailbox size is %d, want %d", info.MailboxSize, p.opts.MailboxSize)
 	}
 	p.lifecycle = JobPoolStarting
-	p.publishGauges()
 	p.reconcileStatus()
 	// The high-priority self-message reports ready after the pool creates its workers.
 	if err := p.SendWithPriority(p.PID(), MessageJobPoolStarted{}, gen.MessagePriorityHigh); err != nil {
@@ -96,14 +95,13 @@ func (p *jobPool) HandleMessage(from gen.PID, message any) error {
 			return nil
 		}
 		p.publishGauges()
-		_ = p.SendWithPriority(from, MessageJobPoolStatusChanged{Status: p.status()}, gen.MessagePriorityHigh)
+		p.propagateStatus(p.status())
 		return nil
 	case MessageJobPoolStarted:
 		if from != p.PID() || p.lifecycle != JobPoolStarting {
 			return nil
 		}
 		p.lifecycle = JobPoolRunning
-		p.publishGauges()
 		p.reconcileStatus()
 		return nil
 	}
@@ -118,7 +116,6 @@ func (p *jobPool) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
 // Terminate marks the pool stopped and publishes its final status.
 func (p *jobPool) Terminate(error) {
 	p.lifecycle = JobPoolStopped
-	p.publishGauges()
 	p.reconcileStatus()
 }
 
@@ -135,13 +132,19 @@ func (p *jobPool) status() JobPoolStatus {
 	return JobPoolStatus{Lifecycle: p.lifecycle, Availability: availability}
 }
 
-// reconcileStatus publishes a status change to the parent.
+// reconcileStatus refreshes gauges on every reconciliation and propagates status only on change.
 func (p *jobPool) reconcileStatus() {
+	p.publishGauges()
 	next := p.status()
 	if next == p.lastStatus {
 		return
 	}
 	p.lastStatus = next
+	p.propagateStatus(next)
+}
+
+// propagateStatus sends the supplied snapshot without reconciling state or publishing gauges.
+func (p *jobPool) propagateStatus(next JobPoolStatus) {
 	_ = p.SendWithPriority(p.Parent(), MessageJobPoolStatusChanged{Status: next}, gen.MessagePriorityHigh)
 }
 

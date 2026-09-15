@@ -118,7 +118,7 @@ func (m *kafkaReaderMeta) Init(process gen.MetaProcess) error {
 	m.MetaProcess = process
 	m.runCtx, m.cancelRun = context.WithCancel(context.Background())
 	m.jobs = make(chan any, 1)
-	m.labels.Set(m, metricKafkaReaderQueue, 0)
+	m.reconcileStatus()
 	if !m.barrier.Acquire() {
 		m.cancelRun()
 		return fmt.Errorf("kafka reader meta: I/O barrier is sealed")
@@ -167,7 +167,7 @@ func (m *kafkaReaderMeta) Start() (runErr error) {
 		case <-m.runCtx.Done():
 			return nil
 		case job := <-m.jobs:
-			m.labels.Set(m, metricKafkaReaderQueue, float64(len(m.jobs)))
+			m.reconcileStatus()
 			switch job := job.(type) {
 			case MessageKafkaReaderFetch:
 				if err := m.fetch(reader, job); err != nil {
@@ -191,7 +191,7 @@ func (m *kafkaReaderMeta) HandleMessage(from gen.PID, message any) error {
 	case MessageKafkaReaderFetch, MessageKafkaReaderCommit:
 		select {
 		case m.jobs <- message:
-			m.labels.Set(m, metricKafkaReaderQueue, float64(len(m.jobs)))
+			m.reconcileStatus()
 			return nil
 		default:
 			m.labels.Count(m, metricKafkaReaderQueueRejections)
@@ -204,13 +204,6 @@ func (m *kafkaReaderMeta) HandleMessage(from gen.PID, message any) error {
 // HandleCall rejects synchronous use; all broker I/O is completed by fenced messages.
 func (*kafkaReaderMeta) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
 	return fmt.Errorf("kafka reader meta: unsupported call %T", request), nil
-}
-
-// HandleInspect reports only I/O-local state; the reader actor owns lifecycle and availability.
-func (m *kafkaReaderMeta) HandleInspect(gen.PID, ...string) map[string]string {
-	return map[string]string{
-		"kafka_reader:queue": fmt.Sprintf("%d/%d", len(m.jobs), cap(m.jobs)),
-	}
 }
 
 // Terminate only requests cancellation; Start owns and closes the reader.
@@ -335,4 +328,26 @@ func (m *kafkaReaderMeta) commit(reader brokers.Reader, job MessageKafkaReaderCo
 		return fmt.Errorf("kafka reader meta: send commit result: %w", sendErr)
 	}
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Status
+// ---------------------------------------------------------------------------
+
+// reconcileStatus refreshes owned gauges; the parent actor derives health from operation results.
+// Queue mutations do not produce a second status stream.
+func (m *kafkaReaderMeta) reconcileStatus() {
+	m.publishGauges()
+}
+
+// publishGauges reads the concurrency-safe queue depth without changing state or sending status.
+func (m *kafkaReaderMeta) publishGauges() {
+	m.labels.Set(m, metricKafkaReaderQueue, float64(len(m.jobs)))
+}
+
+// HandleInspect reports only I/O-local state; the reader actor owns lifecycle and availability.
+func (m *kafkaReaderMeta) HandleInspect(gen.PID, ...string) map[string]string {
+	return map[string]string{
+		"kafka_reader:queue": fmt.Sprintf("%d/%d", len(m.jobs), cap(m.jobs)),
+	}
 }

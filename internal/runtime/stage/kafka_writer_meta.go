@@ -101,7 +101,7 @@ func (m *kafkaWriterMeta) Init(process gen.MetaProcess) error {
 	m.MetaProcess = process
 	m.runCtx, m.cancelRun = context.WithCancel(context.Background())
 	m.jobs = make(chan MessageKafkaWriterWrite, 1)
-	m.labels.Set(m, metricKafkaWriterQueueDepth, 0)
+	m.reconcileStatus()
 	if !m.barrier.Acquire() {
 		m.cancelRun()
 		return fmt.Errorf("kafka writer meta: I/O barrier is sealed")
@@ -150,7 +150,7 @@ func (m *kafkaWriterMeta) Start() (runErr error) {
 		case <-m.runCtx.Done():
 			return nil
 		case job := <-m.jobs:
-			m.labels.Set(m, metricKafkaWriterQueueDepth, float64(len(m.jobs)))
+			m.reconcileStatus()
 			if err := m.write(writer, job); err != nil {
 				return err
 			}
@@ -167,7 +167,7 @@ func (m *kafkaWriterMeta) HandleMessage(from gen.PID, message any) error {
 	case MessageKafkaWriterWrite:
 		select {
 		case m.jobs <- job:
-			m.labels.Set(m, metricKafkaWriterQueueDepth, float64(len(m.jobs)))
+			m.reconcileStatus()
 			return nil
 		default:
 			m.labels.Count(m, metricKafkaWriterQueueRejects)
@@ -180,13 +180,6 @@ func (m *kafkaWriterMeta) HandleMessage(from gen.PID, message any) error {
 // HandleCall rejects unsupported meta-process calls.
 func (m *kafkaWriterMeta) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
 	return fmt.Errorf("kafka writer meta: unsupported call %T", request), nil
-}
-
-// HandleInspect returns bounded queue inspection data.
-func (m *kafkaWriterMeta) HandleInspect(gen.PID, ...string) map[string]string {
-	return map[string]string{
-		"kafka_writer:queue": fmt.Sprintf("%d/%d", len(m.jobs), cap(m.jobs)),
-	}
 }
 
 // Terminate cancels the running writer meta-process.
@@ -283,4 +276,26 @@ func (m *kafkaWriterMeta) write(writer brokers.Writer, job MessageKafkaWriterWri
 		return fmt.Errorf("kafka writer meta: send completion: %w", sendErr)
 	}
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Status
+// ---------------------------------------------------------------------------
+
+// reconcileStatus refreshes owned gauges; the parent actor derives health from operation results.
+// Queue mutations do not produce a second status stream.
+func (m *kafkaWriterMeta) reconcileStatus() {
+	m.publishGauges()
+}
+
+// publishGauges reads the concurrency-safe queue depth without changing state or sending status.
+func (m *kafkaWriterMeta) publishGauges() {
+	m.labels.Set(m, metricKafkaWriterQueueDepth, float64(len(m.jobs)))
+}
+
+// HandleInspect returns bounded queue inspection data.
+func (m *kafkaWriterMeta) HandleInspect(gen.PID, ...string) map[string]string {
+	return map[string]string{
+		"kafka_writer:queue": fmt.Sprintf("%d/%d", len(m.jobs), cap(m.jobs)),
+	}
 }
