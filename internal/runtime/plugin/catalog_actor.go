@@ -319,6 +319,15 @@ func (a *catalogActor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, er
 	return fmt.Errorf("unsupported catalog call %T", request), nil
 }
 
+// Terminate latches the terminal lifecycle and cancels pending router restarts; the supervisor fails
+// the in-flight calls this incarnation owned, so they are not touched here.
+func (a *catalogActor[T]) Terminate(reason error) {
+	defer a.reconcileStatus()
+	a.err = runtime.FirstError(reason, a.err)
+	a.lifecycle = CatalogActorStopped
+	a.cancelAllRouterRestarts(false)
+}
+
 // ---------------------------------------------------------------------------
 // Work
 // ---------------------------------------------------------------------------
@@ -613,6 +622,10 @@ func (a *catalogActor[T]) status() catalogActorStatus {
 		availability = runtime.AvailabilityReady
 	case routable > 0:
 		availability = runtime.AvailabilityDegraded
+	}
+	// A stopped catalog serves nothing, whatever its routers' cached statuses still claim.
+	if a.lifecycle == CatalogActorStopped {
+		availability = runtime.AvailabilityUnavailable
 	}
 
 	return catalogActorStatus{
