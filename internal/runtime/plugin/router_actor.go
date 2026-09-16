@@ -76,7 +76,7 @@ type deploymentRouteState struct {
 	name        gen.Atom
 	pid         gen.PID
 	restart     *runtime.ScheduledBackoff
-	status      deploymentManagerStatus
+	status      deploymentManagerActorStatus
 	statusEpoch int64
 	phase       deploymentRoutePhase
 	managers    map[gen.PID]struct{}
@@ -411,7 +411,7 @@ func (a *routerActor[T]) activateDesired(active **Deployment, desired *Deploymen
 	}
 	ref := a.routesByKey[desired.RouteKey()]
 	if ref != nil && ref.phase == deploymentRouteActive &&
-		ref.status.lifecycle == DeploymentManagerRunning && ref.status.availability == runtime.AvailabilityReady {
+		ref.status.lifecycle == DeploymentManagerActorRunning && ref.status.availability == runtime.AvailabilityReady {
 		*active = desired
 	}
 }
@@ -685,14 +685,14 @@ func (a *routerActor[T]) scheduleRouteStep(ref *deploymentRouteState) error {
 }
 
 // newDeploymentManager builds the DeploymentManager child that serves this route.
-func (a *routerActor[T]) newDeploymentManager(ref *deploymentRouteState) *deploymentManager[T] {
-	ref.status = deploymentManagerStatus{
+func (a *routerActor[T]) newDeploymentManager(ref *deploymentRouteState) *deploymentManagerActor[T] {
+	ref.status = deploymentManagerActorStatus{
 		err:          ref.status.err,
-		lifecycle:    DeploymentManagerStarting,
+		lifecycle:    DeploymentManagerActorStarting,
 		availability: runtime.AvailabilityUnavailable,
 		processes:    make(map[gen.PID]pluginProcessActorStatus),
 	}
-	return &deploymentManager[T]{
+	return &deploymentManagerActor[T]{
 		adapter:    a.adapter,
 		options:    a.opts.DeploymentManagerOptions,
 		deployment: ref.deployment,
@@ -807,13 +807,13 @@ func (a *routerActor[T]) deploymentStatusFor(deployment *Deployment) deploymentR
 	}
 	lifecycle := DeploymentRouteStarting
 	switch ref.status.lifecycle {
-	case DeploymentManagerRunning:
+	case DeploymentManagerActorRunning:
 		lifecycle = DeploymentRouteRunning
-	case DeploymentManagerDraining:
+	case DeploymentManagerActorDraining:
 		lifecycle = DeploymentRouteDraining
-	case DeploymentManagerStopped:
+	case DeploymentManagerActorStopped:
 		lifecycle = DeploymentRouteStopped
-	case DeploymentManagerFailed:
+	case DeploymentManagerActorFailed:
 		lifecycle = DeploymentRouteFailed
 	}
 	if ref.restart != nil && ref.restart.Pending {
