@@ -29,8 +29,9 @@ const (
 
 // reconcilerActorState tracks the desired-state reconciler actor.
 type reconcilerActorState struct {
-	pid    gen.PID
-	status reconcilerActorStatus
+	pid         gen.PID
+	status      reconcilerActorStatus
+	statusEpoch int64
 }
 
 // reconcilerActorStatus reports the reconciler state to its supervisor.
@@ -45,23 +46,25 @@ type reconcilerActorStatus struct {
 // coalescing, and retry policy, replacing its metas independently so an I/O failure discards neither.
 type reconcilerActor struct {
 	act.Actor
-	directory        string
-	revision         uint64
-	snapshotEvent    gen.Event
-	statusEvent      gen.Event
-	snapshot         *snapshot.Snapshot
-	readerActorReady bool
-	resolutionRetry  *runtime.ScheduledBackoff
-	resolver         artifactResolverMetaState
-	watcher          artifactWatcherMetaState
-	resolving        bool
-	dirty            bool
-	deferred         bool
+	directory             string
+	revision              uint64
+	snapshotEvent         gen.Event
+	statusEvent           gen.Event
+	snapshot              *snapshot.Snapshot
+	readerActorReady      bool
+	lastReaderStatusEpoch int64
+	resolutionRetry       *runtime.ScheduledBackoff
+	resolver              artifactResolverMetaState
+	watcher               artifactWatcherMetaState
+	resolving             bool
+	dirty                 bool
+	deferred              bool
 	// What this incarnation last proposed, so a re-resolution reproducing it is a no-op; nil until it
 	// proposes, which is why a replacement proposes once on its revision base.
 	proposed           map[string]routerDesiredState
 	proposedGeneration int64
 	lastStatus         reconcilerActorStatus
+	lastStatusEpoch    int64
 	labels             telemetry.Labels
 }
 
@@ -74,7 +77,10 @@ type reconcilerActor struct {
 type MessageReconcilerActorActivate struct{ revisionBase uint64 }
 
 // MessageReconcilerActorStatusChanged publishes the reconciler status to its supervisor.
-type MessageReconcilerActorStatusChanged struct{ status reconcilerActorStatus }
+type MessageReconcilerActorStatusChanged struct {
+	epoch  int64
+	status reconcilerActorStatus
+}
 
 // MessageResolutionRetry retries deferred artifact resolution after backoff.
 type MessageResolutionRetry struct{ token uint64 }
@@ -184,9 +190,10 @@ func (a *reconcilerActor) HandleMessage(from gen.PID, message any) error {
 		}, gen.MessagePriorityHigh)
 
 	case MessageArtifactWatcherStatusChanged:
-		if from != a.PID() || m.source != a.watcher.alias || a.watcher.alias == (gen.Alias{}) {
+		if from != a.PID() || m.source != a.watcher.alias || a.watcher.alias == (gen.Alias{}) || m.statusEpoch <= a.watcher.statusEpoch {
 			return nil
 		}
+		a.watcher.statusEpoch = m.statusEpoch
 		started := a.watcher.status.lifecycle != ArtifactWatcherMetaRunning
 		a.watcher.status.lifecycle = ArtifactWatcherMetaRunning
 		if m.directoryReadable && m.watchingDirectory {
@@ -350,11 +357,12 @@ func (a *reconcilerActor) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, er
 func (a *reconcilerActor) applyEvent(event gen.MessageEvent) error {
 	switch event.Event {
 	case a.statusEvent:
-		status, ok := event.Message.(snapshot.ReaderActorStatus)
-		if !ok {
+		message, ok := event.Message.(snapshot.MessageReaderActorStatusChanged)
+		if !ok || message.StatusEpoch <= a.lastReaderStatusEpoch {
 			return nil
 		}
-		a.readerActorReady = status.Availability == runtime.AvailabilityReady
+		a.lastReaderStatusEpoch = message.StatusEpoch
+		a.readerActorReady = message.Status.Availability == runtime.AvailabilityReady
 		a.reconcileStatus()
 		return nil
 
@@ -482,6 +490,7 @@ func (a *reconcilerActor) startArtifactWatcherMeta() error {
 		return nil
 	}
 	a.watcher.alias = alias
+	a.watcher.statusEpoch = 0
 	return nil
 }
 
@@ -618,16 +627,17 @@ func (a *reconcilerActor) status() reconcilerActorStatus {
 // reconcileStatus recomputes and, on change, reports the current reconciler availability to its supervisor
 func (a *reconcilerActor) reconcileStatus() {
 	next := a.status()
-	if next == a.lastStatus {
+	if sameReconcilerActorStatus(a.lastStatus, next) {
 		return
 	}
+	a.lastStatusEpoch = runtime.NextStatusEpoch(a.lastStatusEpoch)
 	a.lastStatus = next
 	a.propagateStatus(next)
 }
 
 // propagateStatus sends the supplied snapshot without reconciling state or publishing gauges.
 func (a *reconcilerActor) propagateStatus(next reconcilerActorStatus) {
-	_ = a.SendWithPriority(a.Parent(), MessageReconcilerActorStatusChanged{status: next}, gen.MessagePriorityHigh)
+	_ = a.SendWithPriority(a.Parent(), MessageReconcilerActorStatusChanged{epoch: a.lastStatusEpoch, status: next}, gen.MessagePriorityHigh)
 }
 
 // HandleInspect exposes lifecycle, both sub-workers' health, and the gates deciding a re-resolution.
@@ -656,4 +666,9 @@ func errorText(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+// sameReconcilerActorStatus compares the status fields that trigger publication.
+func sameReconcilerActorStatus(left, right reconcilerActorStatus) bool {
+	return left == right
 }

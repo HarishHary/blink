@@ -121,12 +121,13 @@ func (q *pendingQueue[T]) remove(entry *deploymentManagerCall[T]) {
 // assigned is the outstanding invocation count the manager schedules from, retiring stops a process once
 // its calls finish, and replace refills the slot, separating a failure from a deliberate shrink.
 type pluginProcessState struct {
-	pid      gen.PID
-	restart  *runtime.ScheduledBackoff
-	status   pluginProcessStatus
-	assigned int
-	retiring bool
-	replace  bool
+	pid         gen.PID
+	restart     *runtime.ScheduledBackoff
+	status      pluginProcessStatus
+	statusEpoch int64
+	assigned    int
+	retiring    bool
+	replace     bool
 }
 
 // deploymentManager owns invocation, scaling, and process lifecycle for one concrete deployment.
@@ -146,20 +147,21 @@ type deploymentManager[T Artifact] struct {
 	nextSlot  int
 	// desiredProcs is how many processes the manager wants running: min_procs at rest, one more per
 	// scale-up, and none for an idle deployment that reserves none.
-	desiredProcs   int
-	inFlightCalls  map[uint64]*deploymentManagerCall[T]
-	pendingCalls   pendingQueue[T]
-	lastStatus     deploymentManagerStatus
-	circuitOpen    bool
-	circuitToken   uint64
-	circuitStop    gen.CancelFunc
-	reconcileToken uint64
-	reconcileStop  gen.CancelFunc
-	idleSince      time.Time
-	lastScale      time.Time
-	lastError      error
-	growthProcs    int // processes held from the process budget, above this deployment's reservation
-	labels         telemetry.Labels
+	desiredProcs    int
+	inFlightCalls   map[uint64]*deploymentManagerCall[T]
+	pendingCalls    pendingQueue[T]
+	lastStatus      deploymentManagerStatus
+	lastStatusEpoch int64
+	circuitOpen     bool
+	circuitToken    uint64
+	circuitStop     gen.CancelFunc
+	reconcileToken  uint64
+	reconcileStop   gen.CancelFunc
+	idleSince       time.Time
+	lastScale       time.Time
+	lastError       error
+	growthProcs     int // processes held from the process budget, above this deployment's reservation
+	labels          telemetry.Labels
 }
 
 // ---------------------------------------------------------------------------
@@ -195,9 +197,10 @@ type MessageDeploymentManagerRetry struct {
 
 // MessageDeploymentManagerStatusChanged publishes the latest manager status to its Router.
 type MessageDeploymentManagerStatusChanged struct {
-	route   gen.Atom
-	manager gen.PID
-	status  deploymentManagerStatus
+	route       gen.Atom
+	manager     gen.PID
+	status      deploymentManagerStatus
+	statusEpoch int64
 }
 
 // MessageInvocationAccepted acknowledges manager ownership of an invocation.
@@ -298,9 +301,10 @@ func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 
 	case MessagePluginProcessStatusChanged:
 		_, process := m.slotFor(msg.process)
-		if process == nil || from != msg.process {
+		if process == nil || from != msg.process || msg.statusEpoch <= process.statusEpoch {
 			return nil
 		}
+		process.statusEpoch = msg.statusEpoch
 		wasReady := process.status.availability == runtime.AvailabilityReady
 		process.status = msg.status
 		// A process that came up is the only evidence recovery works; without this a slot's budget only shrinks.
@@ -891,6 +895,7 @@ func (m *deploymentManager[T]) startPluginProcess(slot int) bool {
 		return false
 	}
 	process.pid = pid
+	process.statusEpoch = 0
 	process.status = pluginProcessStatus{
 		lifecycle:    PluginProcessStarting,
 		availability: runtime.AvailabilityUnavailable,
@@ -1136,6 +1141,7 @@ func (m *deploymentManager[T]) reconcileStatus() {
 	if sameDeploymentManagerStatus(m.lastStatus, next) {
 		return
 	}
+	m.lastStatusEpoch = runtime.NextStatusEpoch(m.lastStatusEpoch)
 	m.lastStatus = next
 	m.propagateStatus(next)
 }
@@ -1143,7 +1149,9 @@ func (m *deploymentManager[T]) reconcileStatus() {
 // propagateStatus sends the supplied snapshot without reconciling state or publishing gauges.
 func (m *deploymentManager[T]) propagateStatus(next deploymentManagerStatus) {
 	_ = m.SendWithPriority(m.Parent(), MessageDeploymentManagerStatusChanged{
-		route: m.route, manager: m.PID(),
-		status: next,
+		statusEpoch: m.lastStatusEpoch,
+		route:       m.route,
+		manager:     m.PID(),
+		status:      next,
 	}, gen.MessagePriorityHigh)
 }

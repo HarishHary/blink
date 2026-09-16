@@ -20,11 +20,12 @@ import (
 
 // routerState tracks one router actor and its restart state.
 type routerState struct {
-	pid        gen.PID
-	generation uint64
-	restart    *runtime.ScheduledBackoff
-	status     routerActorStatus
-	retiring   bool
+	pid         gen.PID
+	generation  uint64
+	restart     *runtime.ScheduledBackoff
+	status      routerActorStatus
+	statusEpoch int64
+	retiring    bool
 }
 
 // RouterActorLifecycle describes one logical-plugin router actor incarnation.
@@ -70,14 +71,15 @@ const (
 
 // deploymentRouteState is one dynamic route: a stable address that outlives many manager PIDs.
 type deploymentRouteState struct {
-	key        DeploymentRouteKey
-	deployment Deployment
-	name       gen.Atom
-	pid        gen.PID
-	restart    *runtime.ScheduledBackoff
-	status     deploymentManagerStatus
-	phase      deploymentRoutePhase
-	managers   map[gen.PID]struct{}
+	key         DeploymentRouteKey
+	deployment  Deployment
+	name        gen.Atom
+	pid         gen.PID
+	restart     *runtime.ScheduledBackoff
+	status      deploymentManagerStatus
+	statusEpoch int64
+	phase       deploymentRoutePhase
+	managers    map[gen.PID]struct{}
 }
 
 // routerActor owns one dynamic Ergo route per concrete DeploymentRouteKey.
@@ -86,6 +88,7 @@ type routerActor[T Artifact] struct {
 	opts             RouterOptions
 	lifecycle        RouterActorLifecycle
 	lastStatus       routerActorStatus
+	lastStatusEpoch  int64
 	pluginID         string
 	generation       uint64
 	desiredRevision  uint64
@@ -151,10 +154,11 @@ type MessageRouterDrained struct {
 
 // MessageRouterStatusChanged publishes a changed router status to the catalog.
 type MessageRouterStatusChanged struct {
-	pluginID   string
-	pid        gen.PID
-	generation uint64
-	status     routerActorStatus
+	pluginID    string
+	pid         gen.PID
+	generation  uint64
+	status      routerActorStatus
+	statusEpoch int64
 }
 
 // MessageRetryRouteStep is the self-timer that re-drives a route's pending lifecycle step.
@@ -266,6 +270,10 @@ func (a *routerActor[T]) HandleMessage(from gen.PID, message any) error {
 
 	case MessageDeploymentManagerStatusChanged:
 		if ref, ok := a.currentManager(m.route, from, m.manager); ok {
+			if m.statusEpoch <= ref.statusEpoch {
+				return nil
+			}
+			ref.statusEpoch = m.statusEpoch
 			ref.status = m.status
 			ref.managers[m.manager] = struct{}{}
 			if ref.restart != nil {
@@ -689,7 +697,10 @@ func (a *routerActor[T]) refreshRoutePID(ref *deploymentRouteState) gen.PID {
 	if !ok {
 		return gen.PID{}
 	}
-	ref.pid = info.PID
+	if ref.pid != info.PID {
+		ref.statusEpoch = 0
+		ref.pid = info.PID
+	}
 	if info.PID != (gen.PID{}) {
 		if ref.managers == nil {
 			ref.managers = make(map[gen.PID]struct{})
@@ -845,6 +856,7 @@ func (a *routerActor[T]) reconcileStatus() {
 	if sameRouterActorStatus(a.lastStatus, next) {
 		return
 	}
+	a.lastStatusEpoch = runtime.NextStatusEpoch(a.lastStatusEpoch)
 	a.lastStatus = next
 	a.propagateStatus(next)
 }
@@ -852,7 +864,7 @@ func (a *routerActor[T]) reconcileStatus() {
 // propagateStatus sends the supplied snapshot without reconciling state or publishing gauges.
 func (a *routerActor[T]) propagateStatus(next routerActorStatus) {
 	if a.generation != 0 {
-		_ = a.SendWithPriority(a.Parent(), MessageRouterStatusChanged{pluginID: a.pluginID, pid: a.PID(), generation: a.generation, status: next.clone()}, gen.MessagePriorityHigh)
+		_ = a.SendWithPriority(a.Parent(), MessageRouterStatusChanged{statusEpoch: a.lastStatusEpoch, pluginID: a.pluginID, pid: a.PID(), generation: a.generation, status: next.clone()}, gen.MessagePriorityHigh)
 	}
 }
 

@@ -78,26 +78,27 @@ type runtimeCall struct {
 // supervisor coordinates the runtime actor subtree.
 type supervisor[P Artifact, M any] struct {
 	act.Supervisor
-	opts                 SupervisorOptions
-	namespace            string
-	adapter              *Adapter[P]
-	lifecycle            SupervisorLifecycle
-	transition           SupervisorTransitionPhase
-	liveStatus           SupervisorStatus
-	loader               snapshot.Loader[M]
-	reconciler           reconcilerActorState
-	catalog              catalogActorState
-	snapshot             snapshot.SupervisorState
-	projection           snapshot.ProjectionActorState
-	desiredState         MessageApplyCatalogDesiredState
-	pendingDesiredState  MessageApplyCatalogDesiredState
-	inFlightCalls        map[uint64]runtimeCall
-	drainWaiters         []runtimeDrainWaiter
-	transitionGeneration int64
-	labels               telemetry.Labels
-	signal               telemetry.Signal
-	collectorsRegistered bool
-	radarLogged          bool
+	opts                      SupervisorOptions
+	namespace                 string
+	adapter                   *Adapter[P]
+	lifecycle                 SupervisorLifecycle
+	transition                SupervisorTransitionPhase
+	liveStatus                SupervisorStatus
+	loader                    snapshot.Loader[M]
+	reconciler                reconcilerActorState
+	catalog                   catalogActorState
+	snapshot                  snapshot.SupervisorState
+	projection                snapshot.ProjectionActorState
+	lastProjectionStatusEpoch int64
+	desiredState              MessageApplyCatalogDesiredState
+	pendingDesiredState       MessageApplyCatalogDesiredState
+	inFlightCalls             map[uint64]runtimeCall
+	drainWaiters              []runtimeDrainWaiter
+	transitionGeneration      int64
+	labels                    telemetry.Labels
+	signal                    telemetry.Signal
+	collectorsRegistered      bool
+	radarLogged               bool
 }
 
 // ---------------------------------------------------------------------------
@@ -340,9 +341,10 @@ func (s *supervisor[P, M]) HandleMessage(from gen.PID, message any) error {
 		}
 
 	case MessageReconcilerActorStatusChanged:
-		if from != s.reconciler.pid {
+		if from != s.reconciler.pid || m.epoch <= s.reconciler.statusEpoch {
 			return nil
 		}
+		s.reconciler.statusEpoch = m.epoch
 		s.reconciler.status = m.status
 		if m.status.snapshotGeneration != s.desiredState.snapshotGeneration ||
 			m.status.revision != s.desiredState.desiredRevision ||
@@ -374,9 +376,10 @@ func (s *supervisor[P, M]) HandleMessage(from gen.PID, message any) error {
 		return s.requestProjectionCommit()
 
 	case snapshot.MessageProjectionActorStatusChanged:
-		if from != s.snapshot.Pid {
+		if from != s.snapshot.Pid || m.StatusEpoch <= s.lastProjectionStatusEpoch {
 			return nil
 		}
+		s.lastProjectionStatusEpoch = m.StatusEpoch
 		return s.handleProjectionStatus(m.Status, m.ProjectionPID)
 
 	case snapshot.MessageProjectionCommitResult:
@@ -444,9 +447,10 @@ func (s *supervisor[P, M]) HandleMessage(from gen.PID, message any) error {
 
 	case MessageCatalogStatusChanged:
 		if from != s.catalog.pid ||
-			m.pid != s.catalog.pid {
+			m.pid != s.catalog.pid || m.statusEpoch <= s.catalog.statusEpoch {
 			return nil
 		}
+		s.catalog.statusEpoch = m.statusEpoch
 
 		s.mergeCatalogStatus(m.status)
 		s.completeDesiredStateTransition()
@@ -697,6 +701,7 @@ func (s *supervisor[P, M]) startSnapshotSupervisor(pid gen.PID) {
 		return
 	}
 	s.snapshot.Pid = pid
+	s.lastProjectionStatusEpoch = 0
 	s.snapshot.Epoch++
 	s.projection.Pid = gen.PID{}
 	s.projection.ReadyGeneration = 0
@@ -713,6 +718,10 @@ func (s *supervisor[P, M]) startSnapshotSupervisor(pid gen.PID) {
 // startReconcilerActor initializes a desired-state reconciler incarnation.
 func (s *supervisor[P, M]) startReconcilerActor(pid gen.PID) error {
 	state := &s.reconciler
+	if state.pid == pid {
+		return nil
+	}
+	state.statusEpoch = 0
 	if s.transition != SupervisorTransitionIdle {
 		s.transition = SupervisorTransitionPreparing
 	}
@@ -735,6 +744,10 @@ func (s *supervisor[P, M]) startReconcilerActor(pid gen.PID) error {
 // startCatalogActor initializes a catalog actor incarnation.
 func (s *supervisor[P, M]) startCatalogActor(pid gen.PID) error {
 	state := &s.catalog
+	if state.pid == pid {
+		return nil
+	}
+	state.statusEpoch = 0
 	state.pid = pid
 	state.status = newCatalogStatus(state.status.lastError)
 

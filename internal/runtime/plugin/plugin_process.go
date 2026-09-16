@@ -45,12 +45,13 @@ type pluginProcessCall struct {
 // pluginProcess owns one plugin process meta-process incarnation.
 type pluginProcess[T Artifact] struct {
 	act.Actor
-	adapter    *Adapter[T]
-	options    PluginProcessOptions
-	deployment Deployment
-	pluginMeta pluginMetaState
-	lastStatus pluginProcessStatus
-	calls      map[uint64]*pluginProcessCall
+	adapter         *Adapter[T]
+	options         PluginProcessOptions
+	deployment      Deployment
+	pluginMeta      pluginMetaState
+	lastStatus      pluginProcessStatus
+	lastStatusEpoch int64
+	calls           map[uint64]*pluginProcessCall
 }
 
 // pluginMetaInvokeSlack pads the backstop timer so a late-scheduled timer never calls a subprocess
@@ -63,8 +64,9 @@ const pluginMetaInvokeSlack = time.Second
 
 // MessagePluginProcessStatusChanged reports a process status update to its manager.
 type MessagePluginProcessStatusChanged struct {
-	process gen.PID
-	status  pluginProcessStatus
+	process     gen.PID
+	status      pluginProcessStatus
+	statusEpoch int64
 }
 
 // MessagePluginProcessStopped reports process shutdown to its manager.
@@ -597,6 +599,7 @@ func (p *pluginProcess[T]) reconcileStatus() {
 	if samePluginProcessStatus(p.lastStatus, next) {
 		return
 	}
+	p.lastStatusEpoch = runtime.NextStatusEpoch(p.lastStatusEpoch)
 	p.lastStatus = next
 	p.propagateStatus(next)
 }
@@ -604,8 +607,9 @@ func (p *pluginProcess[T]) reconcileStatus() {
 // propagateStatus sends the supplied snapshot without reconciling state or publishing gauges.
 func (p *pluginProcess[T]) propagateStatus(next pluginProcessStatus) {
 	_ = p.SendWithPriority(p.Parent(), MessagePluginProcessStatusChanged{
-		process: p.PID(),
-		status:  next,
+		statusEpoch: p.lastStatusEpoch,
+		process:     p.PID(),
+		status:      next,
 	}, gen.MessagePriorityHigh)
 }
 

@@ -27,8 +27,9 @@ const (
 
 // catalogActorState tracks the catalog actor incarnation and status.
 type catalogActorState struct {
-	pid    gen.PID
-	status catalogActorStatus
+	pid         gen.PID
+	status      catalogActorStatus
+	statusEpoch int64
 }
 
 // catalogActorStatus is owned by catalogActor, except LastError, which the supervisor owns because
@@ -66,6 +67,7 @@ type catalogActor[T Artifact] struct {
 	draining        bool
 	drainReported   bool
 	lastStatus      catalogActorStatus
+	lastStatusEpoch int64
 	routers         map[string]*routerState
 	desired         map[string]routerDesiredState
 	inFlightCalls   map[uint64]gen.PID
@@ -93,8 +95,9 @@ type MessageCatalogDrained struct {
 
 // MessageCatalogStatusChanged publishes a changed catalog status to the supervisor.
 type MessageCatalogStatusChanged struct {
-	pid    gen.PID
-	status catalogActorStatus
+	pid         gen.PID
+	status      catalogActorStatus
+	statusEpoch int64
 }
 
 // MessageRouterRestart re-drives a pending router restart after backoff.
@@ -241,9 +244,10 @@ func (a *catalogActor[T]) HandleMessage(from gen.PID, message any) error {
 		if ref == nil ||
 			from != ref.pid ||
 			ref.pid != m.pid ||
-			ref.generation != m.generation {
+			ref.generation != m.generation || m.statusEpoch <= ref.statusEpoch {
 			return nil
 		}
+		ref.statusEpoch = m.statusEpoch
 
 		next := m.status.clone()
 		a.cancelRouterRestartBackoff(m.pluginID, true)
@@ -393,6 +397,7 @@ func (a *catalogActor[T]) startRouter(id string) (*routerState, error) {
 	}
 
 	ref.generation++
+	ref.statusEpoch = 0
 	generation := ref.generation
 	ref.retiring = false
 	prevErr := ref.status.lastError
@@ -629,6 +634,7 @@ func (a *catalogActor[T]) reconcileStatus() {
 	if sameCatalogActorStatus(a.lastStatus, next) {
 		return
 	}
+	a.lastStatusEpoch = runtime.NextStatusEpoch(a.lastStatusEpoch)
 	a.lastStatus = next
 	a.propagateStatus(next)
 }
@@ -639,8 +645,9 @@ func (a *catalogActor[T]) propagateStatus(next catalogActorStatus) {
 		return
 	}
 	_ = a.SendWithPriority(a.Parent(), MessageCatalogStatusChanged{
-		pid:    a.PID(),
-		status: next.clone(),
+		statusEpoch: a.lastStatusEpoch,
+		pid:         a.PID(),
+		status:      next.clone(),
 	}, gen.MessagePriorityHigh)
 }
 

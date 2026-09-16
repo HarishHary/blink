@@ -35,9 +35,10 @@ const (
 
 // artifactWatcherMetaState tracks the watcher meta-process state and restart policy.
 type artifactWatcherMetaState struct {
-	alias   gen.Alias
-	restart *runtime.ScheduledBackoff
-	status  artifactWatcherMetaStatus
+	alias       gen.Alias
+	statusEpoch int64
+	restart     *runtime.ScheduledBackoff
+	status      artifactWatcherMetaStatus
 }
 
 // artifactWatcherMetaStatus is owned by reconcilerActor: the watcher reports directory facts, the
@@ -62,9 +63,8 @@ type artifactWatcherRunState struct {
 	fingerprint       [sha256.Size]byte
 	directoryReadable bool
 	watchingDirectory bool
-	statePublished    bool
-	publishedReadable bool
-	publishedWatching bool
+	lastStatus        MessageArtifactWatcherStatusChanged
+	lastStatusEpoch   int64
 }
 
 // ---------------------------------------------------------------------------
@@ -77,6 +77,7 @@ type MessageArtifactDirectoryChanged struct{ source gen.Alias }
 // MessageArtifactWatcherStatusChanged reports watcher readability and attachment state.
 type MessageArtifactWatcherStatusChanged struct {
 	source            gen.Alias
+	statusEpoch       int64
 	directoryReadable bool
 	watchingDirectory bool
 }
@@ -313,32 +314,36 @@ func artifactDirectoryFingerprint(directory string) ([sha256.Size]byte, error) {
 // reconcileStatus propagates changed directory facts; the owner actor derives health and gauges.
 // The cache stays in Start's run state, never in fields shared with concurrent meta callbacks.
 func (m *artifactWatcherMeta) reconcileStatus(state *artifactWatcherRunState, watchErr error) error {
-	if state.statePublished &&
-		state.publishedReadable == state.directoryReadable &&
-		state.publishedWatching == state.watchingDirectory {
+	next := MessageArtifactWatcherStatusChanged{
+		statusEpoch:       runtime.NextStatusEpoch(state.lastStatusEpoch),
+		source:            m.ID(),
+		directoryReadable: state.directoryReadable,
+		watchingDirectory: state.watchingDirectory,
+	}
+	if state.lastStatusEpoch != 0 && sameArtifactWatcherStatus(state.lastStatus, next) {
 		return nil
 	}
 	if watchErr != nil {
 		m.Log().Warning("artifact watcher unavailable: directory=%q alias=%s error=%v", m.directory, m.ID(), watchErr)
 	}
-	if err := m.propagateStatus(state); err != nil {
+	if err := m.propagateStatus(next); err != nil {
 		return err
 	}
 
-	state.statePublished = true
-	state.publishedReadable = state.directoryReadable
-	state.publishedWatching = state.watchingDirectory
+	state.lastStatus = next
+	state.lastStatusEpoch = next.statusEpoch
 	return nil
 }
 
 // propagateStatus sends directory facts without changing the reconciliation cache.
-func (m *artifactWatcherMeta) propagateStatus(state *artifactWatcherRunState) error {
-	if err := m.SendWithPriority(m.Parent(), MessageArtifactWatcherStatusChanged{
-		source:            m.ID(),
-		directoryReadable: state.directoryReadable,
-		watchingDirectory: state.watchingDirectory,
-	}, gen.MessagePriorityHigh); err != nil {
+func (m *artifactWatcherMeta) propagateStatus(next MessageArtifactWatcherStatusChanged) error {
+	if err := m.SendWithPriority(m.Parent(), next, gen.MessagePriorityHigh); err != nil {
 		return fmt.Errorf("%w: publish watcher state: %w", runtime.ErrArtifactWatch, err)
 	}
 	return nil
+}
+
+// sameArtifactWatcherStatus compares directory facts, independently of their publication epoch.
+func sameArtifactWatcherStatus(left, right MessageArtifactWatcherStatusChanged) bool {
+	return left.directoryReadable == right.directoryReadable && left.watchingDirectory == right.watchingDirectory
 }
