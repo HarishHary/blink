@@ -72,12 +72,12 @@ type MessageSnapshotWriteResult struct {
 
 // MessageSnapshotWriterIOStarted reports an accepted reservation and its local completion proof.
 type MessageSnapshotWriterIOStarted struct {
-	Alias      gen.Alias
+	source     gen.Alias
 	completion *runtime.IOBarrier
 }
 
 // MessageSnapshotWriterIOStopped reports that the writer meta released its I/O reservation.
-type MessageSnapshotWriterIOStopped struct{ Alias gen.Alias }
+type MessageSnapshotWriterIOStopped struct{ source gen.Alias }
 
 // ---------------------------------------------------------------------------
 // Actor lifecycle & handlers
@@ -102,7 +102,7 @@ func (m *snapshotWriterMeta) Init(process gen.MetaProcess) error {
 		return fmt.Errorf("snapshot writer meta: reserve completion proof")
 	}
 	m.completion.Seal()
-	if err := m.SendWithPriority(m.supervisor, MessageSnapshotWriterIOStarted{Alias: m.ID(), completion: m.completion}, gen.MessagePriorityHigh); err != nil {
+	if err := m.SendWithPriority(m.supervisor, MessageSnapshotWriterIOStarted{source: m.ID(), completion: m.completion}, gen.MessagePriorityHigh); err != nil {
 		m.cancelRun()
 		m.completion.Release()
 		m.barrier.Release()
@@ -115,7 +115,7 @@ func (m *snapshotWriterMeta) Init(process gen.MetaProcess) error {
 // Start loads persisted state and writes queued updates.
 func (m *snapshotWriterMeta) Start() (runErr error) {
 	defer func() {
-		_ = m.SendWithPriority(m.supervisor, MessageSnapshotWriterIOStopped{Alias: m.ID()}, gen.MessagePriorityHigh)
+		_ = m.SendWithPriority(m.supervisor, MessageSnapshotWriterIOStopped{source: m.ID()}, gen.MessagePriorityHigh)
 	}()
 	defer m.completion.Release()
 	defer m.barrier.Release()

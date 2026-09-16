@@ -37,10 +37,10 @@ type supervisorStatus struct {
 }
 
 type actorState struct {
-	pid             gen.PID
-	lastStatusEpoch int64
-	status          actorStatus
-	activationSent  bool
+	pid            gen.PID
+	statusEpoch    int64
+	status         actorStatus
+	activationSent bool
 }
 
 // writerIOFence tracks a writer's owner and proof that its I/O has finished.
@@ -70,8 +70,8 @@ type supervisor[T plugin.Artifact] struct {
 // ---------------------------------------------------------------------------
 
 type MessageActorStatusChanged struct {
-	epoch  int64
-	status actorStatus
+	statusEpoch int64
+	status      actorStatus
 }
 
 // MessageRadarTick drives the supervisor's periodic radar reconcile.
@@ -176,10 +176,10 @@ func (s *supervisor[T]) HandleMessage(from gen.PID, message any) error {
 		}
 		return s.advanceShutdown()
 	case MessageActorStatusChanged:
-		if s.actor.pid != from || m.epoch <= s.actor.lastStatusEpoch {
+		if s.actor.pid != from || m.statusEpoch <= s.actor.statusEpoch {
 			return nil
 		}
-		s.actor.lastStatusEpoch = m.epoch
+		s.actor.statusEpoch = m.statusEpoch
 		previous := s.actor.status.Lifecycle
 		s.actor.status = m.status
 		if previous != m.status.Lifecycle {
@@ -189,19 +189,19 @@ func (s *supervisor[T]) HandleMessage(from gen.PID, message any) error {
 			return s.advanceShutdown()
 		}
 	case MessageSnapshotWriterIOStarted:
-		if s.actor.pid != from || m.Alias == (gen.Alias{}) || m.completion == nil {
+		if s.actor.pid != from || m.source == (gen.Alias{}) || m.completion == nil {
 			return nil
 		}
-		if _, exists := s.writerFences[m.Alias]; exists {
+		if _, exists := s.writerFences[m.source]; exists {
 			return nil
 		}
 		if s.writerFences == nil {
 			s.writerFences = make(map[gen.Alias]writerIOFence)
 		}
-		s.writerFences[m.Alias] = writerIOFence{owner: from, completion: m.completion}
-		s.Log().Debug("snapshot writer I/O fence registered: name=%s child=%s alias=%s active=%d", s.Name(), from, m.Alias, len(s.writerFences))
+		s.writerFences[m.source] = writerIOFence{owner: from, completion: m.completion}
+		s.Log().Debug("snapshot writer I/O fence registered: name=%s child=%s alias=%s active=%d", s.Name(), from, m.source, len(s.writerFences))
 	case MessageSnapshotWriterIOStopped:
-		return s.completeIOFence(from, m.Alias)
+		return s.completeIOFence(from, m.source)
 	}
 	return nil
 }
@@ -262,7 +262,7 @@ func (s *supervisor[T]) completeIOFence(from gen.PID, alias gen.Alias) error {
 		return nil
 	}
 	if s.actor.pid == from {
-		if err := s.SendWithPriority(from, MessageSnapshotWriterIOStopped{Alias: alias}, gen.MessagePriorityHigh); err != nil && !stalePIDSendFailure(err) {
+		if err := s.SendWithPriority(from, MessageSnapshotWriterIOStopped{source: alias}, gen.MessagePriorityHigh); err != nil && !stalePIDSendFailure(err) {
 			s.Log().Error("snapshot writer I/O completion forwarding failed: name=%s child=%s alias=%s error=%v", s.Name(), from, alias, err)
 			//argus:allow A2012 forwarding failure is fatal because losing this completion blocks writer replacement and drain
 			return fmt.Errorf("forward snapshot writer I/O completion to %s: %w", from, err)

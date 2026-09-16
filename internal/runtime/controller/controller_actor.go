@@ -360,10 +360,10 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 		if from != a.Parent() {
 			return nil
 		}
-		if _, ok := a.writer.activeIO[m.Alias]; !ok {
+		if _, ok := a.writer.activeIO[m.source]; !ok {
 			return nil
 		}
-		delete(a.writer.activeIO, m.Alias)
+		delete(a.writer.activeIO, m.source)
 		if a.lifecycle == ActorDraining || a.lifecycle == ActorDrained {
 			return a.maybeDrained()
 		}
@@ -820,7 +820,7 @@ func (a *actor[T]) reconcileStatus() {
 
 // propagateStatus sends the supplied snapshot without reconciling state or publishing gauges.
 func (a *actor[T]) propagateStatus(next actorStatus) {
-	_ = a.SendWithPriority(a.Parent(), MessageActorStatusChanged{epoch: a.lastStatusEpoch, status: next}, gen.MessagePriorityHigh)
+	_ = a.SendWithPriority(a.Parent(), MessageActorStatusChanged{statusEpoch: a.lastStatusEpoch, status: next}, gen.MessagePriorityHigh)
 }
 
 // publishGauges publishes current values even when the controller status is unchanged.
