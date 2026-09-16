@@ -1,6 +1,7 @@
 package brokers
 
 import (
+	"bytes"
 	"context"
 )
 
@@ -11,6 +12,31 @@ type Message struct {
 	Offset    int64
 	Key       []byte
 	Value     []byte
+}
+
+// Clone returns a copy with independently owned key and value bytes.
+func (m Message) Clone() Message {
+	m.Key = bytes.Clone(m.Key)
+	m.Value = bytes.Clone(m.Value)
+	return m
+}
+
+// CloneMessages returns a deep copy of the messages' keys and values.
+func CloneMessages(messages []Message) []Message {
+	cloned := make([]Message, len(messages))
+	for i, message := range messages {
+		cloned[i] = message.Clone()
+	}
+	return cloned
+}
+
+// TotalBytes returns the total key and value bytes, excluding envelope metadata.
+func TotalBytes(messages []Message) int {
+	size := 0
+	for _, message := range messages {
+		size += len(message.Key) + len(message.Value)
+	}
+	return size
 }
 
 // Reader consumes messages without implicitly committing offsets.
