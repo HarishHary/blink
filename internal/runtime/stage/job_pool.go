@@ -25,6 +25,7 @@ const (
 
 // JobPoolStatus reports job-pool lifecycle and availability.
 type JobPoolStatus struct {
+	LastError    error
 	Lifecycle    JobPoolLifecycle
 	Availability runtime.Availability
 }
@@ -68,20 +69,27 @@ func NewJobPool(opts JobPoolOptions) gen.ProcessBehavior {
 // Init validates the pool configuration and schedules startup completion.
 func (p *jobPool) Init(...any) (act.PoolOptions, error) {
 	if err := validateJobPoolOptions(p.opts); err != nil {
+		p.lastStatus.LastError = err
 		return act.PoolOptions{}, err
 	}
 	info, err := p.Info()
 	if err != nil {
-		return act.PoolOptions{}, fmt.Errorf("job pool: inspect mailbox: %w", err)
+		err := fmt.Errorf("job pool: inspect mailbox: %w", err)
+		p.lastStatus.LastError = err
+		return act.PoolOptions{}, err
 	}
 	if info.MailboxSize != p.opts.MailboxSize {
-		return act.PoolOptions{}, fmt.Errorf("job pool: mailbox size is %d, want %d", info.MailboxSize, p.opts.MailboxSize)
+		err := fmt.Errorf("job pool: mailbox size is %d, want %d", info.MailboxSize, p.opts.MailboxSize)
+		p.lastStatus.LastError = err
+		return act.PoolOptions{}, err
 	}
 	p.lifecycle = JobPoolStarting
-	p.reconcileStatus()
+	p.reconcileStatus(nil)
 	// The high-priority self-message reports ready after the pool creates its workers.
 	if err := p.SendWithPriority(p.PID(), MessageJobPoolStarted{}, gen.MessagePriorityHigh); err != nil {
-		return act.PoolOptions{}, fmt.Errorf("job pool: schedule startup: %w", err)
+		err := fmt.Errorf("job pool: schedule startup: %w", err)
+		p.lastStatus.LastError = err
+		return act.PoolOptions{}, err
 	}
 	return act.PoolOptions{
 		PoolSize:          p.opts.Workers,
@@ -99,7 +107,7 @@ func (p *jobPool) HandleMessage(from gen.PID, message any) error {
 			return nil
 		}
 		epoch := p.lastStatusEpoch
-		p.reconcileStatus()
+		p.reconcileStatus(p.lastStatus.LastError)
 		if p.lastStatusEpoch == epoch {
 			p.propagateStatus(p.lastStatus)
 		}
@@ -109,7 +117,7 @@ func (p *jobPool) HandleMessage(from gen.PID, message any) error {
 			return nil
 		}
 		p.lifecycle = JobPoolRunning
-		p.reconcileStatus()
+		p.reconcileStatus(nil)
 		return nil
 	}
 	return nil
@@ -121,9 +129,9 @@ func (p *jobPool) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
 }
 
 // Terminate marks the pool stopped and publishes its final status.
-func (p *jobPool) Terminate(error) {
+func (p *jobPool) Terminate(reason error) {
 	p.lifecycle = JobPoolStopped
-	p.reconcileStatus()
+	p.reconcileStatus(reason)
 }
 
 // ---------------------------------------------------------------------------
@@ -136,13 +144,18 @@ func (p *jobPool) status() JobPoolStatus {
 	if p.lifecycle == JobPoolRunning {
 		availability = runtime.AvailabilityReady
 	}
-	return JobPoolStatus{Lifecycle: p.lifecycle, Availability: availability}
+	return JobPoolStatus{
+		Lifecycle:    p.lifecycle,
+		Availability: availability,
+		LastError:    p.lastStatus.LastError,
+	}
 }
 
 // reconcileStatus refreshes gauges on every reconciliation and propagates status only on change.
-func (p *jobPool) reconcileStatus() {
+func (p *jobPool) reconcileStatus(err error) {
 	p.publishGauges()
 	next := p.status()
+	next.LastError = err
 	if sameJobPoolStatus(p.lastStatus, next) {
 		return
 	}
@@ -160,6 +173,7 @@ func (p *jobPool) propagateStatus(next JobPoolStatus) {
 func (p *jobPool) HandleInspect(from gen.PID, item ...string) map[string]string {
 	result := p.Pool.HandleInspect(from, item...)
 	status := p.status()
+	result["job_pool:last_error"] = runtime.ErrorText(status.LastError)
 	result["job_pool:lifecycle"] = string(status.Lifecycle)
 	result["job_pool:availability"] = string(status.Availability)
 	return result
@@ -178,5 +192,7 @@ func (p *jobPool) publishGauges() {
 
 // sameJobPoolStatus compares the status fields that trigger publication.
 func sameJobPoolStatus(left, right JobPoolStatus) bool {
-	return left == right
+	return left.Lifecycle == right.Lifecycle &&
+		left.Availability == right.Availability &&
+		runtime.ErrorText(left.LastError) == runtime.ErrorText(right.LastError)
 }
