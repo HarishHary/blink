@@ -17,20 +17,20 @@ import (
 // Types & state
 // ---------------------------------------------------------------------------
 
-// DeploymentManagerLifecycle describes the lifecycle of one deployment manager.
-type DeploymentManagerLifecycle string
+// DeploymentManagerActorLifecycle describes the lifecycle of one deployment manager.
+type DeploymentManagerActorLifecycle string
 
 const (
-	DeploymentManagerStarting DeploymentManagerLifecycle = "starting"
-	DeploymentManagerRunning  DeploymentManagerLifecycle = "running"
-	DeploymentManagerDraining DeploymentManagerLifecycle = "draining"
-	DeploymentManagerFailed   DeploymentManagerLifecycle = "failed"
-	DeploymentManagerStopped  DeploymentManagerLifecycle = "stopped"
+	DeploymentManagerActorStarting DeploymentManagerActorLifecycle = "starting"
+	DeploymentManagerActorRunning  DeploymentManagerActorLifecycle = "running"
+	DeploymentManagerActorDraining DeploymentManagerActorLifecycle = "draining"
+	DeploymentManagerActorFailed   DeploymentManagerActorLifecycle = "failed"
+	DeploymentManagerActorStopped  DeploymentManagerActorLifecycle = "stopped"
 )
 
-// deploymentManagerStatus is the manager-owned deployment availability snapshot.
-type deploymentManagerStatus struct {
-	lifecycle         DeploymentManagerLifecycle
+// deploymentManagerActorStatus is the manager-owned deployment availability snapshot.
+type deploymentManagerActorStatus struct {
+	lifecycle         DeploymentManagerActorLifecycle
 	availability      runtime.Availability
 	currentProcs      int
 	readyProcs        int
@@ -40,8 +40,8 @@ type deploymentManagerStatus struct {
 	dispatching       int
 	active            int
 	availableCapacity int
-	lastError         error
 	processes         map[gen.PID]pluginProcessActorStatus
+	err               error
 }
 
 // deploymentManagerCallPhase tracks one invocation through the manager pipeline.
@@ -116,11 +116,11 @@ func (q *pendingQueue[T]) remove(entry *deploymentManagerCall[T]) {
 	q.length--
 }
 
-// pluginProcessState is one process slot: a stable identity that outlives the PIDs filling it, what the
+// pluginProcessActorState is one process slot: a stable identity that outlives the PIDs filling it, what the
 // current process reported, and the backoff that owns its next start. A zero pid waits on that backoff,
 // assigned is the outstanding invocation count the manager schedules from, retiring stops a process once
 // its calls finish, and replace refills the slot, separating a failure from a deliberate shrink.
-type pluginProcessState struct {
+type pluginProcessActorState struct {
 	pid         gen.PID
 	restart     *runtime.ScheduledBackoff
 	status      pluginProcessActorStatus
@@ -130,8 +130,8 @@ type pluginProcessState struct {
 	replace     bool
 }
 
-// deploymentManager owns invocation, scaling, and process lifecycle for one concrete deployment.
-type deploymentManager[T Artifact] struct {
+// deploymentManagerActor owns invocation, scaling, and process lifecycle for one concrete deployment.
+type deploymentManagerActor[T Artifact] struct {
 	act.Actor
 	adapter    *Adapter[T]
 	options    DeploymentManagerOptions
@@ -141,7 +141,7 @@ type deploymentManager[T Artifact] struct {
 	route      gen.Atom
 	// processes are this deployment's slots by id, order records the sequence they were opened in so
 	// shrinking retires the newest, and byPID resolves a child's facts back to its slot.
-	processes map[int]*pluginProcessState
+	processes map[int]*pluginProcessActorState
 	order     []int
 	byPID     map[gen.PID]int
 	nextSlot  int
@@ -150,8 +150,6 @@ type deploymentManager[T Artifact] struct {
 	desiredProcs    int
 	inFlightCalls   map[uint64]*deploymentManagerCall[T]
 	pendingCalls    pendingQueue[T]
-	lastStatus      deploymentManagerStatus
-	lastStatusEpoch int64
 	circuitOpen     bool
 	circuitToken    uint64
 	circuitStop     gen.CancelFunc
@@ -159,7 +157,11 @@ type deploymentManager[T Artifact] struct {
 	reconcileStop   gen.CancelFunc
 	idleSince       time.Time
 	lastScale       time.Time
-	growthProcs     int // processes held from the process budget, above this deployment's reservation
+	growthProcs     int                          // processes held from the process budget, above this deployment's reservation
+	stopped         bool                         // latched by Terminate; the terminal lifecycle outlives the state it was derived from
+	err             error                        // the manager's own failure, kept apart from its processes' errors
+	lastStatus      deploymentManagerActorStatus // last published projection, the baseline reconcileStatus dedupes against
+	lastStatusEpoch int64
 	labels          telemetry.Labels
 }
 
@@ -198,7 +200,7 @@ type MessageDeploymentManagerRetry struct {
 type MessageDeploymentManagerStatusChanged struct {
 	route       gen.Atom
 	manager     gen.PID
-	status      deploymentManagerStatus
+	status      deploymentManagerActorStatus
 	statusEpoch int64
 }
 
@@ -227,7 +229,7 @@ type MessageDeploymentManagerTerminated struct {
 // ---------------------------------------------------------------------------
 
 // Init validates configuration and starts the deployment's minimum process count.
-func (m *deploymentManager[T]) Init(...any) error {
+func (m *deploymentManagerActor[T]) Init(...any) error {
 	m.options = deploymentManagerOptionsWithDefaults(m.options)
 	if m.deployment.MinProcs < 0 || m.deployment.MaxProcs > MaxDeploymentProcs || m.deployment.MinProcs > m.deployment.ProcessCountLimit() {
 		return fmt.Errorf("deployment manager: invalid process bounds min=%d max=%d", m.deployment.MinProcs, m.deployment.ProcessCountLimit())
@@ -236,7 +238,7 @@ func (m *deploymentManager[T]) Init(...any) error {
 		return fmt.Errorf("deployment manager: invalid process capacity calls=%d max=%d", m.deployment.MaxConcurrentCallsPerProcess, MaxDeploymentCallsPerProcess)
 	}
 	m.inFlightCalls = make(map[uint64]*deploymentManagerCall[T])
-	m.processes = make(map[int]*pluginProcessState)
+	m.processes = make(map[int]*pluginProcessActorState)
 	m.byPID = make(map[gen.PID]int)
 	// A route always gets its reservation whatever the budget holds - desired state is not negotiable, and
 	// oversubscription is reported so an operator sees it before scaling makes it worse.
@@ -255,13 +257,10 @@ func (m *deploymentManager[T]) Init(...any) error {
 }
 
 // Terminate cancels local work and reports manager termination to the Router.
-func (m *deploymentManager[T]) Terminate(reason error) {
-	next := m.status()
-	next.lifecycle = DeploymentManagerStopped
-	next.availability = runtime.AvailabilityUnavailable
-	next.availableCapacity = 0
-	next.lastError = runtime.FirstError(reason, next.lastError)
-	m.reconcileStatus(next)
+func (m *deploymentManagerActor[T]) Terminate(reason error) {
+	m.stopped = true
+	m.err = runtime.FirstError(reason, m.err)
+	m.reconcileStatus()
 	m.cancelPluginProcessRestarts(false)
 	m.cancelCircuitCooldown()
 	if m.reconcileStop != nil {
@@ -280,7 +279,7 @@ func (m *deploymentManager[T]) Terminate(reason error) {
 }
 
 // HandleMessage processes invocations, child facts, timers, scaling, and drain controls.
-func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
+func (m *deploymentManagerActor[T]) HandleMessage(from gen.PID, message any) error {
 	switch msg := message.(type) {
 	case MessageInvokePlugin[T]:
 		m.acceptInvocation(msg)
@@ -325,7 +324,7 @@ func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 		}
 		// The process gave up on its own subprocess, so this incarnation is spent and only its slot is
 		// refilled: the deployment's other processes keep serving the calls they hold.
-		process.status.lastError = msg.err
+		process.status.err = msg.err
 		m.retireSlot(slot, true, fmt.Errorf("plugin process restart exhausted: %w", msg.err))
 		m.reconcile()
 
@@ -368,7 +367,7 @@ func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 		// carries over, since a slot whose processes keep dying is what that budget counts.
 		retiring, replace := process.retiring, process.replace
 		delete(m.byPID, msg.PID)
-		*process = pluginProcessState{
+		*process = pluginProcessActorState{
 			restart: process.restart,
 			status:  pluginProcessActorStatus{lifecycle: PluginProcessActorRestarting, availability: runtime.AvailabilityUnavailable},
 		}
@@ -380,7 +379,7 @@ func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 		case !m.draining:
 			// Every unexpected process incarnation consumes its own slot's finite budget, including an idle
 			// MinProcs=0 one whose committed calls just failed.
-			process.status.lastError = msg.Reason
+			process.status.err = msg.Reason
 			m.Log().Info("scheduling plugin process restart: slot=%d route=%s", slot, m.route)
 			m.schedulePluginProcessRestart(slot)
 		default:
@@ -459,12 +458,12 @@ func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 }
 
 // HandleInspect exposes concise operational manager metrics.
-func (m *deploymentManager[T]) HandleInspect(_ gen.PID, _ ...string) map[string]string {
+func (m *deploymentManagerActor[T]) HandleInspect(_ gen.PID, _ ...string) map[string]string {
 	status := m.status()
 	// Processes and calls are reported apart: a saturated deployment may be short of processes or of the
 	// capacity each one was given, and only one of those is its own to raise.
 	return map[string]string{
-		"deployment:last_error":        runtime.ErrorText(status.lastError),
+		"deployment:last_error":        runtime.ErrorText(status.err),
 		"deployment:availability":      string(status.availability),
 		"deployment:current":           fmt.Sprintf("%d", status.currentProcs),
 		"deployment:ready":             fmt.Sprintf("%d", status.readyProcs),
@@ -481,7 +480,7 @@ func (m *deploymentManager[T]) HandleInspect(_ gen.PID, _ ...string) map[string]
 // ---------------------------------------------------------------------------
 
 // acceptInvocation records one invocation or rejects it with an exact completion.
-func (m *deploymentManager[T]) acceptInvocation(call MessageInvokePlugin[T]) {
+func (m *deploymentManagerActor[T]) acceptInvocation(call MessageInvokePlugin[T]) {
 	_ = m.SendWithPriority(m.Parent(), MessageInvocationAccepted{
 		route: m.route, manager: m.PID(), callID: call.CallID,
 	}, gen.MessagePriorityHigh)
@@ -511,7 +510,7 @@ func (m *deploymentManager[T]) acceptInvocation(call MessageInvokePlugin[T]) {
 }
 
 // dispatchInvocation forwards queued invocations while ready process capacity is available.
-func (m *deploymentManager[T]) dispatchInvocation() {
+func (m *deploymentManagerActor[T]) dispatchInvocation() {
 	if m.draining || m.circuitOpen {
 		return
 	}
@@ -545,8 +544,8 @@ func (m *deploymentManager[T]) dispatchInvocation() {
 
 // selectProcess returns the ready slot holding the fewest invocations, or nil when none has spare
 // capacity; least-loaded, since stacking a call behind a busy process is latency already paid for.
-func (m *deploymentManager[T]) selectProcess() (int, *pluginProcessState) {
-	selected, best := 0, (*pluginProcessState)(nil)
+func (m *deploymentManagerActor[T]) selectProcess() (int, *pluginProcessActorState) {
+	selected, best := 0, (*pluginProcessActorState)(nil)
 	for _, slot := range m.order {
 		process := m.processes[slot]
 		if process == nil || process.retiring || process.assigned >= m.deployment.CapacityPerProcess() ||
@@ -561,9 +560,9 @@ func (m *deploymentManager[T]) selectProcess() (int, *pluginProcessState) {
 }
 
 // reconcile advances drain, process lifecycle, dispatch, scaling, and status publication.
-func (m *deploymentManager[T]) reconcile() {
+func (m *deploymentManagerActor[T]) reconcile() {
 	if m.draining || m.circuitOpen {
-		m.reconcileStatus(m.status())
+		m.reconcileStatus()
 		if m.draining && !m.drained && len(m.inFlightCalls) == 0 {
 			m.reportDrained()
 		}
@@ -579,12 +578,12 @@ func (m *deploymentManager[T]) reconcile() {
 	m.reconcileProcesses()
 	m.dispatchInvocation()
 	m.reconcileScale()
-	m.reconcileStatus(m.status())
+	m.reconcileStatus()
 }
 
 // reconcileProcesses moves the deployment's slots toward the desired count and fills the empty ones,
 // one pass at a time.
-func (m *deploymentManager[T]) reconcileProcesses() {
+func (m *deploymentManagerActor[T]) reconcileProcesses() {
 	if m.draining || m.circuitOpen {
 		return
 	}
@@ -625,7 +624,7 @@ func (m *deploymentManager[T]) reconcileProcesses() {
 
 // reconcileScale moves the desired process count toward the one this deployment's demand needs, at
 // most one scaling decision per cooldown.
-func (m *deploymentManager[T]) reconcileScale() {
+func (m *deploymentManagerActor[T]) reconcileScale() {
 	if m.draining || m.circuitOpen {
 		return
 	}
@@ -676,7 +675,7 @@ func (m *deploymentManager[T]) reconcileScale() {
 }
 
 // scheduleScaleReconcile replaces the pending autoscaling timer with a fenced one.
-func (m *deploymentManager[T]) scheduleScaleReconcile() {
+func (m *deploymentManagerActor[T]) scheduleScaleReconcile() {
 	if m.circuitOpen || m.draining || m.restartingProcs() {
 		return
 	}
@@ -704,7 +703,7 @@ func (m *deploymentManager[T]) scheduleScaleReconcile() {
 
 // requiredProcs converts the invocations this deployment owes into the process count that would serve
 // them, each carrying its whole declared capacity, floored at the reservation and capped at max_procs.
-func (m *deploymentManager[T]) requiredProcs() int {
+func (m *deploymentManagerActor[T]) requiredProcs() int {
 	capacity := m.deployment.CapacityPerProcess()
 	demand := m.activeCalls() + m.dispatchingCalls() + m.pendingCalls.length
 	required := (demand + capacity - 1) / capacity
@@ -713,7 +712,7 @@ func (m *deploymentManager[T]) requiredProcs() int {
 
 // syncGrowthProcs follows the budget down to the process count this deployment now wants, so a
 // process it gave up is available to whichever deployment needs it next.
-func (m *deploymentManager[T]) syncGrowthProcs() {
+func (m *deploymentManagerActor[T]) syncGrowthProcs() {
 	if held := max(0, m.desiredProcs-max(1, m.deployment.MinProcs)); held < m.growthProcs {
 		m.options.ProcessBudget.release(m.growthProcs - held)
 		m.growthProcs = held
@@ -721,13 +720,13 @@ func (m *deploymentManager[T]) syncGrowthProcs() {
 }
 
 // releaseGrowthProcs hands every budgeted process this manager holds back to the process budget.
-func (m *deploymentManager[T]) releaseGrowthProcs() {
+func (m *deploymentManagerActor[T]) releaseGrowthProcs() {
 	m.options.ProcessBudget.release(m.growthProcs)
 	m.growthProcs = 0
 }
 
 // failProcessCalls completes every invocation dispatched to one process.
-func (m *deploymentManager[T]) failProcessCalls(pid gen.PID, err error) {
+func (m *deploymentManagerActor[T]) failProcessCalls(pid gen.PID, err error) {
 	for callID, entry := range m.inFlightCalls {
 		if entry.phase != deploymentManagerPending && entry.process == pid {
 			if entry.call.Cancel != nil {
@@ -739,7 +738,7 @@ func (m *deploymentManager[T]) failProcessCalls(pid gen.PID, err error) {
 }
 
 // removeCall releases all state for one invocation and completes it once.
-func (m *deploymentManager[T]) removeCall(callID uint64, err error) {
+func (m *deploymentManagerActor[T]) removeCall(callID uint64, err error) {
 	entry := m.inFlightCalls[callID]
 	if entry == nil {
 		return
@@ -766,7 +765,7 @@ func (m *deploymentManager[T]) removeCall(callID uint64, err error) {
 }
 
 // completeInvocation publishes one idempotent invocation result to the Router.
-func (m *deploymentManager[T]) completeInvocation(entry *deploymentManagerCall[T], err error) {
+func (m *deploymentManagerActor[T]) completeInvocation(entry *deploymentManagerCall[T], err error) {
 	if entry.completed {
 		return
 	}
@@ -782,7 +781,7 @@ func (m *deploymentManager[T]) completeInvocation(entry *deploymentManagerCall[T
 }
 
 // reportDrained publishes the manager's terminal graceful-drain fact once.
-func (m *deploymentManager[T]) reportDrained() {
+func (m *deploymentManagerActor[T]) reportDrained() {
 	if m.drained {
 		return
 	}
@@ -790,7 +789,7 @@ func (m *deploymentManager[T]) reportDrained() {
 	_ = m.SendWithPriority(m.Parent(), MessageDeploymentManagerDrained{
 		route: m.route, manager: m.PID(),
 	}, gen.MessagePriorityHigh)
-	m.reconcileStatus(m.status())
+	m.reconcileStatus()
 }
 
 // ---------------------------------------------------------------------------
@@ -798,7 +797,7 @@ func (m *deploymentManager[T]) reportDrained() {
 // ---------------------------------------------------------------------------
 
 // slotFor resolves one plugin process to the slot it fills, and nil for a PID this manager does not own.
-func (m *deploymentManager[T]) slotFor(pid gen.PID) (int, *pluginProcessState) {
+func (m *deploymentManagerActor[T]) slotFor(pid gen.PID) (int, *pluginProcessActorState) {
 	slot, ok := m.byPID[pid]
 	if !ok {
 		return 0, nil
@@ -807,10 +806,10 @@ func (m *deploymentManager[T]) slotFor(pid gen.PID) (int, *pluginProcessState) {
 }
 
 // openSlot opens one slot and starts the process to fill it, reporting whether the deployment gained one.
-func (m *deploymentManager[T]) openSlot() bool {
+func (m *deploymentManagerActor[T]) openSlot() bool {
 	slot := m.nextSlot
 	m.nextSlot++
-	m.processes[slot] = &pluginProcessState{
+	m.processes[slot] = &pluginProcessActorState{
 		restart: runtime.NewScheduledBackoff(m.options.RestartMin, m.options.RestartMax),
 		status: pluginProcessActorStatus{
 			lifecycle:    PluginProcessActorStarting,
@@ -825,7 +824,7 @@ func (m *deploymentManager[T]) openSlot() bool {
 
 // retireSlot takes one slot's process out of service - reason set when it must stop at once rather than
 // after the calls it holds, replace set when the slot is to be refilled.
-func (m *deploymentManager[T]) retireSlot(slot int, replace bool, reason error) {
+func (m *deploymentManagerActor[T]) retireSlot(slot int, replace bool, reason error) {
 	process := m.processes[slot]
 	if process == nil || process.retiring {
 		return
@@ -855,7 +854,7 @@ func (m *deploymentManager[T]) retireSlot(slot int, replace bool, reason error) 
 }
 
 // releaseSlot drops one slot and the retry budget it owned, for a deployment that is not refilling it.
-func (m *deploymentManager[T]) releaseSlot(slot int) {
+func (m *deploymentManagerActor[T]) releaseSlot(slot int) {
 	process := m.processes[slot]
 	if process == nil {
 		return
@@ -870,7 +869,7 @@ func (m *deploymentManager[T]) releaseSlot(slot int) {
 
 // startPluginProcess spawns and monitors the process for one empty slot, reporting whether the slot
 // was filled.
-func (m *deploymentManager[T]) startPluginProcess(slot int) bool {
+func (m *deploymentManagerActor[T]) startPluginProcess(slot int) bool {
 	process := m.processes[slot]
 	if process == nil {
 		return false
@@ -885,12 +884,12 @@ func (m *deploymentManager[T]) startPluginProcess(slot int) bool {
 		}
 	}, gen.ProcessOptions{LinkParent: true})
 	if err != nil {
-		process.status.lastError = fmt.Errorf("spawn plugin process: %w", err)
+		process.status.err = fmt.Errorf("spawn plugin process: %w", err)
 		m.schedulePluginProcessRestart(slot)
 		return false
 	}
 	if err := m.MonitorPID(pid); err != nil {
-		process.status.lastError = fmt.Errorf("monitor plugin process: %w", err)
+		process.status.err = fmt.Errorf("monitor plugin process: %w", err)
 		_ = m.Node().SendExit(pid, gen.TerminateReasonShutdown)
 		m.schedulePluginProcessRestart(slot)
 		return false
@@ -898,7 +897,7 @@ func (m *deploymentManager[T]) startPluginProcess(slot int) bool {
 	process.pid = pid
 	process.statusEpoch = 0
 	process.status = pluginProcessActorStatus{
-		lastError:    process.status.lastError,
+		err:          process.status.err,
 		lifecycle:    PluginProcessActorStarting,
 		availability: runtime.AvailabilityUnavailable,
 	}
@@ -909,7 +908,7 @@ func (m *deploymentManager[T]) startPluginProcess(slot int) bool {
 
 // schedulePluginProcessRestart consumes one slot's finite retry budget, opening the deployment's
 // circuit when that slot has spent it.
-func (m *deploymentManager[T]) schedulePluginProcessRestart(slot int) {
+func (m *deploymentManagerActor[T]) schedulePluginProcessRestart(slot int) {
 	process := m.processes[slot]
 	if process == nil || process.restart.Pending {
 		m.Log().Warning("plugin process restart already pending or slot missing: slot=%d route=%s nilProcess=%v", slot, m.route, process == nil)
@@ -935,7 +934,7 @@ func (m *deploymentManager[T]) schedulePluginProcessRestart(slot int) {
 
 // cancelPluginProcessRestarts drops every slot's pending start, resetting the budgets when the
 // deployment is being given a clean one.
-func (m *deploymentManager[T]) cancelPluginProcessRestarts(reset bool) {
+func (m *deploymentManagerActor[T]) cancelPluginProcessRestarts(reset bool) {
 	for _, process := range m.processes {
 		process.restart.CancelScheduled(reset)
 	}
@@ -943,7 +942,7 @@ func (m *deploymentManager[T]) cancelPluginProcessRestarts(reset bool) {
 
 // runningProcs counts the slots the manager still means to keep, an empty one waiting on its restart
 // included, so a failed slot is not immediately joined by another opened for the same shortfall.
-func (m *deploymentManager[T]) runningProcs() int {
+func (m *deploymentManagerActor[T]) runningProcs() int {
 	count := 0
 	for _, process := range m.processes {
 		if !process.retiring || process.replace {
@@ -955,7 +954,7 @@ func (m *deploymentManager[T]) runningProcs() int {
 
 // restartingProcs reports whether any slot is waiting on its own backoff, which is what paces the
 // next scaling decision.
-func (m *deploymentManager[T]) restartingProcs() bool {
+func (m *deploymentManagerActor[T]) restartingProcs() bool {
 	for _, process := range m.processes {
 		if process.restart.Pending {
 			return true
@@ -965,7 +964,7 @@ func (m *deploymentManager[T]) restartingProcs() bool {
 }
 
 // readyProcs counts the processes serving invocations right now.
-func (m *deploymentManager[T]) readyProcs() int {
+func (m *deploymentManagerActor[T]) readyProcs() int {
 	count := 0
 	for _, process := range m.processes {
 		if !process.retiring && process.status.availability == runtime.AvailabilityReady {
@@ -977,7 +976,7 @@ func (m *deploymentManager[T]) readyProcs() int {
 
 // idleProcs reports whether the manager holds a process it could give back right now: one it has not
 // already retired and that is running no invocation.
-func (m *deploymentManager[T]) idleProcs() bool {
+func (m *deploymentManagerActor[T]) idleProcs() bool {
 	for _, process := range m.processes {
 		if !process.retiring && process.assigned == 0 {
 			return true
@@ -987,7 +986,7 @@ func (m *deploymentManager[T]) idleProcs() bool {
 }
 
 // openCircuit stops process recovery, fails all tracked invocations, and arms the cooldown.
-func (m *deploymentManager[T]) openCircuit(err error) {
+func (m *deploymentManagerActor[T]) openCircuit(err error) {
 	if m.circuitOpen {
 		return
 	}
@@ -1010,20 +1009,20 @@ func (m *deploymentManager[T]) openCircuit(err error) {
 	if cancel, sendErr := m.SendWithPriorityAfter(m.PID(), MessageDeploymentManagerCircuitCooldown{token: m.circuitToken}, gen.MessagePriorityHigh, m.options.CircuitCooldown); sendErr == nil {
 		m.circuitStop = cancel
 	}
-	next := m.status()
-	next.lastError = err
-	m.reconcileStatus(next)
+	m.err = err
+	m.reconcileStatus()
 }
 
 // closeCircuit reopens admission, resetting the retry budget of any slot that outlived the circuit opening.
-func (m *deploymentManager[T]) closeCircuit() {
+func (m *deploymentManagerActor[T]) closeCircuit() {
 	m.circuitOpen = false
+	m.err = nil
 	m.cancelCircuitCooldown()
 	m.cancelPluginProcessRestarts(true)
 }
 
 // cancelCircuitCooldown drops any pending cooldown timer and fences its message.
-func (m *deploymentManager[T]) cancelCircuitCooldown() {
+func (m *deploymentManagerActor[T]) cancelCircuitCooldown() {
 	if m.circuitStop != nil {
 		m.circuitStop()
 		m.circuitStop = nil
@@ -1037,12 +1036,12 @@ func (m *deploymentManager[T]) cancelCircuitCooldown() {
 
 // committedCapacity is what this deployment can execute at once, counting only ready processes and each
 // for the calls it can serve; the per-process figure is the declared one every process enforces.
-func (m *deploymentManager[T]) committedCapacity() int {
+func (m *deploymentManagerActor[T]) committedCapacity() int {
 	return m.readyProcs() * m.deployment.CapacityPerProcess()
 }
 
 // dispatchingCalls counts invocations sent to a process but not yet started.
-func (m *deploymentManager[T]) dispatchingCalls() int {
+func (m *deploymentManagerActor[T]) dispatchingCalls() int {
 	count := 0
 	for _, entry := range m.inFlightCalls {
 		if entry.phase == deploymentManagerDispatching {
@@ -1053,7 +1052,7 @@ func (m *deploymentManager[T]) dispatchingCalls() int {
 }
 
 // activeCalls counts invocations currently executing in a process.
-func (m *deploymentManager[T]) activeCalls() int {
+func (m *deploymentManagerActor[T]) activeCalls() int {
 	count := 0
 	for _, entry := range m.inFlightCalls {
 		if entry.phase == deploymentManagerActive {
@@ -1065,7 +1064,7 @@ func (m *deploymentManager[T]) activeCalls() int {
 
 // processStatuses snapshots what each owned process last reported, keyed by PID since that is what an
 // operator sees, and skipping a slot standing empty between two of them.
-func (m *deploymentManager[T]) processStatuses() map[gen.PID]pluginProcessActorStatus {
+func (m *deploymentManagerActor[T]) processStatuses() map[gen.PID]pluginProcessActorStatus {
 	statuses := make(map[gen.PID]pluginProcessActorStatus, len(m.processes))
 	for _, process := range m.processes {
 		if process.pid != (gen.PID{}) {
@@ -1076,10 +1075,7 @@ func (m *deploymentManager[T]) processStatuses() map[gen.PID]pluginProcessActorS
 }
 
 // status derives the manager's public snapshot from owned state.
-func (m *deploymentManager[T]) status() deploymentManagerStatus {
-	if m.lastStatus.lifecycle == DeploymentManagerStopped {
-		return m.lastStatus
-	}
+func (m *deploymentManagerActor[T]) status() deploymentManagerActorStatus {
 	// A deployment that reserves nothing and is doing nothing is not broken, it is asleep: it holds no
 	// slot, owes no call, and is waiting on neither a retry nor an error.
 	idleAtZero := m.desiredProcs == 0 && len(m.processes) == 0 && len(m.inFlightCalls) == 0 &&
@@ -1099,26 +1095,24 @@ func (m *deploymentManager[T]) status() deploymentManagerStatus {
 	default:
 		availability = runtime.AvailabilityDegraded
 	}
-	lifecycle := DeploymentManagerRunning
+	lifecycle := DeploymentManagerActorRunning
 	switch {
 	case m.circuitOpen:
-		lifecycle = DeploymentManagerFailed
+		lifecycle = DeploymentManagerActorFailed
 	case m.draining:
-		lifecycle = DeploymentManagerDraining
+		lifecycle = DeploymentManagerActorDraining
 	case m.readyProcs() == 0 && !idleAtZero:
-		lifecycle = DeploymentManagerStarting
+		lifecycle = DeploymentManagerActorStarting
 	}
-	var lastError error
-	var errorSlot int
-	for slot, process := range m.processes {
-		if process.status.lastError != nil && (lastError == nil || slot < errorSlot) {
-			lastError, errorSlot = process.status.lastError, slot
+	// The manager's own failure wins, then its processes in the order their slots were opened.
+	errors := make([]error, 0, len(m.order)+1)
+	errors = append(errors, m.err)
+	for _, slot := range m.order {
+		if process := m.processes[slot]; process != nil {
+			errors = append(errors, process.status.err)
 		}
 	}
-	if m.circuitOpen {
-		lastError = runtime.FirstError(m.lastStatus.lastError, lastError)
-	}
-	return deploymentManagerStatus{
+	status := deploymentManagerActorStatus{
 		lifecycle:         lifecycle,
 		availability:      availability,
 		currentProcs:      m.desiredProcs,
@@ -1129,21 +1123,28 @@ func (m *deploymentManager[T]) status() deploymentManagerStatus {
 		dispatching:       m.dispatchingCalls(),
 		active:            m.activeCalls(),
 		availableCapacity: max(0, m.committedCapacity()-m.activeCalls()-m.dispatchingCalls()),
-		lastError:         lastError,
+		err:               runtime.FirstError(errors...),
 		processes:         m.processStatuses(),
 	}
+	// Termination outranks whatever the counters still describe: a stopped manager serves nothing.
+	if m.stopped {
+		status.lifecycle = DeploymentManagerActorStopped
+		status.availability = runtime.AvailabilityUnavailable
+		status.availableCapacity = 0
+	}
+	return status
 }
 
 // sameDeploymentManagerStatus reports whether two snapshots describe the same health, for publish
 // deduplication, excluding the per-invocation counters (see deploymentManagerStatus).
-func sameDeploymentManagerStatus(left, right deploymentManagerStatus) bool {
+func sameDeploymentManagerStatus(left, right deploymentManagerActorStatus) bool {
 	if left.lifecycle != right.lifecycle ||
 		left.availability != right.availability ||
 		left.currentProcs != right.currentProcs ||
 		left.readyProcs != right.readyProcs ||
 		left.callsPerProcess != right.callsPerProcess ||
 		left.totalCapacity != right.totalCapacity ||
-		runtime.ErrorText(left.lastError) != runtime.ErrorText(right.lastError) ||
+		runtime.ErrorText(left.err) != runtime.ErrorText(right.err) ||
 		len(left.processes) != len(right.processes) {
 		return false
 	}
@@ -1157,7 +1158,8 @@ func sameDeploymentManagerStatus(left, right deploymentManagerStatus) bool {
 }
 
 // reconcileStatus compares before caching and publishing a new manager snapshot.
-func (m *deploymentManager[T]) reconcileStatus(next deploymentManagerStatus) {
+func (m *deploymentManagerActor[T]) reconcileStatus() {
+	next := m.status()
 	if sameDeploymentManagerStatus(m.lastStatus, next) {
 		return
 	}
@@ -1167,7 +1169,7 @@ func (m *deploymentManager[T]) reconcileStatus(next deploymentManagerStatus) {
 }
 
 // propagateStatus sends the supplied snapshot without reconciling state or publishing gauges.
-func (m *deploymentManager[T]) propagateStatus(next deploymentManagerStatus) {
+func (m *deploymentManagerActor[T]) propagateStatus(next deploymentManagerActorStatus) {
 	_ = m.SendWithPriority(m.Parent(), MessageDeploymentManagerStatusChanged{
 		statusEpoch: m.lastStatusEpoch,
 		route:       m.route,
