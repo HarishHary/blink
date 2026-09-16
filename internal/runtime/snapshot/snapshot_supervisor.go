@@ -72,7 +72,7 @@ type Supervisor[T any] struct {
 	act.Supervisor
 	opts                 SupervisorOptions
 	loader               Loader[T]
-	lifecycle            SupervisorLifecycle
+	lastStatus           SupervisorStatus
 	readerActor          readerActorState
 	projectionActor      projectionActorState
 	snapshotEvent        eventPublication
@@ -168,7 +168,7 @@ func (s *Supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 		return act.SupervisorSpec{}, fmt.Errorf("register snapshot status event: %w", err)
 	}
 	s.statusEvent = eventPublication{name: statusEvent.Name, token: statusToken}
-	s.lifecycle = SupervisorStarting
+	s.lastStatus.Lifecycle = SupervisorStarting
 	s.reconcileReaderStatus(newReaderActorStatus())
 	s.projectionActor.status = newProjectionActorStatus()
 	// Delayed: the first report is worth sending only once the reader has had its chance to subscribe.
@@ -367,7 +367,7 @@ func (s *Supervisor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, erro
 // Terminate marks children stopped and reports the shutdown reason.
 func (s *Supervisor[T]) Terminate(reason error) {
 	defer s.reconcileStatus()
-	s.lifecycle = SupervisorStopping
+	s.lastStatus.Lifecycle = SupervisorStopping
 	s.lastError = reason
 	s.cancelExecutorReport()
 	s.projectionActor.status.Lifecycle = ProjectionActorStopped
@@ -431,7 +431,7 @@ func (s *Supervisor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 	return map[string]string{
 		"supervisor:last_error":                      runtime.ErrorText(s.status().LastError),
 		"supervisor:projection_last_error":           runtime.ErrorText(s.projectionActor.status.LastError),
-		"supervisor:lifecycle":                       string(s.lifecycle),
+		"supervisor:lifecycle":                       string(s.lastStatus.Lifecycle),
 		"supervisor:readiness_signal":                s.signal.State(),
 		"supervisor:reader":                          fmt.Sprintf("%s", s.readerActor.pid),
 		"supervisor:reader_lifecycle":                string(s.readerActor.status.Lifecycle),
@@ -450,9 +450,10 @@ func (s *Supervisor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 // reconcileStatus advances lifecycle and refreshes gauges/readiness from the reconciled child states.
 func (s *Supervisor[T]) reconcileStatus() {
 	// Both children up promotes the subtree once, and a rest-for-one restart never demotes it.
-	if s.lifecycle == SupervisorStarting && s.readerActor.pid != (gen.PID{}) && s.projectionActor.pid != (gen.PID{}) {
-		s.lifecycle = SupervisorRunning
+	if s.lastStatus.Lifecycle == SupervisorStarting && s.readerActor.pid != (gen.PID{}) && s.projectionActor.pid != (gen.PID{}) {
+		s.lastStatus.Lifecycle = SupervisorRunning
 	}
+	s.lastStatus = s.status()
 	s.publishGauges()
 	s.propagateReadiness()
 }
@@ -470,7 +471,7 @@ func (s *Supervisor[T]) reconcileReaderStatus(next ReaderActorStatus) {
 // publishGauges publishes current values without changing lifecycle or propagating status.
 func (s *Supervisor[T]) publishGauges() {
 	subtreeGauges{
-		lifecycle:              s.lifecycle,
+		lifecycle:              s.lastStatus.Lifecycle,
 		readerAvailability:     s.readerActor.status.Availability,
 		readerGeneration:       s.readerActor.status.Generation,
 		projectionAvailability: s.projectionActor.status.Availability,
@@ -549,7 +550,7 @@ func (s *Supervisor[T]) propagateStatus(next ReaderActorStatus) {
 
 // propagateReadiness includes both children, independently of reader-event deduplication.
 func (s *Supervisor[T]) propagateReadiness() {
-	s.signal.SetReady(s, s.lifecycle == SupervisorRunning &&
+	s.signal.SetReady(s, s.lastStatus.Lifecycle == SupervisorRunning &&
 		s.readerActor.pid != (gen.PID{}) && s.projectionActor.pid != (gen.PID{}) &&
 		s.executorAvailability() == runtime.AvailabilityReady)
 }
@@ -573,7 +574,7 @@ func (s *Supervisor[T]) propagateProjectionStatus(next ProjectionActorStatus, pi
 // status derives subtree health without changing either child's status.
 func (s *Supervisor[T]) status() SupervisorStatus {
 	return SupervisorStatus{
-		Lifecycle:    s.lifecycle,
+		Lifecycle:    s.lastStatus.Lifecycle,
 		Availability: s.executorAvailability(),
 		LastError:    runtime.FirstError(s.lastError, s.projectionActor.status.LastError, s.readerActor.status.LastError),
 	}
