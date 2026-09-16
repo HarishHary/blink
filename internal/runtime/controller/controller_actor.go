@@ -32,10 +32,10 @@ const (
 
 // actorStatus is the controller actor's immutable status report to its supervisor.
 type actorStatus struct {
-	LastError    error
-	Lifecycle    ActorLifecycle
-	Availability runtime.Availability
-	Generation   int64
+	lifecycle    ActorLifecycle
+	availability runtime.Availability
+	generation   int64
+	err          error
 }
 
 type scannerMetaState struct {
@@ -79,9 +79,11 @@ type actor[T plugin.Artifact] struct {
 	fullRewriteRequired bool
 	subscribers         map[string]gen.PID
 	executors           map[string]ExecutorStatus
-	lastStatus          actorStatus
-	lastStatusEpoch     int64
 	labels              telemetry.Labels
+	lifecycle           ActorLifecycle // the controller's own live lifecycle
+	err                 error          // the controller's own failure, kept apart from its metas' errors
+	lastStatus          actorStatus    // last published projection, the baseline reconcileStatus dedupes against
+	lastStatusEpoch     int64
 }
 
 // ExecutorStatus is one executor's last-known convergence state, tracked per namespace controller
@@ -92,7 +94,7 @@ type ExecutorStatus struct {
 	CommittedGeneration int64
 	ReadyGeneration     int64
 	Availability        string
-	LastError           error
+	Err                 error
 	DriftSince          time.Time // zero if not currently drifting
 }
 
@@ -154,22 +156,22 @@ func (a *actor[T]) Init(...any) error {
 	if a.opts.Directory == "" || a.loader == nil || a.database == nil || a.barrier == nil {
 		return fmt.Errorf("controller actor: directory, loader, database, and barrier are required")
 	}
-	a.lastStatus.Lifecycle = ActorStarting
+	a.lifecycle = ActorStarting
 	a.records = make(map[string]backends.ControllerRecord)
 	a.subscribers = make(map[string]gen.PID)
 	a.executors = make(map[string]ExecutorStatus)
 	a.scanner = scannerMetaState{
 		restart: runtime.NewScheduledBackoff(a.opts.RestartMin, a.opts.RestartMax),
 		status: artifactScannerMetaStatus{
-			Lifecycle:    ArtifactScannerMetaStarting,
-			Availability: runtime.AvailabilityUnavailable,
+			lifecycle:    ArtifactScannerMetaStarting,
+			availability: runtime.AvailabilityUnavailable,
 		},
 	}
 	a.writer = writerMetaState{
 		restart: runtime.NewScheduledBackoff(a.opts.RestartMin, a.opts.RestartMax),
 		status: snapshotWriterMetaStatus{
-			Lifecycle:    SnapshotWriterMetaStarting,
-			Availability: runtime.AvailabilityUnavailable,
+			lifecycle:    SnapshotWriterMetaStarting,
+			availability: runtime.AvailabilityUnavailable,
 		},
 		activeIO: make(map[gen.Alias]struct{}),
 	}
@@ -178,14 +180,14 @@ func (a *actor[T]) Init(...any) error {
 
 // HandleMessage advances controller state from lifecycle and worker messages.
 func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
-	defer a.reconcileStatus(a.lastStatus)
+	defer a.reconcileStatus()
 	switch message.(type) {
 	case MessageActorActivate:
-		if from != a.Parent() || a.lastStatus.Lifecycle != ActorStarting {
+		if from != a.Parent() || a.lifecycle != ActorStarting {
 			return nil
 		}
 	case plugin.MessageDrain:
-		if from != a.Parent() || a.lastStatus.Lifecycle == ActorStarting {
+		if from != a.Parent() || a.lifecycle == ActorStarting {
 			return nil
 		}
 		return a.beginDrain()
@@ -195,7 +197,7 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 		}
 		return gen.TerminateReasonNormal
 	}
-	if a.lastStatus.Lifecycle == ActorDraining || a.lastStatus.Lifecycle == ActorDrained {
+	if a.lifecycle == ActorDraining || a.lifecycle == ActorDrained {
 		switch message.(type) {
 		case gen.MessageDownAlias, gen.MessageDownPID, MessageSnapshotWriterIOStopped, snapshot.UnsubscribeRequest:
 		default:
@@ -204,7 +206,7 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 	}
 	switch m := message.(type) {
 	case MessageActorActivate:
-		a.lastStatus.Lifecycle = ActorRunning
+		a.lifecycle = ActorRunning
 		if err := a.startScanner(); err != nil {
 			return err
 		}
@@ -221,7 +223,7 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 		return nil
 	case MessageExecutorDriftCheck:
 		a.checkExecutorDrift()
-		if a.lastStatus.Lifecycle == ActorRunning {
+		if a.lifecycle == ActorRunning {
 			if _, err := a.SendAfter(a.PID(), MessageExecutorDriftCheck{}, executorDriftCheckInterval); err != nil {
 				return fmt.Errorf("reschedule executor drift check: %w", err)
 			}
@@ -231,23 +233,23 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 		if from != a.PID() || m.source != a.scanner.alias {
 			return nil
 		}
-		a.scanner.status.Lifecycle = ArtifactScannerMetaRunning
+		a.scanner.status.lifecycle = ArtifactScannerMetaRunning
 		if !m.complete {
-			a.scanner.status.Complete = false
-			a.scanner.status.Availability = runtime.AvailabilityUnavailable
-			a.scanner.status.LastError = m.err
+			a.scanner.status.complete = false
+			a.scanner.status.availability = runtime.AvailabilityUnavailable
+			a.scanner.status.err = m.err
 			a.labels.Count(a, metricArtifactScans, "incomplete")
 			return nil
 		}
 		a.scanner.restart.CancelScheduled(true)
-		a.scanner.status.Complete = true
+		a.scanner.status.complete = true
 		if m.err != nil {
-			a.scanner.status.Availability = runtime.AvailabilityDegraded
-			a.scanner.status.LastError = m.err
+			a.scanner.status.availability = runtime.AvailabilityDegraded
+			a.scanner.status.err = m.err
 			a.labels.Count(a, metricArtifactScans, "degraded")
 		} else {
-			a.scanner.status.Availability = runtime.AvailabilityReady
-			a.scanner.status.LastError = nil
+			a.scanner.status.availability = runtime.AvailabilityReady
+			a.scanner.status.err = nil
 			a.labels.Count(a, metricArtifactScans, "ok")
 		}
 		a.scanner.entries = snapshot.CloneEntries(m.entries)
@@ -259,7 +261,7 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 			return nil
 		}
 		if m.err != nil {
-			a.writer.status.LastError = m.err
+			a.writer.status.err = m.err
 			a.stopWriter(gen.TerminateReasonShutdown)
 			a.writer.replacementPending = true
 			return a.scheduleWriterRestart()
@@ -276,22 +278,22 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 				a.records[record.Id] = record
 			}
 		}
-		a.writer.status.Lifecycle = SnapshotWriterMetaRunning
-		a.writer.status.Loaded = true
+		a.writer.status.lifecycle = SnapshotWriterMetaRunning
+		a.writer.status.loaded = true
 		switch {
-		case a.pending != nil, a.writer.status.LastError != nil, a.writer.consecutiveFailures >= writeUnavailableThreshold:
-			a.writer.status.Availability = runtime.AvailabilityUnavailable
+		case a.pending != nil, a.writer.status.err != nil, a.writer.consecutiveFailures >= writeUnavailableThreshold:
+			a.writer.status.availability = runtime.AvailabilityUnavailable
 		case a.writer.consecutiveFailures > 0:
-			a.writer.status.Availability = runtime.AvailabilityDegraded
+			a.writer.status.availability = runtime.AvailabilityDegraded
 		default:
-			a.writer.status.Availability = runtime.AvailabilityReady
+			a.writer.status.availability = runtime.AvailabilityReady
 		}
 		if a.pending != nil {
 			return a.sendPending()
 		}
 		return a.reconcile()
 	case MessageSnapshotWriteResult:
-		if from != a.PID() || m.source != a.writer.alias || a.pending == nil || !a.writer.status.Writing {
+		if from != a.PID() || m.source != a.writer.alias || a.pending == nil || !a.writer.status.writing {
 			return nil
 		}
 		if m.err != nil {
@@ -299,7 +301,7 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 			a.labels.Count(a, metricSnapshotWrites, "error")
 			return nil
 		}
-		a.writer.status.Writing = false
+		a.writer.status.writing = false
 		a.labels.Count(a, metricSnapshotWrites, "ok")
 		if seconds, timed := telemetry.ElapsedSeconds(a.writer.writeDispatchedAt); timed {
 			a.labels.Observe(a, metricSnapshotWriteTime, seconds)
@@ -323,8 +325,8 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 		}
 		a.pending = nil
 		a.writer.consecutiveFailures = 0
-		a.writer.status.Availability = runtime.AvailabilityReady
-		a.writer.status.LastError = nil
+		a.writer.status.availability = runtime.AvailabilityReady
+		a.writer.status.err = nil
 		a.writer.restart.CancelScheduled(true)
 		return a.reconcile()
 	case snapshot.UnsubscribeRequest:
@@ -364,32 +366,32 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 			return nil
 		}
 		delete(a.writer.activeIO, m.source)
-		if a.lastStatus.Lifecycle == ActorDraining || a.lastStatus.Lifecycle == ActorDrained {
+		if a.lifecycle == ActorDraining || a.lifecycle == ActorDrained {
 			return a.maybeDrained()
 		}
 		return a.scheduleWriterRestart()
 	case gen.MessageDownAlias:
 		switch m.Alias {
 		case a.scanner.alias:
-			if a.lastStatus.Lifecycle == ActorRunning {
+			if a.lifecycle == ActorRunning {
 				a.Log().Error("artifact scanner stopped unexpectedly: name=%s alias=%s reason=%v", a.Name(), m.Alias, m.Reason)
 			}
 			a.scanner.alias = gen.Alias{}
-			if a.lastStatus.Lifecycle == ActorDraining || a.lastStatus.Lifecycle == ActorDrained {
-				a.scanner.status.Lifecycle, a.scanner.status.Availability = ArtifactScannerMetaStopped, runtime.AvailabilityUnavailable
+			if a.lifecycle == ActorDraining || a.lifecycle == ActorDrained {
+				a.scanner.status.lifecycle, a.scanner.status.availability = ArtifactScannerMetaStopped, runtime.AvailabilityUnavailable
 				return nil
 			}
-			a.scanner.status.Lifecycle = ArtifactScannerMetaRestarting
-			a.scanner.status.Availability = runtime.AvailabilityUnavailable
-			a.scanner.status.Complete = false
-			a.scanner.status.LastError = m.Reason
+			a.scanner.status.lifecycle = ArtifactScannerMetaRestarting
+			a.scanner.status.availability = runtime.AvailabilityUnavailable
+			a.scanner.status.complete = false
+			a.scanner.status.err = m.Reason
 			return a.scheduleScannerRestart()
 		case a.writer.alias:
-			if a.lastStatus.Lifecycle == ActorRunning {
+			if a.lifecycle == ActorRunning {
 				a.Log().Error("snapshot writer stopped unexpectedly: name=%s alias=%s reason=%v", a.Name(), m.Alias, m.Reason)
 			}
 			a.writerMetaLost(m.Alias, m.Reason)
-			if a.lastStatus.Lifecycle == ActorDraining || a.lastStatus.Lifecycle == ActorDrained {
+			if a.lifecycle == ActorDraining || a.lifecycle == ActorDrained {
 				return a.maybeDrained()
 			}
 			a.writer.replacementPending = true
@@ -401,18 +403,18 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 
 // Terminate stops workers and reports the final controller state.
 func (a *actor[T]) Terminate(reason error) {
-	defer a.reconcileStatus(a.lastStatus)
-	a.lastStatus.LastError = reason
-	a.lastStatus.Lifecycle = ActorStopped
+	defer a.reconcileStatus()
+	a.err = runtime.FirstError(reason, a.err)
+	a.lifecycle = ActorStopped
 	a.scanner.restart.CancelScheduled(false)
 	a.writer.restart.CancelScheduled(false)
 	a.stopScanner(gen.TerminateReasonShutdown)
 	a.stopWriter(gen.TerminateReasonShutdown)
-	a.scanner.status.Lifecycle = ArtifactScannerMetaStopped
-	a.scanner.status.Availability = runtime.AvailabilityUnavailable
-	a.writer.status.Lifecycle = SnapshotWriterMetaStopped
-	a.writer.status.Availability = runtime.AvailabilityUnavailable
-	a.writer.status.Writing = false
+	a.scanner.status.lifecycle = ArtifactScannerMetaStopped
+	a.scanner.status.availability = runtime.AvailabilityUnavailable
+	a.writer.status.lifecycle = SnapshotWriterMetaStopped
+	a.writer.status.availability = runtime.AvailabilityUnavailable
+	a.writer.status.writing = false
 }
 
 // HandleCall answers a subscribing executor's request; everything else is rejected.
@@ -454,14 +456,14 @@ func (status ExecutorStatus) Apply(report snapshot.MessageExecutorReport) Execut
 		status.ReadyGeneration = report.Applied.Generation
 	}
 	if report.Heartbeat != nil || report.LastError != nil {
-		status.LastError = report.LastError
+		status.Err = report.LastError
 	}
 	return status
 }
 
 // reconcile builds and queues a plan when both inputs are ready.
 func (a *actor[T]) reconcile() error {
-	if !a.bootstrapped || !a.scanner.status.Complete || a.pending != nil {
+	if !a.bootstrapped || !a.scanner.status.complete || a.pending != nil {
 		return nil
 	}
 	plan := makePlan(a.committed, a.generation, a.records, a.scanner.entries, a.scanner.presentIDs, a.fullRewriteRequired, time.Now())
@@ -471,10 +473,10 @@ func (a *actor[T]) reconcile() error {
 
 // sendPending queues the current plan with the active writer.
 func (a *actor[T]) sendPending() error {
-	if a.pending == nil || a.writer.status.Writing || a.writer.alias == (gen.Alias{}) || !a.writer.status.Loaded || a.lastStatus.Lifecycle != ActorRunning {
+	if a.pending == nil || a.writer.status.writing || a.writer.alias == (gen.Alias{}) || !a.writer.status.loaded || a.lifecycle != ActorRunning {
 		return nil
 	}
-	a.writer.status.Writing = true
+	a.writer.status.writing = true
 	a.writer.writeDispatchedAt = time.Now()
 	message := MessageWriteSnapshot{
 		records:    append([]backends.ControllerRecord(nil), a.pending.recordUpserts...),
@@ -489,10 +491,10 @@ func (a *actor[T]) sendPending() error {
 	//argus:allow A1001 deep-cloned records, snapshot, upserts, and tombstones transfer exclusively to the writer
 	if err := a.Send(a.writer.alias, message); err != nil {
 		a.Log().Error("pending write dispatch failed: name=%s generation=%d error=%v", a.Name(), message.next.Generation, err)
-		a.writer.status.Writing = false
+		a.writer.status.writing = false
 		a.recordWriteFailure(fmt.Errorf("%w: queue write: %w", ErrSnapshotWrite, err))
-		a.writer.status.Availability = runtime.AvailabilityUnavailable
-		a.writer.status.Loaded = false
+		a.writer.status.availability = runtime.AvailabilityUnavailable
+		a.writer.status.loaded = false
 		a.writer.replacementPending = true
 		a.stopWriter(gen.TerminateReasonShutdown)
 		return a.scheduleWriterRestart()
@@ -504,19 +506,19 @@ func (a *actor[T]) sendPending() error {
 // recordWriteFailure updates writer health after a failed write.
 func (a *actor[T]) recordWriteFailure(err error) {
 	a.writer.consecutiveFailures++
-	a.writer.status.Availability = runtime.AvailabilityDegraded
-	a.writer.status.LastError = err
+	a.writer.status.availability = runtime.AvailabilityDegraded
+	a.writer.status.err = err
 	if a.writer.consecutiveFailures >= writeUnavailableThreshold {
-		a.writer.status.Availability = runtime.AvailabilityUnavailable
+		a.writer.status.availability = runtime.AvailabilityUnavailable
 	}
 }
 
 // beginDrain stops workers and waits for accepted writer I/O.
 func (a *actor[T]) beginDrain() error {
-	if a.lastStatus.Lifecycle == ActorDraining || a.lastStatus.Lifecycle == ActorDrained || a.lastStatus.Lifecycle == ActorStopped {
+	if a.lifecycle == ActorDraining || a.lifecycle == ActorDrained || a.lifecycle == ActorStopped {
 		return nil
 	}
-	a.lastStatus.Lifecycle = ActorDraining
+	a.lifecycle = ActorDraining
 	a.Log().Info("controller draining: name=%s writer_active_io=%d", a.Name(), len(a.writer.activeIO))
 	a.scanner.restart.CancelScheduled(false)
 	a.writer.restart.CancelScheduled(false)
@@ -530,8 +532,8 @@ func (a *actor[T]) maybeDrained() error {
 	if len(a.writer.activeIO) != 0 {
 		return nil
 	}
-	if a.lastStatus.Lifecycle != ActorDrained {
-		a.lastStatus.Lifecycle = ActorDrained
+	if a.lifecycle != ActorDrained {
+		a.lifecycle = ActorDrained
 		a.Log().Info("controller drained: name=%s", a.Name())
 	}
 	return nil
@@ -672,17 +674,23 @@ func (a *actor[T]) startScanner() error {
 	if a.scanner.alias != (gen.Alias{}) {
 		return nil
 	}
-	a.scanner.status = artifactScannerMetaStatus{Lifecycle: ArtifactScannerMetaStarting, Availability: runtime.AvailabilityUnavailable}
+	a.scanner.status = artifactScannerMetaStatus{
+		lifecycle:    ArtifactScannerMetaStarting,
+		availability: runtime.AvailabilityUnavailable,
+		err:          a.scanner.status.err,
+	}
+	// Each start attempt supersedes the controller's own previous failure.
+	a.err = nil
 	alias, err := a.SpawnMeta(&artifactScannerMeta[T]{directory: a.opts.Directory, loader: a.loader, labels: a.labels}, gen.MetaOptions{})
 	if err != nil {
-		a.scanner.status.LastError = fmt.Errorf("spawn artifact scanner meta: %w", err)
-		a.Log().Error("artifact scanner meta spawn failed: name=%s error=%v", a.Name(), a.scanner.status.LastError)
+		a.err = fmt.Errorf("spawn artifact scanner meta: %w", err)
+		a.Log().Error("artifact scanner meta spawn failed: name=%s error=%v", a.Name(), a.err)
 		return a.scheduleScannerRestart()
 	}
 	if err := a.MonitorAlias(alias); err != nil {
 		_ = a.SendExitMeta(alias, gen.TerminateReasonShutdown)
-		a.scanner.status.LastError = fmt.Errorf("monitor artifact scanner meta: %w", err)
-		a.Log().Error("artifact scanner meta monitor failed: name=%s error=%v", a.Name(), a.scanner.status.LastError)
+		a.err = fmt.Errorf("monitor artifact scanner meta: %w", err)
+		a.Log().Error("artifact scanner meta monitor failed: name=%s error=%v", a.Name(), a.err)
 		return a.scheduleScannerRestart()
 	}
 	a.scanner.alias = alias
@@ -691,14 +699,16 @@ func (a *actor[T]) startScanner() error {
 
 // startWriter starts a new snapshot writer when I/O is unfenced.
 func (a *actor[T]) startWriter() error {
-	if a.writer.alias != (gen.Alias{}) || len(a.writer.activeIO) != 0 || a.lastStatus.Lifecycle != ActorRunning {
+	if a.writer.alias != (gen.Alias{}) || len(a.writer.activeIO) != 0 || a.lifecycle != ActorRunning {
 		return nil
 	}
 	a.writer.status = snapshotWriterMetaStatus{
-		Lifecycle:    SnapshotWriterMetaStarting,
-		Availability: runtime.AvailabilityUnavailable,
-		LastError:    a.writer.status.LastError,
+		lifecycle:    SnapshotWriterMetaStarting,
+		availability: runtime.AvailabilityUnavailable,
+		err:          a.writer.status.err,
 	}
+	// Each start attempt supersedes the controller's own previous failure.
+	a.err = nil
 	alias, err := a.SpawnMeta(&snapshotWriterMeta{
 		database:   a.database,
 		barrier:    a.barrier,
@@ -708,16 +718,16 @@ func (a *actor[T]) startWriter() error {
 		labels:     a.labels,
 	}, gen.MetaOptions{})
 	if err != nil {
-		a.writer.status.LastError = fmt.Errorf("spawn snapshot writer meta: %w", err)
-		a.Log().Error("snapshot writer meta spawn failed: name=%s error=%v", a.Name(), a.writer.status.LastError)
+		a.err = fmt.Errorf("spawn snapshot writer meta: %w", err)
+		a.Log().Error("snapshot writer meta spawn failed: name=%s error=%v", a.Name(), a.err)
 		a.writer.replacementPending = true
 		return a.scheduleWriterRestart()
 	}
 	a.writer.activeIO[alias] = struct{}{}
 	if err := a.MonitorAlias(alias); err != nil {
 		_ = a.SendExitMeta(alias, gen.TerminateReasonShutdown)
-		a.writer.status.LastError = fmt.Errorf("monitor snapshot writer meta: %w", err)
-		a.Log().Error("snapshot writer meta monitor failed: name=%s error=%v", a.Name(), a.writer.status.LastError)
+		a.err = fmt.Errorf("monitor snapshot writer meta: %w", err)
+		a.Log().Error("snapshot writer meta monitor failed: name=%s error=%v", a.Name(), a.err)
 		a.writer.replacementPending = true
 		return a.scheduleWriterRestart()
 	}
@@ -750,16 +760,16 @@ func (a *actor[T]) writerMetaLost(alias gen.Alias, reason error) {
 	if alias == a.writer.alias {
 		a.writer.alias = gen.Alias{}
 	}
-	a.writer.status.Lifecycle = SnapshotWriterMetaRestarting
-	a.writer.status.Availability = runtime.AvailabilityUnavailable
-	a.writer.status.Loaded = false
-	a.writer.status.Writing = false
-	a.writer.status.LastError = reason
+	a.writer.status.lifecycle = SnapshotWriterMetaRestarting
+	a.writer.status.availability = runtime.AvailabilityUnavailable
+	a.writer.status.loaded = false
+	a.writer.status.writing = false
+	a.writer.status.err = reason
 }
 
 // scheduleScannerRestart arranges the next scanner restart attempt.
 func (a *actor[T]) scheduleScannerRestart() error {
-	if a.lastStatus.Lifecycle != ActorRunning || a.scanner.restart.Pending {
+	if a.lifecycle != ActorRunning || a.scanner.restart.Pending {
 		return nil
 	}
 	delay := a.scanner.restart.Strategy.NextBackOff()
@@ -774,7 +784,7 @@ func (a *actor[T]) scheduleScannerRestart() error {
 	}
 	a.scanner.restart.Pending = true
 	a.scanner.restart.Cancel = cancel
-	a.scanner.status.Lifecycle = ArtifactScannerMetaRestarting
+	a.scanner.status.lifecycle = ArtifactScannerMetaRestarting
 	a.labels.Count(a, metricWorkerRestarts, "scanner")
 	a.Log().Debug("artifact scanner restart scheduled: name=%s delay=%s token=%d", a.Name(), delay, token)
 	return nil
@@ -782,7 +792,7 @@ func (a *actor[T]) scheduleScannerRestart() error {
 
 // scheduleWriterRestart arranges a writer restart after its I/O stops.
 func (a *actor[T]) scheduleWriterRestart() error {
-	if a.lastStatus.Lifecycle != ActorRunning || !a.writer.replacementPending || a.writer.alias != (gen.Alias{}) || len(a.writer.activeIO) != 0 || a.writer.restart.Pending {
+	if a.lifecycle != ActorRunning || !a.writer.replacementPending || a.writer.alias != (gen.Alias{}) || len(a.writer.activeIO) != 0 || a.writer.restart.Pending {
 		return nil
 	}
 	delay := a.writer.restart.Strategy.NextBackOff()
@@ -797,7 +807,7 @@ func (a *actor[T]) scheduleWriterRestart() error {
 	}
 	a.writer.restart.Pending = true
 	a.writer.restart.Cancel = cancel
-	a.writer.status.Lifecycle = SnapshotWriterMetaRestarting
+	a.writer.status.lifecycle = SnapshotWriterMetaRestarting
 	a.labels.Count(a, metricWorkerRestarts, "writer")
 	a.Log().Debug("snapshot writer restart scheduled: name=%s delay=%s token=%d", a.Name(), delay, token)
 	return nil
@@ -808,10 +818,10 @@ func (a *actor[T]) scheduleWriterRestart() error {
 // ---------------------------------------------------------------------------
 
 // reconcileStatus compares against the pre-handler snapshot so in-place lifecycle changes are published.
-func (a *actor[T]) reconcileStatus(previous actorStatus) {
+func (a *actor[T]) reconcileStatus() {
 	a.publishGauges()
 	next := a.status()
-	if sameActorStatus(previous, next) {
+	if sameActorStatus(a.lastStatus, next) {
 		return
 	}
 	a.lastStatusEpoch = runtime.NextStatusEpoch(a.lastStatusEpoch)
@@ -850,24 +860,21 @@ func (a *actor[T]) actorGauges() actorGauges {
 // status computes the controller's current publishable status, shared by reconcileStatus (to the
 // supervisor) and HandleInspect (to an operator).
 func (a *actor[T]) status() actorStatus {
-	var ownError error
-	if a.lastStatus.Lifecycle == ActorStopped {
-		ownError = a.lastStatus.LastError
-	}
 	return actorStatus{
-		Lifecycle:    a.lastStatus.Lifecycle,
-		Availability: a.availability(),
-		Generation:   a.generation,
-		LastError:    runtime.FirstError(ownError, a.writer.status.LastError, a.scanner.status.LastError),
+		lifecycle:    a.lifecycle,
+		availability: a.availability(),
+		generation:   a.generation,
+		// The controller's own failure wins, then the writer, then the scanner.
+		err: runtime.FirstError(a.err, a.writer.status.err, a.scanner.status.err),
 	}
 }
 
 // availability derives the controller's own health from lifecycle and worker readiness.
 func (a *actor[T]) availability() runtime.Availability {
-	if a.lastStatus.Lifecycle != ActorRunning {
+	if a.lifecycle != ActorRunning {
 		return runtime.AvailabilityUnavailable
 	}
-	if a.scanner.status.Complete && a.scanner.status.Availability == runtime.AvailabilityReady && a.writer.status.Loaded && a.writer.status.Availability == runtime.AvailabilityReady {
+	if a.scanner.status.complete && a.scanner.status.availability == runtime.AvailabilityReady && a.writer.status.loaded && a.writer.status.availability == runtime.AvailabilityReady {
 		return runtime.AvailabilityReady
 	}
 	return runtime.AvailabilityDegraded
@@ -883,32 +890,32 @@ func (a *actor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 	}
 	status := a.status()
 	return map[string]string{
-		"controller:last_error":                  runtime.ErrorText(status.LastError),
-		"controller:scanner:last_error":          runtime.ErrorText(a.scanner.status.LastError),
-		"controller:writer:last_error":           runtime.ErrorText(a.writer.status.LastError),
-		"controller:lifecycle":                   string(status.Lifecycle),
-		"controller:availability":                string(status.Availability),
-		"controller:generation":                  fmt.Sprintf("%d", status.Generation),
+		"controller:last_error":                  runtime.ErrorText(status.err),
+		"controller:scanner:last_error":          runtime.ErrorText(a.scanner.status.err),
+		"controller:writer:last_error":           runtime.ErrorText(a.writer.status.err),
+		"controller:lifecycle":                   string(status.lifecycle),
+		"controller:availability":                string(status.availability),
+		"controller:generation":                  fmt.Sprintf("%d", status.generation),
 		"controller:records":                     fmt.Sprintf("%d", len(a.records)),
 		"controller:subscribers":                 fmt.Sprintf("%d", len(a.subscribers)),
 		"controller:executors":                   fmt.Sprintf("%d", len(a.executors)),
 		"controller:executors_drifting":          fmt.Sprintf("%d", drifting),
 		"controller:pending:upserts":             fmt.Sprintf("%d", upserts),
 		"controller:pending:tombstones":          fmt.Sprintf("%d", tombstones),
-		"controller:scanner:lifecycle":           string(a.scanner.status.Lifecycle),
-		"controller:scanner:availability":        string(a.scanner.status.Availability),
+		"controller:scanner:lifecycle":           string(a.scanner.status.lifecycle),
+		"controller:scanner:availability":        string(a.scanner.status.availability),
 		"controller:scanner:entries":             fmt.Sprintf("%d", len(a.scanner.entries)),
-		"controller:writer:lifecycle":            string(a.writer.status.Lifecycle),
-		"controller:writer:availability":         string(a.writer.status.Availability),
-		"controller:writer:writing":              fmt.Sprintf("%t", a.writer.status.Writing),
+		"controller:writer:lifecycle":            string(a.writer.status.lifecycle),
+		"controller:writer:availability":         string(a.writer.status.availability),
+		"controller:writer:writing":              fmt.Sprintf("%t", a.writer.status.writing),
 		"controller:writer:consecutive_failures": fmt.Sprintf("%d", a.writer.consecutiveFailures),
 	}
 }
 
 // sameActorStatus compares the status fields that trigger publication.
 func sameActorStatus(left, right actorStatus) bool {
-	return left.Lifecycle == right.Lifecycle &&
-		left.Availability == right.Availability &&
-		left.Generation == right.Generation &&
-		runtime.ErrorText(left.LastError) == runtime.ErrorText(right.LastError)
+	return left.lifecycle == right.lifecycle &&
+		left.availability == right.availability &&
+		left.generation == right.generation &&
+		runtime.ErrorText(left.err) == runtime.ErrorText(right.err)
 }

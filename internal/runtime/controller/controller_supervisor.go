@@ -33,9 +33,9 @@ const (
 
 // supervisorStatus is the controller subtree's current lifecycle and availability.
 type supervisorStatus struct {
-	Lifecycle    SupervisorLifecycle
-	Availability runtime.Availability
-	LastError    error
+	lifecycle    SupervisorLifecycle
+	availability runtime.Availability
+	err          error
 }
 
 type actorState struct {
@@ -64,8 +64,9 @@ type supervisor[T plugin.Artifact] struct {
 	radarLogged          bool
 	labels               telemetry.Labels
 	signal               telemetry.Signal
-	lastStatus           supervisorStatus
-	lastError            error
+	lifecycle            SupervisorLifecycle // the supervisor's own live lifecycle
+	err                  error               // the supervisor's own failure, kept apart from its actor's errors
+	lastStatus           supervisorStatus    // last published projection, the baseline reconcileStatus dedupes against
 }
 
 // ---------------------------------------------------------------------------
@@ -106,10 +107,10 @@ func (s *supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 		return act.SupervisorSpec{}, fmt.Errorf("controller supervisor: namespace is required")
 	}
 	s.actor.status = actorStatus{
-		Lifecycle:    ActorStarting,
-		Availability: runtime.AvailabilityUnavailable,
+		lifecycle:    ActorStarting,
+		availability: runtime.AvailabilityUnavailable,
 	}
-	s.lastStatus.Lifecycle = SupervisorStarting
+	s.lifecycle = SupervisorStarting
 	s.writerFences = make(map[gen.Alias]writerIOFence)
 	s.reconcileStatus()
 	// A message, not an inline call: radar must not delay the spec.
@@ -149,7 +150,7 @@ func (s *supervisor[T]) HandleMessage(from gen.PID, message any) error {
 			return err
 		}
 		s.reconcileRadar()
-		if s.lastStatus.Lifecycle != SupervisorStopping {
+		if s.lifecycle != SupervisorStopping {
 			if _, err := s.SendWithPriorityAfter(s.PID(), MessageRadarTick{}, gen.MessagePriorityHigh, telemetry.RadarTickInterval); err != nil {
 				return fmt.Errorf("reschedule radar tick: %w", err)
 			}
@@ -169,10 +170,10 @@ func (s *supervisor[T]) HandleMessage(from gen.PID, message any) error {
 		s.Log().Debug("radar process down, re-registering on next tick: namespace=%q process=%s", s.namespace, m.ProcessID.Name)
 		return nil
 	case plugin.MessageStop:
-		if s.lastStatus.Lifecycle != SupervisorRunning {
+		if s.lifecycle != SupervisorRunning {
 			return nil
 		}
-		s.lastStatus.Lifecycle = SupervisorDraining
+		s.lifecycle = SupervisorDraining
 		s.Log().Info("controller supervisor draining: name=%s child=%s writer_fences=%d", s.Name(), s.actor.pid, len(s.writerFences))
 		if err := s.sendDrain(); err != nil {
 			return err
@@ -183,12 +184,12 @@ func (s *supervisor[T]) HandleMessage(from gen.PID, message any) error {
 			return nil
 		}
 		s.actor.statusEpoch = m.statusEpoch
-		previous := s.actor.status.Lifecycle
+		previous := s.actor.status.lifecycle
 		s.actor.status = m.status
-		if previous != m.status.Lifecycle {
-			s.Log().Debug("controller child lifecycle changed: name=%s child=%s lifecycle=%s", s.Name(), from, m.status.Lifecycle)
+		if previous != m.status.lifecycle {
+			s.Log().Debug("controller child lifecycle changed: name=%s child=%s lifecycle=%s", s.Name(), from, m.status.lifecycle)
 		}
-		if s.lastStatus.Lifecycle == SupervisorDraining {
+		if s.lifecycle == SupervisorDraining {
 			return s.advanceShutdown()
 		}
 	case MessageSnapshotWriterIOStarted:
@@ -219,8 +220,8 @@ func (s *supervisor[T]) HandleChildStart(name gen.Atom, pid gen.PID) error {
 	s.actor = actorState{
 		pid: pid,
 		status: actorStatus{
-			Lifecycle:    ActorStarting,
-			Availability: runtime.AvailabilityUnavailable,
+			lifecycle:    ActorStarting,
+			availability: runtime.AvailabilityUnavailable,
 		},
 	}
 	s.Log().Info("controller child started: name=%s child=%s", s.Name(), pid)
@@ -235,9 +236,9 @@ func (s *supervisor[T]) HandleChildTerminate(name gen.Atom, pid gen.PID, reason 
 	defer s.reconcileStatus()
 	s.labels.Count(s, metricChildTerminations, telemetry.TerminationReason(reason))
 	s.actor.pid = gen.PID{}
-	s.actor.status.LastError = reason
+	s.actor.status.err = reason
 	if reason == gen.TerminateReasonNormal || reason == gen.TerminateReasonShutdown {
-		switch s.lastStatus.Lifecycle {
+		switch s.lifecycle {
 		case SupervisorDraining, SupervisorStopping:
 			s.Log().Info("controller child stopped: name=%s child=%s reason=%v", s.Name(), pid, reason)
 			return s.advanceShutdown()
@@ -252,8 +253,8 @@ func (s *supervisor[T]) HandleChildTerminate(name gen.Atom, pid gen.PID, reason 
 
 // Terminate retains the subtree failure and publishes final gauges and readiness.
 func (s *supervisor[T]) Terminate(reason error) {
-	s.lastError = reason
-	s.lastStatus.Lifecycle = SupervisorStopped
+	s.err = reason
+	s.lifecycle = SupervisorStopped
 	s.reconcileStatus()
 }
 
@@ -298,20 +299,20 @@ func (s *supervisor[T]) pollIOCompletions() error {
 
 // advanceShutdown stops the actor after draining writer I/O.
 func (s *supervisor[T]) advanceShutdown() error {
-	if s.lastStatus.Lifecycle == SupervisorDraining {
-		if s.actor.pid != (gen.PID{}) && s.actor.status.Lifecycle != ActorDrained {
+	if s.lifecycle == SupervisorDraining {
+		if s.actor.pid != (gen.PID{}) && s.actor.status.lifecycle != ActorDrained {
 			return nil
 		}
 		if len(s.writerFences) != 0 {
 			return nil
 		}
-		s.lastStatus.Lifecycle = SupervisorStopping
+		s.lifecycle = SupervisorStopping
 		s.Log().Info("controller supervisor stopping: name=%s", s.Name())
 		if err := s.sendStop(); err != nil {
 			return err
 		}
 	}
-	if s.lastStatus.Lifecycle == SupervisorStopping && s.actor.pid == (gen.PID{}) && len(s.writerFences) == 0 {
+	if s.lifecycle == SupervisorStopping && s.actor.pid == (gen.PID{}) && len(s.writerFences) == 0 {
 		s.Log().Info("controller supervisor stopped: name=%s", s.Name())
 		return gen.TerminateReasonNormal
 	}
@@ -323,14 +324,14 @@ func (s *supervisor[T]) reconcileActor() error {
 	if s.actor.pid == (gen.PID{}) {
 		return s.advanceShutdown()
 	}
-	if s.lastStatus.Lifecycle == SupervisorStopping {
+	if s.lifecycle == SupervisorStopping {
 		return s.sendStop()
 	}
-	if s.lastStatus.Lifecycle == SupervisorDraining {
+	if s.lifecycle == SupervisorDraining {
 		if len(s.writerFences) != 0 {
 			return nil
 		}
-		s.lastStatus.Lifecycle = SupervisorStopping
+		s.lifecycle = SupervisorStopping
 		return s.sendStop()
 	}
 	if len(s.writerFences) != 0 || s.actor.activationSent {
@@ -345,7 +346,7 @@ func (s *supervisor[T]) reconcileActor() error {
 		return fmt.Errorf("activate controller %s: %w", s.actor.pid, err)
 	}
 	s.actor.activationSent = true
-	s.lastStatus.Lifecycle = SupervisorRunning
+	s.lifecycle = SupervisorRunning
 	if err == nil {
 		s.Log().Info("controller activated: name=%s child=%s", s.Name(), s.actor.pid)
 	}
@@ -396,20 +397,20 @@ func stalePIDSendFailure(err error) bool {
 // status derives the controller subtree's current status without changing state.
 func (s *supervisor[T]) status() supervisorStatus {
 	return supervisorStatus{
-		Lifecycle:    s.lastStatus.Lifecycle,
-		Availability: s.availability(),
-		LastError:    runtime.FirstError(s.lastError, s.actor.status.LastError),
+		lifecycle:    s.lifecycle,
+		availability: s.availability(),
+		err:          runtime.FirstError(s.err, s.actor.status.err),
 	}
 }
 
 // availability follows the live child's health only while the supervisor is running.
 func (s *supervisor[T]) availability() runtime.Availability {
-	if s.lastStatus.Lifecycle != SupervisorRunning || s.actor.pid == (gen.PID{}) {
+	if s.lifecycle != SupervisorRunning || s.actor.pid == (gen.PID{}) {
 		return runtime.AvailabilityUnavailable
 	}
-	switch s.actor.status.Availability {
+	switch s.actor.status.availability {
 	case runtime.AvailabilityReady, runtime.AvailabilityDegraded:
-		return s.actor.status.Availability
+		return s.actor.status.availability
 	default:
 		return runtime.AvailabilityUnavailable
 	}
@@ -430,7 +431,7 @@ func (s *supervisor[T]) propagateReadiness() {
 // publishGauges publishes current values without changing lifecycle or readiness.
 func (s *supervisor[T]) publishGauges() {
 	status := s.status()
-	s.labels.Set(s, metricSupervisorLifecycle, supervisorLifecycleValue(status.Lifecycle))
+	s.labels.Set(s, metricSupervisorLifecycle, supervisorLifecycleValue(status.lifecycle))
 	s.labels.Set(s, metricWriterFences, float64(len(s.writerFences)))
 }
 
@@ -480,13 +481,13 @@ func (s *supervisor[T]) radarUnavailableOnce(err error) {
 func (s *supervisor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 	status := s.status()
 	return map[string]string{
-		"supervisor:last_error":         runtime.ErrorText(status.LastError),
-		"supervisor:lifecycle":          string(status.Lifecycle),
-		"supervisor:availability":       string(status.Availability),
+		"supervisor:last_error":         runtime.ErrorText(status.err),
+		"supervisor:lifecycle":          string(status.lifecycle),
+		"supervisor:availability":       string(status.availability),
 		"supervisor:child":              fmt.Sprintf("%s", s.actor.pid),
-		"supervisor:child_lifecycle":    string(s.actor.status.Lifecycle),
-		"supervisor:child_availability": string(s.actor.status.Availability),
-		"supervisor:child_generation":   fmt.Sprintf("%d", s.actor.status.Generation),
+		"supervisor:child_lifecycle":    string(s.actor.status.lifecycle),
+		"supervisor:child_availability": string(s.actor.status.availability),
+		"supervisor:child_generation":   fmt.Sprintf("%d", s.actor.status.generation),
 		"supervisor:writer_fences":      fmt.Sprintf("%d", len(s.writerFences)),
 		"supervisor:readiness_signal":   s.signal.State(),
 	}
