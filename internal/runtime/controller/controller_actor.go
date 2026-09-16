@@ -69,7 +69,6 @@ type actor[T plugin.Artifact] struct {
 	loader              plugin.Loader[T]
 	database            backends.Database
 	barrier             *runtime.IOBarrier
-	lifecycle           ActorLifecycle
 	scanner             scannerMetaState
 	writer              writerMetaState
 	bootstrapped        bool
@@ -80,7 +79,6 @@ type actor[T plugin.Artifact] struct {
 	fullRewriteRequired bool
 	subscribers         map[string]gen.PID
 	executors           map[string]ExecutorStatus
-	lastError           error
 	lastStatus          actorStatus
 	lastStatusEpoch     int64
 	labels              telemetry.Labels
@@ -156,7 +154,7 @@ func (a *actor[T]) Init(...any) error {
 	if a.opts.Directory == "" || a.loader == nil || a.database == nil || a.barrier == nil {
 		return fmt.Errorf("controller actor: directory, loader, database, and barrier are required")
 	}
-	a.lifecycle = ActorStarting
+	a.lastStatus.Lifecycle = ActorStarting
 	a.records = make(map[string]backends.ControllerRecord)
 	a.subscribers = make(map[string]gen.PID)
 	a.executors = make(map[string]ExecutorStatus)
@@ -180,14 +178,14 @@ func (a *actor[T]) Init(...any) error {
 
 // HandleMessage advances controller state from lifecycle and worker messages.
 func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
-	defer a.reconcileStatus()
+	defer a.reconcileStatus(a.lastStatus)
 	switch message.(type) {
 	case MessageActorActivate:
-		if from != a.Parent() || a.lifecycle != ActorStarting {
+		if from != a.Parent() || a.lastStatus.Lifecycle != ActorStarting {
 			return nil
 		}
 	case plugin.MessageDrain:
-		if from != a.Parent() || a.lifecycle == ActorStarting {
+		if from != a.Parent() || a.lastStatus.Lifecycle == ActorStarting {
 			return nil
 		}
 		return a.beginDrain()
@@ -197,7 +195,7 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 		}
 		return gen.TerminateReasonNormal
 	}
-	if a.lifecycle == ActorDraining || a.lifecycle == ActorDrained {
+	if a.lastStatus.Lifecycle == ActorDraining || a.lastStatus.Lifecycle == ActorDrained {
 		switch message.(type) {
 		case gen.MessageDownAlias, gen.MessageDownPID, MessageSnapshotWriterIOStopped, snapshot.UnsubscribeRequest:
 		default:
@@ -206,7 +204,7 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 	}
 	switch m := message.(type) {
 	case MessageActorActivate:
-		a.lifecycle = ActorRunning
+		a.lastStatus.Lifecycle = ActorRunning
 		if err := a.startScanner(); err != nil {
 			return err
 		}
@@ -223,7 +221,7 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 		return nil
 	case MessageExecutorDriftCheck:
 		a.checkExecutorDrift()
-		if a.lifecycle == ActorRunning {
+		if a.lastStatus.Lifecycle == ActorRunning {
 			if _, err := a.SendAfter(a.PID(), MessageExecutorDriftCheck{}, executorDriftCheckInterval); err != nil {
 				return fmt.Errorf("reschedule executor drift check: %w", err)
 			}
@@ -366,18 +364,18 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 			return nil
 		}
 		delete(a.writer.activeIO, m.source)
-		if a.lifecycle == ActorDraining || a.lifecycle == ActorDrained {
+		if a.lastStatus.Lifecycle == ActorDraining || a.lastStatus.Lifecycle == ActorDrained {
 			return a.maybeDrained()
 		}
 		return a.scheduleWriterRestart()
 	case gen.MessageDownAlias:
 		switch m.Alias {
 		case a.scanner.alias:
-			if a.lifecycle == ActorRunning {
+			if a.lastStatus.Lifecycle == ActorRunning {
 				a.Log().Error("artifact scanner stopped unexpectedly: name=%s alias=%s reason=%v", a.Name(), m.Alias, m.Reason)
 			}
 			a.scanner.alias = gen.Alias{}
-			if a.lifecycle == ActorDraining || a.lifecycle == ActorDrained {
+			if a.lastStatus.Lifecycle == ActorDraining || a.lastStatus.Lifecycle == ActorDrained {
 				a.scanner.status.Lifecycle, a.scanner.status.Availability = ArtifactScannerMetaStopped, runtime.AvailabilityUnavailable
 				return nil
 			}
@@ -387,11 +385,11 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 			a.scanner.status.LastError = m.Reason
 			return a.scheduleScannerRestart()
 		case a.writer.alias:
-			if a.lifecycle == ActorRunning {
+			if a.lastStatus.Lifecycle == ActorRunning {
 				a.Log().Error("snapshot writer stopped unexpectedly: name=%s alias=%s reason=%v", a.Name(), m.Alias, m.Reason)
 			}
 			a.writerMetaLost(m.Alias, m.Reason)
-			if a.lifecycle == ActorDraining || a.lifecycle == ActorDrained {
+			if a.lastStatus.Lifecycle == ActorDraining || a.lastStatus.Lifecycle == ActorDrained {
 				return a.maybeDrained()
 			}
 			a.writer.replacementPending = true
@@ -403,9 +401,9 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 
 // Terminate stops workers and reports the final controller state.
 func (a *actor[T]) Terminate(reason error) {
-	a.lastError = reason
-	defer a.reconcileStatus()
-	a.lifecycle = ActorStopped
+	defer a.reconcileStatus(a.lastStatus)
+	a.lastStatus.LastError = reason
+	a.lastStatus.Lifecycle = ActorStopped
 	a.scanner.restart.CancelScheduled(false)
 	a.writer.restart.CancelScheduled(false)
 	a.stopScanner(gen.TerminateReasonShutdown)
@@ -473,7 +471,7 @@ func (a *actor[T]) reconcile() error {
 
 // sendPending queues the current plan with the active writer.
 func (a *actor[T]) sendPending() error {
-	if a.pending == nil || a.writer.status.Writing || a.writer.alias == (gen.Alias{}) || !a.writer.status.Loaded || a.lifecycle != ActorRunning {
+	if a.pending == nil || a.writer.status.Writing || a.writer.alias == (gen.Alias{}) || !a.writer.status.Loaded || a.lastStatus.Lifecycle != ActorRunning {
 		return nil
 	}
 	a.writer.status.Writing = true
@@ -515,10 +513,10 @@ func (a *actor[T]) recordWriteFailure(err error) {
 
 // beginDrain stops workers and waits for accepted writer I/O.
 func (a *actor[T]) beginDrain() error {
-	if a.lifecycle == ActorDraining || a.lifecycle == ActorDrained || a.lifecycle == ActorStopped {
+	if a.lastStatus.Lifecycle == ActorDraining || a.lastStatus.Lifecycle == ActorDrained || a.lastStatus.Lifecycle == ActorStopped {
 		return nil
 	}
-	a.lifecycle = ActorDraining
+	a.lastStatus.Lifecycle = ActorDraining
 	a.Log().Info("controller draining: name=%s writer_active_io=%d", a.Name(), len(a.writer.activeIO))
 	a.scanner.restart.CancelScheduled(false)
 	a.writer.restart.CancelScheduled(false)
@@ -532,8 +530,8 @@ func (a *actor[T]) maybeDrained() error {
 	if len(a.writer.activeIO) != 0 {
 		return nil
 	}
-	if a.lifecycle != ActorDrained {
-		a.lifecycle = ActorDrained
+	if a.lastStatus.Lifecycle != ActorDrained {
+		a.lastStatus.Lifecycle = ActorDrained
 		a.Log().Info("controller drained: name=%s", a.Name())
 	}
 	return nil
@@ -693,7 +691,7 @@ func (a *actor[T]) startScanner() error {
 
 // startWriter starts a new snapshot writer when I/O is unfenced.
 func (a *actor[T]) startWriter() error {
-	if a.writer.alias != (gen.Alias{}) || len(a.writer.activeIO) != 0 || a.lifecycle != ActorRunning {
+	if a.writer.alias != (gen.Alias{}) || len(a.writer.activeIO) != 0 || a.lastStatus.Lifecycle != ActorRunning {
 		return nil
 	}
 	a.writer.status = snapshotWriterMetaStatus{
@@ -761,7 +759,7 @@ func (a *actor[T]) writerMetaLost(alias gen.Alias, reason error) {
 
 // scheduleScannerRestart arranges the next scanner restart attempt.
 func (a *actor[T]) scheduleScannerRestart() error {
-	if a.lifecycle != ActorRunning || a.scanner.restart.Pending {
+	if a.lastStatus.Lifecycle != ActorRunning || a.scanner.restart.Pending {
 		return nil
 	}
 	delay := a.scanner.restart.Strategy.NextBackOff()
@@ -784,7 +782,7 @@ func (a *actor[T]) scheduleScannerRestart() error {
 
 // scheduleWriterRestart arranges a writer restart after its I/O stops.
 func (a *actor[T]) scheduleWriterRestart() error {
-	if a.lifecycle != ActorRunning || !a.writer.replacementPending || a.writer.alias != (gen.Alias{}) || len(a.writer.activeIO) != 0 || a.writer.restart.Pending {
+	if a.lastStatus.Lifecycle != ActorRunning || !a.writer.replacementPending || a.writer.alias != (gen.Alias{}) || len(a.writer.activeIO) != 0 || a.writer.restart.Pending {
 		return nil
 	}
 	delay := a.writer.restart.Strategy.NextBackOff()
@@ -810,10 +808,10 @@ func (a *actor[T]) scheduleWriterRestart() error {
 // ---------------------------------------------------------------------------
 
 // reconcileStatus refreshes gauges on every reconciliation and propagates status only on change.
-func (a *actor[T]) reconcileStatus() {
+func (a *actor[T]) reconcileStatus(previous actorStatus) {
 	a.publishGauges()
 	next := a.status()
-	if sameActorStatus(a.lastStatus, next) {
+	if sameActorStatus(previous, next) {
 		return
 	}
 	a.lastStatusEpoch = runtime.NextStatusEpoch(a.lastStatusEpoch)
@@ -852,17 +850,21 @@ func (a *actor[T]) actorGauges() actorGauges {
 // status computes the controller's current publishable status, shared by reconcileStatus (to the
 // supervisor) and HandleInspect (to an operator).
 func (a *actor[T]) status() actorStatus {
+	var ownError error
+	if a.lastStatus.Lifecycle == ActorStopped {
+		ownError = a.lastStatus.LastError
+	}
 	return actorStatus{
-		Lifecycle:    a.lifecycle,
+		Lifecycle:    a.lastStatus.Lifecycle,
 		Availability: a.availability(),
 		Generation:   a.generation,
-		LastError:    runtime.FirstError(a.lastError, a.writer.status.LastError, a.scanner.status.LastError),
+		LastError:    runtime.FirstError(ownError, a.writer.status.LastError, a.scanner.status.LastError),
 	}
 }
 
 // availability derives the controller's own health from lifecycle and worker readiness.
 func (a *actor[T]) availability() runtime.Availability {
-	if a.lifecycle != ActorRunning {
+	if a.lastStatus.Lifecycle != ActorRunning {
 		return runtime.AvailabilityUnavailable
 	}
 	if a.scanner.status.Complete && a.scanner.status.Availability == runtime.AvailabilityReady && a.writer.status.Loaded && a.writer.status.Availability == runtime.AvailabilityReady {
