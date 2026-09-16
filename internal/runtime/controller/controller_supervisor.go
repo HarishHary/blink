@@ -32,6 +32,7 @@ const (
 
 // supervisorStatus is the controller subtree's current lifecycle and availability.
 type supervisorStatus struct {
+	LastError    error
 	Lifecycle    SupervisorLifecycle
 	Availability runtime.Availability
 }
@@ -63,6 +64,7 @@ type supervisor[T plugin.Artifact] struct {
 	signal               telemetry.Signal
 	collectorsRegistered bool
 	radarLogged          bool
+	lastError            error
 }
 
 // ---------------------------------------------------------------------------
@@ -232,6 +234,7 @@ func (s *supervisor[T]) HandleChildTerminate(name gen.Atom, pid gen.PID, reason 
 	defer s.reconcileStatus()
 	s.labels.Count(s, metricChildTerminations, telemetry.TerminationReason(reason))
 	s.actor.pid = gen.PID{}
+	s.actor.status.LastError = reason
 	if reason == gen.TerminateReasonNormal || reason == gen.TerminateReasonShutdown {
 		switch s.lifecycle {
 		case SupervisorDraining, SupervisorStopping:
@@ -244,6 +247,12 @@ func (s *supervisor[T]) HandleChildTerminate(name gen.Atom, pid gen.PID, reason 
 	}
 	s.Log().Error("controller child failed: name=%s child=%s reason=%v", s.Name(), pid, reason)
 	return nil
+}
+
+// Terminate retains the subtree termination reason for inspection.
+func (s *supervisor[T]) Terminate(reason error) {
+	s.lastError = reason
+	s.lifecycle = SupervisorStopping
 }
 
 // HandleCall rejects unsupported supervisor calls.
@@ -384,7 +393,11 @@ func stalePIDSendFailure(err error) bool {
 
 // status derives the controller subtree's current status without changing state.
 func (s *supervisor[T]) status() supervisorStatus {
-	return supervisorStatus{Lifecycle: s.lifecycle, Availability: s.availability()}
+	return supervisorStatus{
+		Lifecycle:    s.lifecycle,
+		Availability: s.availability(),
+		LastError:    runtime.FirstError(s.lastError, s.actor.status.LastError),
+	}
 }
 
 // availability follows the live child's health only while the supervisor is running.
@@ -464,6 +477,7 @@ func (s *supervisor[T]) radarUnavailableOnce(err error) {
 func (s *supervisor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 	status := s.status()
 	return map[string]string{
+		"supervisor:last_error":         runtime.ErrorText(status.LastError),
 		"supervisor:lifecycle":          string(status.Lifecycle),
 		"supervisor:availability":       string(status.Availability),
 		"supervisor:child":              fmt.Sprintf("%s", s.actor.pid),

@@ -82,6 +82,7 @@ type Supervisor[T any] struct {
 	signal               telemetry.Signal
 	collectorsRegistered bool
 	radarLogged          bool
+	lastError            error
 }
 
 // ---------------------------------------------------------------------------
@@ -367,7 +368,7 @@ func (s *Supervisor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, erro
 func (s *Supervisor[T]) Terminate(reason error) {
 	defer s.reconcileStatus()
 	s.lifecycle = SupervisorStopping
-	s.projectionActor.status.LastError = reason
+	s.lastError = reason
 	s.cancelExecutorReport()
 	s.projectionActor.status.Lifecycle = ProjectionActorStopped
 	s.projectionActor.status.Availability = runtime.AvailabilityUnavailable
@@ -574,7 +575,7 @@ func (s *Supervisor[T]) status() SupervisorStatus {
 	return SupervisorStatus{
 		Lifecycle:    s.lifecycle,
 		Availability: s.executorAvailability(),
-		LastError:    runtime.FirstError(s.projectionActor.status.LastError, s.readerActor.status.LastError),
+		LastError:    runtime.FirstError(s.lastError, s.projectionActor.status.LastError, s.readerActor.status.LastError),
 	}
 }
 
