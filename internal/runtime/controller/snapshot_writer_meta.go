@@ -35,11 +35,11 @@ const (
 
 // snapshotWriterMetaStatus is derived and owned by the controller actor.
 type snapshotWriterMetaStatus struct {
-	Lifecycle    SnapshotWriterMetaLifecycle
-	Availability runtime.Availability
-	Loaded       bool
-	Writing      bool
-	LastError    error
+	lifecycle    SnapshotWriterMetaLifecycle
+	availability runtime.Availability
+	loaded       bool
+	writing      bool
+	err          error
 }
 
 // snapshotWriterMeta owns blocking persistence for one writer instance.

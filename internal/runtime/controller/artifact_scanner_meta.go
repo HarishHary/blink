@@ -44,10 +44,10 @@ const (
 
 // artifactScannerMetaStatus is derived and owned by the controller actor.
 type artifactScannerMetaStatus struct {
-	Lifecycle    ArtifactScannerMetaLifecycle
-	Availability runtime.Availability
-	Complete     bool
-	LastError    error
+	lifecycle    ArtifactScannerMetaLifecycle
+	availability runtime.Availability
+	complete     bool
+	err          error
 }
 
 // artifactScannerMeta owns filesystem observation and parsing for one scanner instance.
