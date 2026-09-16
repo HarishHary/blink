@@ -91,24 +91,24 @@ type Rollout struct {
 
 type projectionActor[T any] struct {
 	act.Actor
-	snapshotEvent      gen.Event
-	statusEvent        gen.Event
-	loader             Loader[T]
-	mode               ProjectionCommitMode
-	readerActor        readerActorState
-	observedGeneration int64
-	committed          *parsedProjection[T]
-	prepared           *parsedProjection[T]
-	lastError          error
-	lastStatus         ProjectionActorStatus
-	lastStatusEpoch    int64
-	labels             telemetry.Labels
+	snapshotEvent   gen.Event
+	statusEvent     gen.Event
+	loader          Loader[T]
+	mode            ProjectionCommitMode
+	readerActor     readerActorState
+	observed        *parsedProjection[T]
+	committed       *parsedProjection[T]
+	prepared        *parsedProjection[T]
+	lastStatus      ProjectionActorStatus
+	lastStatusEpoch int64
+	labels          telemetry.Labels
 }
 
 type parsedProjection[T any] struct {
 	generation int64
 	data       ProjectionData[T]
 	failures   int
+	err        error
 }
 
 // ProjectionClient performs bounded reads against the stable projection endpoint.
@@ -194,7 +194,7 @@ func (a *projectionActor[T]) HandleMessage(from gen.PID, message any) error {
 		switch {
 		case a.mode != ProjectionCommitExternal:
 			err = ErrProjectionNotPrepared
-		case m.Generation != a.observedGeneration:
+		case a.observed == nil || m.Generation != a.observed.generation:
 			err = fmt.Errorf("%w: %d", ErrProjectionNotPrepared, m.Generation)
 		case a.committed == nil || a.committed.generation != m.Generation:
 			if a.prepared == nil || a.prepared.generation != m.Generation {
@@ -218,10 +218,10 @@ func (a *projectionActor[T]) HandleMessage(from gen.PID, message any) error {
 
 // HandleEvent applies a monitored snapshot or reader status event.
 func (a *projectionActor[T]) HandleEvent(event gen.MessageEvent) error {
-	previousGeneration := a.observedGeneration
+	previous := a.observed
 	err := a.applyEvent(event)
-	if event.Event == a.snapshotEvent && a.observedGeneration > previousGeneration && a.lastError != nil {
-		a.Log().Error("snapshot projection parse failed: generation=%d error=%v", a.observedGeneration, a.lastError)
+	if a.observed != previous && a.observed != nil && a.observed.err != nil {
+		a.Log().Error("snapshot projection parse failed: generation=%d error=%v", a.observed.generation, a.observed.err)
 	}
 	a.reconcileStatus()
 	return err
@@ -274,10 +274,9 @@ func (a *projectionActor[T]) applyEvent(event gen.MessageEvent) error {
 	switch event.Event {
 	case a.snapshotEvent:
 		snap, ok := event.Message.(*Snapshot)
-		if !ok || snap == nil || snap.Generation <= a.observedGeneration {
+		if !ok || snap == nil || snap.Generation <= 0 || (a.observed != nil && snap.Generation <= a.observed.generation) {
 			return nil
 		}
-		a.observedGeneration = snap.Generation
 		a.prepared = nil
 		start := time.Now()
 		parsed, err := newParsedProjection(snap, a.loader)
@@ -286,7 +285,7 @@ func (a *projectionActor[T]) applyEvent(event gen.MessageEvent) error {
 		if parsed.failures != 0 {
 			a.labels.Add(a, metricParseFailures, float64(parsed.failures))
 		}
-		a.lastError = err
+		a.observed = &parsed
 		// Nothing parsed leaves the previous generation standing; a partial one serves what parsed and
 		// stays degraded.
 		if err != nil && len(parsed.data.ByFileName) == 0 {
@@ -357,7 +356,8 @@ func newParsedProjection[T any](snap *Snapshot, loader Loader[T]) (parsedProject
 			data.RolloutByID[entry.Id] = rollout
 		}
 	}
-	return parsedProjection[T]{generation: snap.Generation, data: data, failures: len(parseErrs)}, errors.Join(parseErrs...)
+	parsed := parsedProjection[T]{generation: snap.Generation, data: data, failures: len(parseErrs), err: errors.Join(parseErrs...)}
+	return parsed, parsed.err
 }
 
 // NewProjectionClient creates a client for the projection child of a namespace's subtree.
@@ -396,7 +396,10 @@ func (a *projectionActor[T]) status() ProjectionActorStatus {
 	status := ProjectionActorStatus{
 		Lifecycle:    ProjectionActorRunning,
 		Availability: runtime.AvailabilityUnavailable,
-		LastError:    runtime.FirstError(a.lastError, a.readerActor.status.LastError),
+		LastError:    a.readerActor.status.LastError,
+	}
+	if a.observed != nil {
+		status.LastError = runtime.FirstError(a.observed.err, status.LastError)
 	}
 	if a.mode == ProjectionCommitExternal && a.prepared != nil {
 		status.PreparedGeneration = a.prepared.generation
@@ -405,13 +408,13 @@ func (a *projectionActor[T]) status() ProjectionActorStatus {
 		return status
 	}
 	status.CommittedGeneration = a.committed.generation
-	if a.lastError != nil {
+	if a.observed != nil && a.observed.err != nil {
 		status.Availability = runtime.AvailabilityDegraded
 		return status
 	}
-	if a.readerActor.status.Availability == runtime.AvailabilityReady &&
+	if a.observed != nil && a.readerActor.status.Availability == runtime.AvailabilityReady &&
 		a.readerActor.status.Generation >= a.committed.generation &&
-		a.observedGeneration >= a.committed.generation {
+		a.observed.generation >= a.committed.generation {
 		status.Availability = runtime.AvailabilityReady
 	}
 	return status
@@ -446,13 +449,17 @@ func (a *projectionActor[T]) propagateStatus(next ProjectionActorStatus) {
 // HandleInspect exposes lifecycle and availability plus the generation at each stage.
 func (a *projectionActor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 	status := a.status()
+	var observedGeneration int64
+	if a.observed != nil {
+		observedGeneration = a.observed.generation
+	}
 	return map[string]string{
 		"projection:last_error":           runtime.ErrorText(status.LastError),
 		"projection:lifecycle":            string(status.Lifecycle),
 		"projection:availability":         string(status.Availability),
 		"projection:committed_generation": fmt.Sprintf("%d", status.CommittedGeneration),
 		"projection:prepared_generation":  fmt.Sprintf("%d", status.PreparedGeneration),
-		"projection:observed_generation":  fmt.Sprintf("%d", a.observedGeneration),
+		"projection:observed_generation":  fmt.Sprintf("%d", observedGeneration),
 		"projection:reader_ready":         fmt.Sprintf("%t", a.readerActor.status.Availability == runtime.AvailabilityReady),
 		"projection:reader_generation":    fmt.Sprintf("%d", a.readerActor.status.Generation),
 	}

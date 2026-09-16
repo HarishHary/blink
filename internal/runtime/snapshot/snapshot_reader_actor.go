@@ -53,7 +53,6 @@ type readerActor struct {
 	retry           *runtime.ScheduledBackoff
 	lastStatus      ReaderActorStatus
 	lastStatusEpoch int64
-	lastError       error
 	labels          telemetry.Labels
 }
 
@@ -119,7 +118,7 @@ func (a *readerActor) Init(...any) error {
 
 // HandleMessage processes activation, pushed snapshot updates, controller-loss, and retry messages.
 func (a *readerActor) HandleMessage(from gen.PID, message any) error {
-	defer a.reconcileStatus()
+	defer func() { a.reconcileStatus(a.lastStatus.LastError) }()
 	switch m := message.(type) {
 	case MessageReaderActorActivate:
 		if from != a.Parent() || a.activated {
@@ -135,8 +134,8 @@ func (a *readerActor) HandleMessage(from gen.PID, message any) error {
 		}
 		a.labels.Count(a, metricUpdates)
 		a.lastGeneration = m.Snapshot.Generation
-		a.lastError = nil
 		a.publishSnapshot(m.Snapshot)
+		a.reconcileStatus(nil)
 		return nil
 	case MessageSubscribeRetry:
 		if !a.retry.Pending || a.retry.Token != m.token || a.subscribed {
@@ -152,7 +151,7 @@ func (a *readerActor) HandleMessage(from gen.PID, message any) error {
 		a.labels.Count(a, metricControllerDown, "process")
 		a.controllerPID = gen.PID{}
 		a.subscribed = false
-		a.lastError = m.Reason
+		a.reconcileStatus(m.Reason)
 		a.Log().Error("snapshot reader actor: controller %s stopped: %v", m.PID, m.Reason)
 		return a.scheduleSubscribeRetry()
 	case gen.MessageDownNode:
@@ -162,7 +161,7 @@ func (a *readerActor) HandleMessage(from gen.PID, message any) error {
 		a.labels.Count(a, metricControllerDown, "node")
 		a.controllerPID = gen.PID{}
 		a.subscribed = false
-		a.lastError = fmt.Errorf("controller node %s down", m.Name)
+		a.reconcileStatus(fmt.Errorf("controller node %s down", m.Name))
 		a.Log().Error("snapshot reader actor: controller node %s down", m.Name)
 		return a.scheduleSubscribeRetry()
 	}
@@ -176,7 +175,7 @@ func (a *readerActor) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error)
 
 // Terminate cancels any pending resubscribe and notifies the controller, best effort.
 func (a *readerActor) Terminate(error) {
-	defer a.reconcileStatus()
+	defer func() { a.reconcileStatus(a.lastStatus.LastError) }()
 	if a.retry != nil {
 		a.retry.CancelScheduled(false)
 	}
@@ -200,18 +199,18 @@ func (a *readerActor) subscribe() error {
 	response, err := a.CallProcessID(a.opts.Endpoint, request, subscribeTimeoutSeconds)
 	if err != nil {
 		a.labels.Count(a, metricSubscribeAttempts, "unreachable")
-		a.lastError = fmt.Errorf("%w: subscribe: %w", ErrSnapshotSubscribe, err)
+		a.reconcileStatus(fmt.Errorf("%w: subscribe: %w", ErrSnapshotSubscribe, err))
 		return a.scheduleSubscribeRetry()
 	}
 	sub, ok := response.(SubscribeResponse)
 	if !ok {
 		a.labels.Count(a, metricSubscribeAttempts, "bad_response")
-		a.lastError = fmt.Errorf("%w: subscribe: unexpected response %T", ErrSnapshotSubscribe, response)
+		a.reconcileStatus(fmt.Errorf("%w: subscribe: unexpected response %T", ErrSnapshotSubscribe, response))
 		return a.scheduleSubscribeRetry()
 	}
 	if err := a.MonitorPID(sub.ControllerPID); err != nil {
 		a.labels.Count(a, metricSubscribeAttempts, "unmonitorable")
-		a.lastError = fmt.Errorf("%w: monitor controller: %w", ErrSnapshotSubscribe, err)
+		a.reconcileStatus(fmt.Errorf("%w: monitor controller: %w", ErrSnapshotSubscribe, err))
 		return a.scheduleSubscribeRetry()
 	}
 	_ = a.MonitorNode(a.opts.Endpoint.Node)
@@ -220,11 +219,11 @@ func (a *readerActor) subscribe() error {
 	a.retry.CancelScheduled(true)
 	a.controllerPID = sub.ControllerPID
 	a.subscribed = true
-	a.lastError = nil
 	if sub.Current != nil && sub.Current.Generation > a.lastGeneration {
 		a.lastGeneration = sub.Current.Generation
 		a.publishSnapshot(sub.Current)
 	}
+	a.reconcileStatus(nil)
 	return nil
 }
 
@@ -279,11 +278,13 @@ func (a *readerActor) scheduleSubscribeRetry() error {
 // ---------------------------------------------------------------------------
 
 // reconcileStatus recomputes and, on change, sends the current reader status to the supervisor.
-func (a *readerActor) reconcileStatus() {
+func (a *readerActor) reconcileStatus(err error) {
 	if !a.activated {
+		a.lastStatus.LastError = err
 		return
 	}
 	next := a.status()
+	next.LastError = err
 	if sameReaderActorStatus(a.lastStatus, next) {
 		return
 	}
@@ -309,7 +310,7 @@ func (a *readerActor) status() ReaderActorStatus {
 		Availability: availability,
 		Generation:   a.lastGeneration,
 	}
-	status.LastError = a.lastError
+	status.LastError = a.lastStatus.LastError
 	return status
 }
 
