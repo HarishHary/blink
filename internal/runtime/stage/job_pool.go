@@ -32,10 +32,11 @@ type JobPoolStatus struct {
 // jobPool routes jobs round-robin while coordinators manage admission and completion.
 type jobPool struct {
 	act.Pool
-	opts       JobPoolOptions
-	lifecycle  JobPoolLifecycle
-	lastStatus JobPoolStatus
-	labels     telemetry.Labels
+	opts            JobPoolOptions
+	lifecycle       JobPoolLifecycle
+	lastStatus      JobPoolStatus
+	lastStatusEpoch int64
+	labels          telemetry.Labels
 }
 
 // ---------------------------------------------------------------------------
@@ -49,7 +50,10 @@ type MessageJobPoolStarted struct{}
 type MessageJobPoolStatusRequest struct{}
 
 // MessageJobPoolStatusChanged reports a job pool's current status.
-type MessageJobPoolStatusChanged struct{ Status JobPoolStatus }
+type MessageJobPoolStatusChanged struct {
+	StatusEpoch int64
+	Status      JobPoolStatus
+}
 
 // ---------------------------------------------------------------------------
 // Actor lifecycle & handlers
@@ -94,8 +98,11 @@ func (p *jobPool) HandleMessage(from gen.PID, message any) error {
 		if from != p.Parent() {
 			return nil
 		}
-		p.publishGauges()
-		p.propagateStatus(p.status())
+		epoch := p.lastStatusEpoch
+		p.reconcileStatus()
+		if p.lastStatusEpoch == epoch {
+			p.propagateStatus(p.lastStatus)
+		}
 		return nil
 	case MessageJobPoolStarted:
 		if from != p.PID() || p.lifecycle != JobPoolStarting {
@@ -136,16 +143,17 @@ func (p *jobPool) status() JobPoolStatus {
 func (p *jobPool) reconcileStatus() {
 	p.publishGauges()
 	next := p.status()
-	if next == p.lastStatus {
+	if sameJobPoolStatus(p.lastStatus, next) {
 		return
 	}
+	p.lastStatusEpoch = runtime.NextStatusEpoch(p.lastStatusEpoch)
 	p.lastStatus = next
 	p.propagateStatus(next)
 }
 
 // propagateStatus sends the supplied snapshot without reconciling state or publishing gauges.
 func (p *jobPool) propagateStatus(next JobPoolStatus) {
-	_ = p.SendWithPriority(p.Parent(), MessageJobPoolStatusChanged{Status: next}, gen.MessagePriorityHigh)
+	_ = p.SendWithPriority(p.Parent(), MessageJobPoolStatusChanged{StatusEpoch: p.lastStatusEpoch, Status: next}, gen.MessagePriorityHigh)
 }
 
 // HandleInspect returns pool inspection data with lifecycle and availability.
@@ -166,4 +174,9 @@ func (p *jobPool) publishGauges() {
 		}
 	}
 	jobPoolGauges{availability: p.status().Availability, workers: workers}.publish(p.labels, p)
+}
+
+// sameJobPoolStatus compares the status fields that trigger publication.
+func sameJobPoolStatus(left, right JobPoolStatus) bool {
+	return left == right
 }
