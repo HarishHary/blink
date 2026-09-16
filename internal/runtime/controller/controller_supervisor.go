@@ -249,10 +249,11 @@ func (s *supervisor[T]) HandleChildTerminate(name gen.Atom, pid gen.PID, reason 
 	return nil
 }
 
-// Terminate retains the subtree termination reason for inspection.
+// Terminate retains the subtree failure and publishes final gauges and readiness.
 func (s *supervisor[T]) Terminate(reason error) {
 	s.lastError = reason
 	s.lifecycle = SupervisorStopping
+	s.reconcileStatus()
 }
 
 // HandleCall rejects unsupported supervisor calls.

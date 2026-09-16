@@ -185,7 +185,7 @@ func (a *projectionActor[T]) HandleMessage(from gen.PID, message any) error {
 				}
 			}
 		}
-		a.reconcileStatus()
+		a.reconcileStatus(a.status())
 	case MessageProjectionCommit:
 		if from != a.Parent() {
 			return nil
@@ -206,7 +206,7 @@ func (a *projectionActor[T]) HandleMessage(from gen.PID, message any) error {
 			}
 		}
 		a.labels.Count(a, metricCommits, telemetry.Result(err))
-		a.reconcileStatus()
+		a.reconcileStatus(a.status())
 		return a.SendWithPriority(a.Parent(), MessageProjectionCommitResult{Generation: m.Generation, ProjectionPID: m.ProjectionPID, Err: err}, gen.MessagePriorityHigh)
 	case gen.MessageDownEvent:
 		if m.Event == a.snapshotEvent || m.Event == a.statusEvent {
@@ -216,6 +216,15 @@ func (a *projectionActor[T]) HandleMessage(from gen.PID, message any) error {
 	return nil
 }
 
+// Terminate retains the actor's failure without changing parse or reader diagnostics.
+func (a *projectionActor[T]) Terminate(reason error) {
+	next := a.status()
+	next.Lifecycle = ProjectionActorStopped
+	next.Availability = runtime.AvailabilityUnavailable
+	next.LastError = runtime.FirstError(reason, next.LastError)
+	a.reconcileStatus(next)
+}
+
 // HandleEvent applies a monitored snapshot or reader status event.
 func (a *projectionActor[T]) HandleEvent(event gen.MessageEvent) error {
 	previous := a.observed
@@ -223,7 +232,7 @@ func (a *projectionActor[T]) HandleEvent(event gen.MessageEvent) error {
 	if a.observed != previous && a.observed != nil && a.observed.err != nil {
 		a.Log().Error("snapshot projection parse failed: generation=%d error=%v", a.observed.generation, a.observed.err)
 	}
-	a.reconcileStatus()
+	a.reconcileStatus(a.status())
 	return err
 }
 
@@ -393,6 +402,9 @@ func (c *ProjectionClient[T]) State(ctx context.Context) (ProjectionState[T], er
 
 // status derives the projection actor's current availability.
 func (a *projectionActor[T]) status() ProjectionActorStatus {
+	if a.lastStatus.Lifecycle == ProjectionActorStopped {
+		return a.lastStatus
+	}
 	status := ProjectionActorStatus{
 		Lifecycle:    ProjectionActorRunning,
 		Availability: runtime.AvailabilityUnavailable,
@@ -430,9 +442,8 @@ func (a *projectionActor[T]) state() ProjectionState[T] {
 	return state
 }
 
-// reconcileStatus recomputes and, on change, sends the current projection status to the supervisor
-func (a *projectionActor[T]) reconcileStatus() {
-	next := a.status()
+// reconcileStatus stores and publishes a changed projection snapshot.
+func (a *projectionActor[T]) reconcileStatus(next ProjectionActorStatus) {
 	if sameProjectionActorStatus(a.lastStatus, next) {
 		return
 	}

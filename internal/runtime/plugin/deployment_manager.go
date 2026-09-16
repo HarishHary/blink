@@ -256,6 +256,12 @@ func (m *deploymentManager[T]) Init(...any) error {
 
 // Terminate cancels local work and reports manager termination to the Router.
 func (m *deploymentManager[T]) Terminate(reason error) {
+	next := m.status()
+	next.lifecycle = DeploymentManagerStopped
+	next.availability = runtime.AvailabilityUnavailable
+	next.availableCapacity = 0
+	next.lastError = runtime.FirstError(reason, next.lastError)
+	m.reconcileStatus(next)
 	m.cancelPluginProcessRestarts(false)
 	m.cancelCircuitCooldown()
 	if m.reconcileStop != nil {
@@ -557,7 +563,7 @@ func (m *deploymentManager[T]) selectProcess() (int, *pluginProcessState) {
 // reconcile advances drain, process lifecycle, dispatch, scaling, and status publication.
 func (m *deploymentManager[T]) reconcile() {
 	if m.draining || m.circuitOpen {
-		m.reconcileStatus(nil)
+		m.reconcileStatus(m.status())
 		if m.draining && !m.drained && len(m.inFlightCalls) == 0 {
 			m.reportDrained()
 		}
@@ -573,7 +579,7 @@ func (m *deploymentManager[T]) reconcile() {
 	m.reconcileProcesses()
 	m.dispatchInvocation()
 	m.reconcileScale()
-	m.reconcileStatus(nil)
+	m.reconcileStatus(m.status())
 }
 
 // reconcileProcesses moves the deployment's slots toward the desired count and fills the empty ones,
@@ -784,7 +790,7 @@ func (m *deploymentManager[T]) reportDrained() {
 	_ = m.SendWithPriority(m.Parent(), MessageDeploymentManagerDrained{
 		route: m.route, manager: m.PID(),
 	}, gen.MessagePriorityHigh)
-	m.reconcileStatus(nil)
+	m.reconcileStatus(m.status())
 }
 
 // ---------------------------------------------------------------------------
@@ -1004,7 +1010,9 @@ func (m *deploymentManager[T]) openCircuit(err error) {
 	if cancel, sendErr := m.SendWithPriorityAfter(m.PID(), MessageDeploymentManagerCircuitCooldown{token: m.circuitToken}, gen.MessagePriorityHigh, m.options.CircuitCooldown); sendErr == nil {
 		m.circuitStop = cancel
 	}
-	m.reconcileStatus(err)
+	next := m.status()
+	next.lastError = err
+	m.reconcileStatus(next)
 }
 
 // closeCircuit reopens admission, resetting the retry budget of any slot that outlived the circuit opening.
@@ -1069,6 +1077,9 @@ func (m *deploymentManager[T]) processStatuses() map[gen.PID]pluginProcessActorS
 
 // status derives the manager's public snapshot from owned state.
 func (m *deploymentManager[T]) status() deploymentManagerStatus {
+	if m.lastStatus.lifecycle == DeploymentManagerStopped {
+		return m.lastStatus
+	}
 	// A deployment that reserves nothing and is doing nothing is not broken, it is asleep: it holds no
 	// slot, owes no call, and is waiting on neither a retry nor an error.
 	idleAtZero := m.desiredProcs == 0 && len(m.processes) == 0 && len(m.inFlightCalls) == 0 &&
@@ -1145,12 +1156,8 @@ func sameDeploymentManagerStatus(left, right deploymentManagerStatus) bool {
 	return true
 }
 
-// reconcileStatus recomputes and, on change, sends the latest snapshot to its Router parent; every
-// invocation reconciles this manager, and an unchanged status would walk the whole chain twice.
-// A new circuit error is compared before replacing the cached status.
-func (m *deploymentManager[T]) reconcileStatus(err error) {
-	next := m.status()
-	next.lastError = runtime.FirstError(err, next.lastError)
+// reconcileStatus compares before caching and publishing a new manager snapshot.
+func (m *deploymentManager[T]) reconcileStatus(next deploymentManagerStatus) {
 	if sameDeploymentManagerStatus(m.lastStatus, next) {
 		return
 	}
