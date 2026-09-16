@@ -143,6 +143,7 @@ var (
 			Help:    "Seconds from a deployment manager accepting one invocation to completing it, queueing included",
 			Buckets: invocationBuckets,
 		},
+
 		// plugin process
 		{Kind: telemetry.Counter, Name: metricSubprocessStarts, Help: "Plugin subprocesses spawned by the process actor holding a slot", Labels: namespaceLabels},
 		{Kind: telemetry.Counter, Name: metricSubprocessRestarts, Help: "Plugin subprocess restarts scheduled, by what asked for one", Labels: reasonLabels},

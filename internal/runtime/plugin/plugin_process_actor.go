@@ -10,6 +10,7 @@ import (
 	"ergo.services/ergo/gen"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/harishhary/blink/internal/runtime"
+	"github.com/harishhary/blink/internal/runtime/telemetry"
 )
 
 // ---------------------------------------------------------------------------
@@ -63,6 +64,7 @@ type pluginProcessActor[T Artifact] struct {
 	err             error                    // the actor's own failure, kept apart from its meta's errors
 	lastStatus      pluginProcessActorStatus // last published projection, the baseline reconcileStatus dedupes against
 	lastStatusEpoch int64
+	labels          telemetry.Labels
 }
 
 // pluginMetaInvokeSlack pads the backstop timer so a late-scheduled timer never calls a subprocess
@@ -487,6 +489,7 @@ func (p *pluginProcessActor[T]) startPluginMeta() error {
 	// one read as stale instead of completing a call this one now owns.
 	p.pluginMeta.generation++
 	p.pluginMeta.alias = alias
+	p.labels.Count(p, metricSubprocessStarts)
 	return nil
 }
 
@@ -520,6 +523,12 @@ func (p *pluginProcessActor[T]) schedulePluginMetaRestart(health bool) error {
 	}
 	restart.Pending = true
 	restart.Cancel = cancel
+	// "health" is a subprocess that stopped answering while it looked alive, "failure" one that died.
+	reason := "failure"
+	if health {
+		reason = "health"
+	}
+	p.labels.Count(p, metricSubprocessRestarts, reason)
 	return nil
 }
 
@@ -539,6 +548,7 @@ func (p *pluginProcessActor[T]) failPluginMeta(err error) {
 		capacity:     p.deployment.CapacityPerProcess(),
 		err:          err,
 	}
+	p.labels.Count(p, metricSubprocessFailures)
 	p.reconcileStatus()
 	_ = p.SendWithPriority(p.Parent(), MessagePluginProcessRestartExhausted{err: err}, gen.MessagePriorityHigh)
 }

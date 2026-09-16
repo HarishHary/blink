@@ -1137,7 +1137,7 @@ func (m *deploymentManagerActor[T]) status() deploymentManagerActorStatus {
 }
 
 // sameDeploymentManagerStatus reports whether two snapshots describe the same health, for publish
-// deduplication, excluding the per-invocation counters (see deploymentManagerStatus).
+// deduplication, excluding the per-invocation counters (see deploymentManagerActorStatus).
 func sameDeploymentManagerStatus(left, right deploymentManagerActorStatus) bool {
 	if left.lifecycle != right.lifecycle ||
 		left.availability != right.availability ||
