@@ -55,12 +55,12 @@ type readerActor struct {
 // Messages
 // ---------------------------------------------------------------------------
 
-// MessageReaderActorActivate tells the reader child its parent recorded its PID and it may subscribe.
-type MessageReaderActorActivate struct{}
+// MessageReaderActorActivate permits subscription and carries the status epoch to continue after.
+type MessageReaderActorActivate struct{ StatusEpoch int64 }
 
 type MessageReaderActorStatusChanged struct {
-	Epoch  int64
-	Status ReaderActorStatus
+	StatusEpoch int64
+	Status      ReaderActorStatus
 }
 
 // SubscribeRequest asks for the committed snapshot and registers the caller for pushed SnapshotUpdate
@@ -119,6 +119,7 @@ func (a *readerActor) HandleMessage(from gen.PID, message any) error {
 		if from != a.Parent() || a.activated {
 			return nil
 		}
+		a.lastStatusEpoch = max(a.lastStatusEpoch, m.StatusEpoch)
 		a.activated = true
 		return a.subscribe()
 	case SnapshotUpdate:
@@ -287,7 +288,7 @@ func (a *readerActor) reconcileStatus() {
 
 // propagateStatus sends the supplied snapshot without reconciling state or publishing gauges.
 func (a *readerActor) propagateStatus(next ReaderActorStatus) {
-	_ = a.SendWithPriority(a.Parent(), MessageReaderActorStatusChanged{Epoch: a.lastStatusEpoch, Status: next}, gen.MessagePriorityHigh)
+	_ = a.SendWithPriority(a.Parent(), MessageReaderActorStatusChanged{StatusEpoch: a.lastStatusEpoch, Status: next}, gen.MessagePriorityHigh)
 }
 
 // status derives the reader's current publishable status, shared by reconcileStatus (to the

@@ -128,7 +128,7 @@ type ProjectionStateRequest struct{}
 // MessageProjectionActorStatusChanged reports projection status, with a zero PID from the child and
 // stamped by Supervisor.
 type MessageProjectionActorStatusChanged struct {
-	Epoch         int64
+	StatusEpoch   int64
 	Status        ProjectionActorStatus
 	ProjectionPID gen.PID
 }
@@ -146,9 +146,8 @@ type MessageProjectionCommitResult struct {
 	Err           error
 }
 
-// MessageProjectionActorActivate tells a projection child its parent recorded its PID and it may
-// monitor snapshot events.
-type MessageProjectionActorActivate struct{}
+// MessageProjectionActorActivate permits event monitoring and carries the status epoch to continue after.
+type MessageProjectionActorActivate struct{ StatusEpoch int64 }
 
 // ---------------------------------------------------------------------------
 // Actor lifecycle & handlers
@@ -175,6 +174,7 @@ func (a *projectionActor[T]) HandleMessage(from gen.PID, message any) error {
 		if from != a.Parent() {
 			return nil
 		}
+		a.lastStatusEpoch = max(a.lastStatusEpoch, m.StatusEpoch)
 		for _, event := range []gen.Event{a.snapshotEvent, a.statusEvent} {
 			buffered, err := a.MonitorEvent(event)
 			if err != nil {
@@ -300,8 +300,8 @@ func (a *projectionActor[T]) applyEvent(event gen.MessageEvent) error {
 		}
 	case a.statusEvent:
 		message, ok := event.Message.(MessageReaderActorStatusChanged)
-		if ok && message.Epoch > a.lastReaderStatusEpoch {
-			a.lastReaderStatusEpoch = message.Epoch
+		if ok && message.StatusEpoch > a.lastReaderStatusEpoch {
+			a.lastReaderStatusEpoch = message.StatusEpoch
 			a.readerActorReady = message.Status.Availability == runtime.AvailabilityReady
 			a.readerGeneration = message.Status.Generation
 		}
@@ -436,7 +436,7 @@ func (a *projectionActor[T]) reconcileStatus() {
 
 // propagateStatus sends the supplied snapshot without reconciling state or publishing gauges.
 func (a *projectionActor[T]) propagateStatus(next ProjectionActorStatus) {
-	_ = a.SendWithPriority(a.Parent(), MessageProjectionActorStatusChanged{Epoch: a.lastStatusEpoch, Status: next}, gen.MessagePriorityHigh)
+	_ = a.SendWithPriority(a.Parent(), MessageProjectionActorStatusChanged{StatusEpoch: a.lastStatusEpoch, Status: next}, gen.MessagePriorityHigh)
 }
 
 // HandleInspect exposes lifecycle and availability plus the generation at each stage.

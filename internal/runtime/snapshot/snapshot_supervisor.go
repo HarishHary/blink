@@ -41,14 +41,16 @@ type eventPublication struct {
 }
 
 type readerActorState struct {
-	pid    gen.PID
-	status ReaderActorStatus
+	pid         gen.PID
+	status      ReaderActorStatus
+	statusEpoch int64
 }
 
 type projectionActorState struct {
 	pid              gen.PID
 	commitGeneration int64
 	status           ProjectionActorStatus
+	statusEpoch      int64
 }
 
 // SupervisorState identifies one snapshot supervisor incarnation.
@@ -68,7 +70,6 @@ type Supervisor[T any] struct {
 	projectionActor      projectionActorState
 	snapshotEvent        eventPublication
 	statusEvent          eventPublication
-	lastStatus           ReaderActorStatus
 	reportCancel         gen.CancelFunc
 	labels               telemetry.Labels
 	signal               telemetry.Signal
@@ -161,7 +162,7 @@ func (s *Supervisor[T]) Init(...any) (act.SupervisorSpec, error) {
 	}
 	s.statusEvent = eventPublication{name: statusEvent.Name, token: statusToken}
 	s.lifecycle = SupervisorStarting
-	s.readerActor.status = newReaderActorStatus()
+	s.reconcileReaderStatus(newReaderActorStatus())
 	s.projectionActor.status = newProjectionActorStatus()
 	// Delayed: the first report is worth sending only once the reader has had its chance to subscribe.
 	if err := s.scheduleExecutorReport(); err != nil {
@@ -210,8 +211,10 @@ func (s *Supervisor[T]) HandleChildStart(name gen.Atom, pid gen.PID) error {
 		s.projectionActor.pid = pid
 		s.projectionActor.commitGeneration = 0
 		s.projectionActor.status = newProjectionActorStatus()
+		// The replacement continues after this identity change, even if the clock moved backward.
+		s.projectionActor.statusEpoch = runtime.NextStatusEpoch(s.projectionActor.statusEpoch)
 		// Stale child-start callbacks may race a replacement and fail to send.
-		_ = s.SendWithPriority(pid, MessageProjectionActorActivate{}, gen.MessagePriorityHigh)
+		_ = s.SendWithPriority(pid, MessageProjectionActorActivate{StatusEpoch: s.projectionActor.statusEpoch}, gen.MessagePriorityHigh)
 		return nil
 	case ReaderActorName(s.opts.Namespace):
 		if s.readerActor.pid != (gen.PID{}) {
@@ -219,8 +222,8 @@ func (s *Supervisor[T]) HandleChildStart(name gen.Atom, pid gen.PID) error {
 		}
 		s.labels.Count(s, metricChildStarts, "reader")
 		s.readerActor.pid = pid
-		s.readerActor.status = newReaderActorStatus()
-		return s.SendWithPriority(pid, MessageReaderActorActivate{}, gen.MessagePriorityHigh)
+		s.reconcileReaderStatus(newReaderActorStatus())
+		return s.SendWithPriority(pid, MessageReaderActorActivate{StatusEpoch: s.readerActor.statusEpoch}, gen.MessagePriorityHigh)
 	default:
 		return nil
 	}
@@ -233,10 +236,11 @@ func (s *Supervisor[T]) HandleChildTerminate(_ gen.Atom, pid gen.PID, reason err
 	case s.projectionActor.pid:
 		s.labels.Count(s, metricChildTerminations, "projection", telemetry.TerminationReason(reason))
 		s.projectionActor.pid = gen.PID{}
-		s.projectionActor.status.Lifecycle = ProjectionActorRestarting
-		s.projectionActor.status.Availability = runtime.AvailabilityUnavailable
-		s.projectionActor.status.PreparedGeneration = 0
-		s.propagateProjectionStatus(s.projectionActor.status, pid)
+		status := s.projectionActor.status
+		status.Lifecycle = ProjectionActorRestarting
+		status.Availability = runtime.AvailabilityUnavailable
+		status.PreparedGeneration = 0
+		s.reconcileProjectionStatus(status, pid)
 		if generation := s.projectionActor.commitGeneration; generation != 0 {
 			s.projectionActor.commitGeneration = 0
 			_ = s.SendWithPriority(s.Parent(), MessageProjectionCommitResult{
@@ -253,7 +257,7 @@ func (s *Supervisor[T]) HandleChildTerminate(_ gen.Atom, pid gen.PID, reason err
 		if reason != nil {
 			status.LastError = reason.Error()
 		}
-		s.readerActor.status = status
+		s.reconcileReaderStatus(status)
 		s.propagateExecutorStatus(nil)
 		return nil
 	default:
@@ -293,26 +297,30 @@ func (s *Supervisor[T]) HandleMessage(from gen.PID, message any) error {
 		s.Log().Debug("radar process down, re-registering on next tick: namespace=%q process=%s", s.opts.Namespace, message.ProcessID.Name)
 		return nil
 	case MessageReaderActorStatusChanged:
-		if from == s.readerActor.pid {
-			if s.readerActor.status != message.status {
-				attached := s.readerActor.status.Availability != message.status.Availability
-				s.readerActor.status = message.status
-				if attached {
-					s.propagateExecutorStatus(nil)
-				}
+		if from == s.readerActor.pid && message.StatusEpoch > s.readerActor.statusEpoch {
+			changed := !sameReaderActorStatus(s.readerActor.status, message.Status)
+			attached := s.readerActor.status.Availability != message.Status.Availability
+			s.readerActor.statusEpoch = message.StatusEpoch
+			s.readerActor.status = message.Status
+			if changed {
+				s.propagateStatus(message.Status)
+			}
+			if attached {
+				s.propagateExecutorStatus(nil)
 			}
 		}
 	case MessageProjectionActorStatusChanged:
-		if from == s.projectionActor.pid {
+		if from == s.projectionActor.pid && message.StatusEpoch > s.projectionActor.statusEpoch {
 			applied := message.Status.CommittedGeneration > s.projectionActor.status.CommittedGeneration
+			s.projectionActor.statusEpoch = message.StatusEpoch
 			s.projectionActor.status = message.Status
+			s.propagateProjectionStatus(message.Status, s.projectionActor.pid)
 			if applied {
 				s.propagateExecutorStatus(&ExecutorAppliedGeneration{
 					Generation: message.Status.CommittedGeneration,
 					Admitted:   message.Status.Availability == runtime.AvailabilityReady,
 				})
 			}
-			s.propagateProjectionStatus(message.Status, s.projectionActor.pid)
 		}
 	case MessageProjectionCommit:
 		if s.opts.ProjectionMode != ProjectionCommitExternal || from != s.Parent() {
@@ -352,8 +360,10 @@ func (s *Supervisor[T]) Terminate(reason error) {
 	s.cancelExecutorReport()
 	s.projectionActor.status.Lifecycle = ProjectionActorStopped
 	s.projectionActor.status.Availability = runtime.AvailabilityUnavailable
-	s.readerActor.status.Lifecycle = ReaderActorStopped
-	s.readerActor.status.Availability = runtime.AvailabilityUnavailable
+	status := s.readerActor.status
+	status.Lifecycle = ReaderActorStopped
+	status.Availability = runtime.AvailabilityUnavailable
+	s.reconcileReaderStatus(status)
 	if s.opts.Stopped != nil {
 		select {
 		case s.opts.Stopped <- reason:
@@ -423,7 +433,7 @@ func (s *Supervisor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 	}
 }
 
-// reconcileStatus advances lifecycle, refreshes gauges/readiness, and propagates reader status only on change.
+// reconcileStatus advances lifecycle and refreshes gauges/readiness from the reconciled child states.
 func (s *Supervisor[T]) reconcileStatus() {
 	// Both children up promotes the subtree once, and a rest-for-one restart never demotes it.
 	if s.lifecycle == SupervisorStarting && s.readerActor.pid != (gen.PID{}) && s.projectionActor.pid != (gen.PID{}) {
@@ -431,11 +441,16 @@ func (s *Supervisor[T]) reconcileStatus() {
 	}
 	s.publishGauges()
 	s.propagateReadiness()
-	if !s.statusEvent.registered() || s.readerActor.status == s.lastStatus {
+}
+
+// reconcileReaderStatus compares before replacing child status, then versions and publishes changes.
+func (s *Supervisor[T]) reconcileReaderStatus(next ReaderActorStatus) {
+	if sameReaderActorStatus(s.readerActor.status, next) {
 		return
 	}
-	s.lastStatus = s.readerActor.status
-	s.propagateStatus(s.lastStatus)
+	s.readerActor.statusEpoch = runtime.NextStatusEpoch(s.readerActor.statusEpoch)
+	s.readerActor.status = next
+	s.propagateStatus(next)
 }
 
 // publishGauges publishes current values without changing lifecycle or propagating status.
@@ -513,7 +528,9 @@ func (s *Supervisor[T]) executorAvailability() runtime.Availability {
 
 // propagateStatus forwards the supplied reader status through the registered event.
 func (s *Supervisor[T]) propagateStatus(next ReaderActorStatus) {
-	_ = s.SendEvent(s.statusEvent.name, s.statusEvent.token, next)
+	if s.statusEvent.registered() {
+		_ = s.SendEvent(s.statusEvent.name, s.statusEvent.token, MessageReaderActorStatusChanged{StatusEpoch: s.readerActor.statusEpoch, Status: next})
+	}
 }
 
 // propagateReadiness includes both children, independently of reader-event deduplication.
@@ -523,11 +540,19 @@ func (s *Supervisor[T]) propagateReadiness() {
 		s.executorAvailability() == runtime.AvailabilityReady)
 }
 
-// propagateProjectionStatus immediately forwards the external commit protocol's status facts.
-// These retain the child PID fence and must not be deduplicated with the reader status stream.
+// reconcileProjectionStatus versions projection health; child start versions identity changes.
+func (s *Supervisor[T]) reconcileProjectionStatus(next ProjectionActorStatus, pid gen.PID) {
+	if s.projectionActor.statusEpoch == 0 || !sameProjectionActorStatus(s.projectionActor.status, next) {
+		s.projectionActor.statusEpoch = runtime.NextStatusEpoch(s.projectionActor.statusEpoch)
+		s.projectionActor.status = next
+	}
+	s.propagateProjectionStatus(next, pid)
+}
+
+// propagateProjectionStatus forwards the reconciled projection version without changing its epoch.
 func (s *Supervisor[T]) propagateProjectionStatus(next ProjectionActorStatus, pid gen.PID) {
 	if s.opts.ProjectionMode == ProjectionCommitExternal {
-		_ = s.SendWithPriority(s.Parent(), MessageProjectionActorStatusChanged{Status: next, ProjectionPID: pid}, gen.MessagePriorityHigh)
+		_ = s.SendWithPriority(s.Parent(), MessageProjectionActorStatusChanged{StatusEpoch: s.projectionActor.statusEpoch, Status: next, ProjectionPID: pid}, gen.MessagePriorityHigh)
 	}
 }
 
