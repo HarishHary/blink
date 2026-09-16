@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -16,6 +17,11 @@ import (
 // ---------------------------------------------------------------------------
 // Types & state
 // ---------------------------------------------------------------------------
+
+var (
+	ErrSnapshotLoad  = errors.New("snapshot state load failed")
+	ErrSnapshotWrite = errors.New("snapshot write failed")
+)
 
 // SnapshotWriterMetaLifecycle describes the controller-owned writer meta lifecycle.
 type SnapshotWriterMetaLifecycle string
@@ -132,11 +138,11 @@ func (m *snapshotWriterMeta) Start() (runErr error) {
 	var generation int64
 	var saved *snapshot.Snapshot
 	if err != nil {
-		err = fmt.Errorf("%w: records: %w", runtime.ErrSnapshotLoad, err)
+		err = fmt.Errorf("%w: records: %w", ErrSnapshotLoad, err)
 	} else if generation, err = m.database.LoadGeneration(m.runCtx); err != nil {
-		err = fmt.Errorf("%w: generation: %w", runtime.ErrSnapshotLoad, err)
+		err = fmt.Errorf("%w: generation: %w", ErrSnapshotLoad, err)
 	} else if saved, err = m.database.LoadSnapshot(m.runCtx); err != nil {
-		err = fmt.Errorf("%w: snapshot: %w", runtime.ErrSnapshotLoad, err)
+		err = fmt.Errorf("%w: snapshot: %w", ErrSnapshotLoad, err)
 	}
 	m.labels.Observe(m, metricSnapshotLoadTime, time.Since(loadStarted).Seconds())
 	m.labels.Count(m, metricSnapshotLoads, telemetry.Result(err))
@@ -161,7 +167,7 @@ func (m *snapshotWriterMeta) Start() (runErr error) {
 		snapshot:   saved.Clone(),
 		err:        err,
 	}, gen.MessagePriorityHigh); sendErr != nil {
-		return fmt.Errorf("%w: send result: %w", runtime.ErrSnapshotLoad, sendErr)
+		return fmt.Errorf("%w: send result: %w", ErrSnapshotLoad, sendErr)
 	}
 
 	for {
@@ -189,7 +195,7 @@ func (m *snapshotWriterMeta) Start() (runErr error) {
 				}
 				m.Log().Debug("snapshot write attempt failed: alias=%s generation=%d attempt=%d/%d error=%v", m.ID(), job.next.Generation, attempt, writeRetryAttemptBudget, writeErr)
 				if sendErr := m.SendWithPriority(m.Parent(), MessageSnapshotWriteResult{source: m.ID(), err: writeErr}, gen.MessagePriorityHigh); sendErr != nil {
-					reportErr = fmt.Errorf("%w: send failed attempt: %w", runtime.ErrSnapshotWrite, sendErr)
+					reportErr = fmt.Errorf("%w: send failed attempt: %w", ErrSnapshotWrite, sendErr)
 					return backoff.Permanent(reportErr)
 				}
 				return writeErr
@@ -209,7 +215,7 @@ func (m *snapshotWriterMeta) Start() (runErr error) {
 				m.Log().Debug("snapshot write skipped unchanged commit: alias=%s generation=%d records=%d", m.ID(), job.next.Generation, len(job.records))
 			}
 			if sendErr := m.SendWithPriority(m.Parent(), MessageSnapshotWriteResult{source: m.ID()}, gen.MessagePriorityHigh); sendErr != nil {
-				return fmt.Errorf("%w: send result: %w", runtime.ErrSnapshotWrite, sendErr)
+				return fmt.Errorf("%w: send result: %w", ErrSnapshotWrite, sendErr)
 			}
 		}
 	}
@@ -227,7 +233,7 @@ func (m *snapshotWriterMeta) HandleMessage(_ gen.PID, message any) error {
 		default:
 			m.labels.Count(m, metricWriteQueueRejects)
 			m.Log().Warning("snapshot write queue full: alias=%s generation=%d", m.ID(), message.next.Generation)
-			return fmt.Errorf("%w: already queued", runtime.ErrSnapshotWrite)
+			return fmt.Errorf("%w: already queued", ErrSnapshotWrite)
 		}
 	}
 	return nil
@@ -253,16 +259,16 @@ func (m *snapshotWriterMeta) Terminate(error) {
 // durable persistence, not distribution, which is notifySubscribers' job.
 func (m *snapshotWriterMeta) write(job MessageWriteSnapshot) error {
 	if err := m.database.Upsert(m.runCtx, job.records); err != nil {
-		return fmt.Errorf("%w: upsert records: %w", runtime.ErrSnapshotWrite, err)
+		return fmt.Errorf("%w: upsert records: %w", ErrSnapshotWrite, err)
 	}
 	if !job.changed {
 		return nil
 	}
 	if err := m.database.SaveGeneration(m.runCtx, job.next.Generation); err != nil {
-		return fmt.Errorf("%w: reserve generation: %w", runtime.ErrSnapshotWrite, err)
+		return fmt.Errorf("%w: reserve generation: %w", ErrSnapshotWrite, err)
 	}
 	if err := m.database.SaveSnapshot(m.runCtx, job.next); err != nil {
-		return fmt.Errorf("%w: save snapshot: %w", runtime.ErrSnapshotWrite, err)
+		return fmt.Errorf("%w: save snapshot: %w", ErrSnapshotWrite, err)
 	}
 	return nil
 }

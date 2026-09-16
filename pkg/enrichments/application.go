@@ -26,7 +26,7 @@ func NewApplication(opts plugin.ApplicationOptions, logger *logger.Logger) *Appl
 // Enrich applies one enrichment to every alert, preserving input order and cardinality.
 func (r *Application) Enrich(ctx context.Context, state snapshot.ProjectionState[*EnrichmentMetadata], enrichmentID string, input *alerts.Batch) EnrichResult {
 	if r == nil || r.Application == nil {
-		return EnrichResult{CallErr: errors.NewE(runtime.ErrRuntimeNotStarted)}
+		return EnrichResult{CallErr: errors.NewE(plugin.ErrRuntimeNotStarted)}
 	}
 	if input.Len() == 0 {
 		return EnrichResult{Errs: []errors.Error{}}

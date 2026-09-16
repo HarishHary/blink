@@ -26,7 +26,7 @@ func NewApplication(opts plugin.ApplicationOptions, logger *logger.Logger) *Appl
 // Match runs one matcher against every event in a prepared batch and preserves input order.
 func (r *Application) Match(ctx context.Context, state snapshot.ProjectionState[*MatcherMetadata], matcherID string, input *events.Batch) MatchResult {
 	if r == nil || r.Application == nil {
-		return MatchResult{CallErr: errors.NewE(runtime.ErrRuntimeNotStarted)}
+		return MatchResult{CallErr: errors.NewE(plugin.ErrRuntimeNotStarted)}
 	}
 	if input.Len() == 0 {
 		return MatchResult{Items: []MatchItem{}}

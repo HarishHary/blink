@@ -8,9 +8,7 @@ import (
 	"github.com/cenkalti/backoff/v4"
 )
 
-var (
-	ErrBackoffStopped = errors.New("scheduled backoff stopped")
-)
+var ErrBackoffStopped = errors.New("scheduled backoff stopped")
 
 // ScheduledBackoff tracks a bounded retry or replacement schedule and its pending timer.
 type ScheduledBackoff struct {

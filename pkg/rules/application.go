@@ -26,7 +26,7 @@ func NewApplication(opts plugin.ApplicationOptions, logger *logger.Logger) *Appl
 // Evaluate preserves input order while grouping events by rollout side and sharding each group.
 func (r *Application) Evaluate(ctx context.Context, state snapshot.ProjectionState[*RuleMetadata], ruleID string, input *events.Batch) EvaluateResult {
 	if r == nil || r.Application == nil {
-		return EvaluateResult{CallErr: errors.NewE(runtime.ErrRuntimeNotStarted)}
+		return EvaluateResult{CallErr: errors.NewE(plugin.ErrRuntimeNotStarted)}
 	}
 	if input.Len() == 0 {
 		return EvaluateResult{Items: []EvaluateItem{}}

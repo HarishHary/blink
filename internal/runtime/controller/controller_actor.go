@@ -489,7 +489,7 @@ func (a *actor[T]) sendPending() error {
 	if err := a.Send(a.writer.alias, message); err != nil {
 		a.Log().Error("pending write dispatch failed: name=%s generation=%d error=%v", a.Name(), message.next.Generation, err)
 		a.writer.status.Writing = false
-		a.recordWriteFailure(fmt.Errorf("%w: queue write: %w", runtime.ErrSnapshotWrite, err))
+		a.recordWriteFailure(fmt.Errorf("%w: queue write: %w", ErrSnapshotWrite, err))
 		a.writer.status.Availability = runtime.AvailabilityUnavailable
 		a.writer.status.Loaded = false
 		a.writer.replacementPending = true

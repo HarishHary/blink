@@ -26,7 +26,7 @@ func NewApplication(opts plugin.ApplicationOptions, logger *logger.Logger) *Appl
 // Tune runs one tuning rule across every alert and preserves input order.
 func (r *Application) Tune(ctx context.Context, state snapshot.ProjectionState[*TuningRuleMetadata], tuningRuleID string, input *alerts.Batch) TuneResult {
 	if r == nil || r.Application == nil {
-		return TuneResult{CallErr: errors.NewE(runtime.ErrRuntimeNotStarted)}
+		return TuneResult{CallErr: errors.NewE(plugin.ErrRuntimeNotStarted)}
 	}
 	if input.Len() == 0 {
 		return TuneResult{Items: []TuneItem{}}

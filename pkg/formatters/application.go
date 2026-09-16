@@ -26,7 +26,7 @@ func NewApplication(opts plugin.ApplicationOptions, logger *logger.Logger) *Appl
 // Format preserves input order while grouping alerts by rollout side and sharding each group.
 func (r *Application) Format(ctx context.Context, state snapshot.ProjectionState[*FormatterMetadata], formatterID string, input *alerts.Batch) FormatResult {
 	if r == nil || r.Application == nil {
-		return FormatResult{CallErr: errors.NewE(runtime.ErrRuntimeNotStarted)}
+		return FormatResult{CallErr: errors.NewE(plugin.ErrRuntimeNotStarted)}
 	}
 	if input.Len() == 0 {
 		return FormatResult{Items: []FormatItem{}}

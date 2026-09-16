@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -23,6 +24,8 @@ import (
 // ---------------------------------------------------------------------------
 // Types & state
 // ---------------------------------------------------------------------------
+
+var ErrArtifactScan = errors.New("plugin artifact scan failed")
 
 const (
 	scannerDebounce = 400 * time.Millisecond
@@ -110,7 +113,7 @@ func (m *artifactScannerMeta[T]) Start() (runErr error) {
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		return fmt.Errorf("%w: create watcher: %w", runtime.ErrArtifactWatch, err)
+		return fmt.Errorf("%w: create watcher: %w", plugin.ErrArtifactWatch, err)
 	}
 	defer watcher.Close()
 	if m.runCtx.Err() != nil {
@@ -156,7 +159,7 @@ func (m *artifactScannerMeta[T]) Start() (runErr error) {
 				if m.runCtx.Err() != nil {
 					return nil
 				}
-				return fmt.Errorf("%w: events closed", runtime.ErrArtifactWatch)
+				return fmt.Errorf("%w: events closed", plugin.ErrArtifactWatch)
 			}
 			m.Log().Debug("artifact change detected: directory=%q alias=%s path=%q operation=%s", m.directory, m.ID(), event.Name, event.Op)
 			schedule()
@@ -165,9 +168,9 @@ func (m *artifactScannerMeta[T]) Start() (runErr error) {
 				if m.runCtx.Err() != nil {
 					return nil
 				}
-				return fmt.Errorf("%w: errors closed", runtime.ErrArtifactWatch)
+				return fmt.Errorf("%w: errors closed", plugin.ErrArtifactWatch)
 			}
-			return fmt.Errorf("%w: %w", runtime.ErrArtifactWatch, err)
+			return fmt.Errorf("%w: %w", plugin.ErrArtifactWatch, err)
 		case <-debounceC:
 			debounceC = nil
 			m.Log().Debug("artifact changes detected; rescanning: directory=%q alias=%s", m.directory, m.ID())
@@ -221,7 +224,7 @@ func (m *artifactScannerMeta[T]) sendScan(watcher *fsnotify.Watcher) error {
 		m.labels.Count(m, metricArtifactScanFailures, "watch")
 	}
 	if err == nil && attachErr != nil {
-		err = fmt.Errorf("%w: directory %q: %w", runtime.ErrArtifactWatch, m.directory, attachErr)
+		err = fmt.Errorf("%w: directory %q: %w", plugin.ErrArtifactWatch, m.directory, attachErr)
 	}
 	if err != nil {
 		m.Log().Warning("artifact scan incomplete: directory=%q alias=%s error=%v", m.directory, m.ID(), err)
@@ -250,7 +253,7 @@ func (m *artifactScannerMeta[T]) scan() ([]snapshot.EffectiveEntry, []string, bo
 	files, err := os.ReadDir(m.directory)
 	if err != nil {
 		m.labels.Count(m, metricArtifactScanFailures, "directory")
-		return nil, nil, false, fmt.Errorf("%w: directory %q: %w", runtime.ErrArtifactScan, m.directory, err)
+		return nil, nil, false, fmt.Errorf("%w: directory %q: %w", ErrArtifactScan, m.directory, err)
 	}
 	seenParsed := make(map[string]struct{})
 	seenBinaries := make(map[string]struct{})
