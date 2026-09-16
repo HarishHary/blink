@@ -59,6 +59,7 @@ type ProjectionActorState struct {
 
 // ProjectionActorStatus is the projection actor's current runtime status.
 type ProjectionActorStatus struct {
+	LastError           error
 	Lifecycle           ProjectionActorLifecycle
 	Availability        runtime.Availability
 	CommittedGeneration int64
@@ -90,20 +91,18 @@ type Rollout struct {
 
 type projectionActor[T any] struct {
 	act.Actor
-	snapshotEvent         gen.Event
-	statusEvent           gen.Event
-	loader                Loader[T]
-	mode                  ProjectionCommitMode
-	readerActorReady      bool
-	lastReaderStatusEpoch int64
-	readerGeneration      int64
-	observedGeneration    int64
-	committed             *parsedProjection[T]
-	prepared              *parsedProjection[T]
-	lastError             error
-	lastStatus            ProjectionActorStatus
-	lastStatusEpoch       int64
-	labels                telemetry.Labels
+	snapshotEvent      gen.Event
+	statusEvent        gen.Event
+	loader             Loader[T]
+	mode               ProjectionCommitMode
+	readerActor        readerActorState
+	observedGeneration int64
+	committed          *parsedProjection[T]
+	prepared           *parsedProjection[T]
+	lastError          error
+	lastStatus         ProjectionActorStatus
+	lastStatusEpoch    int64
+	labels             telemetry.Labels
 }
 
 type parsedProjection[T any] struct {
@@ -203,7 +202,7 @@ func (a *projectionActor[T]) HandleMessage(from gen.PID, message any) error {
 			} else {
 				a.committed = a.prepared
 				a.prepared = nil
-				a.lastError = nil
+				// Parsing the generation, not committing it, clears its parse error.
 			}
 		}
 		a.labels.Count(a, metricCommits, telemetry.Result(err))
@@ -300,10 +299,9 @@ func (a *projectionActor[T]) applyEvent(event gen.MessageEvent) error {
 		}
 	case a.statusEvent:
 		message, ok := event.Message.(MessageReaderActorStatusChanged)
-		if ok && message.StatusEpoch > a.lastReaderStatusEpoch {
-			a.lastReaderStatusEpoch = message.StatusEpoch
-			a.readerActorReady = message.Status.Availability == runtime.AvailabilityReady
-			a.readerGeneration = message.Status.Generation
+		if ok && message.StatusEpoch > a.readerActor.statusEpoch {
+			a.readerActor.statusEpoch = message.StatusEpoch
+			a.readerActor.status = message.Status
 		}
 	}
 	return nil
@@ -395,7 +393,11 @@ func (c *ProjectionClient[T]) State(ctx context.Context) (ProjectionState[T], er
 
 // status derives the projection actor's current availability.
 func (a *projectionActor[T]) status() ProjectionActorStatus {
-	status := ProjectionActorStatus{Lifecycle: ProjectionActorRunning, Availability: runtime.AvailabilityUnavailable}
+	status := ProjectionActorStatus{
+		Lifecycle:    ProjectionActorRunning,
+		Availability: runtime.AvailabilityUnavailable,
+		LastError:    runtime.FirstError(a.lastError, a.readerActor.status.LastError),
+	}
 	if a.mode == ProjectionCommitExternal && a.prepared != nil {
 		status.PreparedGeneration = a.prepared.generation
 	}
@@ -407,7 +409,9 @@ func (a *projectionActor[T]) status() ProjectionActorStatus {
 		status.Availability = runtime.AvailabilityDegraded
 		return status
 	}
-	if a.readerActorReady && a.readerGeneration >= a.committed.generation && a.observedGeneration >= a.committed.generation {
+	if a.readerActor.status.Availability == runtime.AvailabilityReady &&
+		a.readerActor.status.Generation >= a.committed.generation &&
+		a.observedGeneration >= a.committed.generation {
 		status.Availability = runtime.AvailabilityReady
 	}
 	return status
@@ -443,17 +447,22 @@ func (a *projectionActor[T]) propagateStatus(next ProjectionActorStatus) {
 func (a *projectionActor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 	status := a.status()
 	return map[string]string{
+		"projection:last_error":           runtime.ErrorText(status.LastError),
 		"projection:lifecycle":            string(status.Lifecycle),
 		"projection:availability":         string(status.Availability),
 		"projection:committed_generation": fmt.Sprintf("%d", status.CommittedGeneration),
 		"projection:prepared_generation":  fmt.Sprintf("%d", status.PreparedGeneration),
 		"projection:observed_generation":  fmt.Sprintf("%d", a.observedGeneration),
-		"projection:reader_ready":         fmt.Sprintf("%t", a.readerActorReady),
-		"projection:reader_generation":    fmt.Sprintf("%d", a.readerGeneration),
+		"projection:reader_ready":         fmt.Sprintf("%t", a.readerActor.status.Availability == runtime.AvailabilityReady),
+		"projection:reader_generation":    fmt.Sprintf("%d", a.readerActor.status.Generation),
 	}
 }
 
 // sameProjectionActorStatus compares the status fields that trigger publication.
 func sameProjectionActorStatus(left, right ProjectionActorStatus) bool {
-	return left == right
+	return left.Lifecycle == right.Lifecycle &&
+		left.Availability == right.Availability &&
+		left.CommittedGeneration == right.CommittedGeneration &&
+		left.PreparedGeneration == right.PreparedGeneration &&
+		runtime.ErrorText(left.LastError) == runtime.ErrorText(right.LastError)
 }
