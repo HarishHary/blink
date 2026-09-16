@@ -32,6 +32,7 @@ const (
 
 // actorStatus is the controller actor's immutable status report to its supervisor.
 type actorStatus struct {
+	LastError    error
 	Lifecycle    ActorLifecycle
 	Availability runtime.Availability
 	Generation   int64
@@ -79,6 +80,7 @@ type actor[T plugin.Artifact] struct {
 	fullRewriteRequired bool
 	subscribers         map[string]gen.PID
 	executors           map[string]ExecutorStatus
+	lastError           error
 	lastStatus          actorStatus
 	lastStatusEpoch     int64
 	labels              telemetry.Labels
@@ -92,7 +94,7 @@ type ExecutorStatus struct {
 	CommittedGeneration int64
 	ReadyGeneration     int64
 	Availability        string
-	LastError           string
+	LastError           error
 	DriftSince          time.Time // zero if not currently drifting
 }
 
@@ -400,7 +402,8 @@ func (a *actor[T]) HandleMessage(from gen.PID, message any) error {
 }
 
 // Terminate stops workers and reports the final controller state.
-func (a *actor[T]) Terminate(error) {
+func (a *actor[T]) Terminate(reason error) {
+	a.lastError = reason
 	defer a.reconcileStatus()
 	a.lifecycle = ActorStopped
 	a.scanner.restart.CancelScheduled(false)
@@ -452,7 +455,7 @@ func (status ExecutorStatus) Apply(report snapshot.MessageExecutorReport) Execut
 	if report.Applied != nil {
 		status.ReadyGeneration = report.Applied.Generation
 	}
-	if report.LastError != "" {
+	if report.Heartbeat != nil || report.LastError != nil {
 		status.LastError = report.LastError
 	}
 	return status
@@ -849,7 +852,12 @@ func (a *actor[T]) actorGauges() actorGauges {
 // status computes the controller's current publishable status, shared by reconcileStatus (to the
 // supervisor) and HandleInspect (to an operator).
 func (a *actor[T]) status() actorStatus {
-	return actorStatus{Lifecycle: a.lifecycle, Availability: a.availability(), Generation: a.generation}
+	return actorStatus{
+		Lifecycle:    a.lifecycle,
+		Availability: a.availability(),
+		Generation:   a.generation,
+		LastError:    runtime.FirstError(a.lastError, a.writer.status.LastError, a.scanner.status.LastError),
+	}
 }
 
 // availability derives the controller's own health from lifecycle and worker readiness.
@@ -873,6 +881,9 @@ func (a *actor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 	}
 	status := a.status()
 	return map[string]string{
+		"controller:last_error":                  runtime.ErrorText(status.LastError),
+		"controller:scanner:last_error":          runtime.ErrorText(a.scanner.status.LastError),
+		"controller:writer:last_error":           runtime.ErrorText(a.writer.status.LastError),
 		"controller:lifecycle":                   string(status.Lifecycle),
 		"controller:availability":                string(status.Availability),
 		"controller:generation":                  fmt.Sprintf("%d", status.Generation),
@@ -894,5 +905,8 @@ func (a *actor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 
 // sameActorStatus compares the status fields that trigger publication.
 func sameActorStatus(left, right actorStatus) bool {
-	return left == right
+	return left.Lifecycle == right.Lifecycle &&
+		left.Availability == right.Availability &&
+		left.Generation == right.Generation &&
+		runtime.ErrorText(left.LastError) == runtime.ErrorText(right.LastError)
 }

@@ -12,6 +12,16 @@ func ErrorText(err error) string {
 	return err.Error()
 }
 
+// FirstError returns the first active failure in the caller's priority order.
+func FirstError(errs ...error) error {
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // NextStatusEpoch returns a Unix-nanosecond status version. Repeated or backward
 // clock readings advance one nanosecond past the previous version instead.
 func NextStatusEpoch(previous int64) int64 {

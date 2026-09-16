@@ -53,6 +53,13 @@ type projectionActorState struct {
 	statusEpoch      int64
 }
 
+// SupervisorStatus reports the health of the entire snapshot subtree.
+type SupervisorStatus struct {
+	Lifecycle    SupervisorLifecycle
+	Availability runtime.Availability
+	LastError    error
+}
+
 // SupervisorState identifies one snapshot supervisor incarnation.
 type SupervisorState struct {
 	Pid   gen.PID
@@ -95,13 +102,12 @@ type ExecutorAppliedGeneration struct {
 	Admitted   bool
 }
 
-// MessageExecutorReport carries one executor's convergence report, either half nil, sent
-// fire-and-forget to the controller actor; LastError is text because EDF reduces it to that anyway.
+// MessageExecutorReport carries one executor's convergence report, either half nil, sent fire-and-forget to the controller actor.
 type MessageExecutorReport struct {
 	ExecutorID string
 	Heartbeat  *ExecutorHeartbeat
 	Applied    *ExecutorAppliedGeneration
-	LastError  string
+	LastError  error
 }
 
 // MessageExecutorReportTick drives the periodic convergence report to the controller.
@@ -240,6 +246,7 @@ func (s *Supervisor[T]) HandleChildTerminate(_ gen.Atom, pid gen.PID, reason err
 		status.Lifecycle = ProjectionActorRestarting
 		status.Availability = runtime.AvailabilityUnavailable
 		status.PreparedGeneration = 0
+		status.LastError = reason
 		s.reconcileProjectionStatus(status, pid)
 		if generation := s.projectionActor.commitGeneration; generation != 0 {
 			s.projectionActor.commitGeneration = 0
@@ -299,7 +306,7 @@ func (s *Supervisor[T]) HandleMessage(from gen.PID, message any) error {
 	case MessageReaderActorStatusChanged:
 		if from == s.readerActor.pid && message.StatusEpoch > s.readerActor.statusEpoch {
 			changed := !sameReaderActorStatus(s.readerActor.status, message.Status)
-			attached := s.readerActor.status.Availability != message.Status.Availability
+			attached := s.readerActor.status.Availability != message.Status.Availability || runtime.ErrorText(s.readerActor.status.LastError) != runtime.ErrorText(message.Status.LastError)
 			s.readerActor.statusEpoch = message.StatusEpoch
 			s.readerActor.status = message.Status
 			if changed {
@@ -311,6 +318,7 @@ func (s *Supervisor[T]) HandleMessage(from gen.PID, message any) error {
 		}
 	case MessageProjectionActorStatusChanged:
 		if from == s.projectionActor.pid && message.StatusEpoch > s.projectionActor.statusEpoch {
+			errorChanged := runtime.ErrorText(s.projectionActor.status.LastError) != runtime.ErrorText(message.Status.LastError)
 			applied := message.Status.CommittedGeneration > s.projectionActor.status.CommittedGeneration
 			s.projectionActor.statusEpoch = message.StatusEpoch
 			s.projectionActor.status = message.Status
@@ -320,6 +328,8 @@ func (s *Supervisor[T]) HandleMessage(from gen.PID, message any) error {
 					Generation: message.Status.CommittedGeneration,
 					Admitted:   message.Status.Availability == runtime.AvailabilityReady,
 				})
+			} else if errorChanged {
+				s.propagateExecutorStatus(nil)
 			}
 		}
 	case MessageProjectionCommit:
@@ -357,6 +367,7 @@ func (s *Supervisor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, erro
 func (s *Supervisor[T]) Terminate(reason error) {
 	defer s.reconcileStatus()
 	s.lifecycle = SupervisorStopping
+	s.projectionActor.status.LastError = reason
 	s.cancelExecutorReport()
 	s.projectionActor.status.Lifecycle = ProjectionActorStopped
 	s.projectionActor.status.Availability = runtime.AvailabilityUnavailable
@@ -417,6 +428,8 @@ func (s *Supervisor[T]) cancelExecutorReport() {
 // HandleInspect exposes both children's identity and last-reported status plus any in-flight commit.
 func (s *Supervisor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 	return map[string]string{
+		"supervisor:last_error":                      runtime.ErrorText(s.status().LastError),
+		"supervisor:projection_last_error":           runtime.ErrorText(s.projectionActor.status.LastError),
 		"supervisor:lifecycle":                       string(s.lifecycle),
 		"supervisor:readiness_signal":                s.signal.State(),
 		"supervisor:reader":                          fmt.Sprintf("%s", s.readerActor.pid),
@@ -556,6 +569,15 @@ func (s *Supervisor[T]) propagateProjectionStatus(next ProjectionActorStatus, pi
 	}
 }
 
+// status derives subtree health without changing either child's status.
+func (s *Supervisor[T]) status() SupervisorStatus {
+	return SupervisorStatus{
+		Lifecycle:    s.lifecycle,
+		Availability: s.executorAvailability(),
+		LastError:    runtime.FirstError(s.projectionActor.status.LastError, s.readerActor.status.LastError),
+	}
+}
+
 // propagateExecutorStatus sends this executor's current convergence report.
 // Both periodic and on-change reports are normal-priority bookkeeping, not commit acknowledgements.
 func (s *Supervisor[T]) propagateExecutorStatus(applied *ExecutorAppliedGeneration) {
@@ -569,7 +591,7 @@ func (s *Supervisor[T]) propagateExecutorStatus(applied *ExecutorAppliedGenerati
 			Availability:        string(s.executorAvailability()),
 		},
 		Applied:   applied,
-		LastError: runtime.ErrorText(s.readerActor.status.LastError),
+		LastError: s.status().LastError,
 	})
 }
 
