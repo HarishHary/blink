@@ -38,6 +38,8 @@ Actor state machines live in the pages below, not in this index.
 - All four supervisor constructors create their namespace-bound labels and readiness signal; `newHealthSignal` lives in each package's `metrics.go`. `Init` schedules asynchronous registration. `reconcileRadar`, `watchRadar`, and `radarUnavailableOnce` manage registration, monitoring, and outage logging.
 - High priority is for lifecycle/recovery and messages that release capacity or I/O fences. Business work, metrics, and convergence reports normally use normal priority; FIFO protocol requirements take precedence. Controller and processor `MessageRadarTick` messages stay high because they release completed I/O fences; plugin and snapshot ticks are normal. The Kafka reader's coordinator-drained notification stays normal so it follows normal-priority results.
 - Broker payload ownership uses `Message.Clone()` or `brokers.CloneMessages`; `brokers.TotalBytes` counts key/value bytes, not topic/partition/offset metadata. These helpers live in [`internal/brokers/broker.go`](../../internal/brokers/broker.go).
+- Primitives shared across the independent subtrees live in [`internal/runtime`](../../internal/runtime/status.go), not in any one package. `Availability` is the tri-state `unavailable`/`degraded`/`ready`, and `Routable()` reports whether existing capacity may still take work, so a degraded component keeps serving. `FirstError` picks one active failure in the caller's priority order. Component lifecycle enums stay per-package. Sentinel errors belong to the package that owns the failure: `plugin.ErrPluginUnavailable`, `plugin.ErrQueueFull`, `snapshot.ErrSnapshotRead`.
+- `runtime.IOBarrier` ([`io_barrier.go`](../../internal/runtime/io_barrier.go)) fences resources that shutdown owns: `Acquire`/`Release` per operation, `Seal` from shutdown orchestration, then `WaitQuiesced` on a bounded context. A timeout does not establish quiescence, and a sealed barrier is not reusable. Never wait from an actor callback.
 
 ## Documents
 
@@ -50,3 +52,5 @@ Actor state machines live in the pages below, not in this index.
 - [Schema reference](schemas/README.md)
 - [Controller service](../services/controller.md)
 - [Event matcher service](../services/event_matcher.md)
+- [Rule executor service](../services/rule_executor.md)
+- [Rule tuner service](../services/rule_tuner.md)

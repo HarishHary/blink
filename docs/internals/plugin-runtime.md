@@ -69,6 +69,22 @@ Only the two supervisors are registered; every other name is a child or dynamic 
 - The supervisor is ready when projection and catalog generations/revisions agree, both are routable, and it is not draining. It gates on catalog routability, not catalog readiness; per-call admission rejects a dead route with `ErrPluginUnavailable`.
 - Availability is unavailable during a transition/drain or with projection/catalog missing, degraded when dependencies exist but are not all ready. No extra lifecycle constants.
 
+Each `### Lifecycle` diagram below is behavior. Only these values reach status, `Inspect`, and the gauges; any other state name in a diagram is composite prose:
+
+| Layer                                         | Lifecycle constants                                                  |
+| --------------------------------------------- | -------------------------------------------------------------------- |
+| Runtime supervisor                            | `starting`, `running`, `draining`, `stopped`                         |
+| Reconciler actor                              | `starting`, `running`, `restarting`, `stopped`                       |
+| Artifact resolver meta, artifact watcher meta | `starting`, `running`, `restarting`, `stopped`                       |
+| Catalog actor                                 | `starting`, `running`, `restarting`, `draining`, `stopped`           |
+| Router actor                                  | `starting`, `running`, `restarting`, `draining`, `stopped`           |
+| Deployment route                              | `starting`, `running`, `restarting`, `failed`, `draining`, `stopped` |
+| Deployment manager                            | `starting`, `running`, `draining`, `failed`, `stopped`               |
+| Plugin process                                | `starting`, `running`, `restarting`, `failed`, `stopped`             |
+| Plugin meta                                   | `starting`, `running`, `restarting`, `failed`                        |
+
+An owner assigns `restarting`: the supervisor to a lost reconciler or catalog incarnation, the catalog to a lost router, the reconciler to a retired resolver or watcher alias, the router to a route whose step retry is pending, the process to its retired meta. Only the plugin process republishes that label as its own lifecycle; everywhere else a child restart moves the parent's availability, not its lifecycle.
+
 ## Plugin application
 
 ### Lifecycle
@@ -118,10 +134,12 @@ stateDiagram-v2
     [*] --> Starting
     Starting --> Running: catalog running
     Running --> Draining: DrainRequest
-    Draining --> Stopped: catalog drained
-    Running --> Restarting: child restart
-    Restarting --> Running: children converged
+    Draining --> Stopped: catalog drained, then Terminate
+    Starting --> Stopped: Terminate
+    Running --> Stopped: Terminate
 ```
+
+`running` is reached only when the catalog reports `running`, and only `Terminate` writes `stopped`. A child restart never leaves `running`: the retired child's availability drops, so `blink_plugin_availability` and the readiness signal fall while the lifecycle holds.
 
 ### Messages
 
@@ -169,14 +187,14 @@ stateDiagram-v2
 
 ### Messages
 
-| Message                           | Direction                        | Meaning                                                                |
-| --------------------------------- | -------------------------------- | ---------------------------------------------------------------------- |
-| `MessageProposeDesiredState`      | reconciler → supervisor          | Offers a resolved, monotonic desired revision.                         |
-| `MessageApplyCatalogDesiredState` | supervisor → catalog             | Applies the revision after tracked calls drain.                        |
-| `MessageDesiredStateFreshness`    | supervisor → reconciler          | Challenges the proposed generation/revision after catalog convergence. |
-| `MessageDesiredStateFreshness`    | reconciler → supervisor          | Confirms that exact generation/revision is current and locally ready.  |
-| `MessageProjectionCommit`         | supervisor → snapshot supervisor | Requests external commit of the matching projection generation.        |
-| `MessageProjectionCommitResult`   | snapshot supervisor → supervisor | Acknowledges the PID/generation-fenced commit.                         |
+| Message                                  | Direction                        | Meaning                                                                |
+| ---------------------------------------- | -------------------------------- | ---------------------------------------------------------------------- |
+| `MessageProposeDesiredState`             | reconciler → supervisor          | Offers a resolved, monotonic desired revision.                         |
+| `MessageApplyCatalogDesiredState`        | supervisor → catalog             | Applies the revision after tracked calls drain.                        |
+| `MessageDesiredStateFreshness`           | supervisor → reconciler          | Challenges the proposed generation/revision after catalog convergence. |
+| `MessageDesiredStateFreshness`           | reconciler → supervisor          | Confirms that exact generation/revision is current and locally ready.  |
+| `snapshot.MessageProjectionCommit`       | supervisor → snapshot supervisor | Requests external commit of the matching projection generation.        |
+| `snapshot.MessageProjectionCommitResult` | snapshot supervisor → supervisor | Acknowledges the PID/generation-fenced commit.                         |
 
 ### Readiness
 
@@ -199,8 +217,8 @@ stateDiagram-v2
     Deferred --> Resolving: scheduled retry or directory change
     Resolving --> Ready: resolved state proposed
     Ready --> Resolving: newer snapshot or directory change
-    Observing --> Restarting: resolver or watcher meta down
-    Restarting --> Observing: meta restart
+    Observing --> Recovering: resolver or watcher meta down
+    Recovering --> Observing: meta restarted on its own backoff
     Ready --> Stopped: terminate
 ```
 
@@ -293,14 +311,13 @@ Activation enables status publication. The catalog applies only nondecreasing de
 ```mermaid
 stateDiagram-v2
     [*] --> Starting
-    Starting --> Running: activated with desired revision
-    Running --> Reconciling: desired state applied
-    Reconciling --> Running: router statuses aggregate
-    Running --> Restarting: desired router dies
-    Restarting --> Running: scheduled router restart
+    Starting --> Running: first nonzero desired revision
+    Running --> Running: revision applied, router restarted, statuses aggregated
     Running --> Draining: MessageDrain
     Draining --> Stopped: all routers drained
 ```
+
+The first nonzero desired revision, not activation, is what makes the lifecycle `running`. Router churn and revision application stay inside `running`, moving `blink_plugin_catalog_availability` and the router counts instead.
 
 ### Messages
 
@@ -318,7 +335,7 @@ stateDiagram-v2
 
 ### Readiness
 
-Status receivers validate the current PID/alias and any incarnation generation, then accept only a newer status timestamp. Tracked child records keep `status` and `statusEpoch`; actor publishers keep `lastStatus` and `lastStatusEpoch`. The reader-event and projection-status consumers have their own `lastReaderStatusEpoch` and `lastProjectionStatusEpoch` watermarks. This applies throughout the watcher, reconciler, process, manager, router, and catalog status chains. `reconcileStatus` uses `same<Type>Status` against `lastStatus` to suppress unchanged publication; the process/meta comparisons still ignore sampled load counters. Epochs protect ordering independently of equality. On router loss the catalog fails calls assigned to that PID.
+Status receivers validate the current PID/alias and any incarnation generation, then accept only a newer status timestamp. Tracked child records keep `status` and `statusEpoch`; actor publishers keep `lastStatus` and `lastStatusEpoch`. The reconciler's reader-event consumer keeps its own `readerActor.statusEpoch` watermark, and the supervisor's projection-status consumer keeps `lastProjectionStatusEpoch`. This applies throughout the watcher, reconciler, process, manager, router, and catalog status chains. `reconcileStatus` uses `same<Type>Status` against `lastStatus` to suppress unchanged publication; the process/meta comparisons still ignore sampled load counters. Epochs protect ordering independently of equality. On router loss the catalog fails calls assigned to that PID.
 
 ## Router actor
 
@@ -337,12 +354,13 @@ The router routes a whole call by the single rollout key that call carries:
 ```mermaid
 stateDiagram-v2
     [*] --> Starting
-    Starting --> Running: activated
-    Running --> Reconciling: desired primary/candidate update
-    Reconciling --> Running: routes status published
+    Starting --> Running: a normal route becomes routable
+    Running --> Running: desired primary/candidate update, route status published
     Running --> Draining: MessageDrain
     Draining --> Stopped: all routes removed
 ```
+
+`MessageRouterActivate` only fences the incarnation with its catalog generation; the lifecycle stays `starting` until a normal route is routable, and later route loss lowers availability without leaving `running`.
 
 ### Messages
 
@@ -395,6 +413,8 @@ stateDiagram-v2
 | `RemoveRoute`                           | router → `act.Router` | Removes the drained route; failures retry.                        |
 
 ### Readiness
+
+The diagram's states are the router's own route steps. The `DeploymentRouteLifecycle` the catalog sees is a projection of that route's manager status: `running`, `draining`, `stopped`, and `failed` mirror the manager's lifecycle, `starting` covers a route with no manager status yet, and a pending step retry reports `restarting` over all of them.
 
 Each route has its own `MessageRetryRouteStep` backoff for failed lifecycle operations. A pending route made obsolete is deleted directly. Ergo's router may automatically replace a lost manager immediately; `RouterOptions.RetryMin/RetryMax` govern the explicit lifecycle retry path, not that automatic replacement. Draining with no live manager respawns a draining manager so the drain protocol can complete.
 
@@ -487,7 +507,7 @@ Each slot owns one manager budget; a process reporting ready resets it. A proces
 
 Exhausting any one slot's budget opens the deployment's circuit: it fails every tracked invocation, drops the desired count to `MinProcs`, returns every grown permit, releases every slot, and stops recovery. `openCircuit` schedules a token-fenced `MessageDeploymentManagerCircuitCooldown` after `CircuitCooldown` (default 5 minutes); handling it reconciles and opens fresh slots with fresh budgets. Drain and terminate cancel the pending cooldown. `MessageDeploymentManagerRetry` resets the circuit immediately; no production sender emits `MessageRetryDeployment`.
 
-An active route changes only when desired state removes or replaces it. `Recovering` is composite-state prose, not a `DeploymentManagerLifecycle` constant - those are `starting`, `running`, `draining`, `failed`, and `stopped`.
+An active route changes only when desired state removes or replaces it. The manager has no `restarting` constant: losing its last ready process returns the lifecycle to `starting`, and only an exhausted slot budget reaches `failed`.
 
 Availability: ready when the ready count covers a nonzero `MinProcs`; degraded when only some are ready or while draining; unavailable while starting with none ready or while the circuit is open. A `MinProcs=0` deployment holding no process, call, pending retry, or error is ready.
 
@@ -652,21 +672,21 @@ Every layer publishes into the node's radar application, labelled by `namespace`
 | Router Actor       | -               | itself            | Rollout target per invocation; calls with no route or no manager acknowledgement.                            |
 | Deployment Manager | -               | itself            | Queue rejects, dispatch timeouts, process churn, circuit opens, scaling, invocation histogram.               |
 
-| Metric                                                                                                                                                                                          | Published by       | Meaning                                                                                                                                         |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `blink_plugin_supervisor_lifecycle`, `blink_plugin_availability`, `blink_plugin_transition`                                                                                                     | runtime supervisor | 0 starting / 1 running / 2 draining; 0 unavailable / 1 degraded / 2 ready; 0 idle / 1 preparing / 2 awaiting freshness / 3 awaiting projection. |
-| `blink_plugin_desired_revision`, `blink_plugin_projection_ready_generation`, `blink_plugin_projection_committed_generation`                                                                     | runtime supervisor | Revision being moved to; generation calls are admitted against; generation the snapshot subtree was asked to commit.                            |
-| `blink_plugin_in_flight_calls`, `blink_plugin_invocations_total{result}`, `blink_plugin_invocations_rejected_total{reason}`                                                                     | runtime supervisor | Calls a transition waits on; completions by result; admissions refused as `closed` or `context`.                                                |
-| `blink_plugin_reconciler_availability`, `blink_plugin_reconciler_generation`, `blink_plugin_reconciler_revision`, `blink_plugin_catalog_availability`                                           | runtime supervisor | Each child's own readiness, and how far the reconciler has resolved.                                                                            |
-| `blink_plugin_routers_desired`, `blink_plugin_routers_routable`, `blink_plugin_routers_settled`, `blink_plugin_routers_unavailable`                                                             | runtime supervisor | Plugins the revision asks for, against routers accepting work, done moving, and serving nothing.                                                |
-| `blink_plugin_processes_ready`, `blink_plugin_processes_desired`, `blink_plugin_queue_depth`, `blink_plugin_active_calls`                                                                       | runtime supervisor | Summed over every route on both sides of a rollout.                                                                                             |
-| `blink_plugin_projection_commits_total{result}`, `blink_plugin_desired_state_promotions_total`, `blink_plugin_child_starts_total{child}`, `blink_plugin_child_terminations_total{child,reason}` | runtime supervisor | Commit requests; revisions promoted into the catalog; snapshot/reconciler/catalog churn.                                                        |
-| `blink_plugin_resolutions_total{result}`, `blink_plugin_resolution_retries_total`, `blink_plugin_artifact_worker_restarts_total{worker}`                                                        | reconciler actor   | Result is `proposed`, `unchanged`, `deferred`, or `stale`; retries are deferred ones returning; workers are `resolver` and `watcher`.           |
-| `blink_plugin_router_starts_total`, `blink_plugin_router_restarts_total`, `blink_plugin_router_terminations_total{reason}`                                                                      | catalog actor      | Router incarnations spawned, replacements after a loss, exits by reason.                                                                        |
-| `blink_plugin_routed_total{target}`, `blink_plugin_unroutable_total`, `blink_plugin_acceptance_timeouts_total`                                                                                  | router actor       | Rollout decision `primary`, `candidate`, or `shadow`; calls with no active route; routed calls no manager acknowledged.                         |
-| `blink_plugin_queue_rejects_total`, `blink_plugin_dispatch_timeouts_total`, `blink_plugin_circuit_opens_total`, `blink_plugin_scale_events_total{direction}`                                    | deployment manager | Full queue; dispatch no process started; spent restart budget; autoscaling `up` or `down`.                                                      |
-| `blink_plugin_process_starts_total`, `blink_plugin_process_restarts_total`, `blink_plugin_process_terminations_total{reason}`                                                                   | deployment manager | Plugin process churn against the slot retry budget the circuit opens on.                                                                        |
-| `blink_plugin_invocation_seconds`                                                                                                                                                               | deployment manager | Accept to completion, queueing included. A rejected call was never accepted, so it contributes no sample.                                       |
+| Metric                                                                                                                                                                                          | Published by       | Meaning                                                                                                                                                     |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `blink_plugin_supervisor_lifecycle`, `blink_plugin_availability`, `blink_plugin_transition`                                                                                                     | runtime supervisor | 0 starting / 1 running / 2 draining / 3 stopped; 0 unavailable / 1 degraded / 2 ready; 0 idle / 1 preparing / 2 awaiting freshness / 3 awaiting projection. |
+| `blink_plugin_desired_revision`, `blink_plugin_projection_ready_generation`, `blink_plugin_projection_committed_generation`                                                                     | runtime supervisor | Revision being moved to; generation calls are admitted against; generation the snapshot subtree was asked to commit.                                        |
+| `blink_plugin_in_flight_calls`, `blink_plugin_invocations_total{result}`, `blink_plugin_invocations_rejected_total{reason}`                                                                     | runtime supervisor | Calls a transition waits on; completions by result; admissions refused as `closed` or `context`.                                                            |
+| `blink_plugin_reconciler_availability`, `blink_plugin_reconciler_generation`, `blink_plugin_reconciler_revision`, `blink_plugin_catalog_availability`                                           | runtime supervisor | Each child's own readiness, and how far the reconciler has resolved.                                                                                        |
+| `blink_plugin_routers_desired`, `blink_plugin_routers_routable`, `blink_plugin_routers_settled`, `blink_plugin_routers_unavailable`                                                             | runtime supervisor | Plugins the revision asks for, against routers accepting work, done moving, and serving nothing.                                                            |
+| `blink_plugin_processes_ready`, `blink_plugin_processes_desired`, `blink_plugin_queue_depth`, `blink_plugin_active_calls`                                                                       | runtime supervisor | Summed over every route on both sides of a rollout.                                                                                                         |
+| `blink_plugin_projection_commits_total{result}`, `blink_plugin_desired_state_promotions_total`, `blink_plugin_child_starts_total{child}`, `blink_plugin_child_terminations_total{child,reason}` | runtime supervisor | Commit requests; revisions promoted into the catalog; snapshot/reconciler/catalog churn.                                                                    |
+| `blink_plugin_resolutions_total{result}`, `blink_plugin_resolution_retries_total`, `blink_plugin_artifact_worker_restarts_total{worker}`                                                        | reconciler actor   | Result is `proposed`, `unchanged`, `deferred`, or `stale`; retries are deferred ones returning; workers are `resolver` and `watcher`.                       |
+| `blink_plugin_router_starts_total`, `blink_plugin_router_restarts_total`, `blink_plugin_router_terminations_total{reason}`                                                                      | catalog actor      | Router incarnations spawned, replacements after a loss, exits by reason.                                                                                    |
+| `blink_plugin_routed_total{target}`, `blink_plugin_unroutable_total`, `blink_plugin_acceptance_timeouts_total`                                                                                  | router actor       | Rollout decision `primary`, `candidate`, or `shadow`; calls with no active route; routed calls no manager acknowledged.                                     |
+| `blink_plugin_queue_rejects_total`, `blink_plugin_dispatch_timeouts_total`, `blink_plugin_circuit_opens_total`, `blink_plugin_scale_events_total{direction}`                                    | deployment manager | Full queue; dispatch no process started; spent restart budget; autoscaling `up` or `down`.                                                                  |
+| `blink_plugin_process_starts_total`, `blink_plugin_process_restarts_total`, `blink_plugin_process_terminations_total{reason}`                                                                   | deployment manager | Plugin process churn against the slot retry budget the circuit opens on.                                                                                    |
+| `blink_plugin_invocation_seconds`                                                                                                                                                               | deployment manager | Accept to completion, queueing included. A rejected call was never accepted, so it contributes no sample.                                                   |
 
 `MessageRadarTick` drives registration: sent to itself from `Init`, then retried every `telemetry.RadarTickInterval` (30 s). Collectors register through `gen.Node` because radar deletes a dead registrant's metrics. The supervisor also owns the readiness-only `plugin-<namespace>` signal: up only while running with `AvailabilityReady`, down while starting, degraded, unavailable, or draining. It heartbeats only while up, with a 90 s expiry, and never unregisters on drain.
 

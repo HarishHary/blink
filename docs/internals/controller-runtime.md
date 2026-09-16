@@ -34,8 +34,8 @@ flowchart TB
 | `SpawnMeta`                                               | actor → snapshot writer meta                                     | Starts the writer after its I/O barrier reservation.                        |
 | `MessageArtifactScanResult`                               | artifact_scanner meta → actor                                    | Effective catalog and present IDs.                                          |
 | `MessageSnapshotLoadResult`, `MessageSnapshotWriteResult` | snapshot writer meta → actor                                     | Bootstrap state and write outcomes.                                         |
-| `MessageSnapshotWriterIOStarted`                          | snapshot writer meta → supervisor                                | Registers the writer I/O fence.                                             |
-| `MessageSnapshotWriterIOStopped`                          | snapshot writer meta → supervisor → owning actor                 | Releases the fence; notifies the owning actor if still current.             |
+| `MessageSnapshotWriterIOStarted`                          | snapshot writer meta → supervisor                                | Registers the writer I/O fence and its completion barrier.                  |
+| `MessageSnapshotWriterIOStopped`                          | snapshot writer meta → supervisor → owning actor                 | Releases a quiesced fence; notifies the owning actor if still current.      |
 | `SubscribeRequest`/`Response`                             | executor reader actor → controller actor (cluster `Call`)        | Registers caller PID; returns the committed snapshot.                       |
 | `SnapshotUpdate`                                          | controller actor → subscriber PID (cluster `SendImportant`)      | Pushes one commit's full state to every subscriber.                         |
 | `MessageExecutorReport`                                   | executor snapshot supervisor → controller actor (cluster `Send`) | That executor's received and live generations; every 30s and on any change. |
@@ -64,12 +64,20 @@ Naming:
 | Component               | Readiness summary                                                                              |
 | ----------------------- | ---------------------------------------------------------------------------------------------- |
 | Controller application  | `Load` validates options, opens the database and namespace store; no independent availability. |
-| Controller supervisor   | Derives subtree availability from its lifecycle and current actor; owns Radar readiness.      |
+| Controller supervisor   | Derives subtree availability from its lifecycle and current actor; owns Radar readiness.       |
 | Controller actor        | `ready` only while running, scanner complete and ready, writer loaded and ready.               |
 | `artifact_scanner` meta | Status from scan completeness and any nonfatal watch-attachment error.                         |
 | Snapshot writer meta    | Status from bootstrap, pending work, write failures.                                           |
 
-Scanner and writer health is derived by the controller from current-alias operation results, not a separate meta status-message stream. Their cached statuses therefore have no independent status epoch. The actor publishes its aggregate through `MessageActorStatusChanged`; the supervisor validates the actor PID and the message's `statusEpoch` before updating its tracked `actor.statusEpoch`.
+Scanner and writer health is derived by the controller from current-alias operation results, not a separate meta status-message stream. Their cached statuses therefore have no independent status epoch, though each still carries its own lifecycle - `starting`, `running`, `restarting`, `stopped` - which the actor moves on spawn, on a scheduled replacement, and on `gen.MessageDownAlias`.
+
+### Status composition
+
+`LastError` composes first-non-nil, never last-writer-wins. The actor reports `runtime.FirstError(own terminate reason, writer, scanner)`, and its own reason counts only once its lifecycle is `stopped`, so a live controller surfaces worker diagnostics rather than masking them; a terminating one surfaces its exit reason without erasing them. The supervisor reports `runtime.FirstError(subtree terminate reason, tracked child status)`, and `HandleChildTerminate` records the child's exit reason there. A recovered worker clears the field at both layers on the next reconcile.
+
+Publication is deduplicated. The actor's `reconcileStatus` compares a pre-handler snapshot against the recomputed status on lifecycle, availability, generation, and `runtime.ErrorText(LastError)`; an identical status publishes nothing and leaves the epoch alone. A change stamps `runtime.NextStatusEpoch` - `max(now in nanoseconds, previous + 1)` - so epochs stay strictly monotonic even across a backwards clock step.
+
+The supervisor drops any `MessageActorStatusChanged` whose sender is not the tracked actor PID or whose `statusEpoch` is not greater than the recorded watermark. `HandleChildStart` resets that watermark to zero, so a replacement's first epoch is accepted while the previous PID's late facts stay fenced out.
 
 ## Controller application
 
@@ -114,7 +122,7 @@ One-for-one and transient, one actor child. Preserves the child's mailbox, handl
 - Intensity five restarts / ten seconds; exhausting it terminates the application.
 - Abnormal child exit is eligible for restart.
 - Normal or shutdown exit outside draining or stopping fails the supervisor.
-- After `plugin.MessageStop` it forwards `plugin.MessageDrain` to the actor.
+- On `plugin.MessageStop` while running it forwards `plugin.MessageDrain` to the actor; the message is ignored in any other lifecycle.
 
 ```mermaid
 stateDiagram-v2
@@ -131,21 +139,23 @@ stateDiagram-v2
 
 ### Messages
 
-| Message                                    | Direction                                        | Meaning                                                                       |
-| ------------------------------------------ | ------------------------------------------------ | ----------------------------------------------------------------------------- |
-| `HandleChildStart`, `MessageActorActivate` | Ergo supervisor → actor                          | Tracks and activates the child after writer fences clear.                     |
-| `HandleChildTerminate`                     | Ergo → supervisor                                | Transient abnormal exit eligible for restart; unexpected clean exit fails it. |
-| `plugin.MessageStop`                       | service → supervisor                             | Starts supervisor draining.                                                   |
-| `plugin.MessageDrain`                      | supervisor → actor                               | Stops new work after `plugin.MessageStop`.                                    |
-| `MessageActorStatusChanged`                | actor → supervisor                               | Versioned lifecycle, availability, and generation; also advances draining.    |
-| `MessageSnapshotWriterIOStarted`           | snapshot writer meta → supervisor                | Registers a fence before the meta touches application resources.              |
-| `MessageSnapshotWriterIOStopped`           | snapshot writer meta → supervisor → owning actor | Releases the fence; forwarded to the owning actor if still current.           |
-| `plugin.MessageStop`                       | supervisor → actor                               | Stops the drained actor after all writer fences clear.                        |
-| `MessageRadarTick`                         | supervisor → supervisor                          | High-priority Radar reconcile and completed-I/O fence polling, every 30 s.     |
+| Message                                    | Direction                                        | Meaning                                                                                                   |
+| ------------------------------------------ | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------- |
+| `HandleChildStart`, `MessageActorActivate` | Ergo supervisor → actor                          | Tracks and activates the child after writer fences clear.                                                 |
+| `HandleChildTerminate`                     | Ergo → supervisor                                | Transient abnormal exit eligible for restart; unexpected clean exit fails it.                             |
+| `plugin.MessageStop`                       | service → supervisor                             | Starts supervisor draining.                                                                               |
+| `plugin.MessageDrain`                      | supervisor → actor                               | Stops new work after `plugin.MessageStop`.                                                                |
+| `MessageActorStatusChanged`                | actor → supervisor                               | Epoch-stamped lifecycle, availability, generation, first error; also advances draining.                   |
+| `MessageSnapshotWriterIOStarted`           | snapshot writer meta → supervisor                | Registers a fence, plus the completion barrier that later proves it done.                                 |
+| `MessageSnapshotWriterIOStopped`           | snapshot writer meta → supervisor → owning actor | Releases the fence once quiesced; forwarded to the owning actor if current.                               |
+| `plugin.MessageStop`                       | supervisor → actor                               | Stops the drained actor after all writer fences clear.                                                    |
+| `MessageRadarTick`                         | supervisor → supervisor                          | High-priority Radar reconcile and completed-I/O fence polling, every 30 s; not rescheduled once stopping. |
 
 ### Readiness
 
-`status()` returns the supervisor lifecycle and derived availability. Availability is `unavailable` unless the supervisor is running with a live actor; otherwise it follows that actor's `ready`/`degraded`/`unavailable` status. `propagateReadiness()` raises the Radar signal only for `ready`. The supervisor starts the tracked actor `starting`/`unavailable`, activates it only after writer fences clear, and waits for `drained` plus all fences before stopping it.
+`status()` returns the supervisor lifecycle, derived availability, and `runtime.FirstError(subtree reason, child status)`. Availability is `unavailable` unless the supervisor is running with a live actor; otherwise it follows that actor's `ready`/`degraded`/`unavailable` status. `propagateReadiness()` raises the Radar signal only for `ready`. The supervisor starts the tracked actor `starting`/`unavailable`, activates it only after writer fences clear, and waits for `drained` plus all fences before stopping it.
+
+A fence clears only against proof. `completeIOFence` requires the reporting PID to own the fence and the fence's completion barrier to read `Quiesced()`; anything else is dropped, so a stale or forged notification cannot unblock a replacement or a drain. Losing the notification entirely is not terminal: each `MessageRadarTick` runs `pollIOCompletions`, which sweeps every registered fence and completes the ones already quiesced. Forwarding the completion to a live owning actor is the one send whose failure fails the supervisor, because a dropped completion would stall both writer replacement and drain.
 
 ## Controller actor
 
@@ -161,26 +171,29 @@ stateDiagram-v2
   Running --> Draining: parent MessageDrain
   Draining --> Drained: active writer I/O is zero
   Drained --> Stopped: parent MessageStop
+  Draining --> Stopped: parent MessageStop
   Starting --> Stopped: parent MessageStop
   Stopped --> [*]
 ```
 
+While `draining` or `drained` the actor accepts only four messages - `gen.MessageDownAlias`, `gen.MessageDownPID`, `MessageSnapshotWriterIOStopped`, and `snapshot.UnsubscribeRequest` - so no late scan, write result, or executor report can restart work or reopen a plan. `plugin.MessageStop` from the parent terminates normally from any lifecycle; the supervisor sends it after `drained`, or while still `draining` once every writer fence has cleared.
+
 ### Messages
 
-| Message                                                                 | Direction                                        | Meaning                                                |
-| ----------------------------------------------------------------------- | ------------------------------------------------ | ------------------------------------------------------ |
-| `MessageActorActivate`                                                  | supervisor → actor                               | Starts artifact_scanner and writer once.               |
-| `plugin.MessageDrain`, `plugin.MessageStop`                             | supervisor → actor                               | Stop new work, then terminate.                         |
-| `MessageArtifactScanResult`                                             | artifact_scanner meta → actor                    | Complete or incomplete effective catalog, present IDs. |
-| `MessageSnapshotLoadResult`                                             | snapshot writer meta → actor                     | Bootstrap records, generation, prior snapshot.         |
-| `MessageWriteSnapshot`                                                  | actor → snapshot writer meta                     | One pending reconciliation plan.                       |
-| `MessageSnapshotWriteResult`                                            | snapshot writer meta → actor                     | Per-attempt failure or final success.                  |
-| `MessageArtifactScannerMetaRestart`, `MessageSnapshotWriterMetaRestart` | actor → actor                                    | Token-checked worker replacement timer messages.       |
-| `MessageExecutorDriftCheck`                                             | actor → actor                                    | Self-scheduled drift scan over tracked executors.      |
-| `gen.MessageDownAlias`                                                  | Ergo → actor                                     | Observes worker termination.                           |
-| `MessageSnapshotWriterIOStopped`                                        | snapshot writer meta → supervisor → owning actor | If the owner remains current, it clears `activeIO`.    |
-| `MessageActorStatusChanged`                                             | actor → supervisor                               | Reports lifecycle, availability, committed generation. |
-| `StatusRequest`/`Response`                                              | `/status` handler → actor (same node)            | Committed generation and every tracked executor.       |
+| Message                                                                 | Direction                             | Meaning                                                                                                         |
+| ----------------------------------------------------------------------- | ------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `MessageActorActivate`                                                  | supervisor → actor                    | Starts artifact_scanner and writer once.                                                                        |
+| `plugin.MessageDrain`, `plugin.MessageStop`                             | supervisor → actor                    | Stop new work, then terminate.                                                                                  |
+| `MessageArtifactScanResult`                                             | artifact_scanner meta → actor         | Complete or incomplete effective catalog, present IDs.                                                          |
+| `MessageSnapshotLoadResult`                                             | snapshot writer meta → actor          | Bootstrap records, generation, prior snapshot.                                                                  |
+| `MessageWriteSnapshot`                                                  | actor → snapshot writer meta          | One pending reconciliation plan.                                                                                |
+| `MessageSnapshotWriteResult`                                            | snapshot writer meta → actor          | Per-attempt failure or final success.                                                                           |
+| `MessageArtifactScannerMetaRestart`, `MessageSnapshotWriterMetaRestart` | actor → actor                         | Token-checked worker replacement timer messages.                                                                |
+| `MessageExecutorDriftCheck`                                             | actor → actor                         | Self-scheduled drift scan over tracked executors.                                                               |
+| `gen.MessageDownAlias`                                                  | Ergo → actor                          | Observes worker termination.                                                                                    |
+| `MessageSnapshotWriterIOStopped`                                        | supervisor → owning actor             | Accepted only from the parent for a tracked alias; clears `activeIO`, then drains or schedules the replacement. |
+| `MessageActorStatusChanged`                                             | actor → supervisor                    | Epoch-stamped lifecycle, availability, generation, first error; sent only on a change.                          |
+| `StatusRequest`/`Response`                                              | `/status` handler → actor (same node) | Committed generation and every tracked executor.                                                                |
 
 ### Readiness
 
@@ -200,6 +213,8 @@ On a changed commit - `MessageSnapshotWriteResult` with `a.pending.next.Generati
 - `Heartbeat.ReadyGeneration` - what the executor's projection holds live.
 
 They differ when a generation is received but not yet adopted; under `ProjectionCommitExternal` the gap is the plugin runtime fetching binaries. See [Executor reporting](snapshot-runtime.md#executor-reporting).
+
+`Apply` overwrites `LastError` only when the report carries a heartbeat or a new error of its own, so an applied-only report keeps the last heartbeat's diagnosis and a healthy heartbeat clears it. `Applied` alone advances `ReadyGeneration` without touching availability.
 
 Reports arrive every `executorReportInterval` (30s, a quarter of the stale threshold), and on any change to either generation, reader availability, or reader liveness.
 
@@ -281,24 +296,24 @@ stateDiagram-v2
 
 | Message                                                                | Direction                                        | Meaning                                                                              |
 | ---------------------------------------------------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------ |
-| `runtime.IOBarrier.Acquire`, `MessageSnapshotWriterIOStarted`          | snapshot writer meta → supervisor                | Reserves application I/O; registers its fence.                                       |
+| `runtime.IOBarrier.Acquire`, `MessageSnapshotWriterIOStarted`          | snapshot writer meta → supervisor                | Reserves application I/O; registers its fence and completion barrier.                |
 | `Database.LoadAll`, `Database.LoadGeneration`, `Database.LoadSnapshot` | snapshot writer meta → SQLite                    | Loads bootstrap records, generation, snapshot.                                       |
 | `MessageSnapshotLoadResult`                                            | snapshot writer meta → actor                     | Delivers the bootstrap result.                                                       |
 | `MessageWriteSnapshot`                                                 | actor → snapshot writer meta                     | Queues the one buffered write job.                                                   |
 | `MessageSnapshotWriteResult`                                           | snapshot writer meta → actor                     | Reports each failed attempt and final success.                                       |
 | `Terminate`                                                            | actor → snapshot writer meta                     | Cancels loading or writing.                                                          |
-| `MessageSnapshotWriterIOStopped`                                       | snapshot writer meta → supervisor → owning actor | Releases the fence; notifies the owning actor if still current when `Start` returns. |
-| `runtime.IOBarrier.Release`                                            | snapshot writer meta → barrier                   | Releases the I/O reservation when `Start` returns.                                   |
+| `MessageSnapshotWriterIOStopped`                                       | snapshot writer meta → supervisor → owning actor | Releases the fence once quiesced; notifies the owning actor if still current.        |
+| `runtime.IOBarrier.Release`                                            | snapshot writer meta → both barriers             | Releases the completion proof, then the application reservation, as `Start` returns. |
 
 ### Readiness
 
 The actor owns the writer status. After a successful bootstrap:
 
-- `ready` - no pending plan, no last error, threshold not exhausted
-- `degraded` - a write attempt failed
-- `unavailable` - a pending plan, a load error, or an exhausted failure threshold
+- `ready` - loaded, no pending plan, no last error, no consecutive failures
+- `degraded` - at least one consecutive failed write attempt, still under the threshold
+- `unavailable` - a pending plan, a last error, or consecutive failures at the five-attempt threshold
 
-A replacement cannot start until the prior writer's I/O-stopped completion clears `activeIO`.
+A replacement cannot start until the prior writer's I/O-stopped completion clears `activeIO`, and that completion only reaches the actor after the supervisor's fence proof (see [Writer I/O barrier and shutdown](#writer-io-barrier-and-shutdown)).
 
 Each job gets five attempts, exponential between the actor's retry minimum and maximum, multiplier two, no elapsed-time limit. Every failed attempt is reported at high priority. Final success commits the pending plan; failure leaves it pending, and once the writer stops and its fence clears a replacement loads state and retries.
 
@@ -345,7 +360,9 @@ The writer always persists record upserts, changed or not. A changed plan also r
 
 ## Writer I/O barrier and shutdown
 
-The barrier separates actor lifecycle from blocking writer I/O. `Acquire` succeeds only before `Seal`. Every accepted writer `Start` reports a supervisor fence and releases its reservation on return.
+`runtime.IOBarrier` in `internal/runtime/io_barrier.go` is a shared counting primitive, not a controller type: the controller application and the stage runtime both use it. Here it separates actor lifecycle from blocking writer I/O. `Acquire` succeeds only before `Seal`; a sealed barrier with no reservations left is quiesced.
+
+Each accepted writer holds two of them. The application's barrier is shared by every writer instance and gates `Close`. A private completion barrier, created and sealed in the writer's own `Init` with one reservation held, exists only to prove that one instance finished: `MessageSnapshotWriterIOStarted` hands the supervisor a pointer to it, and the supervisor releases the fence only once it reads `Quiesced()`. The writer's `Start` releases the completion barrier before sending `MessageSnapshotWriterIOStopped`, so the proof is already in place when the notification lands.
 
 ### Lifecycle
 
@@ -363,11 +380,13 @@ stateDiagram-v2
 
 ### Messages
 
-| Message   | Direction                                 | Meaning                                                                    |
-| --------- | ----------------------------------------- | -------------------------------------------------------------------------- |
-| `Acquire` | snapshot writer meta → writer I/O barrier | Reserves I/O unless the barrier is sealed.                                 |
-| `Seal`    | application/service → writer I/O barrier  | Rejects new reservations; begins shutdown quiescence.                      |
-| `Release` | snapshot writer meta → writer I/O barrier | Frees one reservation; the final release makes a sealed barrier quiescent. |
+| Message        | Direction                                                                       | Meaning                                                                   |
+| -------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `Acquire`      | snapshot writer meta → application barrier, own completion barrier              | Reserves I/O unless that barrier is sealed.                               |
+| `Seal`         | application/service → application barrier; writer meta → own completion barrier | Rejects new reservations; begins quiescence.                              |
+| `Release`      | snapshot writer meta → both barriers                                            | Frees one reservation; the final release makes a sealed barrier quiesced. |
+| `Quiesced`     | supervisor → a registered fence's completion barrier                            | Non-blocking proof that one writer instance returned.                     |
+| `WaitQuiesced` | service → application barrier                                                   | Blocks cleanup until every accepted writer has released.                  |
 
 ### Readiness
 
@@ -376,7 +395,7 @@ stateDiagram-v2
 1. Service seals the application.
 2. Supervisor drains the actor.
 3. Actor cancels worker restart timers and asks both metas to stop.
-4. Writer meta → supervisor → owning actor reports stopped completion, only if still current.
+4. Writer meta releases its completion barrier, then reports stopped; the supervisor releases the fence once that barrier reads quiesced, and forwards the completion to the owning actor only if still current.
 5. Supervisor stops the drained actor.
 6. Service waits for quiescence, closes the database, unloads the application.
 
@@ -393,7 +412,7 @@ Every layer publishes into the node's radar application (`RADAR_HOST:RADAR_PORT`
 | Actor       | -                                                   | itself            | Own gauges, counters, histograms through a plain `telemetry.Labels`, republished every drift-check tick.                                                                                                        |
 | Metas       | -                                                   | `gen.MetaProcess` | `Send` but no `Call`, so it cannot register; carries a copy of the actor's `telemetry.Labels`.                                                                                                                  |
 
-`reconcileStatus()` refreshes owned gauges even when status is unchanged; the drift-check and Radar ticks provide periodic refreshes. `publishGauges()` itself does not change lifecycle or propagate status/readiness. All emission is best-effort: an unreachable radar produces a discarded `Send` error, and `telemetry.Labels` with no namespace stays silent, since a label count mismatching the registered collector panics radar's metrics actor.
+`reconcileStatus()` refreshes owned gauges even when status is unchanged; the drift-check and Radar ticks provide periodic refreshes. It runs on every supervisor and actor handler, deferred, so a handler returning an error still leaves gauges and Radar current. The two layers differ in what else it does: the actor's dedupes and may publish `MessageActorStatusChanged`, the supervisor's always re-evaluates the Radar signal. `publishGauges()` itself does not change lifecycle or propagate status/readiness. All emission is best-effort: an unreachable radar produces a discarded `Send` error, and `telemetry.Labels` with no namespace stays silent, since a label count mismatching the registered collector panics radar's metrics actor.
 
 ### Readiness signal
 
@@ -424,7 +443,8 @@ A namespace serves only when the supervisor is running, its child alive, and tha
 ## Source references
 
 - `internal/runtime/controller/{service.go,controller_application.go,controller_supervisor.go,controller_actor.go}` - lifecycle ownership, message handling.
-- `internal/runtime/controller/{artifact_scanner_meta.go,snapshot_writer_meta.go,reconcile.go,writer_io_barrier.go,options.go,defaults.go}` - worker behavior, planning, shutdown barrier, names, timing defaults.
+- `internal/runtime/controller/{artifact_scanner_meta.go,snapshot_writer_meta.go,reconcile.go,options.go,defaults.go}` - worker behavior, planning, names, timing defaults.
+- `internal/runtime/{io_barrier.go,status.go}` - the shared I/O barrier, `Availability`, `FirstError`, `ErrorText`, `NextStatusEpoch`.
 - `internal/runtime/controller/metrics.go` - metric specs, gauge publishing, readiness signal.
 - `internal/runtime/telemetry/{metrics.go,signal.go}` - shared radar plumbing: collector specs, bound label values, readiness signal.
 - `internal/runtime/backoff.go` - scheduled worker-restart budget and backoff.

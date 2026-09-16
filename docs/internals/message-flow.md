@@ -16,6 +16,8 @@ sequenceDiagram
     participant Store as SQLite
     participant Executor as reader actor (remote)
 
+    Writer->>Store: Database.LoadAll, LoadGeneration, LoadSnapshot
+    Writer-->>Controller: MessageSnapshotLoadResult
     Executor->>Controller: SubscribeRequest (cluster Call)
     Controller-->>Executor: SubscribeResponse{Current, ControllerPID}
     ArtifactScanner->>Controller: MessageArtifactScanResult
@@ -30,6 +32,7 @@ sequenceDiagram
 
 | Message                                      | Direction                                   | Meaning                                                       |
 | -------------------------------------------- | ------------------------------------------- | ------------------------------------------------------------- |
+| `MessageSnapshotLoadResult`                  | snapshot writer meta → controller actor     | Bootstraps records, generation, and prior snapshot at start.  |
 | `SubscribeRequest`/`Response`                | reader actor ↔ controller actor (cluster)   | Registers a subscriber PID; returns the committed snapshot.   |
 | `MessageArtifactScanResult`                  | artifact_scanner meta → controller actor    | Delivers the effective catalog used by reconciliation.        |
 | `makePlan`                                   | controller actor → controller actor         | Derives pending records, entries, diff, next generation.      |
@@ -41,7 +44,7 @@ sequenceDiagram
 
 - The in-memory generation commits only on final SQLite success, then `notifySubscribers` pushes it.
 - A subscriber applies a pushed snapshot or initial `SubscribeResponse.Current` only if strictly newer than the last published. SQLite alone writes the generation counter, so generations never go backwards.
-- Readiness needs a complete artifact_scanner result and a loaded, ready writer.
+- Readiness needs the actor running, a complete and `ready` artifact_scanner result, and a loaded, `ready` writer. Any shortfall while running is `degraded`, which stays routable rather than unavailable.
 - Persistence gets five exponential attempts; an exhausted writer is replaced, its pending plan retained.
 - Worker replacement uses bounded exponential backoff; the runner retries with 1 s-60 s jittered backoff until cancellation.
 - On cancellation: seal writer I/O, drain the actor, cancel restart timers and metas, wait for accepted I/O to quiesce, close resources.
