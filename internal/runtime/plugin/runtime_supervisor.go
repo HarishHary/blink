@@ -94,10 +94,10 @@ type supervisor[P Artifact, M any] struct {
 	inFlightCalls             map[uint64]runtimeCall
 	drainWaiters              []runtimeDrainWaiter
 	transitionGeneration      int64
-	labels                    telemetry.Labels
-	signal                    telemetry.Signal
 	collectorsRegistered      bool
 	radarLogged               bool
+	labels                    telemetry.Labels
+	signal                    telemetry.Signal
 	lastStatus                SupervisorStatus
 	lastError                 error
 }

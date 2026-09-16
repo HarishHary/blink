@@ -77,10 +77,10 @@ type Supervisor[T any] struct {
 	snapshotEvent        eventPublication
 	statusEvent          eventPublication
 	reportCancel         gen.CancelFunc
-	labels               telemetry.Labels
-	signal               telemetry.Signal
 	collectorsRegistered bool
 	radarLogged          bool
+	labels               telemetry.Labels
+	signal               telemetry.Signal
 	lastStatus           SupervisorStatus
 	lastError            error
 }

@@ -60,10 +60,10 @@ type supervisor[T plugin.Artifact] struct {
 	barrier              *runtime.IOBarrier
 	actor                actorState
 	writerFences         map[gen.Alias]writerIOFence
-	labels               telemetry.Labels
-	signal               telemetry.Signal
 	collectorsRegistered bool
 	radarLogged          bool
+	labels               telemetry.Labels
+	signal               telemetry.Signal
 	lastStatus           supervisorStatus
 	lastError            error
 }
