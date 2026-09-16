@@ -58,13 +58,13 @@ type supervisor[T plugin.Artifact] struct {
 	loader               plugin.Loader[T]
 	database             backends.Database
 	barrier              *runtime.IOBarrier
-	lastStatus           supervisorStatus
 	actor                actorState
 	writerFences         map[gen.Alias]writerIOFence
 	labels               telemetry.Labels
 	signal               telemetry.Signal
 	collectorsRegistered bool
 	radarLogged          bool
+	lastStatus           supervisorStatus
 	lastError            error
 }
 

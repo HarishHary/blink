@@ -72,7 +72,6 @@ type Supervisor[T any] struct {
 	act.Supervisor
 	opts                 SupervisorOptions
 	loader               Loader[T]
-	lastStatus           SupervisorStatus
 	readerActor          readerActorState
 	projectionActor      projectionActorState
 	snapshotEvent        eventPublication
@@ -82,6 +81,7 @@ type Supervisor[T any] struct {
 	signal               telemetry.Signal
 	collectorsRegistered bool
 	radarLogged          bool
+	lastStatus           SupervisorStatus
 	lastError            error
 }
 

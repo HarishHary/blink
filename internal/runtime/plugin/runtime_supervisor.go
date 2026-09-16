@@ -83,7 +83,6 @@ type supervisor[P Artifact, M any] struct {
 	opts                      SupervisorOptions
 	namespace                 string
 	adapter                   *Adapter[P]
-	lastStatus                SupervisorStatus
 	loader                    snapshot.Loader[M]
 	reconciler                reconcilerActorState
 	catalog                   catalogActorState
@@ -99,6 +98,7 @@ type supervisor[P Artifact, M any] struct {
 	signal                    telemetry.Signal
 	collectorsRegistered      bool
 	radarLogged               bool
+	lastStatus                SupervisorStatus
 	lastError                 error
 }
 
