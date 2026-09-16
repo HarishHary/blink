@@ -49,7 +49,7 @@ type artifactWatcherMetaState struct {
 type artifactWatcherMetaStatus struct {
 	lifecycle    ArtifactWatcherMetaLifecycle
 	availability runtime.Availability
-	lastError    error
+	err          error
 }
 
 // artifactWatcherMeta owns one watcher: fsnotify for latency, a periodic fingerprint for the events
@@ -84,7 +84,7 @@ type MessageArtifactWatcherStatusChanged struct {
 	statusEpoch       int64
 	directoryReadable bool
 	watchingDirectory bool
-	lastError         error
+	err               error
 }
 
 // ---------------------------------------------------------------------------
@@ -326,7 +326,7 @@ func (m *artifactWatcherMeta) reconcileStatus(state *artifactWatcherRunState, wa
 		source:            m.ID(),
 		directoryReadable: state.directoryReadable,
 		watchingDirectory: state.watchingDirectory,
-		lastError:         watchErr,
+		err:               watchErr,
 	}
 	if state.lastStatusEpoch != 0 && sameArtifactWatcherStatus(state.lastStatus, next) {
 		return nil
@@ -355,5 +355,5 @@ func (m *artifactWatcherMeta) propagateStatus(next MessageArtifactWatcherStatusC
 func sameArtifactWatcherStatus(left, right MessageArtifactWatcherStatusChanged) bool {
 	return left.directoryReadable == right.directoryReadable &&
 		left.watchingDirectory == right.watchingDirectory &&
-		runtime.ErrorText(left.lastError) == runtime.ErrorText(right.lastError)
+		runtime.ErrorText(left.err) == runtime.ErrorText(right.err)
 }

@@ -40,7 +40,7 @@ type artifactResolverMetaState struct {
 type artifactResolverMetaStatus struct {
 	lifecycle    ArtifactResolverMetaLifecycle
 	availability runtime.Availability
-	LastError    error
+	err          error
 }
 
 // artifactResolverMeta owns one resolver, checking filesystem readiness and binary checksums for a
@@ -68,7 +68,7 @@ type MessageArtifactResolutionResult struct {
 	snapshotGeneration int64
 	desired            map[string]routerDesiredState
 	deferred           bool
-	LastError          error
+	err                error
 }
 
 // ---------------------------------------------------------------------------
@@ -99,7 +99,7 @@ func (m *artifactResolverMeta) Start() error {
 				snapshotGeneration: request.snapshot.Generation,
 				desired:            desired,
 				deferred:           deferred,
-				LastError:          resolveErr,
+				err:                resolveErr,
 			}, gen.MessagePriorityHigh); err != nil {
 				return fmt.Errorf("%w: send result: %w", ErrArtifactResolve, err)
 			}

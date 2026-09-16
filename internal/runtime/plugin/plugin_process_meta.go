@@ -73,11 +73,9 @@ type pluginMetaStatus struct {
 	lifecycle    PluginMetaLifecycle
 	availability runtime.Availability
 	activity     PluginMetaActivity
-	// Sampled when the activity label changes, never published alone: a publish per invocation would
-	// walk the status chain for a number nothing reads.
-	inFlight  int
-	capacity  int
-	lastError error
+	inFlight     int
+	capacity     int
+	err          error
 }
 
 // pluginMetaSession is the atomically published plugin session.
