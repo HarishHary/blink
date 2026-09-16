@@ -48,6 +48,7 @@ type Application[P Artifact, M any] struct {
 	app.Application
 	opts                ApplicationOptions
 	logger              *logger.Logger
+	lastError           error
 	lifecycle           applicationLifecycle
 	supervisor          gen.PID
 	mu                  sync.Mutex
@@ -98,7 +99,8 @@ func (a *Application[P, M]) Name() gen.Atom {
 func (a *Application[P, M]) SupervisorName() gen.Atom { return SupervisorName(a.opts.Namespace) }
 
 // Load describes the root runtime supervisor managed by Ergo.
-func (a *Application[P, M]) Load(...any) (gen.ApplicationSpec, error) {
+func (a *Application[P, M]) Load(...any) (spec gen.ApplicationSpec, loadErr error) {
+	defer func() { a.setLastError(loadErr) }()
 	supervisorOpts := a.opts.SupervisorOptions
 	readerSet := supervisorOpts.SnapshotReader.Endpoint.Name != "" && supervisorOpts.SnapshotReader.ExecutorID != ""
 	if a.opts.Namespace == "" || a.adapter == nil || a.logger == nil || supervisorOpts.Directory == "" || !readerSet || a.loader == nil || isNilLoader(a.loader) {
@@ -134,6 +136,7 @@ func (a *Application[P, M]) Init(gen.Ref, gen.ApplicationMode) error {
 func (a *Application[P, M]) Start(gen.Ref, gen.ApplicationMode) {
 	supervisor, err := a.Node().ProcessPID(a.SupervisorName())
 	if err != nil {
+		a.setLastError(err)
 		a.logger.ErrorF("lookup plugin runtime supervisor %s: %v", a.SupervisorName(), err)
 		return
 	}
@@ -141,6 +144,7 @@ func (a *Application[P, M]) Start(gen.Ref, gen.ApplicationMode) {
 	if a.lifecycle == applicationNew {
 		a.supervisor = supervisor
 		a.lifecycle = applicationRunning
+		a.lastError = nil
 	}
 	a.mu.Unlock()
 }
@@ -159,6 +163,7 @@ func (a *Application[P, M]) Stop(ref gen.Ref, _ error) {
 	defer cancel()
 	pid, err := a.Node().ProcessPID(a.SupervisorName())
 	if err != nil {
+		a.setLastError(err)
 		a.logger.ErrorF("lookup plugin runtime supervisor %s: %v", a.SupervisorName(), err)
 		return
 	}
@@ -171,6 +176,7 @@ func (a *Application[P, M]) Stop(ref gen.Ref, _ error) {
 		}
 	}
 	if err != nil {
+		a.setLastError(err)
 		a.logger.ErrorF("drain plugin runtime %s: %v", a.SupervisorName(), err)
 	}
 }
@@ -462,7 +468,12 @@ func callTimeoutSeconds(ctx context.Context, fallback time.Duration) int {
 
 // Status queries the supervisor's reconciled status without publishing gauges or propagating it.
 // Application lifecycle is synchronized separately; health and its metrics belong to the supervisor.
-func (a *Application[P, M]) Status(ctx context.Context) (SupervisorStatus, error) {
+func (a *Application[P, M]) Status(ctx context.Context) (result SupervisorStatus, statusErr error) {
+	defer func() {
+		if statusErr != nil {
+			result.LastError = statusErr
+		}
+	}()
 	if err := ctx.Err(); err != nil {
 		return SupervisorStatus{}, err
 	}
@@ -470,10 +481,18 @@ func (a *Application[P, M]) Status(ctx context.Context) (SupervisorStatus, error
 	a.mu.Lock()
 	switch {
 	case a.lifecycle == applicationTerminated:
+		reason := a.supervisorDone.err
 		a.mu.Unlock()
+		if reason != nil {
+			return SupervisorStatus{}, fmt.Errorf("%w: %w", ErrRuntimeStopped, reason)
+		}
 		return SupervisorStatus{}, ErrRuntimeStopped
 	case a.lifecycle == applicationNew:
+		reason := a.lastError
 		a.mu.Unlock()
+		if reason != nil {
+			return SupervisorStatus{}, fmt.Errorf("%w: %w", ErrRuntimeNotStarted, reason)
+		}
 		return SupervisorStatus{}, ErrRuntimeNotStarted
 	}
 	n, supervisor, done := a.Node(), a.supervisor, a.supervisorDone.done
@@ -497,7 +516,17 @@ func (a *Application[P, M]) Status(ctx context.Context) (SupervisorStatus, error
 			response,
 		)
 	}
+	a.mu.Lock()
+	status.Status.LastError = runtime.FirstError(a.lastError, status.Status.LastError)
+	a.mu.Unlock()
 	return status.Status, nil
+}
+
+// setLastError records lifecycle failures under the application lock.
+func (a *Application[P, M]) setLastError(err error) {
+	a.mu.Lock()
+	a.lastError = err
+	a.mu.Unlock()
 }
 
 // State returns the typed snapshot state once this runtime committed and admitted that generation.
