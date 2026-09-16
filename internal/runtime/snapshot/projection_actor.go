@@ -59,11 +59,11 @@ type ProjectionActorState struct {
 
 // ProjectionActorStatus is the projection actor's current runtime status.
 type ProjectionActorStatus struct {
-	LastError           error
 	Lifecycle           ProjectionActorLifecycle
 	Availability        runtime.Availability
 	CommittedGeneration int64
 	PreparedGeneration  int64
+	Err                 error
 }
 
 // ProjectionState is an independently owned typed snapshot view.
@@ -99,6 +99,8 @@ type projectionActor[T any] struct {
 	observed        *parsedProjection[T]
 	committed       *parsedProjection[T]
 	prepared        *parsedProjection[T]
+	lifecycle       ProjectionActorLifecycle // the actor's own live lifecycle
+	err             error                    // the actor's own failure, apart from parse and reader diagnostics
 	lastStatus      ProjectionActorStatus
 	lastStatusEpoch int64
 	labels          telemetry.Labels
@@ -163,6 +165,7 @@ func (a *projectionActor[T]) Init(...any) error {
 	if a.snapshotEvent.Name == "" || a.statusEvent.Name == "" {
 		return fmt.Errorf("snapshot projection: snapshot events are required")
 	}
+	a.lifecycle = ProjectionActorRunning
 	return nil
 }
 
@@ -185,7 +188,7 @@ func (a *projectionActor[T]) HandleMessage(from gen.PID, message any) error {
 				}
 			}
 		}
-		a.reconcileStatus(a.status())
+		a.reconcileStatus()
 	case MessageProjectionCommit:
 		if from != a.Parent() {
 			return nil
@@ -206,7 +209,7 @@ func (a *projectionActor[T]) HandleMessage(from gen.PID, message any) error {
 			}
 		}
 		a.labels.Count(a, metricCommits, telemetry.Result(err))
-		a.reconcileStatus(a.status())
+		a.reconcileStatus()
 		return a.SendWithPriority(a.Parent(), MessageProjectionCommitResult{Generation: m.Generation, ProjectionPID: m.ProjectionPID, Err: err}, gen.MessagePriorityHigh)
 	case gen.MessageDownEvent:
 		if m.Event == a.snapshotEvent || m.Event == a.statusEvent {
@@ -218,11 +221,9 @@ func (a *projectionActor[T]) HandleMessage(from gen.PID, message any) error {
 
 // Terminate retains the actor's failure without changing parse or reader diagnostics.
 func (a *projectionActor[T]) Terminate(reason error) {
-	next := a.status()
-	next.Lifecycle = ProjectionActorStopped
-	next.Availability = runtime.AvailabilityUnavailable
-	next.LastError = runtime.FirstError(reason, next.LastError)
-	a.reconcileStatus(next)
+	a.lifecycle = ProjectionActorStopped
+	a.err = runtime.FirstError(reason, a.err)
+	a.reconcileStatus()
 }
 
 // HandleEvent applies a monitored snapshot or reader status event.
@@ -232,7 +233,7 @@ func (a *projectionActor[T]) HandleEvent(event gen.MessageEvent) error {
 	if a.observed != previous && a.observed != nil && a.observed.err != nil {
 		a.Log().Error("snapshot projection parse failed: generation=%d error=%v", a.observed.generation, a.observed.err)
 	}
-	a.reconcileStatus(a.status())
+	a.reconcileStatus()
 	return err
 }
 
@@ -402,25 +403,26 @@ func (c *ProjectionClient[T]) State(ctx context.Context) (ProjectionState[T], er
 
 // status derives the projection actor's current availability.
 func (a *projectionActor[T]) status() ProjectionActorStatus {
-	if a.lastStatus.Lifecycle == ProjectionActorStopped {
-		return a.lastStatus
+	var observedError error
+	if a.observed != nil {
+		observedError = a.observed.err
 	}
 	status := ProjectionActorStatus{
-		Lifecycle:    ProjectionActorRunning,
+		Lifecycle:    a.lifecycle,
 		Availability: runtime.AvailabilityUnavailable,
-		LastError:    a.readerActor.status.LastError,
-	}
-	if a.observed != nil {
-		status.LastError = runtime.FirstError(a.observed.err, status.LastError)
+		// The actor's own failure wins, then the parse of what it observed, then the reader's.
+		Err: runtime.FirstError(a.err, observedError, a.readerActor.status.Err),
 	}
 	if a.mode == ProjectionCommitExternal && a.prepared != nil {
 		status.PreparedGeneration = a.prepared.generation
 	}
-	if a.committed == nil {
+	if a.committed != nil {
+		status.CommittedGeneration = a.committed.generation
+	}
+	if a.lifecycle == ProjectionActorStopped || a.committed == nil {
 		return status
 	}
-	status.CommittedGeneration = a.committed.generation
-	if a.observed != nil && a.observed.err != nil {
+	if observedError != nil {
 		status.Availability = runtime.AvailabilityDegraded
 		return status
 	}
@@ -443,7 +445,8 @@ func (a *projectionActor[T]) state() ProjectionState[T] {
 }
 
 // reconcileStatus stores and publishes a changed projection snapshot.
-func (a *projectionActor[T]) reconcileStatus(next ProjectionActorStatus) {
+func (a *projectionActor[T]) reconcileStatus() {
+	next := a.status()
 	if sameProjectionActorStatus(a.lastStatus, next) {
 		return
 	}
@@ -465,7 +468,7 @@ func (a *projectionActor[T]) HandleInspect(gen.PID, ...string) map[string]string
 		observedGeneration = a.observed.generation
 	}
 	return map[string]string{
-		"projection:last_error":           runtime.ErrorText(status.LastError),
+		"projection:last_error":           runtime.ErrorText(status.Err),
 		"projection:lifecycle":            string(status.Lifecycle),
 		"projection:availability":         string(status.Availability),
 		"projection:committed_generation": fmt.Sprintf("%d", status.CommittedGeneration),
@@ -482,5 +485,5 @@ func sameProjectionActorStatus(left, right ProjectionActorStatus) bool {
 		left.Availability == right.Availability &&
 		left.CommittedGeneration == right.CommittedGeneration &&
 		left.PreparedGeneration == right.PreparedGeneration &&
-		runtime.ErrorText(left.LastError) == runtime.ErrorText(right.LastError)
+		runtime.ErrorText(left.Err) == runtime.ErrorText(right.Err)
 }
