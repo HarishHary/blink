@@ -28,13 +28,13 @@ var (
 )
 
 // applicationLifecycle tracks only caller-visible application boundaries.
-type applicationLifecycle uint8
+type applicationLifecycle string
 
 const (
-	applicationNew applicationLifecycle = iota
-	applicationRunning
-	applicationStopping
-	applicationTerminated
+	applicationNew        applicationLifecycle = "new"
+	applicationRunning    applicationLifecycle = "running"
+	applicationStopping   applicationLifecycle = "stopping"
+	applicationTerminated applicationLifecycle = "terminated"
 )
 
 // runtimeCompletion pairs a broadcast completion signal with its durable result.
@@ -48,8 +48,6 @@ type Application[P Artifact, M any] struct {
 	app.Application
 	opts                ApplicationOptions
 	logger              *logger.Logger
-	lastError           error
-	lifecycle           applicationLifecycle
 	supervisor          gen.PID
 	mu                  sync.Mutex
 	adapter             *Adapter[P]
@@ -59,6 +57,8 @@ type Application[P Artifact, M any] struct {
 	nextCallID          uint64
 	calls               outstandingCalls
 	supervisorDone      runtimeCompletion
+	lifecycle           applicationLifecycle
+	err                 error
 }
 
 // outstandingCalls indexes the same accepted invocations two ways, under Application.mu.
@@ -100,7 +100,7 @@ func (a *Application[P, M]) SupervisorName() gen.Atom { return SupervisorName(a.
 
 // Load describes the root runtime supervisor managed by Ergo.
 func (a *Application[P, M]) Load(...any) (spec gen.ApplicationSpec, loadErr error) {
-	defer func() { a.setLastError(loadErr) }()
+	defer func() { a.setErr(loadErr) }()
 	supervisorOpts := a.opts.SupervisorOptions
 	readerSet := supervisorOpts.SnapshotReader.Endpoint.Name != "" && supervisorOpts.SnapshotReader.ExecutorID != ""
 	if a.opts.Namespace == "" || a.adapter == nil || a.logger == nil || supervisorOpts.Directory == "" || !readerSet || a.loader == nil || isNilLoader(a.loader) {
@@ -136,7 +136,7 @@ func (a *Application[P, M]) Init(gen.Ref, gen.ApplicationMode) error {
 func (a *Application[P, M]) Start(gen.Ref, gen.ApplicationMode) {
 	supervisor, err := a.Node().ProcessPID(a.SupervisorName())
 	if err != nil {
-		a.setLastError(err)
+		a.setErr(err)
 		a.logger.ErrorF("lookup plugin runtime supervisor %s: %v", a.SupervisorName(), err)
 		return
 	}
@@ -144,7 +144,7 @@ func (a *Application[P, M]) Start(gen.Ref, gen.ApplicationMode) {
 	if a.lifecycle == applicationNew {
 		a.supervisor = supervisor
 		a.lifecycle = applicationRunning
-		a.lastError = nil
+		a.err = nil
 	}
 	a.mu.Unlock()
 }
@@ -163,7 +163,7 @@ func (a *Application[P, M]) Stop(ref gen.Ref, _ error) {
 	defer cancel()
 	pid, err := a.Node().ProcessPID(a.SupervisorName())
 	if err != nil {
-		a.setLastError(err)
+		a.setErr(err)
 		a.logger.ErrorF("lookup plugin runtime supervisor %s: %v", a.SupervisorName(), err)
 		return
 	}
@@ -176,7 +176,7 @@ func (a *Application[P, M]) Stop(ref gen.Ref, _ error) {
 		}
 	}
 	if err != nil {
-		a.setLastError(err)
+		a.setErr(err)
 		a.logger.ErrorF("drain plugin runtime %s: %v", a.SupervisorName(), err)
 	}
 }
@@ -471,7 +471,7 @@ func callTimeoutSeconds(ctx context.Context, fallback time.Duration) int {
 func (a *Application[P, M]) Status(ctx context.Context) (result SupervisorStatus, statusErr error) {
 	defer func() {
 		if statusErr != nil {
-			result.LastError = statusErr
+			result.err = statusErr
 		}
 	}()
 	if err := ctx.Err(); err != nil {
@@ -488,7 +488,7 @@ func (a *Application[P, M]) Status(ctx context.Context) (result SupervisorStatus
 		}
 		return SupervisorStatus{}, ErrRuntimeStopped
 	case a.lifecycle == applicationNew:
-		reason := a.lastError
+		reason := a.err
 		a.mu.Unlock()
 		if reason != nil {
 			return SupervisorStatus{}, fmt.Errorf("%w: %w", ErrRuntimeNotStarted, reason)
@@ -517,15 +517,15 @@ func (a *Application[P, M]) Status(ctx context.Context) (result SupervisorStatus
 		)
 	}
 	a.mu.Lock()
-	status.Status.LastError = runtime.FirstError(a.lastError, status.Status.LastError)
+	status.Status.err = runtime.FirstError(a.err, status.Status.err)
 	a.mu.Unlock()
 	return status.Status, nil
 }
 
-// setLastError records lifecycle failures under the application lock.
-func (a *Application[P, M]) setLastError(err error) {
+// setErr records lifecycle failures under the application lock.
+func (a *Application[P, M]) setErr(err error) {
 	a.mu.Lock()
-	a.lastError = err
+	a.err = err
 	a.mu.Unlock()
 }
 
