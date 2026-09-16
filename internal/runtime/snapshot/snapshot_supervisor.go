@@ -255,7 +255,7 @@ func (s *Supervisor[T]) HandleChildTerminate(_ gen.Atom, pid gen.PID, reason err
 		status.Lifecycle = ReaderActorRestarting
 		status.Availability = runtime.AvailabilityUnavailable
 		if reason != nil {
-			status.LastError = reason.Error()
+			status.LastError = reason
 		}
 		s.reconcileReaderStatus(status)
 		s.propagateExecutorStatus(nil)
@@ -423,7 +423,7 @@ func (s *Supervisor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 		"supervisor:reader_lifecycle":                string(s.readerActor.status.Lifecycle),
 		"supervisor:reader_availability":             string(s.readerActor.status.Availability),
 		"supervisor:reader_generation":               fmt.Sprintf("%d", s.readerActor.status.Generation),
-		"supervisor:reader_last_error":               s.readerActor.status.LastError,
+		"supervisor:reader_last_error":               runtime.ErrorText(s.readerActor.status.LastError),
 		"supervisor:reported_availability":           string(s.executorAvailability()),
 		"supervisor:projection":                      fmt.Sprintf("%s", s.projectionActor.pid),
 		"supervisor:projection_lifecycle":            string(s.projectionActor.status.Lifecycle),
@@ -569,7 +569,7 @@ func (s *Supervisor[T]) propagateExecutorStatus(applied *ExecutorAppliedGenerati
 			Availability:        string(s.executorAvailability()),
 		},
 		Applied:   applied,
-		LastError: s.readerActor.status.LastError,
+		LastError: runtime.ErrorText(s.readerActor.status.LastError),
 	})
 }
 

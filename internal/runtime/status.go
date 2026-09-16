@@ -4,6 +4,14 @@ package runtime
 
 import "time"
 
+// ErrorText returns an empty string for nil errors and the error text otherwise.
+func ErrorText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
 // NextStatusEpoch returns a Unix-nanosecond status version. Repeated or backward
 // clock readings advance one nanosecond past the previous version instead.
 func NextStatusEpoch(previous int64) int64 {

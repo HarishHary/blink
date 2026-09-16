@@ -9,21 +9,7 @@ import (
 )
 
 var (
-	ErrPluginUnavailable = errors.New("plugin unavailable")
-	ErrQueueFull         = errors.New("plugin queue full")
-	ErrArtifactMismatch  = errors.New("plugin artifact checksum mismatch")
-	ErrArtifactScan      = errors.New("plugin artifact scan failed")
-	ErrArtifactWatch     = errors.New("plugin artifact watch failed")
-	ErrArtifactResolve   = errors.New("plugin artifact resolution failed")
-	ErrSnapshotLoad      = errors.New("snapshot state load failed")
-	ErrSnapshotWrite     = errors.New("snapshot write failed")
-	ErrSnapshotRead      = errors.New("snapshot read failed")
-	ErrSnapshotSubscribe = errors.New("snapshot event subscription failed")
-	ErrBackoffStopped    = errors.New("scheduled backoff stopped")
-	ErrRuntimeNotStarted = errors.New("actor runtime not started")
-	ErrRuntimeStopped    = errors.New("actor runtime stopped")
-	ErrProcessRecycle    = errors.New("plugin process recycled after transport failure")
-	ErrProcessUnhealthy  = errors.New("plugin process health check failed")
+	ErrBackoffStopped = errors.New("scheduled backoff stopped")
 )
 
 // ScheduledBackoff tracks a bounded retry or replacement schedule and its pending timer.

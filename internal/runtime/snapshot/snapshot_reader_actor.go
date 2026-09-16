@@ -1,6 +1,7 @@
 package snapshot
 
 import (
+	"errors"
 	"fmt"
 
 	"ergo.services/ergo/act"
@@ -13,6 +14,11 @@ import (
 // ---------------------------------------------------------------------------
 // Types & state
 // ---------------------------------------------------------------------------
+
+var (
+	ErrSnapshotRead      = errors.New("snapshot read failed")
+	ErrSnapshotSubscribe = errors.New("snapshot event subscription failed")
+)
 
 const subscribeTimeoutSeconds = 5
 
@@ -31,7 +37,7 @@ type ReaderActorStatus struct {
 	Lifecycle    ReaderActorLifecycle
 	Availability runtime.Availability
 	Generation   int64
-	LastError    string
+	LastError    error
 }
 
 // readerActor makes one bounded Call to subscribe and then receives pushed SnapshotUpdate messages;
@@ -194,18 +200,18 @@ func (a *readerActor) subscribe() error {
 	response, err := a.CallProcessID(a.opts.Endpoint, request, subscribeTimeoutSeconds)
 	if err != nil {
 		a.labels.Count(a, metricSubscribeAttempts, "unreachable")
-		a.lastError = fmt.Errorf("%w: subscribe: %w", runtime.ErrSnapshotSubscribe, err)
+		a.lastError = fmt.Errorf("%w: subscribe: %w", ErrSnapshotSubscribe, err)
 		return a.scheduleSubscribeRetry()
 	}
 	sub, ok := response.(SubscribeResponse)
 	if !ok {
 		a.labels.Count(a, metricSubscribeAttempts, "bad_response")
-		a.lastError = fmt.Errorf("%w: subscribe: unexpected response %T", runtime.ErrSnapshotSubscribe, response)
+		a.lastError = fmt.Errorf("%w: subscribe: unexpected response %T", ErrSnapshotSubscribe, response)
 		return a.scheduleSubscribeRetry()
 	}
 	if err := a.MonitorPID(sub.ControllerPID); err != nil {
 		a.labels.Count(a, metricSubscribeAttempts, "unmonitorable")
-		a.lastError = fmt.Errorf("%w: monitor controller: %w", runtime.ErrSnapshotSubscribe, err)
+		a.lastError = fmt.Errorf("%w: monitor controller: %w", ErrSnapshotSubscribe, err)
 		return a.scheduleSubscribeRetry()
 	}
 	_ = a.MonitorNode(a.opts.Endpoint.Node)
@@ -303,9 +309,7 @@ func (a *readerActor) status() ReaderActorStatus {
 		Availability: availability,
 		Generation:   a.lastGeneration,
 	}
-	if a.lastError != nil {
-		status.LastError = a.lastError.Error()
-	}
+	status.LastError = a.lastError
 	return status
 }
 
@@ -318,11 +322,12 @@ func (a *readerActor) HandleInspect(gen.PID, ...string) map[string]string {
 		"reader:generation":   fmt.Sprintf("%d", a.lastGeneration),
 		"reader:controller":   fmt.Sprintf("%s", a.controllerPID),
 		"reader:executor_id":  a.opts.ExecutorID,
-		"reader:last_error":   status.LastError,
+		"reader:last_error":   runtime.ErrorText(status.LastError),
 	}
 }
 
 // sameReaderActorStatus compares the status fields that trigger publication.
 func sameReaderActorStatus(left, right ReaderActorStatus) bool {
-	return left == right
+	return left.Lifecycle == right.Lifecycle && left.Availability == right.Availability &&
+		left.Generation == right.Generation && runtime.ErrorText(left.LastError) == runtime.ErrorText(right.LastError)
 }
