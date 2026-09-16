@@ -807,7 +807,7 @@ func (a *actor[T]) scheduleWriterRestart() error {
 // Status
 // ---------------------------------------------------------------------------
 
-// reconcileStatus refreshes gauges on every reconciliation and propagates status only on change.
+// reconcileStatus compares against the pre-handler snapshot so in-place lifecycle changes are published.
 func (a *actor[T]) reconcileStatus(previous actorStatus) {
 	a.publishGauges()
 	next := a.status()

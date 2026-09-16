@@ -49,6 +49,7 @@ type artifactWatcherMetaState struct {
 type artifactWatcherMetaStatus struct {
 	lifecycle    ArtifactWatcherMetaLifecycle
 	availability runtime.Availability
+	lastError    error
 }
 
 // artifactWatcherMeta owns one watcher: fsnotify for latency, a periodic fingerprint for the events
@@ -83,6 +84,7 @@ type MessageArtifactWatcherStatusChanged struct {
 	statusEpoch       int64
 	directoryReadable bool
 	watchingDirectory bool
+	lastError         error
 }
 
 // ---------------------------------------------------------------------------
@@ -109,7 +111,8 @@ func (m *artifactWatcherMeta) Start() error {
 	state := artifactWatcherRunState{watcher: watcher}
 
 	// Directory availability is external: keep polling rather than failing this process.
-	if err := m.tryAttachWatch(&state); err != nil {
+	watchErr := m.tryAttachWatch(&state)
+	if err := watchErr; err != nil {
 		m.Log().Warning("artifact watcher unavailable: directory=%q alias=%s error=%v", m.directory, m.ID(), err)
 	}
 	if fingerprint, err := artifactDirectoryFingerprint(m.directory); err == nil {
@@ -118,10 +121,11 @@ func (m *artifactWatcherMeta) Start() error {
 	} else {
 		state.directoryReadable = false
 		state.watchingDirectory = false
+		watchErr = fmt.Errorf("%w: fingerprint: %w", ErrArtifactWatch, err)
 		m.Log().Warning("artifact watcher unavailable: directory=%q alias=%s error=%v", m.directory, m.ID(), err)
 	}
 
-	if err := m.reconcileStatus(&state, nil); err != nil {
+	if err := m.reconcileStatus(&state, watchErr); err != nil {
 		return err
 	}
 
@@ -322,6 +326,7 @@ func (m *artifactWatcherMeta) reconcileStatus(state *artifactWatcherRunState, wa
 		source:            m.ID(),
 		directoryReadable: state.directoryReadable,
 		watchingDirectory: state.watchingDirectory,
+		lastError:         watchErr,
 	}
 	if state.lastStatusEpoch != 0 && sameArtifactWatcherStatus(state.lastStatus, next) {
 		return nil
@@ -348,5 +353,7 @@ func (m *artifactWatcherMeta) propagateStatus(next MessageArtifactWatcherStatusC
 
 // sameArtifactWatcherStatus compares directory facts, independently of their publication epoch.
 func sameArtifactWatcherStatus(left, right MessageArtifactWatcherStatusChanged) bool {
-	return left.directoryReadable == right.directoryReadable && left.watchingDirectory == right.watchingDirectory
+	return left.directoryReadable == right.directoryReadable &&
+		left.watchingDirectory == right.watchingDirectory &&
+		runtime.ErrorText(left.lastError) == runtime.ErrorText(right.lastError)
 }

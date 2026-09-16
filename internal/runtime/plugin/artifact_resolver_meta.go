@@ -40,6 +40,7 @@ type artifactResolverMetaState struct {
 type artifactResolverMetaStatus struct {
 	lifecycle    ArtifactResolverMetaLifecycle
 	availability runtime.Availability
+	LastError    error
 }
 
 // artifactResolverMeta owns one resolver, checking filesystem readiness and binary checksums for a
@@ -67,6 +68,7 @@ type MessageArtifactResolutionResult struct {
 	snapshotGeneration int64
 	desired            map[string]routerDesiredState
 	deferred           bool
+	LastError          error
 }
 
 // ---------------------------------------------------------------------------
@@ -91,12 +93,13 @@ func (m *artifactResolverMeta) Start() error {
 		case <-m.runCtx.Done():
 			return nil
 		case request := <-m.jobs:
-			desired, deferred := m.buildDesiredRoutes(request.snapshot)
+			desired, deferred, resolveErr := m.buildDesiredRoutes(request.snapshot)
 			if err := m.SendWithPriority(m.Parent(), MessageArtifactResolutionResult{
 				source:             m.ID(),
 				snapshotGeneration: request.snapshot.Generation,
 				desired:            desired,
 				deferred:           deferred,
+				LastError:          resolveErr,
 			}, gen.MessagePriorityHigh); err != nil {
 				return fmt.Errorf("%w: send result: %w", ErrArtifactResolve, err)
 			}
@@ -143,41 +146,50 @@ func (m *artifactResolverMeta) HandleInspect(gen.PID, ...string) map[string]stri
 // ---------------------------------------------------------------------------
 
 // buildDesiredRoutes resolves all enabled snapshot entries into desired routes.
-func (m *artifactResolverMeta) buildDesiredRoutes(snap snapshot.Snapshot) (map[string]routerDesiredState, bool) {
+func (m *artifactResolverMeta) buildDesiredRoutes(snap snapshot.Snapshot) (map[string]routerDesiredState, bool, error) {
 	desired := make(map[string]routerDesiredState)
 
 	deferred := false
+	var resolveErr error
 	for _, entry := range snap.Entries {
 		if !entry.Enabled {
 			continue
 		}
 		route := routerDesiredState{}
-		route.primary, route.primaryDeferred = m.resolveDeployment(entry, entry.Primary)
-		route.candidate, route.candidateDeferred = m.resolveDeployment(entry, entry.Candidate)
+		var primaryErr, candidateErr error
+		route.primary, route.primaryDeferred, primaryErr = m.resolveDeployment(entry, entry.Primary)
+		route.candidate, route.candidateDeferred, candidateErr = m.resolveDeployment(entry, entry.Candidate)
+		resolveErr = runtime.FirstError(resolveErr, primaryErr, candidateErr)
 		deferred = deferred || route.primaryDeferred || route.candidateDeferred
 		desired[entry.Id] = route
 	}
-	return desired, deferred
+	return desired, deferred, resolveErr
 }
 
 // resolveDeployment validates and resolves an artifact reference into a deployment.
-func (m *artifactResolverMeta) resolveDeployment(entry snapshot.EffectiveEntry, ref *snapshot.ArtifactRef) (*Deployment, bool) {
+func (m *artifactResolverMeta) resolveDeployment(entry snapshot.EffectiveEntry, ref *snapshot.ArtifactRef) (*Deployment, bool, error) {
 	if ref == nil || !entry.Enabled {
-		return nil, false
+		return nil, false, nil
 	}
 	if ref.Name == "" || filepath.Base(ref.Name) != ref.Name || !filepath.IsLocal(ref.Name) || ref.Hash == "" {
-		return nil, true
+		return nil, true, fmt.Errorf("%w: invalid artifact reference %q", ErrArtifactResolve, ref.Name)
 	}
 
 	var spec Spec
-	if err := yaml.Unmarshal(ref.Spec, &spec); err != nil || !spec.Enabled || spec.Id != entry.Id {
-		return nil, true
+	if err := yaml.Unmarshal(ref.Spec, &spec); err != nil {
+		return nil, true, fmt.Errorf("%w: parse %q: %w", ErrArtifactResolve, ref.Name, err)
+	}
+	if !spec.Enabled || spec.Id != entry.Id {
+		return nil, true, fmt.Errorf("%w: invalid spec %q", ErrArtifactResolve, ref.Name)
 	}
 
 	path := filepath.Join(m.directory, ref.Name)
 	digest, err := helpers.BinaryChecksum(path)
-	if err != nil || ref.Hash != digest {
-		return nil, true
+	if err != nil {
+		return nil, true, fmt.Errorf("%w: checksum %q: %w", ErrArtifactResolve, ref.Name, err)
+	}
+	if ref.Hash != digest {
+		return nil, true, fmt.Errorf("%w: %q: %w", ErrArtifactResolve, ref.Name, ErrArtifactMismatch)
 	}
 
 	return &Deployment{
@@ -192,5 +204,5 @@ func (m *artifactResolverMeta) resolveDeployment(entry snapshot.EffectiveEntry, 
 		Path:                         path,
 		Hash:                         digest,
 		Spec:                         append([]byte(nil), ref.Spec...),
-	}, false
+	}, false, nil
 }
