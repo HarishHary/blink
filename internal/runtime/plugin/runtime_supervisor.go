@@ -45,13 +45,13 @@ const (
 
 // SupervisorStatus is the authoritative public status the runtime supervisor publishes.
 type SupervisorStatus struct {
-	LastError       error
 	Lifecycle       SupervisorLifecycle
 	Availability    runtime.Availability
 	DesiredRevision uint64
 	Transition      SupervisorTransitionPhase
 	Catalog         catalogActorStatus
 	Reconciler      reconcilerActorStatus
+	err             error
 }
 
 // clone returns an independent copy of the runtime status.
@@ -98,8 +98,10 @@ type supervisor[P Artifact, M any] struct {
 	radarLogged               bool
 	labels                    telemetry.Labels
 	signal                    telemetry.Signal
-	lastStatus                SupervisorStatus
-	lastError                 error
+	lifecycle                 SupervisorLifecycle       // the supervisor's own live lifecycle
+	transition                SupervisorTransitionPhase // the live revision-transition phase
+	err                       error                     // the supervisor's own failure, kept apart from its children's errors
+	lastStatus                SupervisorStatus          // last reconciled projection; queries read live state instead
 }
 
 // ---------------------------------------------------------------------------
@@ -189,7 +191,7 @@ func (s *supervisor[P, M]) Init(...any) (act.SupervisorSpec, error) {
 	}
 
 	s.inFlightCalls = make(map[uint64]runtimeCall)
-	s.lastStatus.Lifecycle = SupervisorStarting
+	s.lifecycle = SupervisorStarting
 	s.catalog.status = newCatalogStatus(nil)
 	s.projection.Retry = runtime.NewScheduledBackoff(s.opts.RetryMin, s.opts.RetryMax)
 	s.reconciler.status = reconcilerActorStatus{
@@ -252,15 +254,15 @@ func (s *supervisor[P, M]) HandleCall(from gen.PID, ref gen.Ref, request any) (a
 	defer s.reconcileStatus()
 	switch request.(type) {
 	case DrainRequest:
-		if s.lastStatus.Lifecycle == SupervisorStopped {
+		if s.lifecycle == SupervisorStopped {
 			return DrainResponse{Err: ErrRuntimeStopped}, nil
 		}
 		s.drainWaiters = append(s.drainWaiters, runtimeDrainWaiter{pid: from, ref: ref})
-		if s.lastStatus.Lifecycle == SupervisorDraining {
+		if s.lifecycle == SupervisorDraining {
 			return nil, nil
 		}
 
-		s.lastStatus.Lifecycle = SupervisorDraining
+		s.lifecycle = SupervisorDraining
 		s.cancelProjectionDeadline()
 		if s.catalog.pid != (gen.PID{}) {
 			// Keep the drain behind invocations already forwarded to the catalog.
@@ -269,7 +271,7 @@ func (s *supervisor[P, M]) HandleCall(from gen.PID, ref gen.Ref, request any) (a
 		return nil, nil
 
 	case SupervisorStatusRequest:
-		return SupervisorStatusResponse{Status: s.lastStatus.clone()}, nil
+		return SupervisorStatusResponse{Status: s.status().clone()}, nil
 
 	case SupervisorStateRequest:
 		if !s.supervisorStateReader() {
@@ -353,8 +355,8 @@ func (s *supervisor[P, M]) HandleMessage(from gen.PID, message any) error {
 		if m.status.snapshotGeneration != s.desiredState.snapshotGeneration ||
 			m.status.revision != s.desiredState.desiredRevision ||
 			m.status.availability != runtime.AvailabilityReady {
-			if s.lastStatus.Transition != SupervisorTransitionIdle {
-				s.lastStatus.Transition = SupervisorTransitionPreparing
+			if s.transition != SupervisorTransitionIdle {
+				s.transition = SupervisorTransitionPreparing
 			}
 		}
 		s.completeDesiredStateTransition()
@@ -362,14 +364,14 @@ func (s *supervisor[P, M]) HandleMessage(from gen.PID, message any) error {
 
 	case MessageDesiredStateFreshness:
 		if from != s.reconciler.pid ||
-			s.lastStatus.Transition != SupervisorTransitionAwaitingFreshness ||
+			s.transition != SupervisorTransitionAwaitingFreshness ||
 			s.pendingDesiredState.desiredRevision != 0 ||
 			m.snapshotGeneration != s.transitionGeneration ||
 			m.snapshotGeneration != s.desiredState.snapshotGeneration ||
 			m.desiredRevision != s.desiredState.desiredRevision {
 			return nil
 		}
-		s.lastStatus.Transition = SupervisorTransitionAwaitingProjection
+		s.transition = SupervisorTransitionAwaitingProjection
 		if s.projection.ReadyGeneration == m.snapshotGeneration &&
 			s.projection.CommittedGeneration == m.snapshotGeneration {
 			s.finishDesiredStateTransition()
@@ -411,7 +413,7 @@ func (s *supervisor[P, M]) HandleMessage(from gen.PID, message any) error {
 			m.projectionPID != s.projection.PendingPID {
 			return nil
 		}
-		s.lastError = fmt.Errorf("projection commit deadline: %w", context.DeadlineExceeded)
+		s.err = fmt.Errorf("projection commit deadline: %w", context.DeadlineExceeded)
 		s.projection.DeadlineCancel = nil
 		s.projection.PendingGeneration = 0
 		s.projection.PendingPID = gen.PID{}
@@ -419,8 +421,8 @@ func (s *supervisor[P, M]) HandleMessage(from gen.PID, message any) error {
 
 	case MessageProposeDesiredState:
 		if from != s.reconciler.pid ||
-			s.lastStatus.Lifecycle == SupervisorDraining ||
-			s.lastStatus.Lifecycle == SupervisorStopped ||
+			s.lifecycle == SupervisorDraining ||
+			s.lifecycle == SupervisorStopped ||
 			m.desired.desiredRevision <= s.desiredState.desiredRevision ||
 			m.desired.desiredRevision <= s.pendingDesiredState.desiredRevision ||
 			m.desired.snapshotGeneration < s.desiredState.snapshotGeneration ||
@@ -463,7 +465,7 @@ func (s *supervisor[P, M]) HandleMessage(from gen.PID, message any) error {
 		s.finishDesiredStateTransition()
 
 	case MessageCatalogDrained:
-		if s.lastStatus.Lifecycle != SupervisorDraining ||
+		if s.lifecycle != SupervisorDraining ||
 			from != s.catalog.pid ||
 			m.pid != s.catalog.pid {
 			return nil
@@ -511,14 +513,14 @@ func (s *supervisor[P, M]) HandleChildTerminate(name gen.Atom, pid gen.PID, reas
 		if s.snapshot.Pid == pid {
 			s.snapshot.Pid = gen.PID{}
 			s.projection.ReadyGeneration = 0
-			s.projection.Status.LastError = reason
+			s.projection.Status.Err = reason
 		}
 
 	case s.reconcilerActorName():
 		s.labels.Count(s, metricChildTerminations, "reconciler", telemetry.TerminationReason(reason))
 		if s.reconciler.pid == pid {
 			s.retireReconcilerActor(pid)
-			s.reconciler.status.lastError = reason
+			s.reconciler.status.err = reason
 		}
 
 	case s.catalogActorName():
@@ -531,8 +533,8 @@ func (s *supervisor[P, M]) HandleChildTerminate(name gen.Atom, pid gen.PID, reas
 // Terminate stops the runtime supervisor and completes outstanding calls.
 func (s *supervisor[P, M]) Terminate(reason error) {
 	defer s.reconcileStatus()
-	s.lastStatus.Lifecycle = SupervisorStopped
-	s.lastError = reason
+	s.lifecycle = SupervisorStopped
+	s.err = reason
 	s.cancelProjectionCommitRetry(false)
 	s.cancelProjectionDeadline()
 	for callID := range s.inFlightCalls {
@@ -561,9 +563,9 @@ func (s *supervisor[P, M]) finishCall(callID uint64, err error) {
 
 // promotePendingDesiredState applies the latest proposal after tracked calls drain.
 func (s *supervisor[P, M]) promotePendingDesiredState() error {
-	if s.lastStatus.Lifecycle == SupervisorDraining ||
-		s.lastStatus.Lifecycle == SupervisorStopped ||
-		s.lastStatus.Transition == SupervisorTransitionIdle ||
+	if s.lifecycle == SupervisorDraining ||
+		s.lifecycle == SupervisorStopped ||
+		s.transition == SupervisorTransitionIdle ||
 		len(s.inFlightCalls) != 0 ||
 		s.pendingDesiredState.desiredRevision == 0 ||
 		s.pendingDesiredState.snapshotGeneration != s.transitionGeneration {
@@ -586,11 +588,14 @@ func (s *supervisor[P, M]) promotePendingDesiredState() error {
 
 // beginPendingDesiredStateTransition closes admission only after the target projection is prepared.
 func (s *supervisor[P, M]) beginPendingDesiredStateTransition() error {
-	if s.lastStatus.Lifecycle == SupervisorDraining || s.lastStatus.Lifecycle == SupervisorStopped || s.pendingDesiredState.desiredRevision == 0 || !s.pendingProjectionReady() {
+	if s.lifecycle == SupervisorDraining ||
+		s.lifecycle == SupervisorStopped ||
+		s.pendingDesiredState.desiredRevision == 0 ||
+		!s.pendingProjectionReady() {
 		return nil
 	}
 
-	s.lastStatus.Transition = SupervisorTransitionPreparing
+	s.transition = SupervisorTransitionPreparing
 	s.transitionGeneration = s.pendingDesiredState.snapshotGeneration
 	s.cancelProjectionCommitRetry(false)
 	s.cancelProjectionDeadline()
@@ -625,14 +630,14 @@ func (s *supervisor[P, M]) completeDesiredStateTransition() {
 		snapshotGeneration: s.transitionGeneration,
 		desiredRevision:    s.desiredState.desiredRevision,
 	}, gen.MessagePriorityHigh); err == nil {
-		s.lastStatus.Transition = SupervisorTransitionAwaitingFreshness
+		s.transition = SupervisorTransitionAwaitingFreshness
 	}
 }
 
 // desiredStateTransitionReadyToCommit reports whether every dependency converged; a router that
 // failed for good counts as settled, so one lost plugin cannot hold a transition open.
 func (s *supervisor[P, M]) desiredStateTransitionReadyToCommit() bool {
-	return s.lastStatus.Transition == SupervisorTransitionPreparing &&
+	return s.transition == SupervisorTransitionPreparing &&
 		s.pendingDesiredState.desiredRevision == 0 &&
 		s.reconciler.status.snapshotGeneration == s.transitionGeneration &&
 		s.reconciler.status.availability == runtime.AvailabilityReady &&
@@ -645,7 +650,7 @@ func (s *supervisor[P, M]) desiredStateTransitionReadyToCommit() bool {
 
 // finishDesiredStateTransition reopens admission after every current dependency converges.
 func (s *supervisor[P, M]) finishDesiredStateTransition() {
-	if s.lastStatus.Transition != SupervisorTransitionAwaitingProjection ||
+	if s.transition != SupervisorTransitionAwaitingProjection ||
 		s.pendingDesiredState.desiredRevision != 0 ||
 		s.projection.ReadyGeneration != s.transitionGeneration ||
 		s.projection.CommittedGeneration != s.transitionGeneration ||
@@ -660,7 +665,7 @@ func (s *supervisor[P, M]) finishDesiredStateTransition() {
 		s.catalog.status.settledRouters != s.catalog.status.desiredRouters {
 		return
 	}
-	s.lastStatus.Transition = SupervisorTransitionIdle
+	s.transition = SupervisorTransitionIdle
 }
 
 // acceptsSubmission reports whether the runtime can accept an invocation.
@@ -673,9 +678,9 @@ func (s *supervisor[P, M]) acceptsSubmission(expectedGeneration int64) bool {
 		s.projection.Status.CommittedGeneration == expectedGeneration &&
 		expectedGeneration == s.desiredState.snapshotGeneration &&
 		s.catalog.status.desiredRevision == s.desiredState.desiredRevision &&
-		s.lastStatus.Lifecycle != SupervisorDraining &&
-		s.lastStatus.Lifecycle != SupervisorStopped &&
-		s.lastStatus.Transition == SupervisorTransitionIdle &&
+		s.lifecycle != SupervisorDraining &&
+		s.lifecycle != SupervisorStopped &&
+		s.transition == SupervisorTransitionIdle &&
 		s.projectionReady() &&
 		s.catalog.pid != (gen.PID{})
 }
@@ -705,7 +710,9 @@ func (s *supervisor[P, M]) supervisorStateReader() bool {
 		s.desiredState.snapshotGeneration == s.projection.ReadyGeneration &&
 		s.catalog.status.desiredRevision == s.desiredState.desiredRevision &&
 		s.catalog.status.availability.Routable() &&
-		s.lastStatus.Transition == SupervisorTransitionIdle && s.lastStatus.Lifecycle != SupervisorDraining && s.lastStatus.Lifecycle != SupervisorStopped
+		s.transition == SupervisorTransitionIdle &&
+		s.lifecycle != SupervisorDraining &&
+		s.lifecycle != SupervisorStopped
 }
 
 // ---------------------------------------------------------------------------
@@ -739,19 +746,19 @@ func (s *supervisor[P, M]) startReconcilerActor(pid gen.PID) error {
 		return nil
 	}
 	state.statusEpoch = 0
-	if s.lastStatus.Transition != SupervisorTransitionIdle {
-		s.lastStatus.Transition = SupervisorTransitionPreparing
+	if s.transition != SupervisorTransitionIdle {
+		s.transition = SupervisorTransitionPreparing
 	}
 	state.pid = pid
 	state.status = reconcilerActorStatus{
-		lastError:    state.status.lastError,
+		err:          state.status.err,
 		lifecycle:    ReconcilerActorStarting,
 		availability: runtime.AvailabilityUnavailable,
 	}
 
 	revisionBase := max(s.pendingDesiredState.desiredRevision, s.desiredState.desiredRevision)
 	if err := s.SendWithPriority(pid, MessageReconcilerActorActivate{revisionBase: revisionBase}, gen.MessagePriorityHigh); err != nil {
-		state.status.lastError = err
+		state.status.err = err
 		_ = s.Node().SendExit(
 			pid,
 			fmt.Errorf("activate desired-state reconciler: %w", err),
@@ -768,23 +775,23 @@ func (s *supervisor[P, M]) startCatalogActor(pid gen.PID) error {
 	}
 	state.statusEpoch = 0
 	state.pid = pid
-	state.status = newCatalogStatus(state.status.lastError)
+	state.status = newCatalogStatus(state.status.err)
 
 	if err := s.SendWithPriority(pid, MessageCatalogActivate{}, gen.MessagePriorityHigh); err != nil {
-		state.status.lastError = err
+		state.status.err = err
 		_ = s.Node().SendExit(pid, fmt.Errorf("activate catalog: %w", err))
 		return nil
 	}
 	if s.desiredState.desiredRevision != 0 {
 		if err := s.SendWithPriority(pid, s.desiredState, gen.MessagePriorityHigh); err != nil {
-			state.status.lastError = err
+			state.status.err = err
 			_ = s.Node().SendExit(pid, fmt.Errorf("replay desired state to catalog: %w", err))
 			return nil
 		}
 	}
-	if s.lastStatus.Lifecycle == SupervisorDraining {
+	if s.lifecycle == SupervisorDraining {
 		if err := s.Send(pid, MessageDrain{}); err != nil {
-			state.status.lastError = err
+			state.status.err = err
 			_ = s.Node().SendExit(
 				pid,
 				fmt.Errorf("drain replacement catalog: %w", err),
@@ -802,8 +809,8 @@ func (s *supervisor[P, M]) retireReconcilerActor(pid gen.PID) {
 	}
 
 	state.pid = gen.PID{}
-	if s.lastStatus.Transition != SupervisorTransitionIdle {
-		s.lastStatus.Transition = SupervisorTransitionPreparing
+	if s.transition != SupervisorTransitionIdle {
+		s.transition = SupervisorTransitionPreparing
 	}
 	state.status.lifecycle = ReconcilerActorRestarting
 	state.status.availability = runtime.AvailabilityUnavailable
@@ -819,7 +826,7 @@ func (s *supervisor[P, M]) retireCatalogActor(pid gen.PID, reason error) {
 	state.pid = gen.PID{}
 	state.status.lifecycle = CatalogActorRestarting
 	state.status.availability = runtime.AvailabilityUnavailable
-	state.status.lastError = reason
+	state.status.err = reason
 
 	for callID, call := range s.inFlightCalls {
 		if call.catalog == pid {
@@ -885,7 +892,7 @@ func (s *supervisor[P, M]) handleProjectionCommitResult(m snapshot.MessageProjec
 	s.labels.Count(s, metricProjectionCommits, telemetry.Result(m.Err))
 	if m.Err != nil {
 		if s.adoptAuthoritativeProjectionPID(m.ProjectionPID) {
-			s.lastError = m.Err
+			s.err = m.Err
 			s.cancelProjectionDeadline()
 			s.cancelProjectionCommitRetry(false)
 			return s.requestProjectionCommit()
@@ -896,7 +903,7 @@ func (s *supervisor[P, M]) handleProjectionCommitResult(m snapshot.MessageProjec
 		if s.projection.ReadyGeneration == m.Generation {
 			return nil
 		}
-		s.lastError = m.Err
+		s.err = m.Err
 		s.cancelProjectionDeadline()
 		s.projection.PendingGeneration = 0
 		s.projection.PendingPID = gen.PID{}
@@ -907,7 +914,7 @@ func (s *supervisor[P, M]) handleProjectionCommitResult(m snapshot.MessageProjec
 	}
 	s.cancelProjectionDeadline()
 	s.projection.ReadyGeneration = m.Generation
-	s.lastError = nil
+	s.err = nil
 	s.projection.PendingGeneration = 0
 	s.projection.PendingPID = gen.PID{}
 	s.cancelProjectionCommitRetry(true)
@@ -921,8 +928,8 @@ func (s *supervisor[P, M]) handleProjectionCommitResult(m snapshot.MessageProjec
 // requestProjectionCommit asks the snapshot supervisor to commit the projection.
 func (s *supervisor[P, M]) requestProjectionCommit() error {
 	if s.Process == nil ||
-		s.lastStatus.Lifecycle == SupervisorDraining ||
-		s.lastStatus.Lifecycle == SupervisorStopped ||
+		s.lifecycle == SupervisorDraining ||
+		s.lifecycle == SupervisorStopped ||
 		s.snapshot.Pid == (gen.PID{}) ||
 		s.projection.CommittedGeneration == 0 ||
 		s.projection.Retry.Pending ||
@@ -939,11 +946,11 @@ func (s *supervisor[P, M]) requestProjectionCommit() error {
 		Generation:    s.projection.PendingGeneration,
 		ProjectionPID: s.projection.PendingPID,
 	}, gen.MessagePriorityHigh); err != nil {
-		s.lastError = err
+		s.err = err
 		return s.scheduleProjectionCommitRetry()
 	}
 	if err := s.scheduleProjectionDeadline(); err != nil {
-		s.lastError = err
+		s.err = err
 		s.projection.PendingGeneration = 0
 		s.projection.PendingPID = gen.PID{}
 		return s.scheduleProjectionCommitRetry()
@@ -953,8 +960,8 @@ func (s *supervisor[P, M]) requestProjectionCommit() error {
 
 // scheduleProjectionCommitRetry schedules another projection commit attempt.
 func (s *supervisor[P, M]) scheduleProjectionCommitRetry() error {
-	if s.lastStatus.Lifecycle == SupervisorDraining ||
-		s.lastStatus.Lifecycle == SupervisorStopped ||
+	if s.lifecycle == SupervisorDraining ||
+		s.lifecycle == SupervisorStopped ||
 		s.projection.Retry.Pending ||
 		s.projection.CommittedGeneration == 0 {
 		return nil
@@ -1015,11 +1022,11 @@ func (s *supervisor[P, M]) cancelProjectionDeadline() {
 // ---------------------------------------------------------------------------
 
 // newCatalogStatus returns an initial catalog status for an actor incarnation.
-func newCatalogStatus(lastError error) catalogActorStatus {
+func newCatalogStatus(err error) catalogActorStatus {
 	return catalogActorStatus{
 		lifecycle:    CatalogActorStarting,
 		availability: runtime.AvailabilityUnavailable,
-		lastError:    lastError,
+		err:          err,
 		routers:      make(map[string]routerActorStatus),
 	}
 }
@@ -1029,35 +1036,36 @@ func (s *supervisor[P, M]) mergeCatalogStatus(status catalogActorStatus) {
 	state := &s.catalog
 	next := status.clone()
 	if next.lifecycle == CatalogActorRunning {
-		if s.lastStatus.Lifecycle != SupervisorDraining &&
-			s.lastStatus.Lifecycle != SupervisorStopped {
-			s.lastStatus.Lifecycle = SupervisorRunning
+		if s.lifecycle != SupervisorDraining &&
+			s.lifecycle != SupervisorStopped {
+			s.lifecycle = SupervisorRunning
 		}
-	} else if next.lastError == nil {
-		next.lastError = state.status.lastError
+	} else if next.err == nil {
+		next.err = state.status.err
 	}
 	state.status = next
 }
 
-// status computes the current publishable runtime status, shared by reconcileStatus (which caches it as
-// lastStatus) and HandleInspect (to an operator).
+// status computes the current runtime status, shared by the status query, the gauges, and
+// HandleInspect (to an operator). Nothing caches it: the supervisor publishes no status message, so a
+// query is answered from live state rather than from whatever the last callback happened to leave.
 func (s *supervisor[P, M]) status() SupervisorStatus {
-	lifecycle := s.lastStatus.Lifecycle
+	lifecycle := s.lifecycle
 	if lifecycle == "" {
 		lifecycle = SupervisorStarting
 	}
 	return SupervisorStatus{
-		LastError:       runtime.FirstError(s.lastError, s.catalog.status.lastError, s.reconciler.status.lastError, s.projection.Status.LastError),
+		err:             runtime.FirstError(s.err, s.catalog.status.err, s.reconciler.status.err, s.projection.Status.Err),
 		Lifecycle:       lifecycle,
 		Availability:    s.runtimeAvailability(),
 		DesiredRevision: s.currentDesiredRevision(),
-		Transition:      s.lastStatus.Transition,
+		Transition:      s.transition,
 		Catalog:         s.catalog.status.clone(),
 		Reconciler:      s.reconciler.status,
 	}
 }
 
-// reconcileStatus refreshes the queryable status, gauges, and readiness after each callback.
+// reconcileStatus records the projection, then refreshes gauges and readiness after each callback.
 func (s *supervisor[P, M]) reconcileStatus() {
 	s.lastStatus = s.status()
 	s.publishGauges()
@@ -1066,16 +1074,16 @@ func (s *supervisor[P, M]) reconcileStatus() {
 
 // propagateReadiness updates Radar from current subtree health without publishing status messages.
 func (s *supervisor[P, M]) propagateReadiness() {
-	s.signal.SetReady(s, s.lastStatus.Lifecycle == SupervisorRunning && s.runtimeAvailability() == runtime.AvailabilityReady)
+	s.signal.SetReady(s, s.lifecycle == SupervisorRunning && s.runtimeAvailability() == runtime.AvailabilityReady)
 }
 
 // publishGauges publishes current values without changing state or propagating status.
 func (s *supervisor[P, M]) publishGauges() {
 	processesReady, processesDesired, queueDepth, activeCalls := s.routeTotals()
 	runtimeGauges{
-		lifecycle:              s.lastStatus.Lifecycle,
+		lifecycle:              s.lifecycle,
 		availability:           s.runtimeAvailability(),
-		transition:             s.lastStatus.Transition,
+		transition:             s.transition,
 		desiredRevision:        s.currentDesiredRevision(),
 		readyGeneration:        s.projection.ReadyGeneration,
 		committedGeneration:    s.projection.CommittedGeneration,
@@ -1157,15 +1165,15 @@ func (s *supervisor[P, M]) radarUnavailableOnce(err error) {
 func (s *supervisor[P, M]) HandleInspect(gen.PID, ...string) map[string]string {
 	status := s.status()
 	return map[string]string{
-		"runtime:last_error":                      runtime.ErrorText(status.LastError),
+		"runtime:last_error":                      runtime.ErrorText(status.err),
 		"runtime:lifecycle":                       string(status.Lifecycle),
 		"runtime:availability":                    string(status.Availability),
 		"runtime:readiness_signal":                s.signal.State(),
 		"runtime:desired_revision":                fmt.Sprintf("%d", status.DesiredRevision),
 		"runtime:transition":                      fmt.Sprintf("%d", status.Transition),
-		"runtime:catalog:last_error":              runtime.ErrorText(status.Catalog.lastError),
-		"runtime:reconciler:last_error":           runtime.ErrorText(status.Reconciler.lastError),
-		"runtime:projection:last_error":           runtime.ErrorText(s.projection.Status.LastError),
+		"runtime:catalog:last_error":              runtime.ErrorText(status.Catalog.err),
+		"runtime:reconciler:last_error":           runtime.ErrorText(status.Reconciler.err),
+		"runtime:projection:last_error":           runtime.ErrorText(s.projection.Status.Err),
 		"runtime:catalog:lifecycle":               string(status.Catalog.lifecycle),
 		"runtime:catalog:availability":            string(status.Catalog.availability),
 		"runtime:catalog:routers":                 fmt.Sprintf("%d", status.Catalog.desiredRouters),
@@ -1180,7 +1188,10 @@ func (s *supervisor[P, M]) HandleInspect(gen.PID, ...string) map[string]string {
 
 // runtimeAvailability derives runtime availability from child component status.
 func (s *supervisor[P, M]) runtimeAvailability() runtime.Availability {
-	if s.lastStatus.Lifecycle == SupervisorDraining || s.lastStatus.Lifecycle == SupervisorStopped || s.lastStatus.Transition != SupervisorTransitionIdle || !s.projectionReady() ||
+	if s.lifecycle == SupervisorDraining ||
+		s.lifecycle == SupervisorStopped ||
+		s.transition != SupervisorTransitionIdle ||
+		!s.projectionReady() ||
 		s.projection.Status.Availability == runtime.AvailabilityUnavailable ||
 		s.catalog.status.availability == runtime.AvailabilityUnavailable {
 		return runtime.AvailabilityUnavailable
