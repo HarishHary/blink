@@ -33,6 +33,7 @@ type deploymentRouteStatus struct {
 	queueDepth       int
 	activeCalls      int
 	processes        map[gen.PID]pluginProcessActorStatus
+	lastError        error
 }
 
 // ---------------------------------------------------------------------------
@@ -50,7 +51,7 @@ func (s deploymentRouteStatus) clone() deploymentRouteStatus {
 // sameDeploymentRouteStatus compares route status snapshots.
 func sameDeploymentRouteStatus(left, right deploymentRouteStatus) bool {
 	if left.lifecycle != right.lifecycle ||
-		left.availability != right.availability ||
+		left.availability != right.availability || runtime.ErrorText(left.lastError) != runtime.ErrorText(right.lastError) ||
 		left.readyProcs != right.readyProcs ||
 		left.desiredProcesses != right.desiredProcesses ||
 		left.queueDepth != right.queueDepth ||

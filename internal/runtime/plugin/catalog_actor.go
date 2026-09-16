@@ -32,8 +32,7 @@ type catalogActorState struct {
 	statusEpoch int64
 }
 
-// catalogActorStatus is owned by catalogActor, except LastError, which the supervisor owns because
-// it replaces incarnations.
+// catalogActorStatus reports aggregate router health; the supervisor also records incarnation failures.
 type catalogActorStatus struct {
 	lifecycle          CatalogActorLifecycle
 	availability       runtime.Availability
@@ -251,7 +250,6 @@ func (a *catalogActor[T]) HandleMessage(from gen.PID, message any) error {
 
 		next := m.status.clone()
 		a.cancelRouterRestartBackoff(m.pluginID, true)
-		next.lastError = nil
 		ref.status = next
 		a.reconcileStatus()
 
@@ -565,6 +563,8 @@ func (a *catalogActor[T]) status() catalogActorStatus {
 	degraded := 0
 	unavailable := 0
 	settled := 0
+	var lastError error
+	var errorRouter string
 
 	for id := range a.desired {
 		ref := a.routers[id]
@@ -578,6 +578,9 @@ func (a *catalogActor[T]) status() catalogActorStatus {
 		}
 
 		status := ref.status.clone()
+		if status.lastError != nil && (lastError == nil || id < errorRouter) {
+			lastError, errorRouter = status.lastError, id
+		}
 		routers[id] = status
 		if status.normalRoutable {
 			routable++
@@ -625,6 +628,7 @@ func (a *catalogActor[T]) status() catalogActorStatus {
 		unavailableRouters: unavailable,
 		settledRouters:     settled,
 		routers:            routers,
+		lastError:          lastError,
 	}
 }
 
@@ -656,6 +660,7 @@ func (a *catalogActor[T]) propagateStatus(next catalogActorStatus) {
 func (a *catalogActor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 	status := a.status()
 	return map[string]string{
+		"catalog:last_error":       runtime.ErrorText(status.lastError),
 		"catalog:lifecycle":        string(status.lifecycle),
 		"catalog:availability":     string(status.availability),
 		"catalog:desired_revision": fmt.Sprintf("%d", status.desiredRevision),
@@ -679,10 +684,11 @@ func routerSettled(status routerActorStatus, revision uint64) bool {
 		status.candidate.lifecycle == DeploymentRouteFailed
 }
 
-// sameCatalogActorStatus compares publishable status, excluding the supervisor-owned lastError.
+// sameCatalogActorStatus compares publishable status, including aggregate failures.
 func sameCatalogActorStatus(left, right catalogActorStatus) bool {
 	if left.lifecycle != right.lifecycle ||
 		left.availability != right.availability ||
+		runtime.ErrorText(left.lastError) != runtime.ErrorText(right.lastError) ||
 		left.desiredRevision != right.desiredRevision ||
 		left.desiredRouters != right.desiredRouters ||
 		left.routableRouters != right.routableRouters ||
