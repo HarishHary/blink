@@ -51,7 +51,7 @@ type ProcessorSupervisorOptions struct {
 	Writer           KafkaWriterActorOptions
 	DLQWriter        KafkaWriterActorOptions
 	Coordinator      gen.ProcessFactory
-	JobPool          *JobPoolOptions
+	JobPool          JobPoolOptions
 	MailboxSize      int64
 	RestartIntensity uint16
 	RestartPeriod    uint16
@@ -116,12 +116,7 @@ func validateProcessorSupervisorOptions(opts ProcessorSupervisorOptions) error {
 			return fmt.Errorf("processor supervisor: %s writer destination must be %q", configuredWriter.role, configuredWriter.role)
 		}
 	}
-	if opts.JobPool != nil {
-		pool := *opts.JobPool
-		pool.Namespace = opts.Namespace
-		if err := validateJobPoolOptions(pool); err != nil {
-			return err
-		}
-	}
-	return nil
+	pool := opts.JobPool
+	pool.Namespace = opts.Namespace
+	return validateJobPoolOptions(pool)
 }
