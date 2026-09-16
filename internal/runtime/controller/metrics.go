@@ -98,7 +98,7 @@ var (
 		},
 
 		// supervisor
-		{Kind: telemetry.Gauge, Name: metricSupervisorLifecycle, Help: "Supervisor lifecycle: 0 starting, 1 running, 2 draining, 3 stopping", Labels: namespaceLabels},
+		{Kind: telemetry.Gauge, Name: metricSupervisorLifecycle, Help: "Supervisor lifecycle: 0 starting, 1 running, 2 draining, 3 stopping, 4 stopped", Labels: namespaceLabels},
 		{Kind: telemetry.Gauge, Name: metricWriterFences, Help: "Writer I/O fences a drain is still waiting on", Labels: namespaceLabels},
 		{Kind: telemetry.Counter, Name: metricChildStarts, Help: "Controller actors the supervisor has started", Labels: namespaceLabels},
 		{Kind: telemetry.Counter, Name: metricChildTerminations, Help: "Controller actor exits by reason", Labels: []string{"namespace", "reason"}},

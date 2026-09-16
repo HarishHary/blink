@@ -70,9 +70,8 @@ func kafkaWriterActorOptionsWithDefaults(opts KafkaWriterActorOptions) KafkaWrit
 // processorSupervisorOptionsWithDefaults applies processor supervisor defaults.
 func processorSupervisorOptionsWithDefaults(opts ProcessorSupervisorOptions) ProcessorSupervisorOptions {
 	opts.Reader = kafkaReaderActorOptionsWithDefaults(opts.Reader)
-	for i := range opts.Writers {
-		opts.Writers[i] = kafkaWriterActorOptionsWithDefaults(opts.Writers[i])
-	}
+	opts.Writer = kafkaWriterActorOptionsWithDefaults(opts.Writer)
+	opts.DLQWriter = kafkaWriterActorOptionsWithDefaults(opts.DLQWriter)
 	if opts.RestartIntensity == 0 {
 		opts.RestartIntensity = defaultProcessorRestartIntensity
 	}

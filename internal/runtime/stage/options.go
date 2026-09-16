@@ -48,7 +48,8 @@ type JobPoolOptions struct {
 type ProcessorSupervisorOptions struct {
 	Namespace        string
 	Reader           KafkaReaderActorOptions
-	Writers          []KafkaWriterActorOptions
+	Writer           KafkaWriterActorOptions
+	DLQWriter        KafkaWriterActorOptions
 	Coordinator      gen.ProcessFactory
 	JobPool          *JobPoolOptions
 	MailboxSize      int64
@@ -102,17 +103,18 @@ func validateProcessorSupervisorOptions(opts ProcessorSupervisorOptions) error {
 	if err := validateKafkaReaderOptions(reader); err != nil {
 		return err
 	}
-	seen := make(map[string]struct{}, len(opts.Writers))
-	for _, configuredWriter := range opts.Writers {
-		writer := configuredWriter
+	for _, configuredWriter := range []struct {
+		role string
+		opts KafkaWriterActorOptions
+	}{{"output", opts.Writer}, {"dlq", opts.DLQWriter}} {
+		writer := configuredWriter.opts
 		writer.Namespace = opts.Namespace
 		if err := validateKafkaWriterOptions(writer); err != nil {
 			return err
 		}
-		if _, exists := seen[writer.Destination]; exists {
-			return fmt.Errorf("processor supervisor: duplicate writer destination %q", writer.Destination)
+		if writer.Destination != configuredWriter.role {
+			return fmt.Errorf("processor supervisor: %s writer destination must be %q", configuredWriter.role, configuredWriter.role)
 		}
-		seen[writer.Destination] = struct{}{}
 	}
 	if opts.JobPool != nil {
 		pool := *opts.JobPool

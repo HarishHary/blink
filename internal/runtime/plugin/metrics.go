@@ -81,7 +81,7 @@ var (
 	invocationBuckets = []float64{0.005, 0.025, 0.1, 0.5, 1, 5, 15, 30, 60, 120}
 	runtimeMetrics    = []telemetry.MetricSpec{
 		// supervisor
-		{Kind: telemetry.Gauge, Name: metricSupervisorLifecycle, Help: "Supervisor lifecycle: 0 starting, 1 running, 2 draining", Labels: namespaceLabels},
+		{Kind: telemetry.Gauge, Name: metricSupervisorLifecycle, Help: "Supervisor lifecycle: 0 starting, 1 running, 2 draining, 3 stopped", Labels: namespaceLabels},
 		{Kind: telemetry.Gauge, Name: metricAvailability, Help: "Runtime availability: 0 unavailable, 1 degraded, 2 ready", Labels: namespaceLabels},
 		{Kind: telemetry.Gauge, Name: metricTransition, Help: "Desired-state transition: 0 idle, 1 preparing, 2 awaiting freshness, 3 awaiting projection", Labels: namespaceLabels},
 		{Kind: telemetry.Gauge, Name: metricDesiredRevision, Help: "Newest applied or pending desired-state revision", Labels: namespaceLabels},

@@ -47,7 +47,7 @@ var (
 	parseBuckets   = []float64{0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1}
 	subtreeMetrics = []telemetry.MetricSpec{
 		// supervisor
-		{Kind: telemetry.Gauge, Name: metricSupervisorLifecycle, Help: "Supervisor lifecycle: 0 starting, 1 running, 2 stopping", Labels: namespaceLabels},
+		{Kind: telemetry.Gauge, Name: metricSupervisorLifecycle, Help: "Supervisor lifecycle: 0 starting, 1 running, 2 stopped", Labels: namespaceLabels},
 		{Kind: telemetry.Gauge, Name: metricReaderAvailability, Help: "Reader availability: 0 unavailable, 1 degraded, 2 ready", Labels: namespaceLabels},
 		{Kind: telemetry.Gauge, Name: metricReaderGeneration, Help: "Newest generation the controller has delivered", Labels: namespaceLabels},
 		{Kind: telemetry.Gauge, Name: metricProjectionAvailability, Help: "Projection availability: 0 unavailable, 1 degraded, 2 ready", Labels: namespaceLabels},

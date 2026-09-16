@@ -1,5 +1,5 @@
-// Package actorstatus contains status primitives shared by independent Ergo
-// actor subtrees without coupling those subtrees to each other's packages.
+// Package runtime contains primitives shared by independent Ergo actor subtrees
+// without coupling those subtrees to each other's packages.
 package runtime
 
 import "time"
