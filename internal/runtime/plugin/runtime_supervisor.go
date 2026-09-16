@@ -252,8 +252,11 @@ func (s *supervisor[P, M]) HandleCall(from gen.PID, ref gen.Ref, request any) (a
 	defer s.reconcileStatus()
 	switch request.(type) {
 	case DrainRequest:
+		if s.lastStatus.Lifecycle == SupervisorStopped {
+			return DrainResponse{Err: ErrRuntimeStopped}, nil
+		}
 		s.drainWaiters = append(s.drainWaiters, runtimeDrainWaiter{pid: from, ref: ref})
-		if s.lastStatus.Lifecycle == SupervisorDraining || s.lastStatus.Lifecycle == SupervisorStopped {
+		if s.lastStatus.Lifecycle == SupervisorDraining {
 			return nil, nil
 		}
 
@@ -417,6 +420,7 @@ func (s *supervisor[P, M]) HandleMessage(from gen.PID, message any) error {
 	case MessageProposeDesiredState:
 		if from != s.reconciler.pid ||
 			s.lastStatus.Lifecycle == SupervisorDraining ||
+			s.lastStatus.Lifecycle == SupervisorStopped ||
 			m.desired.desiredRevision <= s.desiredState.desiredRevision ||
 			m.desired.desiredRevision <= s.pendingDesiredState.desiredRevision ||
 			m.desired.snapshotGeneration < s.desiredState.snapshotGeneration ||
@@ -557,7 +561,10 @@ func (s *supervisor[P, M]) finishCall(callID uint64, err error) {
 
 // promotePendingDesiredState applies the latest proposal after tracked calls drain.
 func (s *supervisor[P, M]) promotePendingDesiredState() error {
-	if s.lastStatus.Lifecycle == SupervisorDraining || s.lastStatus.Transition == SupervisorTransitionIdle || len(s.inFlightCalls) != 0 ||
+	if s.lastStatus.Lifecycle == SupervisorDraining ||
+		s.lastStatus.Lifecycle == SupervisorStopped ||
+		s.lastStatus.Transition == SupervisorTransitionIdle ||
+		len(s.inFlightCalls) != 0 ||
 		s.pendingDesiredState.desiredRevision == 0 ||
 		s.pendingDesiredState.snapshotGeneration != s.transitionGeneration {
 		return nil
@@ -579,7 +586,7 @@ func (s *supervisor[P, M]) promotePendingDesiredState() error {
 
 // beginPendingDesiredStateTransition closes admission only after the target projection is prepared.
 func (s *supervisor[P, M]) beginPendingDesiredStateTransition() error {
-	if s.lastStatus.Lifecycle == SupervisorDraining || s.pendingDesiredState.desiredRevision == 0 || !s.pendingProjectionReady() {
+	if s.lastStatus.Lifecycle == SupervisorDraining || s.lastStatus.Lifecycle == SupervisorStopped || s.pendingDesiredState.desiredRevision == 0 || !s.pendingProjectionReady() {
 		return nil
 	}
 
@@ -666,7 +673,10 @@ func (s *supervisor[P, M]) acceptsSubmission(expectedGeneration int64) bool {
 		s.projection.Status.CommittedGeneration == expectedGeneration &&
 		expectedGeneration == s.desiredState.snapshotGeneration &&
 		s.catalog.status.desiredRevision == s.desiredState.desiredRevision &&
-		s.lastStatus.Lifecycle != SupervisorDraining && s.lastStatus.Transition == SupervisorTransitionIdle && s.projectionReady() &&
+		s.lastStatus.Lifecycle != SupervisorDraining &&
+		s.lastStatus.Lifecycle != SupervisorStopped &&
+		s.lastStatus.Transition == SupervisorTransitionIdle &&
+		s.projectionReady() &&
 		s.catalog.pid != (gen.PID{})
 }
 
@@ -695,7 +705,7 @@ func (s *supervisor[P, M]) supervisorStateReader() bool {
 		s.desiredState.snapshotGeneration == s.projection.ReadyGeneration &&
 		s.catalog.status.desiredRevision == s.desiredState.desiredRevision &&
 		s.catalog.status.availability.Routable() &&
-		s.lastStatus.Transition == SupervisorTransitionIdle && s.lastStatus.Lifecycle != SupervisorDraining
+		s.lastStatus.Transition == SupervisorTransitionIdle && s.lastStatus.Lifecycle != SupervisorDraining && s.lastStatus.Lifecycle != SupervisorStopped
 }
 
 // ---------------------------------------------------------------------------
@@ -910,7 +920,11 @@ func (s *supervisor[P, M]) handleProjectionCommitResult(m snapshot.MessageProjec
 
 // requestProjectionCommit asks the snapshot supervisor to commit the projection.
 func (s *supervisor[P, M]) requestProjectionCommit() error {
-	if s.Process == nil || s.lastStatus.Lifecycle == SupervisorDraining || s.snapshot.Pid == (gen.PID{}) || s.projection.CommittedGeneration == 0 ||
+	if s.Process == nil ||
+		s.lastStatus.Lifecycle == SupervisorDraining ||
+		s.lastStatus.Lifecycle == SupervisorStopped ||
+		s.snapshot.Pid == (gen.PID{}) ||
+		s.projection.CommittedGeneration == 0 ||
 		s.projection.Retry.Pending ||
 		(s.projection.PendingGeneration != 0 &&
 			(s.projection.PendingGeneration != s.projection.CommittedGeneration ||
@@ -939,7 +953,10 @@ func (s *supervisor[P, M]) requestProjectionCommit() error {
 
 // scheduleProjectionCommitRetry schedules another projection commit attempt.
 func (s *supervisor[P, M]) scheduleProjectionCommitRetry() error {
-	if s.lastStatus.Lifecycle == SupervisorDraining || s.projection.Retry.Pending || s.projection.CommittedGeneration == 0 {
+	if s.lastStatus.Lifecycle == SupervisorDraining ||
+		s.lastStatus.Lifecycle == SupervisorStopped ||
+		s.projection.Retry.Pending ||
+		s.projection.CommittedGeneration == 0 {
 		return nil
 	}
 	delay := s.projection.Retry.Strategy.NextBackOff()
@@ -1012,7 +1029,8 @@ func (s *supervisor[P, M]) mergeCatalogStatus(status catalogActorStatus) {
 	state := &s.catalog
 	next := status.clone()
 	if next.lifecycle == CatalogActorRunning {
-		if s.lastStatus.Lifecycle != SupervisorDraining {
+		if s.lastStatus.Lifecycle != SupervisorDraining &&
+			s.lastStatus.Lifecycle != SupervisorStopped {
 			s.lastStatus.Lifecycle = SupervisorRunning
 		}
 	} else if next.lastError == nil {
