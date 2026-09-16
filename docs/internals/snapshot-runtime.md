@@ -1,6 +1,6 @@
 # Snapshot runtime
 
-[Internals index](README.md) · [Controller runtime](controller-runtime.md) · [Plugin runtime](plugin-runtime.md)
+[Internals index](README.md) · [Controller runtime](controller-runtime.md) · [Plugin runtime](plugin-runtime.md) · [Runtime recovery](runtime-recovery.md)
 
 The `internal/runtime/snapshot` subtree subscribes to one namespace's controller actor over the Ergo cluster and exposes a typed, immutable projection. Two instances: matcher metadata in the plugin runtime (external commit), rules in `event_matcher` (direct commit).
 
@@ -26,14 +26,14 @@ flowchart TB
 
 | Message                               | Direction                                                | Meaning                                                                       |
 | ------------------------------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `MessageReaderActorActivate`          | snapshot supervisor → reader actor                       | Authorizes the controller subscription.                                       |
-| `MessageProjectionActorActivate`      | snapshot supervisor → projection actor                   | Authorizes snapshot/status event monitoring.                                  |
+| `MessageReaderActorActivate`          | snapshot supervisor → reader actor                       | Authorizes subscription and carries the `StatusEpoch` to continue after.       |
+| `MessageProjectionActorActivate`      | snapshot supervisor → projection actor                   | Authorizes monitoring and carries the `StatusEpoch` to continue after.          |
 | `MessageReaderActorStatusChanged`     | reader → supervisor → buffered status event              | Publishes epoch-tagged reader lifecycle, availability, committed generation.  |
 | `MessageProjectionActorStatusChanged` | projection actor → snapshot supervisor                   | Publishes projection lifecycle, availability, committed/prepared generations. |
 | `MessageProjectionCommit`             | external parent → snapshot supervisor → projection actor | Requests a PID/generation-fenced commit, external-commit mode only.           |
 | `MessageProjectionCommitResult`       | projection actor → snapshot supervisor → external parent | Returns the fenced external-commit result.                                    |
 | `MessageExecutorReportTick`           | snapshot supervisor → snapshot supervisor                | Periodic convergence-report timer.                                            |
-| `MessageRadarTick`                    | snapshot supervisor → snapshot supervisor                | Periodic radar collector registration retry.                                  |
+| `MessageRadarTick`                    | snapshot supervisor → snapshot supervisor                | Periodic collector/readiness registration and heartbeat.                       |
 | `MessageExecutorReport`               | snapshot supervisor → controller actor (cluster `Send`)  | Convergence report: generation received, generation held live.                |
 
 ## Roles
@@ -51,7 +51,7 @@ flowchart TB
 
 ## Readiness
 
-Reader and projection status messages carry an `int64` Unix-nanosecond `Epoch`, monotonically advanced even if the clock repeats or moves backward. The supervisor keeps one `lastStatusEpoch` alongside each child's PID and status, accepting only newer epochs from the current PID and forwarding those timestamps unchanged. The epoch survives child replacement: the existing activation message carries the current epoch, and the replacement seeds its first publication from that floor. There are no separate incoming/outgoing epochs or duplicate supervisor-level status caches. Supervisor-generated lifecycle or projection identity changes advance the same epoch; replaying an unchanged status retains it.
+Reader and projection status messages carry an `int64` Unix-nanosecond `StatusEpoch`, monotonically advanced even if the clock repeats or moves backward. The supervisor keeps one `statusEpoch` alongside each child's PID and status, accepting only newer epochs from the current PID and forwarding those timestamps unchanged. The epoch survives child replacement: the activation message carries it as `StatusEpoch`, and the replacement seeds its publisher's `lastStatusEpoch` from that floor. There are no separate incoming/outgoing epochs or duplicate supervisor-level status caches. Supervisor-generated lifecycle or projection identity changes advance the same epoch; replaying an unchanged status retains it.
 
 `ProjectionCommitExternal` (matcher runtime) defers visibility to the parent; `ProjectionCommitDirect` (rule tree) makes a complete parsed snapshot visible at once. `Ready` needs a committed generation, a ready reader, and reader and observed generations at or beyond that commit.
 
@@ -62,12 +62,13 @@ Reader and projection status messages carry an `int64` Unix-nanosecond `Epoch`, 
 ```mermaid
 stateDiagram-v2
     [*] --> Starting
-    Starting --> Running: children activated
-    Running --> Restarting: transient child exits
-    Restarting --> Running: restarted in RestForOne order
-    Running --> Stopped: parent termination
-    Restarting --> Stopped: intensity exhausted or termination
+    Starting --> Running: both child PIDs recorded
+    Starting --> Stopping: termination
+    Running --> Stopping: termination or restart intensity exhausted
+    Stopping --> [*]
 ```
+
+Rest-for-one replacement changes child status and readiness, not the supervisor's `running` lifecycle.
 
 ### Messages
 
@@ -78,7 +79,7 @@ stateDiagram-v2
 
 ### Readiness
 
-Only the latest reader status is reported. External-commit mode stamps projection status with the current PID, and forwards status and matching commit results upward.
+The buffered event retains the latest reader status. External-commit mode adds the current projection PID and forwards status with its original timestamp, plus matching commit results. Radar readiness requires a running supervisor, both child PIDs, and ready reader/projection availability; child replacement can lower readiness without changing supervisor lifecycle.
 
 ### Executor reporting
 
@@ -200,7 +201,7 @@ Every layer publishes into the node's radar application, labelled by `namespace`
 
 The supervisor monitors `radar_metrics` and `radar_health`, re-registering only what a restarted process lost. Health registration waits for its monitor to succeed. `MessageExecutorReport` remains the separate controller convergence protocol; Radar readiness does not replace it or affect liveness.
 
-Emission is best-effort: an unreachable radar discards the `Send` error, a zero `telemetry.Labels` stays silent. Gauges republish on state changes and on each executor-report tick.
+Emission is best-effort: an unreachable radar discards the `Send` error, a zero `telemetry.Labels` stays silent. Every `reconcileStatus()` refreshes gauges and readiness, even without a changed reader event; both the Radar tick and executor-report tick provide periodic refreshes. Both ticks use normal priority.
 
 ## Retry and shutdown
 

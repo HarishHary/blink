@@ -1,6 +1,6 @@
 # Controller runtime
 
-[Internals index](README.md) · [Plugin runtime](plugin-runtime.md) · [Snapshot runtime](snapshot-runtime.md) · [Controller service](../services/controller.md)
+[Internals index](README.md) · [Plugin runtime](plugin-runtime.md) · [Snapshot runtime](snapshot-runtime.md) · [Runtime recovery](runtime-recovery.md) · [Controller service](../services/controller.md)
 
 Ergo controller runtime in `internal/runtime/controller`. One application per catalog namespace; `cmd/controller` runs five. Each has one supervisor child - the controller actor - plus two actor-owned metas: a filesystem scanner, and a snapshot writer owning SQLite persistence only, not distribution. Subscribing executors are pushed updates actor-to-actor over the native Ergo cluster, no broker.
 
@@ -64,10 +64,12 @@ Naming:
 | Component               | Readiness summary                                                                              |
 | ----------------------- | ---------------------------------------------------------------------------------------------- |
 | Controller application  | `Load` validates options, opens the database and namespace store; no independent availability. |
-| Controller supervisor   | Tracks the current actor's status and writer fences; no independent availability.              |
+| Controller supervisor   | Derives subtree availability from its lifecycle and current actor; owns Radar readiness.      |
 | Controller actor        | `ready` only while running, scanner complete and ready, writer loaded and ready.               |
 | `artifact_scanner` meta | Status from scan completeness and any nonfatal watch-attachment error.                         |
 | Snapshot writer meta    | Status from bootstrap, pending work, write failures.                                           |
+
+Scanner and writer health is derived by the controller from current-alias operation results, not a separate meta status-message stream. Their cached statuses therefore have no independent status epoch. The actor publishes its aggregate through `MessageActorStatusChanged`; the supervisor validates the actor PID and the message's `statusEpoch` before updating its tracked `actor.statusEpoch`.
 
 ## Controller application
 
@@ -135,15 +137,15 @@ stateDiagram-v2
 | `HandleChildTerminate`                     | Ergo → supervisor                                | Transient abnormal exit eligible for restart; unexpected clean exit fails it. |
 | `plugin.MessageStop`                       | service → supervisor                             | Starts supervisor draining.                                                   |
 | `plugin.MessageDrain`                      | supervisor → actor                               | Stops new work after `plugin.MessageStop`.                                    |
-| `MessageActorStatusChanged`                | actor → supervisor                               | Reports the actor drained so shutdown can advance.                            |
+| `MessageActorStatusChanged`                | actor → supervisor                               | Versioned lifecycle, availability, and generation; also advances draining.    |
 | `MessageSnapshotWriterIOStarted`           | snapshot writer meta → supervisor                | Registers a fence before the meta touches application resources.              |
 | `MessageSnapshotWriterIOStopped`           | snapshot writer meta → supervisor → owning actor | Releases the fence; forwarded to the owning actor if still current.           |
 | `plugin.MessageStop`                       | supervisor → actor                               | Stops the drained actor after all writer fences clear.                        |
-| `MessageRadarTick`                         | supervisor → supervisor                          | Self-scheduled radar collector reconcile, every 30 s.                         |
+| `MessageRadarTick`                         | supervisor → supervisor                          | High-priority Radar reconcile and completed-I/O fence polling, every 30 s.     |
 
 ### Readiness
 
-No availability enum. Starts the tracked actor `starting`/`unavailable`, activates it only after writer fences clear, waits for `drained` plus all fences before stopping it.
+`status()` returns the supervisor lifecycle and derived availability. Availability is `unavailable` unless the supervisor is running with a live actor; otherwise it follows that actor's `ready`/`degraded`/`unavailable` status. `propagateReadiness()` raises the Radar signal only for `ready`. The supervisor starts the tracked actor `starting`/`unavailable`, activates it only after writer fences clear, and waits for `drained` plus all fences before stopping it.
 
 ## Controller actor
 
@@ -382,7 +384,7 @@ The service allows 45 seconds, then requests an Ergo force-stop.
 
 ## Telemetry
 
-Every layer publishes into the node's radar application (`RADAR_HOST:RADAR_PORT`, `0.0.0.0:9090` under the Helm chart), labelled by namespace. Metric names are in [the controller service doc](../services/controller.md#metrics). The plumbing - collector specs, one subject's bound label values, the readiness signal - lives in `internal/runtime/telemetry`, shared with the snapshot runtime.
+Every layer publishes into the node's radar application (`RADAR_HOST:RADAR_PORT`, `0.0.0.0:9090` under the Helm chart), labelled by namespace. Metric names are in [the controller service doc](../services/controller.md#metrics). The plumbing - collector specs, one subject's bound label values, the readiness signal - lives in `internal/runtime/telemetry`, shared by controller, plugin, snapshot, and stage.
 
 | Layer       | Registers                                           | Publishes through | Notes                                                                                                                                                                                                           |
 | ----------- | --------------------------------------------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -391,7 +393,7 @@ Every layer publishes into the node's radar application (`RADAR_HOST:RADAR_PORT`
 | Actor       | -                                                   | itself            | Own gauges, counters, histograms through a plain `telemetry.Labels`, republished every drift-check tick.                                                                                                        |
 | Metas       | -                                                   | `gen.MetaProcess` | `Send` but no `Call`, so it cannot register; carries a copy of the actor's `telemetry.Labels`.                                                                                                                  |
 
-All emission is best-effort: an unreachable radar produces a discarded `Send` error, and `telemetry.Labels` with no namespace stays silent, since a label count mismatching the registered collector panics radar's metrics actor.
+`reconcileStatus()` refreshes owned gauges even when status is unchanged; the drift-check and Radar ticks provide periodic refreshes. `publishGauges()` itself does not change lifecycle or propagate status/readiness. All emission is best-effort: an unreachable radar produces a discarded `Send` error, and `telemetry.Labels` with no namespace stays silent, since a label count mismatching the registered collector panics radar's metrics actor.
 
 ### Readiness signal
 

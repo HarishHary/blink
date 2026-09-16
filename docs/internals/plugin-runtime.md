@@ -1,6 +1,6 @@
 # Plugin runtime
 
-[Internals index](README.md) · [Controller runtime](controller-runtime.md) · [Snapshot runtime](snapshot-runtime.md) · [Concurrency knobs](concurrency-knobs.md)
+[Internals index](README.md) · [Controller runtime](controller-runtime.md) · [Snapshot runtime](snapshot-runtime.md) · [Concurrency knobs](concurrency-knobs.md) · [Runtime recovery](runtime-recovery.md)
 
 `internal/runtime/plugin` owns local plugin deployment. One `plugin.Application[P,M]` bridges callers to one runtime supervisor on the process-owned Ergo node.
 
@@ -276,7 +276,7 @@ stateDiagram-v2
 | Message                              | Direction                        | Meaning                                         |
 | ------------------------------------ | -------------------------------- | ----------------------------------------------- |
 | `MessageArtifactDirectoryChanged`    | watcher meta → reconciler        | A debounced filesystem or poll-detected change. |
-| `MessageArtifactWatcherStateChanged` | watcher meta → reconciler        | Watch/poll availability and drift state.        |
+| `MessageArtifactWatcherStatusChanged` | watcher meta → reconciler        | Versioned directory-readability and watch-attachment facts. |
 | `SendExitMeta`                       | reconciler → Ergo meta runtime   | Requests termination of the watcher meta.       |
 | `Terminate`                          | Ergo meta runtime → watcher meta | Invokes cleanup for fsnotify and polling.       |
 
@@ -318,7 +318,7 @@ stateDiagram-v2
 
 ### Readiness
 
-Status receivers validate the current PID/alias and any incarnation generation, then accept only an `Epoch` greater than their `lastStatusEpoch`. This applies throughout the watcher, reconciler, process, manager, router, and catalog status chains, including snapshot reader events and forwarded projection status. `reconcileStatus` uses `same<Type>Status` against `lastStatus` to suppress unchanged publication; the process/meta comparisons still ignore sampled load counters. Epochs protect ordering independently of equality. On router loss the catalog fails calls assigned to that PID.
+Status receivers validate the current PID/alias and any incarnation generation, then accept only a newer status timestamp. Tracked child records keep `status` and `statusEpoch`; actor publishers keep `lastStatus` and `lastStatusEpoch`. The reader-event and projection-status consumers have their own `lastReaderStatusEpoch` and `lastProjectionStatusEpoch` watermarks. This applies throughout the watcher, reconciler, process, manager, router, and catalog status chains. `reconcileStatus` uses `same<Type>Status` against `lastStatus` to suppress unchanged publication; the process/meta comparisons still ignore sampled load counters. Epochs protect ordering independently of equality. On router loss the catalog fails calls assigned to that PID.
 
 ## Router actor
 
@@ -672,7 +672,7 @@ Every layer publishes into the node's radar application, labelled by `namespace`
 
 The supervisor monitors `radar_metrics` and `radar_health` and re-registers only what the restarted process lost. Health registration waits for its monitor to succeed. The nested snapshot subtree has its own readiness signal; Radar requires every registered readiness signal to be up. These signals do not affect liveness or replace the runtime's admission checks.
 
-Emission is best-effort. An unreachable radar produces a discarded `Send` error, and a zero `telemetry.Labels` stays silent, since a mismatched label count panics radar's metrics actor. Counters increment only once the named operation happened. Gauges are republished on every supervisor state change and on the radar tick.
+Emission is best-effort. An unreachable radar produces a discarded `Send` error, and a zero `telemetry.Labels` stays silent, since a mismatched label count panics radar's metrics actor. Counters increment only once the named operation happened. Supervisor gauges are republished on every `reconcileStatus()` call, including normal-priority Radar ticks, even when status is unchanged.
 
 ## Source references
 

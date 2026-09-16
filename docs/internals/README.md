@@ -27,9 +27,17 @@ flowchart TB
 - An event-matcher attempt owns a permanent matcher plugin application plus a rule snapshot supervisor. The plugin runtime keeps its snapshot, reconciler, and catalog actors in a `RestForOne` subtree. Its application is drained, stopped, and unloaded when the attempt ends.
 - A snapshot supervisor owns a reader and a typed projection in `RestForOne` order, so a reader restart replaces its projection too. It exposes the current parsed projection to its owning runtime.
 
-The controller artifact_scanner reads sidecars and binaries, reconciles desired state, and pushes changed snapshots to every subscribed executor over the cluster. The matcher reads immutable projection state per batch and routes through its plugin runtime. It does its own Kafka I/O for the event pipeline, which is unrelated to snapshot distribution.
+The controller artifact scanner reads sidecars and binaries. Its owning actor reconciles desired state, commits snapshots, and pushes them to subscribed executors over the cluster. The matcher reads immutable projection state per batch and routes through its plugin runtime. It does its own Kafka I/O for the event pipeline, which is unrelated to snapshot distribution.
 
 Actor state machines live in the pages below, not in this index.
+
+## Runtime conventions
+
+- `status()` derives a component's status; `publishGauges()` emits measurements without changing lifecycle or sending status messages. `reconcileStatus()` coordinates the status, gauges, and readiness that component owns. Where status publication is deduplicated, unchanged status does not suppress gauge refreshes.
+- `propagateStatus(...)` sends an already-reconciled status without creating a new timestamp. `propagateReadiness()` updates the supervisor's Radar signal. Query-only components and metrics-only metas do not create a status-message stream for symmetry. [Status ordering and recovery](runtime-recovery.md#status-ordering-across-runtimes) defines timestamp ownership and replacement behavior.
+- All four supervisor constructors create their namespace-bound labels and readiness signal; `newHealthSignal` lives in each package's `metrics.go`. `Init` schedules asynchronous registration. `reconcileRadar`, `watchRadar`, and `radarUnavailableOnce` manage registration, monitoring, and outage logging.
+- High priority is for lifecycle/recovery and messages that release capacity or I/O fences. Business work, metrics, and convergence reports normally use normal priority; FIFO protocol requirements take precedence. Controller and processor `MessageRadarTick` messages stay high because they release completed I/O fences; plugin and snapshot ticks are normal. The Kafka reader's coordinator-drained notification stays normal so it follows normal-priority results.
+- Broker payload ownership uses `Message.Clone()` or `brokers.CloneMessages`; `brokers.TotalBytes` counts key/value bytes, not topic/partition/offset metadata. These helpers live in [`internal/brokers/broker.go`](../../internal/brokers/broker.go).
 
 ## Documents
 
@@ -38,6 +46,7 @@ Actor state machines live in the pages below, not in this index.
 - [Snapshot runtime](snapshot-runtime.md)
 - [Message flow](message-flow.md)
 - [Concurrency knobs](concurrency-knobs.md)
+- [Runtime recovery](runtime-recovery.md)
 - [Schema reference](schemas/README.md)
 - [Controller service](../services/controller.md)
 - [Event matcher service](../services/event_matcher.md)
