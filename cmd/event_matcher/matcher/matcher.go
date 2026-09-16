@@ -383,7 +383,7 @@ func (s *Service) newBatch(ctx context.Context, msgs []brokers.Message) (*batch,
 		return nil, err
 	}
 	if !ruleState.Availability.Routable() {
-		return nil, runtime.ErrSnapshotRead
+		return nil, snapshot.ErrSnapshotRead
 	}
 	if previous := s.lastRuleAvailability; previous != ruleState.Availability {
 		s.lastRuleAvailability = ruleState.Availability
@@ -405,7 +405,7 @@ func (s *Service) readMatcherState(ctx context.Context) (snapshot.ProjectionStat
 		if err == nil {
 			return state, nil
 		}
-		if !stderrors.Is(err, runtime.ErrPluginUnavailable) || time.Now().After(deadline) || !wait(ctx, policy) {
+		if !stderrors.Is(err, plugin.ErrPluginUnavailable) || time.Now().After(deadline) || !wait(ctx, policy) {
 			return snapshot.ProjectionState[*matchers.MatcherMetadata]{}, err
 		}
 	}
@@ -533,7 +533,7 @@ func (s *Service) matchWithRetries(ctx context.Context, b *batch, entry *matcher
 		if result.CallErr != nil {
 			// Whole-call failures retry every pending item with the same dead-letter reason.
 			s.logger.Error(result.CallErr)
-			if stderrors.Is(result.CallErr, runtime.ErrPluginUnavailable) {
+			if stderrors.Is(result.CallErr, plugin.ErrPluginUnavailable) {
 				unavailable = true
 			}
 			for i := range pending {

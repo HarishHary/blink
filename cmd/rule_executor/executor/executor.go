@@ -296,7 +296,7 @@ func (s *Service) readRuleState(ctx context.Context) (snapshot.ProjectionState[*
 		if err == nil {
 			return state, nil
 		}
-		if !stderrors.Is(err, runtime.ErrPluginUnavailable) || time.Now().After(deadline) || !wait(ctx, policy) {
+		if !stderrors.Is(err, plugin.ErrPluginUnavailable) || time.Now().After(deadline) || !wait(ctx, policy) {
 			return snapshot.ProjectionState[*rules.RuleMetadata]{}, err
 		}
 	}
