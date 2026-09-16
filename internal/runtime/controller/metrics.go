@@ -146,6 +146,8 @@ func supervisorLifecycleValue(lifecycle SupervisorLifecycle) float64 {
 		return 2
 	case SupervisorStopping:
 		return 3
+	case SupervisorStopped:
+		return 4
 	default:
 		return 0
 	}

@@ -30,6 +30,7 @@ const (
 	SupervisorStarting SupervisorLifecycle = "starting"
 	SupervisorRunning  SupervisorLifecycle = "running"
 	SupervisorDraining SupervisorLifecycle = "draining"
+	SupervisorStopped  SupervisorLifecycle = "stopped"
 )
 
 // SupervisorTransitionPhase describes desired-state transition progress.
@@ -252,7 +253,7 @@ func (s *supervisor[P, M]) HandleCall(from gen.PID, ref gen.Ref, request any) (a
 	switch request.(type) {
 	case DrainRequest:
 		s.drainWaiters = append(s.drainWaiters, runtimeDrainWaiter{pid: from, ref: ref})
-		if s.lastStatus.Lifecycle == SupervisorDraining {
+		if s.lastStatus.Lifecycle == SupervisorDraining || s.lastStatus.Lifecycle == SupervisorStopped {
 			return nil, nil
 		}
 
@@ -526,7 +527,7 @@ func (s *supervisor[P, M]) HandleChildTerminate(name gen.Atom, pid gen.PID, reas
 // Terminate stops the runtime supervisor and completes outstanding calls.
 func (s *supervisor[P, M]) Terminate(reason error) {
 	defer s.reconcileStatus()
-	s.lastStatus.Lifecycle = SupervisorDraining
+	s.lastStatus.Lifecycle = SupervisorStopped
 	s.lastError = reason
 	s.cancelProjectionCommitRetry(false)
 	s.cancelProjectionDeadline()
@@ -1161,7 +1162,7 @@ func (s *supervisor[P, M]) HandleInspect(gen.PID, ...string) map[string]string {
 
 // runtimeAvailability derives runtime availability from child component status.
 func (s *supervisor[P, M]) runtimeAvailability() runtime.Availability {
-	if s.lastStatus.Lifecycle == SupervisorDraining || s.lastStatus.Transition != SupervisorTransitionIdle || !s.projectionReady() ||
+	if s.lastStatus.Lifecycle == SupervisorDraining || s.lastStatus.Lifecycle == SupervisorStopped || s.lastStatus.Transition != SupervisorTransitionIdle || !s.projectionReady() ||
 		s.projection.Status.Availability == runtime.AvailabilityUnavailable ||
 		s.catalog.status.availability == runtime.AvailabilityUnavailable {
 		return runtime.AvailabilityUnavailable

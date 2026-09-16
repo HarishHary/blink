@@ -28,6 +28,7 @@ const (
 	SupervisorRunning  SupervisorLifecycle = "running"
 	SupervisorDraining SupervisorLifecycle = "draining"
 	SupervisorStopping SupervisorLifecycle = "stopping"
+	SupervisorStopped  SupervisorLifecycle = "stopped"
 )
 
 // supervisorStatus is the controller subtree's current lifecycle and availability.
@@ -252,7 +253,7 @@ func (s *supervisor[T]) HandleChildTerminate(name gen.Atom, pid gen.PID, reason 
 // Terminate retains the subtree failure and publishes final gauges and readiness.
 func (s *supervisor[T]) Terminate(reason error) {
 	s.lastError = reason
-	s.lastStatus.Lifecycle = SupervisorStopping
+	s.lastStatus.Lifecycle = SupervisorStopped
 	s.reconcileStatus()
 }
 

@@ -31,7 +31,7 @@ type SupervisorLifecycle string
 const (
 	SupervisorStarting SupervisorLifecycle = "starting"
 	SupervisorRunning  SupervisorLifecycle = "running"
-	SupervisorStopping SupervisorLifecycle = "stopping"
+	SupervisorStopped  SupervisorLifecycle = "stopped"
 )
 
 // eventPublication is one registered event and the token SendEvent requires to publish through it.
@@ -367,7 +367,7 @@ func (s *Supervisor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, erro
 // Terminate marks children stopped and reports the shutdown reason.
 func (s *Supervisor[T]) Terminate(reason error) {
 	defer s.reconcileStatus()
-	s.lastStatus.Lifecycle = SupervisorStopping
+	s.lastStatus.Lifecycle = SupervisorStopped
 	s.lastError = reason
 	s.cancelExecutorReport()
 	s.projectionActor.status.Lifecycle = ProjectionActorStopped
