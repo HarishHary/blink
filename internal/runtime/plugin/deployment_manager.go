@@ -159,7 +159,6 @@ type deploymentManager[T Artifact] struct {
 	reconcileStop   gen.CancelFunc
 	idleSince       time.Time
 	lastScale       time.Time
-	lastError       error
 	growthProcs     int // processes held from the process budget, above this deployment's reservation
 	labels          telemetry.Labels
 }
@@ -320,7 +319,7 @@ func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 		}
 		// The process gave up on its own subprocess, so this incarnation is spent and only its slot is
 		// refilled: the deployment's other processes keep serving the calls they hold.
-		m.lastError = msg.err
+		process.status.lastError = msg.err
 		m.retireSlot(slot, true, fmt.Errorf("plugin process restart exhausted: %w", msg.err))
 		m.reconcile()
 
@@ -372,15 +371,10 @@ func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 		switch {
 		case retiring && !replace:
 			m.releaseSlot(slot)
-			// A deployment that shrank to nothing on purpose is healthy, and a stale error would otherwise
-			// keep it reporting unavailable for as long as it stays idle.
-			if len(m.processes) == 0 && m.desiredProcs == 0 {
-				m.lastError = nil
-			}
 		case !m.draining:
 			// Every unexpected process incarnation consumes its own slot's finite budget, including an idle
 			// MinProcs=0 one whose committed calls just failed.
-			m.lastError = msg.Reason
+			process.status.lastError = msg.Reason
 			m.Log().Info("scheduling plugin process restart: slot=%d route=%s", slot, m.route)
 			m.schedulePluginProcessRestart(slot)
 		default:
@@ -464,6 +458,7 @@ func (m *deploymentManager[T]) HandleInspect(_ gen.PID, _ ...string) map[string]
 	// Processes and calls are reported apart: a saturated deployment may be short of processes or of the
 	// capacity each one was given, and only one of those is its own to raise.
 	return map[string]string{
+		"deployment:last_error":        runtime.ErrorText(status.lastError),
 		"deployment:availability":      string(status.availability),
 		"deployment:current":           fmt.Sprintf("%d", status.currentProcs),
 		"deployment:ready":             fmt.Sprintf("%d", status.readyProcs),
@@ -562,7 +557,7 @@ func (m *deploymentManager[T]) selectProcess() (int, *pluginProcessState) {
 // reconcile advances drain, process lifecycle, dispatch, scaling, and status publication.
 func (m *deploymentManager[T]) reconcile() {
 	if m.draining || m.circuitOpen {
-		m.reconcileStatus()
+		m.reconcileStatus(nil)
 		if m.draining && !m.drained && len(m.inFlightCalls) == 0 {
 			m.reportDrained()
 		}
@@ -578,7 +573,7 @@ func (m *deploymentManager[T]) reconcile() {
 	m.reconcileProcesses()
 	m.dispatchInvocation()
 	m.reconcileScale()
-	m.reconcileStatus()
+	m.reconcileStatus(nil)
 }
 
 // reconcileProcesses moves the deployment's slots toward the desired count and fills the empty ones,
@@ -789,7 +784,7 @@ func (m *deploymentManager[T]) reportDrained() {
 	_ = m.SendWithPriority(m.Parent(), MessageDeploymentManagerDrained{
 		route: m.route, manager: m.PID(),
 	}, gen.MessagePriorityHigh)
-	m.reconcileStatus()
+	m.reconcileStatus(nil)
 }
 
 // ---------------------------------------------------------------------------
@@ -884,12 +879,12 @@ func (m *deploymentManager[T]) startPluginProcess(slot int) bool {
 		}
 	}, gen.ProcessOptions{LinkParent: true})
 	if err != nil {
-		m.lastError = fmt.Errorf("spawn plugin process: %w", err)
+		process.status.lastError = fmt.Errorf("spawn plugin process: %w", err)
 		m.schedulePluginProcessRestart(slot)
 		return false
 	}
 	if err := m.MonitorPID(pid); err != nil {
-		m.lastError = fmt.Errorf("monitor plugin process: %w", err)
+		process.status.lastError = fmt.Errorf("monitor plugin process: %w", err)
 		_ = m.Node().SendExit(pid, gen.TerminateReasonShutdown)
 		m.schedulePluginProcessRestart(slot)
 		return false
@@ -897,6 +892,7 @@ func (m *deploymentManager[T]) startPluginProcess(slot int) bool {
 	process.pid = pid
 	process.statusEpoch = 0
 	process.status = pluginProcessActorStatus{
+		lastError:    process.status.lastError,
 		lifecycle:    PluginProcessActorStarting,
 		availability: runtime.AvailabilityUnavailable,
 	}
@@ -989,7 +985,7 @@ func (m *deploymentManager[T]) openCircuit(err error) {
 	if m.circuitOpen {
 		return
 	}
-	m.circuitOpen, m.lastError = true, err
+	m.circuitOpen = true
 	m.labels.Count(m, metricCircuitOpens)
 	m.cancelPluginProcessRestarts(false)
 	for callID := range m.inFlightCalls {
@@ -1008,12 +1004,12 @@ func (m *deploymentManager[T]) openCircuit(err error) {
 	if cancel, sendErr := m.SendWithPriorityAfter(m.PID(), MessageDeploymentManagerCircuitCooldown{token: m.circuitToken}, gen.MessagePriorityHigh, m.options.CircuitCooldown); sendErr == nil {
 		m.circuitStop = cancel
 	}
-	m.reconcileStatus()
+	m.reconcileStatus(err)
 }
 
 // closeCircuit reopens admission, resetting the retry budget of any slot that outlived the circuit opening.
 func (m *deploymentManager[T]) closeCircuit() {
-	m.circuitOpen, m.lastError = false, nil
+	m.circuitOpen = false
 	m.cancelCircuitCooldown()
 	m.cancelPluginProcessRestarts(true)
 }
@@ -1076,7 +1072,7 @@ func (m *deploymentManager[T]) status() deploymentManagerStatus {
 	// A deployment that reserves nothing and is doing nothing is not broken, it is asleep: it holds no
 	// slot, owes no call, and is waiting on neither a retry nor an error.
 	idleAtZero := m.desiredProcs == 0 && len(m.processes) == 0 && len(m.inFlightCalls) == 0 &&
-		!m.restartingProcs() && m.lastError == nil
+		!m.restartingProcs()
 	availability := runtime.AvailabilityUnavailable
 	switch {
 	case m.circuitOpen:
@@ -1101,13 +1097,28 @@ func (m *deploymentManager[T]) status() deploymentManagerStatus {
 	case m.readyProcs() == 0 && !idleAtZero:
 		lifecycle = DeploymentManagerStarting
 	}
+	var lastError error
+	var errorSlot int
+	for slot, process := range m.processes {
+		if process.status.lastError != nil && (lastError == nil || slot < errorSlot) {
+			lastError, errorSlot = process.status.lastError, slot
+		}
+	}
+	if m.circuitOpen {
+		lastError = runtime.FirstError(m.lastStatus.lastError, lastError)
+	}
 	return deploymentManagerStatus{
-		lifecycle: lifecycle, availability: availability,
-		currentProcs: m.desiredProcs, readyProcs: m.readyProcs(),
-		callsPerProcess: m.deployment.CapacityPerProcess(), totalCapacity: m.committedCapacity(),
-		queueDepth: m.pendingCalls.length, dispatching: m.dispatchingCalls(), active: m.activeCalls(),
+		lifecycle:         lifecycle,
+		availability:      availability,
+		currentProcs:      m.desiredProcs,
+		readyProcs:        m.readyProcs(),
+		callsPerProcess:   m.deployment.CapacityPerProcess(),
+		totalCapacity:     m.committedCapacity(),
+		queueDepth:        m.pendingCalls.length,
+		dispatching:       m.dispatchingCalls(),
+		active:            m.activeCalls(),
 		availableCapacity: max(0, m.committedCapacity()-m.activeCalls()-m.dispatchingCalls()),
-		lastError:         m.lastError,
+		lastError:         lastError,
 		processes:         m.processStatuses(),
 	}
 }
@@ -1136,8 +1147,10 @@ func sameDeploymentManagerStatus(left, right deploymentManagerStatus) bool {
 
 // reconcileStatus recomputes and, on change, sends the latest snapshot to its Router parent; every
 // invocation reconciles this manager, and an unchanged status would walk the whole chain twice.
-func (m *deploymentManager[T]) reconcileStatus() {
+// A new circuit error is compared before replacing the cached status.
+func (m *deploymentManager[T]) reconcileStatus(err error) {
 	next := m.status()
+	next.lastError = runtime.FirstError(err, next.lastError)
 	if sameDeploymentManagerStatus(m.lastStatus, next) {
 		return
 	}

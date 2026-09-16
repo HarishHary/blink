@@ -37,6 +37,7 @@ type pluginProcessActorStatus struct {
 	lifecycle    PluginProcessActorLifecycle
 	availability runtime.Availability
 	meta         pluginMetaStatus
+	lastError    error
 }
 
 // pluginProcessCall is one in-flight invocation, tagged with the incarnation that took it so a
@@ -140,7 +141,8 @@ func (p *pluginProcessActor[T]) Init(...any) error {
 
 // Terminate cancels recovery, releases in-flight calls so the subprocess stops working on answers
 // nobody will collect, and tells the manager, which fails those calls itself.
-func (p *pluginProcessActor[T]) Terminate(error) {
+func (p *pluginProcessActor[T]) Terminate(reason error) {
+	p.pluginMeta.status.lastError = reason
 	p.pluginMeta.restart.CancelScheduled(false)
 	p.pluginMeta.healthRestart.CancelScheduled(false)
 	for callID, entry := range p.calls {
@@ -289,6 +291,8 @@ func (p *pluginProcessActor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (a
 // HandleInspect exposes the meta's lifecycle, both restart tracks, and in-flight call depth.
 func (p *pluginProcessActor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 	return map[string]string{
+		"process:last_error":             runtime.ErrorText(p.status().lastError),
+		"process:meta_last_error":        runtime.ErrorText(p.pluginMeta.status.lastError),
 		"process:meta_lifecycle":         string(p.pluginMeta.status.lifecycle),
 		"process:meta_availability":      string(p.pluginMeta.status.availability),
 		"process:meta_activity":          string(p.pluginMeta.status.activity),
@@ -595,7 +599,10 @@ func (p *pluginProcessActor[T]) status() pluginProcessActorStatus {
 		lifecycle = PluginProcessActorFailed
 	}
 	return pluginProcessActorStatus{
-		lifecycle: lifecycle, availability: p.pluginMeta.status.availability, meta: p.pluginMeta.status,
+		lifecycle:    lifecycle,
+		availability: p.pluginMeta.status.availability,
+		meta:         p.pluginMeta.status,
+		lastError:    p.pluginMeta.status.lastError,
 	}
 }
 
@@ -623,13 +630,17 @@ func (p *pluginProcessActor[T]) propagateStatus(next pluginProcessActorStatus) {
 // samePluginProcessStatus dedups status publishes, ignoring sampled load: the activity label already
 // carries the crossings that matter (see pluginMetaStatus).
 func samePluginProcessStatus(left, right pluginProcessActorStatus) bool {
-	return left.lifecycle == right.lifecycle && left.availability == right.availability &&
+	return left.lifecycle == right.lifecycle &&
+		left.availability == right.availability &&
+		runtime.ErrorText(left.lastError) == runtime.ErrorText(right.lastError) &&
 		samePluginMetaStatus(left.meta, right.meta)
 }
 
 // samePluginMetaStatus compares meta-process status snapshots on the same terms and for the same
 // reason: it decides whether a status is worth publishing.
 func samePluginMetaStatus(left, right pluginMetaStatus) bool {
-	return left.lifecycle == right.lifecycle && left.availability == right.availability &&
-		left.activity == right.activity && runtime.ErrorText(left.lastError) == runtime.ErrorText(right.lastError)
+	return left.lifecycle == right.lifecycle &&
+		left.availability == right.availability &&
+		left.activity == right.activity &&
+		runtime.ErrorText(left.lastError) == runtime.ErrorText(right.lastError)
 }
