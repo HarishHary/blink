@@ -338,6 +338,8 @@ func (a *readerActor) HandleInspect(gen.PID, ...string) map[string]string {
 
 // sameReaderActorStatus compares the status fields that trigger publication.
 func sameReaderActorStatus(left, right ReaderActorStatus) bool {
-	return left.Lifecycle == right.Lifecycle && left.Availability == right.Availability &&
-		left.Generation == right.Generation && runtime.ErrorText(left.Err) == runtime.ErrorText(right.Err)
+	return left.Lifecycle == right.Lifecycle &&
+		left.Availability == right.Availability &&
+		left.Generation == right.Generation &&
+		runtime.ErrorText(left.Err) == runtime.ErrorText(right.Err)
 }
