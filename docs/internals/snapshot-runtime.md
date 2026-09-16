@@ -28,7 +28,7 @@ flowchart TB
 | ------------------------------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------- |
 | `MessageReaderActorActivate`          | snapshot supervisor → reader actor                       | Authorizes the controller subscription.                                       |
 | `MessageProjectionActorActivate`      | snapshot supervisor → projection actor                   | Authorizes snapshot/status event monitoring.                                  |
-| `MessageReaderActorStatusChanged`     | reader actor → snapshot supervisor                       | Publishes reader lifecycle, availability, committed generation.               |
+| `MessageReaderActorStatusChanged`     | reader → supervisor → buffered status event              | Publishes epoch-tagged reader lifecycle, availability, committed generation.  |
 | `MessageProjectionActorStatusChanged` | projection actor → snapshot supervisor                   | Publishes projection lifecycle, availability, committed/prepared generations. |
 | `MessageProjectionCommit`             | external parent → snapshot supervisor → projection actor | Requests a PID/generation-fenced commit, external-commit mode only.           |
 | `MessageProjectionCommitResult`       | projection actor → snapshot supervisor → external parent | Returns the fenced external-commit result.                                    |
@@ -50,6 +50,8 @@ flowchart TB
 - `ControllerActorName` names the subscription's far end.
 
 ## Readiness
+
+Reader and projection status messages carry an `int64` Unix-nanosecond `Epoch`, monotonically advanced even if the clock repeats or moves backward. The supervisor keeps one `lastStatusEpoch` alongside each child's PID and status, accepting only newer epochs from the current PID and forwarding those timestamps unchanged. The epoch survives child replacement: the existing activation message carries the current epoch, and the replacement seeds its first publication from that floor. There are no separate incoming/outgoing epochs or duplicate supervisor-level status caches. Supervisor-generated lifecycle or projection identity changes advance the same epoch; replaying an unchanged status retains it.
 
 `ProjectionCommitExternal` (matcher runtime) defers visibility to the parent; `ProjectionCommitDirect` (rule tree) makes a complete parsed snapshot visible at once. `Ready` needs a committed generation, a ready reader, and reader and observed generations at or beyond that commit.
 

@@ -318,7 +318,7 @@ stateDiagram-v2
 
 ### Readiness
 
-Router status is accepted only from the current sender PID and catalog-created generation. Catalog status is likewise checked against the current catalog PID. Each actor sends status to its local parent through one high-priority FIFO stream, so no status epoch is needed. `reconcileStatus` compares against `lastStatus` and publishes only changes; the process/meta comparisons ignore sampled load counters. On router loss the catalog fails calls assigned to that PID.
+Status receivers validate the current PID/alias and any incarnation generation, then accept only an `Epoch` greater than their `lastStatusEpoch`. This applies throughout the watcher, reconciler, process, manager, router, and catalog status chains, including snapshot reader events and forwarded projection status. `reconcileStatus` uses `same<Type>Status` against `lastStatus` to suppress unchanged publication; the process/meta comparisons still ignore sampled load counters. Epochs protect ordering independently of equality. On router loss the catalog fails calls assigned to that PID.
 
 ## Router actor
 
