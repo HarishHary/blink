@@ -2,6 +2,8 @@ package plugin
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 
 	"ergo.services/ergo/act"
 	"ergo.services/ergo/gen"
@@ -36,7 +38,6 @@ type catalogActorState struct {
 type catalogActorStatus struct {
 	lifecycle          CatalogActorLifecycle
 	availability       runtime.Availability
-	lastError          error
 	desiredRevision    uint64
 	desiredRouters     int
 	routableRouters    int
@@ -44,6 +45,7 @@ type catalogActorStatus struct {
 	unavailableRouters int
 	settledRouters     int
 	routers            map[string]routerActorStatus
+	err                error
 }
 
 // clone deep-copies router statuses so a receiver cannot mutate catalog state.
@@ -63,13 +65,13 @@ type catalogActor[T Artifact] struct {
 	adapter         *Adapter[T]
 	desiredRevision uint64
 	activated       bool
-	draining        bool
-	drainReported   bool
-	lastStatus      catalogActorStatus
-	lastStatusEpoch int64
 	routers         map[string]*routerState
 	desired         map[string]routerDesiredState
 	inFlightCalls   map[uint64]gen.PID
+	lifecycle       CatalogActorLifecycle // the catalog's own live lifecycle; the supervisor owns restarting
+	err             error                 // the catalog's own failure, kept apart from its routers' errors
+	lastStatus      catalogActorStatus    // last published projection, the baseline reconcileStatus dedupes against
+	lastStatusEpoch int64
 	labels          telemetry.Labels
 }
 
@@ -121,6 +123,7 @@ func (a *catalogActor[T]) Init(...any) error {
 	a.routers = make(map[string]*routerState)
 	a.desired = make(map[string]routerDesiredState)
 	a.inFlightCalls = make(map[uint64]gen.PID)
+	a.lifecycle = CatalogActorStarting
 	return nil
 }
 
@@ -135,7 +138,7 @@ func (a *catalogActor[T]) HandleMessage(from gen.PID, message any) error {
 		a.reconcileStatus()
 
 	case MessageApplyCatalogDesiredState:
-		if !a.activated || a.draining || m.desiredRevision < a.desiredRevision {
+		if !a.activated || a.isDraining() || m.desiredRevision < a.desiredRevision {
 			return nil
 		}
 		a.desiredRevision = m.desiredRevision
@@ -160,7 +163,7 @@ func (a *catalogActor[T]) HandleMessage(from gen.PID, message any) error {
 		a.reconcileStatus()
 
 	case MessageInvokePlugin[T]:
-		if a.draining || a.desiredRevision == 0 {
+		if a.isDraining() || a.desiredRevision == 0 {
 			a.finishUntrackedCall(m, ErrPluginUnavailable)
 			return nil
 		}
@@ -191,10 +194,10 @@ func (a *catalogActor[T]) HandleMessage(from gen.PID, message any) error {
 		}
 
 	case MessageDrain:
-		if a.draining {
+		if a.isDraining() {
 			return nil
 		}
-		a.draining = true
+		a.lifecycle = CatalogActorDraining
 		a.cancelAllRouterRestarts(false)
 		a.reconcileStatus()
 		if a.liveRouterCount() == 0 {
@@ -216,14 +219,14 @@ func (a *catalogActor[T]) HandleMessage(from gen.PID, message any) error {
 			ref.generation != m.generation {
 			return nil
 		}
-		if !a.draining && !ref.retiring {
+		if !a.isDraining() && !ref.retiring {
 			return nil
 		}
 
 		_ = a.SendWithPriority(ref.pid, MessageStop{}, gen.MessagePriorityHigh)
 		a.retireRouter(m.pluginID, ErrPluginUnavailable)
 
-		if a.draining {
+		if a.isDraining() {
 			a.reconcileStatus()
 			if a.liveRouterCount() == 0 {
 				a.reportDrained()
@@ -263,7 +266,7 @@ func (a *catalogActor[T]) HandleMessage(from gen.PID, message any) error {
 		}
 		ref.restart.Pending = false
 		ref.restart.Cancel = nil
-		if !a.draining && m.desiredRevision == a.desiredRevision {
+		if !a.isDraining() && m.desiredRevision == a.desiredRevision {
 			return a.sendDesiredToRouter(m.pluginID)
 		}
 
@@ -279,12 +282,12 @@ func (a *catalogActor[T]) HandleMessage(from gen.PID, message any) error {
 			a.labels.Count(a, metricRouterTerminations, telemetry.TerminationReason(m.Reason))
 			ref.status.lifecycle = RouterActorRestarting
 			ref.status.availability = runtime.AvailabilityUnavailable
-			ref.status.lastError = m.Reason
+			ref.status.err = m.Reason
 
 			_, desired := a.desired[id]
-			if a.draining || ref.retiring || !desired {
+			if a.isDraining() || ref.retiring || !desired {
 				a.retireRouter(id, ErrPluginUnavailable)
-				if a.draining {
+				if a.isDraining() {
 					if a.liveRouterCount() == 0 {
 						a.reportDrained()
 					}
@@ -323,7 +326,7 @@ func (a *catalogActor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, er
 // sendDesiredToRouter ensures a router is running and sends it the desired state.
 func (a *catalogActor[T]) sendDesiredToRouter(id string) error {
 	desired, ok := a.desired[id]
-	if !ok || a.draining {
+	if !ok || a.isDraining() {
 		return nil
 	}
 	if ref := a.routers[id]; ref != nil && ref.pid != (gen.PID{}) && ref.retiring {
@@ -371,10 +374,10 @@ func (a *catalogActor[T]) finishTrackedCall(callID uint64, err error) {
 
 // reportDrained announces catalog drain completion to the parent actor.
 func (a *catalogActor[T]) reportDrained() {
-	if a.drainReported {
+	if a.lifecycle == CatalogActorStopped {
 		return
 	}
-	a.drainReported = true
+	a.lifecycle = CatalogActorStopped
 	a.reconcileStatus()
 	_ = a.SendWithPriority(a.Parent(), MessageCatalogDrained{pid: a.PID()}, gen.MessagePriorityHigh)
 }
@@ -398,11 +401,11 @@ func (a *catalogActor[T]) startRouter(id string) (*routerState, error) {
 	ref.statusEpoch = 0
 	generation := ref.generation
 	ref.retiring = false
-	prevErr := ref.status.lastError
+	prevErr := ref.status.err
 	ref.status = routerActorStatus{
 		lifecycle:    RouterActorStarting,
 		availability: runtime.AvailabilityUnavailable,
-		lastError:    prevErr,
+		err:          prevErr,
 		primary: deploymentRouteStatus{
 			lifecycle:    DeploymentRouteStopped,
 			availability: runtime.AvailabilityUnavailable,
@@ -416,6 +419,8 @@ func (a *catalogActor[T]) startRouter(id string) (*routerState, error) {
 	}
 	a.reconcileStatus()
 
+	// Each start attempt supersedes the catalog's own previous failure.
+	a.err = nil
 	pid, err := a.Spawn(func() gen.ProcessBehavior {
 		return &routerActor[T]{
 			opts:     a.opts.RouterOptions,
@@ -426,7 +431,7 @@ func (a *catalogActor[T]) startRouter(id string) (*routerState, error) {
 	}, gen.ProcessOptions{LinkParent: true})
 	if err != nil {
 		ref.status.lifecycle = RouterActorRestarting
-		ref.status.lastError = fmt.Errorf("spawn router: %w", err)
+		a.err = fmt.Errorf("spawn router %s: %w", id, err)
 		return ref, err
 	}
 
@@ -435,7 +440,7 @@ func (a *catalogActor[T]) startRouter(id string) (*routerState, error) {
 		_ = a.Node().SendExit(pid, gen.TerminateReasonShutdown)
 		ref.pid = gen.PID{}
 		ref.status.lifecycle = RouterActorRestarting
-		ref.status.lastError = fmt.Errorf("monitor router: %w", err)
+		a.err = fmt.Errorf("monitor router %s: %w", id, err)
 		return ref, err
 	}
 	if err := a.SendWithPriority(pid, MessageRouterActivate{generation: generation}, gen.MessagePriorityHigh); err != nil {
@@ -468,11 +473,11 @@ func (a *catalogActor[T]) retireRouter(id string, callErr error) {
 
 	ref.pid = gen.PID{}
 	ref.retiring = false
-	prevErr := ref.status.lastError
+	prevErr := ref.status.err
 	ref.status = routerActorStatus{
 		lifecycle:    RouterActorStopped,
 		availability: runtime.AvailabilityUnavailable,
-		lastError:    prevErr,
+		err:          prevErr,
 		revision:     a.desiredRevision,
 		primary: deploymentRouteStatus{
 			lifecycle:    DeploymentRouteStopped,
@@ -502,7 +507,7 @@ func (a *catalogActor[T]) routerRestartState(id string) *runtime.ScheduledBackof
 
 // scheduleRouterRestart schedules a retry for an unavailable router.
 func (a *catalogActor[T]) scheduleRouterRestart(id string) error {
-	if a.draining {
+	if a.isDraining() {
 		return nil
 	}
 	state := a.routerRestartState(id)
@@ -563,8 +568,6 @@ func (a *catalogActor[T]) status() catalogActorStatus {
 	degraded := 0
 	unavailable := 0
 	settled := 0
-	var lastError error
-	var errorRouter string
 
 	for id := range a.desired {
 		ref := a.routers[id]
@@ -578,9 +581,6 @@ func (a *catalogActor[T]) status() catalogActorStatus {
 		}
 
 		status := ref.status.clone()
-		if status.lastError != nil && (lastError == nil || id < errorRouter) {
-			lastError, errorRouter = status.lastError, id
-		}
 		routers[id] = status
 		if status.normalRoutable {
 			routable++
@@ -596,14 +596,11 @@ func (a *catalogActor[T]) status() catalogActorStatus {
 		}
 	}
 
-	lifecycle := CatalogActorStarting
-	switch {
-	case a.drainReported:
-		lifecycle = CatalogActorStopped
-	case a.draining:
-		lifecycle = CatalogActorDraining
-	case a.desiredRevision != 0:
-		lifecycle = CatalogActorRunning
+	// The catalog's own failure wins, then its routers in plugin-id order.
+	errors := make([]error, 0, len(routers)+1)
+	errors = append(errors, a.err)
+	for _, id := range slices.Sorted(maps.Keys(routers)) {
+		errors = append(errors, routers[id].err)
 	}
 
 	availability := runtime.AvailabilityUnavailable
@@ -619,7 +616,7 @@ func (a *catalogActor[T]) status() catalogActorStatus {
 	}
 
 	return catalogActorStatus{
-		lifecycle:          lifecycle,
+		lifecycle:          a.lifecycle,
 		availability:       availability,
 		desiredRevision:    a.desiredRevision,
 		desiredRouters:     len(a.desired),
@@ -628,12 +625,15 @@ func (a *catalogActor[T]) status() catalogActorStatus {
 		unavailableRouters: unavailable,
 		settledRouters:     settled,
 		routers:            routers,
-		lastError:          lastError,
+		err:                runtime.FirstError(errors...),
 	}
 }
 
 // reconcileStatus recomputes and publishes the aggregate catalog status.
 func (a *catalogActor[T]) reconcileStatus() {
+	if a.desiredRevision != 0 && a.lifecycle == CatalogActorStarting {
+		a.lifecycle = CatalogActorRunning
+	}
 	next := a.status()
 	if sameCatalogActorStatus(a.lastStatus, next) {
 		return
@@ -641,6 +641,11 @@ func (a *catalogActor[T]) reconcileStatus() {
 	a.lastStatusEpoch = runtime.NextStatusEpoch(a.lastStatusEpoch)
 	a.lastStatus = next
 	a.propagateStatus(next)
+}
+
+// isDraining reports whether the catalog has closed admission for shutdown.
+func (a *catalogActor[T]) isDraining() bool {
+	return a.lifecycle == CatalogActorDraining || a.lifecycle == CatalogActorStopped
 }
 
 // propagateStatus sends the supplied snapshot without reconciling state or publishing gauges.
@@ -660,7 +665,7 @@ func (a *catalogActor[T]) propagateStatus(next catalogActorStatus) {
 func (a *catalogActor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 	status := a.status()
 	return map[string]string{
-		"catalog:last_error":       runtime.ErrorText(status.lastError),
+		"catalog:last_error":       runtime.ErrorText(status.err),
 		"catalog:lifecycle":        string(status.lifecycle),
 		"catalog:availability":     string(status.availability),
 		"catalog:desired_revision": fmt.Sprintf("%d", status.desiredRevision),
@@ -688,7 +693,7 @@ func routerSettled(status routerActorStatus, revision uint64) bool {
 func sameCatalogActorStatus(left, right catalogActorStatus) bool {
 	if left.lifecycle != right.lifecycle ||
 		left.availability != right.availability ||
-		runtime.ErrorText(left.lastError) != runtime.ErrorText(right.lastError) ||
+		runtime.ErrorText(left.err) != runtime.ErrorText(right.err) ||
 		left.desiredRevision != right.desiredRevision ||
 		left.desiredRouters != right.desiredRouters ||
 		left.routableRouters != right.routableRouters ||
