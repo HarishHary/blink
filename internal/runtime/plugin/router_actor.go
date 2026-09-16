@@ -43,12 +43,12 @@ const (
 type routerActorStatus struct {
 	lifecycle      RouterActorLifecycle
 	availability   runtime.Availability
-	lastError      error
 	revision       uint64
 	normalRoutable bool
 	shadowRoutable bool
 	primary        deploymentRouteStatus
 	candidate      deploymentRouteStatus
+	err            error
 }
 
 // clone deep-copies the nested route statuses so a receiver cannot mutate router state.
@@ -86,8 +86,6 @@ type deploymentRouteState struct {
 type routerActor[T Artifact] struct {
 	act.Router
 	opts             RouterOptions
-	lastStatus       routerActorStatus
-	lastStatusEpoch  int64
 	pluginID         string
 	generation       uint64
 	desiredRevision  uint64
@@ -99,6 +97,10 @@ type routerActor[T Artifact] struct {
 	desiredCandidate *Deployment
 	activePrimary    *Deployment
 	activeCandidate  *Deployment
+	lifecycle        RouterActorLifecycle // the router's own live lifecycle
+	err              error                // the router's own failure, kept apart from its routes' errors
+	lastStatus       routerActorStatus    // last published projection, the baseline reconcileStatus dedupes against
+	lastStatusEpoch  int64
 	labels           telemetry.Labels
 }
 
@@ -173,7 +175,7 @@ type MessageRetryRouteStep struct {
 // Init allocates the router's route and in-flight-call indexes.
 func (a *routerActor[T]) Init(...any) (act.RouterOptions, error) {
 	a.opts = routerOptionsWithDefaults(a.opts)
-	a.lastStatus.lifecycle = RouterActorStarting
+	a.lifecycle = RouterActorStarting
 	a.routesByKey = make(map[DeploymentRouteKey]*deploymentRouteState)
 	a.routesByName = make(map[gen.Atom]DeploymentRouteKey)
 	a.inFlightCalls = make(map[uint64]*routerInvocation)
@@ -182,9 +184,9 @@ func (a *routerActor[T]) Init(...any) (act.RouterOptions, error) {
 
 // Terminate cancels pending timers for in-flight calls and route restarts.
 func (a *routerActor[T]) Terminate(reason error) {
-	previous := a.lastStatus
-	a.lastStatus.lastError = reason
-	a.lastStatus.lifecycle = RouterActorStopped
+	defer a.reconcileStatus()
+	a.err = runtime.FirstError(reason, a.err)
+	a.lifecycle = RouterActorStopped
 	for _, call := range a.inFlightCalls {
 		if call.ackStop != nil {
 			call.ackStop()
@@ -195,7 +197,6 @@ func (a *routerActor[T]) Terminate(reason error) {
 			ref.restart.CancelScheduled(false)
 		}
 	}
-	a.reconcileStatus(previous)
 }
 
 // RouteMessage routes normal-priority plugin invocations.
@@ -232,7 +233,7 @@ func (a *routerActor[T]) HandleMessage(from gen.PID, message any) error {
 			return fmt.Errorf("router %q already activated as generation %d", a.pluginID, a.generation)
 		}
 		a.generation = m.generation
-		a.reconcileStatus(a.lastStatus)
+		a.reconcileStatus()
 
 	case MessageApplyRouterDesiredState:
 		if a.generation == 0 || a.isDraining() || m.desiredRevision < a.desiredRevision {
@@ -257,7 +258,7 @@ func (a *routerActor[T]) HandleMessage(from gen.PID, message any) error {
 			}
 		}
 		a.reconcileDeployments()
-		a.reconcileStatus(a.lastStatus)
+		a.reconcileStatus()
 
 	case MessageCancelInvocation:
 		a.cancelInvocation(m)
@@ -286,7 +287,7 @@ func (a *routerActor[T]) HandleMessage(from gen.PID, message any) error {
 				a.drainRoute(ref)
 			}
 			a.reconcileDeployments()
-			a.reconcileStatus(a.lastStatus)
+			a.reconcileStatus()
 		} else if key, ok := a.routesByName[m.route]; ok {
 			ref := a.routesByKey[key]
 			if ref != nil && from == m.manager && ref.phase == deploymentRouteActive {
@@ -312,7 +313,7 @@ func (a *routerActor[T]) HandleMessage(from gen.PID, message any) error {
 		if ref, ok := a.currentManager(m.route, from, m.manager); ok && ref.phase == deploymentRouteDraining {
 			a.removeDrainedRoute(ref)
 			a.reconcileDeployments()
-			a.reconcileStatus(a.lastStatus)
+			a.reconcileStatus()
 			a.reportDrained()
 		}
 
@@ -339,7 +340,7 @@ func (a *routerActor[T]) HandleMessage(from gen.PID, message any) error {
 			}
 			_ = a.scheduleRouteStep(ref)
 		}
-		a.reconcileStatus(a.lastStatus)
+		a.reconcileStatus()
 
 	case MessageDrain:
 		a.beginDrain()
@@ -553,7 +554,7 @@ func (a *routerActor[T]) drainRoute(ref *deploymentRouteState) {
 	}
 	// No live manager: respawn one, already draining, so it can finish the drain protocol.
 	if err := a.RespawnRoute(ref.name); err != nil {
-		ref.status.lastError = err
+		a.err = err
 		_ = a.scheduleRouteStep(ref)
 		return
 	}
@@ -570,23 +571,21 @@ func (a *routerActor[T]) beginDrain() {
 	if a.isDraining() {
 		return
 	}
-	previous := a.lastStatus
-	a.lastStatus.lifecycle = RouterActorDraining
+	a.lifecycle = RouterActorDraining
 	for _, ref := range a.routesByKey {
 		a.drainRoute(ref)
 	}
-	a.reconcileStatus(previous)
+	a.reconcileStatus()
 	a.reportDrained()
 }
 
 // reportDrained announces router drain completion to the catalog once no routes remain.
 func (a *routerActor[T]) reportDrained() {
-	if a.lastStatus.lifecycle != RouterActorDraining || len(a.routesByKey) > 0 {
+	if a.lifecycle != RouterActorDraining || len(a.routesByKey) > 0 {
 		return
 	}
-	previous := a.lastStatus
-	a.lastStatus.lifecycle = RouterActorStopped
-	a.reconcileStatus(previous)
+	a.lifecycle = RouterActorStopped
+	a.reconcileStatus()
 	_ = a.SendWithPriority(a.Parent(), MessageRouterDrained{pluginID: a.pluginID, pid: a.PID(), generation: a.generation}, gen.MessagePriorityHigh)
 }
 
@@ -594,7 +593,7 @@ func (a *routerActor[T]) reportDrained() {
 func (a *routerActor[T]) removeDrainedRoute(ref *deploymentRouteState) {
 	ref.phase = deploymentRouteRemoving
 	if err := a.RemoveRoute(ref.name); err != nil {
-		ref.status.lastError = err
+		a.err = err
 		_ = a.scheduleRouteStep(ref)
 		return
 	}
@@ -618,7 +617,7 @@ func (a *routerActor[T]) addRoute(ref *deploymentRouteState) error {
 		return a.newDeploymentManager(ref)
 	}})
 	if err != nil {
-		ref.status.lastError = err
+		a.err = err
 		return a.scheduleRouteStep(ref)
 	}
 	ref.phase = deploymentRouteActive
@@ -652,11 +651,11 @@ func (a *routerActor[T]) retryRouteStep(message MessageRetryRouteStep) {
 			}
 		}
 		if err != nil {
-			ref.status.lastError = err
+			a.err = err
 			_ = a.scheduleRouteStep(ref)
 		}
 	}
-	a.reconcileStatus(a.lastStatus)
+	a.reconcileStatus()
 }
 
 // scheduleRouteStep arms a per-route backoff timer that re-drives its pending lifecycle step.
@@ -672,14 +671,14 @@ func (a *routerActor[T]) scheduleRouteStep(ref *deploymentRouteState) error {
 	}
 	delay := ref.restart.Strategy.NextBackOff()
 	if delay == backoff.Stop {
-		ref.status.lastError = fmt.Errorf("deployment route step for %v: %w", ref.key, runtime.ErrBackoffStopped)
-		return ref.status.lastError
+		a.err = fmt.Errorf("deployment route step for %v: %w", ref.key, runtime.ErrBackoffStopped)
+		return a.err
 	}
 	ref.restart.Token++
 	cancel, err := a.SendWithPriorityAfter(a.PID(), MessageRetryRouteStep{route: ref.name, token: ref.restart.Token}, gen.MessagePriorityHigh, delay)
 	if err != nil {
-		ref.status.lastError = fmt.Errorf("schedule deployment route step: %w", err)
-		return ref.status.lastError
+		a.err = fmt.Errorf("schedule deployment route step: %w", err)
+		return a.err
 	}
 	ref.restart.Pending, ref.restart.Cancel = true, cancel
 	return nil
@@ -688,7 +687,7 @@ func (a *routerActor[T]) scheduleRouteStep(ref *deploymentRouteState) error {
 // newDeploymentManager builds the DeploymentManager child that serves this route.
 func (a *routerActor[T]) newDeploymentManager(ref *deploymentRouteState) *deploymentManager[T] {
 	ref.status = deploymentManagerStatus{
-		lastError:    ref.status.lastError,
+		err:          ref.status.err,
 		lifecycle:    DeploymentManagerStarting,
 		availability: runtime.AvailabilityUnavailable,
 		processes:    make(map[gen.PID]pluginProcessActorStatus),
@@ -701,6 +700,16 @@ func (a *routerActor[T]) newDeploymentManager(ref *deploymentRouteState) *deploy
 		draining:   ref.phase >= deploymentRouteDraining || a.isDraining(),
 		labels:     a.labels,
 	}
+}
+
+// routePID reads the route's live manager PID without touching fencing state, so status
+// projections and inspections stay free of side effects.
+func (a *routerActor[T]) routePID(ref *deploymentRouteState) gen.PID {
+	info, ok := a.Route(ref.name)
+	if !ok {
+		return gen.PID{}
+	}
+	return info.PID
 }
 
 // refreshRoutePID reads the route's live manager PID and records it in the fencing set.
@@ -756,7 +765,7 @@ func (a *routerActor[T]) deploymentManagerTerminated(from gen.PID, message Messa
 	}
 	delete(ref.managers, message.manager)
 	if ref.pid == message.manager {
-		ref.status.lastError = message.reason
+		ref.status.err = message.reason
 	}
 	for callID, call := range a.inFlightCalls {
 		if call.accepted && call.route == message.route && call.manager == message.manager {
@@ -771,7 +780,7 @@ func (a *routerActor[T]) deploymentManagerTerminated(from gen.PID, message Messa
 		}
 		_ = a.scheduleRouteStep(ref)
 	}
-	a.reconcileStatus(a.lastStatus)
+	a.reconcileStatus()
 }
 
 // ---------------------------------------------------------------------------
@@ -813,7 +822,7 @@ func (a *routerActor[T]) deploymentStatusFor(deployment *Deployment) deploymentR
 	return deploymentRouteStatus{
 		lifecycle:        lifecycle,
 		availability:     ref.status.availability,
-		lastError:        ref.status.lastError,
+		err:              ref.status.err,
 		readyProcs:       ref.status.readyProcs,
 		desiredProcesses: ref.status.currentProcs,
 		queueDepth:       ref.status.queueDepth,
@@ -828,7 +837,7 @@ func (a *routerActor[T]) activeRouteAvailable(deployment *Deployment) bool {
 		return false
 	}
 	ref := a.routesByKey[deployment.RouteKey()]
-	return ref != nil && ref.phase == deploymentRouteActive && a.refreshRoutePID(ref) != (gen.PID{})
+	return ref != nil && ref.phase == deploymentRouteActive && a.routePID(ref) != (gen.PID{})
 }
 
 // routeAvailability computes route status and routability from desired/active deployments
@@ -859,15 +868,13 @@ func (a *routerActor[T]) routeAvailability() (deploymentRouteStatus, deploymentR
 // and HandleInspect (to an operator).
 func (a *routerActor[T]) status() routerActorStatus {
 	primaryStatus, candidateStatus, normalRoutable, shadowRoutable, availability := a.routeAvailability()
-	var ownError error
-	if a.lastStatus.lifecycle == RouterActorStopped {
-		ownError = a.lastStatus.lastError
+	if a.lifecycle == RouterActorStopped {
 		availability = runtime.AvailabilityUnavailable
 		normalRoutable, shadowRoutable = false, false
 	}
 	return routerActorStatus{
-		lastError:      runtime.FirstError(ownError, primaryStatus.lastError, candidateStatus.lastError),
-		lifecycle:      a.lastStatus.lifecycle,
+		err:            runtime.FirstError(a.err, primaryStatus.err, candidateStatus.err),
+		lifecycle:      a.lifecycle,
 		availability:   availability,
 		revision:       a.desiredRevision,
 		normalRoutable: normalRoutable,
@@ -878,12 +885,12 @@ func (a *routerActor[T]) status() routerActorStatus {
 }
 
 // reconcileStatus recomputes router status and publishes it on change.
-func (a *routerActor[T]) reconcileStatus(previous routerActorStatus) {
-	if _, _, normalRoutable, _, _ := a.routeAvailability(); normalRoutable && a.lastStatus.lifecycle == RouterActorStarting {
-		a.lastStatus.lifecycle = RouterActorRunning
+func (a *routerActor[T]) reconcileStatus() {
+	if _, _, normalRoutable, _, _ := a.routeAvailability(); normalRoutable && a.lifecycle == RouterActorStarting {
+		a.lifecycle = RouterActorRunning
 	}
 	next := a.status()
-	if sameRouterActorStatus(previous, next) {
+	if sameRouterActorStatus(a.lastStatus, next) {
 		return
 	}
 	a.lastStatusEpoch = runtime.NextStatusEpoch(a.lastStatusEpoch)
@@ -903,9 +910,9 @@ func (a *routerActor[T]) propagateStatus(next routerActorStatus) {
 func (a *routerActor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 	status := a.status()
 	return map[string]string{
-		"router:last_error":             runtime.ErrorText(status.lastError),
-		"router:primary:last_error":     runtime.ErrorText(status.primary.lastError),
-		"router:candidate:last_error":   runtime.ErrorText(status.candidate.lastError),
+		"router:last_error":             runtime.ErrorText(status.err),
+		"router:primary:last_error":     runtime.ErrorText(status.primary.err),
+		"router:candidate:last_error":   runtime.ErrorText(status.candidate.err),
 		"router:lifecycle":              string(status.lifecycle),
 		"router:availability":           string(status.availability),
 		"router:revision":               fmt.Sprintf("%d", status.revision),
@@ -922,14 +929,14 @@ func (a *routerActor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 
 // isDraining reports whether the router has closed admission for shutdown.
 func (a *routerActor[T]) isDraining() bool {
-	return a.lastStatus.lifecycle == RouterActorDraining || a.lastStatus.lifecycle == RouterActorStopped
+	return a.lifecycle == RouterActorDraining || a.lifecycle == RouterActorStopped
 }
 
 // sameRouterActorStatus reports whether two router statuses are equal, for publish deduplication.
 func sameRouterActorStatus(left, right routerActorStatus) bool {
 	return left.lifecycle == right.lifecycle &&
 		left.availability == right.availability &&
-		runtime.ErrorText(left.lastError) == runtime.ErrorText(right.lastError) &&
+		runtime.ErrorText(left.err) == runtime.ErrorText(right.err) &&
 		left.revision == right.revision &&
 		left.normalRoutable == right.normalRoutable &&
 		left.shadowRoutable == right.shadowRoutable &&
