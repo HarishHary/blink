@@ -881,6 +881,7 @@ func (m *deploymentManagerActor[T]) startPluginProcess(slot int) bool {
 			adapter:    m.adapter,
 			options:    m.options.PluginProcessOptions,
 			deployment: m.deployment,
+			labels:     m.labels,
 		}
 	}, gen.ProcessOptions{LinkParent: true})
 	if err != nil {

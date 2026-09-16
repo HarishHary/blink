@@ -72,6 +72,14 @@ const (
 	metricInvocationTime      = "blink_plugin_invocation_seconds"
 )
 
+// Plugin process series: the subprocess one process actor keeps. The manager's process counters above
+// track the actors it spawns into slots, which a subprocess restarted in place never disturbs.
+const (
+	metricSubprocessStarts   = "blink_plugin_subprocess_starts_total"
+	metricSubprocessRestarts = "blink_plugin_subprocess_restarts_total"
+	metricSubprocessFailures = "blink_plugin_subprocess_failures_total"
+)
+
 var (
 	namespaceLabels = []string{"namespace"}
 	resultLabels    = []string{"namespace", "result"}
@@ -135,6 +143,10 @@ var (
 			Help:    "Seconds from a deployment manager accepting one invocation to completing it, queueing included",
 			Buckets: invocationBuckets,
 		},
+		// plugin process
+		{Kind: telemetry.Counter, Name: metricSubprocessStarts, Help: "Plugin subprocesses spawned by the process actor holding a slot", Labels: namespaceLabels},
+		{Kind: telemetry.Counter, Name: metricSubprocessRestarts, Help: "Plugin subprocess restarts scheduled, by what asked for one", Labels: reasonLabels},
+		{Kind: telemetry.Counter, Name: metricSubprocessFailures, Help: "Plugin subprocesses the process actor gave up restarting", Labels: namespaceLabels},
 	}
 )
 
