@@ -350,7 +350,7 @@ func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 		}
 		// The process is on its way out and its DOWN will follow, so failing its calls here rather than
 		// waiting means a caller learns as soon as the process itself knows.
-		m.failProcessCalls(msg.process, runtime.ErrPluginUnavailable)
+		m.failProcessCalls(msg.process, ErrPluginUnavailable)
 		m.reconcile()
 
 	case gen.MessageDownPID:
@@ -367,7 +367,7 @@ func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 			restart: process.restart,
 			status:  pluginProcessActorStatus{lifecycle: PluginProcessActorRestarting, availability: runtime.AvailabilityUnavailable},
 		}
-		m.failProcessCalls(msg.PID, runtime.ErrPluginUnavailable)
+		m.failProcessCalls(msg.PID, ErrPluginUnavailable)
 		m.Log().Warning("plugin process down: slot=%d route=%s retiring=%v replace=%v reason=%v", slot, m.route, retiring, replace, msg.Reason)
 		switch {
 		case retiring && !replace:
@@ -397,7 +397,7 @@ func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 		if entry.call.Cancel != nil {
 			entry.call.Cancel()
 		}
-		m.removeCall(msg.callID, runtime.ErrPluginUnavailable)
+		m.removeCall(msg.callID, ErrPluginUnavailable)
 		m.reconcile()
 
 	case MessageDeploymentManagerRestart:
@@ -488,7 +488,7 @@ func (m *deploymentManager[T]) acceptInvocation(call MessageInvokePlugin[T]) {
 		return
 	}
 	if m.draining || m.circuitOpen {
-		m.completeInvocation(&deploymentManagerCall[T]{call: call}, runtime.ErrPluginUnavailable)
+		m.completeInvocation(&deploymentManagerCall[T]{call: call}, ErrPluginUnavailable)
 		return
 	}
 	if call.Context == nil {
@@ -500,7 +500,7 @@ func (m *deploymentManager[T]) acceptInvocation(call MessageInvokePlugin[T]) {
 	}
 	if m.pendingCalls.length >= m.options.QueueSize {
 		m.labels.Count(m, metricQueueRejects)
-		m.completeInvocation(&deploymentManagerCall[T]{call: call}, runtime.ErrQueueFull)
+		m.completeInvocation(&deploymentManagerCall[T]{call: call}, ErrQueueFull)
 		return
 	}
 	entry := &deploymentManagerCall[T]{call: call, phase: deploymentManagerPending, accepted: time.Now()}
@@ -530,13 +530,13 @@ func (m *deploymentManager[T]) dispatchInvocation() {
 		entry.dispatchToken++
 		cancel, err := m.SendWithPriorityAfter(m.PID(), MessageDeploymentManagerDispatchDeadline{callID: callID, token: entry.dispatchToken}, gen.MessagePriorityHigh, m.options.DispatchTimeout)
 		if err != nil {
-			m.removeCall(callID, runtime.ErrPluginUnavailable)
+			m.removeCall(callID, ErrPluginUnavailable)
 			continue
 		}
 		entry.dispatchStop = cancel
 		process.assigned++
 		if err := m.Send(pid, entry.call); err != nil {
-			m.removeCall(callID, runtime.ErrPluginUnavailable)
+			m.removeCall(callID, ErrPluginUnavailable)
 			m.retireSlot(slot, true, fmt.Errorf("dispatch invocation: %w", err))
 		}
 	}
@@ -993,7 +993,7 @@ func (m *deploymentManager[T]) openCircuit(err error) {
 	m.labels.Count(m, metricCircuitOpens)
 	m.cancelPluginProcessRestarts(false)
 	for callID := range m.inFlightCalls {
-		m.removeCall(callID, runtime.ErrPluginUnavailable)
+		m.removeCall(callID, ErrPluginUnavailable)
 	}
 	// The deployment answers nothing while its circuit is open, so its slots are only cost; the cooldown
 	// below opens a fresh set if it can run at all.
@@ -1121,7 +1121,7 @@ func sameDeploymentManagerStatus(left, right deploymentManagerStatus) bool {
 		left.readyProcs != right.readyProcs ||
 		left.callsPerProcess != right.callsPerProcess ||
 		left.totalCapacity != right.totalCapacity ||
-		errorText(left.lastError) != errorText(right.lastError) ||
+		runtime.ErrorText(left.lastError) != runtime.ErrorText(right.lastError) ||
 		len(left.processes) != len(right.processes) {
 		return false
 	}

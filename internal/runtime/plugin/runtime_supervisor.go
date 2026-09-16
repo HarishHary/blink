@@ -308,7 +308,7 @@ func (s *supervisor[P, M]) HandleMessage(from gen.PID, message any) error {
 	case MessageSubmitInvocation[P]:
 		if !s.acceptsSubmission(m.expectedGeneration) {
 			s.labels.Count(s, metricInvocationsRejected, "closed")
-			m.result.Complete(runtime.ErrPluginUnavailable)
+			m.result.Complete(ErrPluginUnavailable)
 			return nil
 		}
 		if err := m.context.Err(); err != nil {
@@ -333,7 +333,7 @@ func (s *supervisor[P, M]) HandleMessage(from gen.PID, message any) error {
 			Shadow:     m.shadow,
 		}
 		if err := s.Send(catalogPID, call); err != nil {
-			s.finishCall(m.callID, runtime.ErrPluginUnavailable)
+			s.finishCall(m.callID, ErrPluginUnavailable)
 			_ = s.Node().SendExit(
 				catalogPID,
 				fmt.Errorf("forward invocation to catalog: %w", err),
@@ -464,7 +464,7 @@ func (s *supervisor[P, M]) HandleMessage(from gen.PID, message any) error {
 		}
 
 		for callID := range s.inFlightCalls {
-			s.finishCall(callID, runtime.ErrPluginUnavailable)
+			s.finishCall(callID, ErrPluginUnavailable)
 		}
 		for _, waiter := range s.drainWaiters {
 			if waiter.alive() {
@@ -525,7 +525,7 @@ func (s *supervisor[P, M]) Terminate(reason error) {
 	s.cancelProjectionCommitRetry(false)
 	s.cancelProjectionDeadline()
 	for callID := range s.inFlightCalls {
-		s.finishCall(callID, runtime.ErrPluginUnavailable)
+		s.finishCall(callID, ErrPluginUnavailable)
 	}
 }
 
@@ -801,7 +801,7 @@ func (s *supervisor[P, M]) retireCatalogActor(pid gen.PID, reason error) {
 
 	for callID, call := range s.inFlightCalls {
 		if call.catalog == pid {
-			s.finishCall(callID, runtime.ErrPluginUnavailable)
+			s.finishCall(callID, ErrPluginUnavailable)
 		}
 	}
 }

@@ -215,7 +215,7 @@ func (a *routerActor[T]) HandleMessage(from gen.PID, message any) error {
 		call := a.inFlightCalls[m.callID]
 		if call != nil && !call.accepted && call.ackToken == m.token {
 			a.labels.Count(a, metricAcceptanceTimeouts)
-			a.finishTrackedCall(m.callID, runtime.ErrPluginUnavailable)
+			a.finishTrackedCall(m.callID, ErrPluginUnavailable)
 		}
 
 	case MessageRetryRouteStep:
@@ -328,7 +328,7 @@ func (a *routerActor[T]) HandleMessage(from gen.PID, message any) error {
 		if tracked == nil || tracked.route != m.Name {
 			return nil
 		}
-		a.finishTrackedCall(call.CallID, runtime.ErrPluginUnavailable)
+		a.finishTrackedCall(call.CallID, ErrPluginUnavailable)
 		if key, ok := a.routesByName[m.Name]; ok {
 			ref := a.routesByKey[key]
 			if ref == nil || ref.phase != deploymentRouteActive || a.refreshRoutePID(ref) != (gen.PID{}) {
@@ -416,7 +416,7 @@ func (a *routerActor[T]) activateDesired(active **Deployment, desired *Deploymen
 func (a *routerActor[T]) routeInvocation(call MessageInvokePlugin[T]) gen.Atom {
 	if a.isDraining() {
 		a.labels.Count(a, metricUnroutable)
-		_ = a.SendWithPriority(a.Parent(), MessageInvocationCompleted{CallID: call.CallID, Err: runtime.ErrPluginUnavailable}, gen.MessagePriorityHigh)
+		_ = a.SendWithPriority(a.Parent(), MessageInvocationCompleted{CallID: call.CallID, Err: ErrPluginUnavailable}, gen.MessagePriorityHigh)
 		return act.RouteDiscard
 	}
 	// Shadow goes to the shadow candidate; else primary, unless a canary wins this call's bucket.
@@ -439,7 +439,7 @@ func (a *routerActor[T]) routeInvocation(call MessageInvokePlugin[T]) gen.Atom {
 	}
 	if ref == nil || ref.phase != deploymentRouteActive || a.refreshRoutePID(ref) == (gen.PID{}) {
 		a.labels.Count(a, metricUnroutable)
-		_ = a.SendWithPriority(a.Parent(), MessageInvocationCompleted{CallID: call.CallID, Err: runtime.ErrPluginUnavailable}, gen.MessagePriorityHigh)
+		_ = a.SendWithPriority(a.Parent(), MessageInvocationCompleted{CallID: call.CallID, Err: ErrPluginUnavailable}, gen.MessagePriorityHigh)
 		return act.RouteDiscard
 	}
 	if _, exists := a.inFlightCalls[call.CallID]; exists {
@@ -453,7 +453,7 @@ func (a *routerActor[T]) routeInvocation(call MessageInvokePlugin[T]) gen.Atom {
 	cancel, err := a.SendWithPriorityAfter(a.PID(), MessageInvocationTimedOut{callID: call.CallID, token: tracked.ackToken}, gen.MessagePriorityHigh, timeout)
 	if err != nil {
 		a.labels.Count(a, metricUnroutable)
-		_ = a.SendWithPriority(a.Parent(), MessageInvocationCompleted{CallID: call.CallID, Err: runtime.ErrPluginUnavailable}, gen.MessagePriorityHigh)
+		_ = a.SendWithPriority(a.Parent(), MessageInvocationCompleted{CallID: call.CallID, Err: ErrPluginUnavailable}, gen.MessagePriorityHigh)
 		return act.RouteDiscard
 	}
 	tracked.ackStop = cancel
@@ -745,7 +745,7 @@ func (a *routerActor[T]) deploymentManagerTerminated(from gen.PID, message Messa
 	delete(ref.managers, message.manager)
 	for callID, call := range a.inFlightCalls {
 		if call.accepted && call.route == message.route && call.manager == message.manager {
-			a.finishTrackedCall(callID, runtime.ErrPluginUnavailable)
+			a.finishTrackedCall(callID, ErrPluginUnavailable)
 		}
 	}
 	if ref.phase == deploymentRouteDraining {
@@ -896,7 +896,7 @@ func (a *routerActor[T]) isDraining() bool {
 func sameRouterActorStatus(left, right routerActorStatus) bool {
 	return left.lifecycle == right.lifecycle &&
 		left.availability == right.availability &&
-		errorText(left.lastError) == errorText(right.lastError) &&
+		runtime.ErrorText(left.lastError) == runtime.ErrorText(right.lastError) &&
 		left.revision == right.revision &&
 		left.normalRoutable == right.normalRoutable &&
 		left.shadowRoutable == right.shadowRoutable &&

@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"os/exec"
 	"sync/atomic"
@@ -21,6 +22,11 @@ import (
 // ---------------------------------------------------------------------------
 // Types & state
 // ---------------------------------------------------------------------------
+
+var (
+	ErrArtifactMismatch = stderrors.New("plugin artifact checksum mismatch")
+	ErrProcessUnhealthy = stderrors.New("plugin process health check failed")
+)
 
 // PluginMetaLifecycle describes one plugin meta-process incarnation.
 type PluginMetaLifecycle string
@@ -234,7 +240,7 @@ func (m *pluginProcessMeta[T]) invoke(msg pluginMetaInvoke[T]) {
 	}
 	session := m.session.Load()
 	if session == nil || session.rpc == nil || m.runCtx.Err() != nil {
-		m.answerInvocation(msg, pluginMetaInvokeResult{err: runtime.ErrPluginUnavailable})
+		m.answerInvocation(msg, pluginMetaInvokeResult{err: ErrPluginUnavailable})
 		return
 	}
 
@@ -312,7 +318,7 @@ func (m *pluginProcessMeta[T]) launchPlugin(ctx context.Context) (T, *goplugin.C
 		return zero, nil, nil, fmt.Errorf("checksum plugin artifact %s: %w", m.deployment.Path, err)
 	}
 	if digest != m.deployment.Hash {
-		return zero, nil, nil, fmt.Errorf("%w: %s expected %s, found %s", runtime.ErrArtifactMismatch, m.deployment.Path, m.deployment.Hash, digest)
+		return zero, nil, nil, fmt.Errorf("%w: %s expected %s, found %s", ErrArtifactMismatch, m.deployment.Path, m.deployment.Hash, digest)
 	}
 
 	client := goplugin.NewClient(&goplugin.ClientConfig{

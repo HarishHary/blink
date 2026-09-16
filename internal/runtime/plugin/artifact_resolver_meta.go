@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 
@@ -15,6 +16,8 @@ import (
 // ---------------------------------------------------------------------------
 // Types & state
 // ---------------------------------------------------------------------------
+
+var ErrArtifactResolve = errors.New("plugin artifact resolution failed")
 
 // ArtifactResolverMetaLifecycle describes the resolver meta-process lifecycle.
 type ArtifactResolverMetaLifecycle string
@@ -95,7 +98,7 @@ func (m *artifactResolverMeta) Start() error {
 				desired:            desired,
 				deferred:           deferred,
 			}, gen.MessagePriorityHigh); err != nil {
-				return fmt.Errorf("%w: send result: %w", runtime.ErrArtifactResolve, err)
+				return fmt.Errorf("%w: send result: %w", ErrArtifactResolve, err)
 			}
 		}
 	}
@@ -118,7 +121,7 @@ func (m *artifactResolverMeta) HandleMessage(_ gen.PID, message any) error {
 	case m.jobs <- request:
 		return nil
 	default:
-		return fmt.Errorf("%w: request already queued", runtime.ErrArtifactResolve)
+		return fmt.Errorf("%w: request already queued", ErrArtifactResolve)
 	}
 }
 

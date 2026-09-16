@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,6 +18,8 @@ import (
 // ---------------------------------------------------------------------------
 // Types & state
 // ---------------------------------------------------------------------------
+
+var ErrArtifactWatch = errors.New("plugin artifact watch failed")
 
 const (
 	artifactWatchDebounce = 300 * time.Millisecond
@@ -100,7 +103,7 @@ func (m *artifactWatcherMeta) Init(process gen.MetaProcess) error {
 func (m *artifactWatcherMeta) Start() error {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		return fmt.Errorf("%w: create watcher: %w", runtime.ErrArtifactWatch, err)
+		return fmt.Errorf("%w: create watcher: %w", ErrArtifactWatch, err)
 	}
 	defer watcher.Close()
 	state := artifactWatcherRunState{watcher: watcher}
@@ -157,12 +160,12 @@ func (m *artifactWatcherMeta) Start() error {
 				if m.runCtx.Err() != nil {
 					return nil
 				}
-				return fmt.Errorf("%w: event channel closed", runtime.ErrArtifactWatch)
+				return fmt.Errorf("%w: event channel closed", ErrArtifactWatch)
 			}
 			if filepath.Clean(event.Name) == filepath.Clean(m.directory) &&
 				event.Op&(fsnotify.Remove|fsnotify.Rename) != 0 {
 				state.watchingDirectory = false
-				if err := m.reconcileStatus(&state, fmt.Errorf("%w: directory watch invalidated for %q: %s", runtime.ErrArtifactWatch, m.directory, event.Op)); err != nil {
+				if err := m.reconcileStatus(&state, fmt.Errorf("%w: directory watch invalidated for %q: %s", ErrArtifactWatch, m.directory, event.Op)); err != nil {
 					return err
 				}
 			}
@@ -173,12 +176,12 @@ func (m *artifactWatcherMeta) Start() error {
 				if m.runCtx.Err() != nil {
 					return nil
 				}
-				return fmt.Errorf("%w: error channel closed", runtime.ErrArtifactWatch)
+				return fmt.Errorf("%w: error channel closed", ErrArtifactWatch)
 			}
 			if m.runCtx.Err() != nil {
 				return nil
 			}
-			return fmt.Errorf("%w: %w", runtime.ErrArtifactWatch, err)
+			return fmt.Errorf("%w: %w", ErrArtifactWatch, err)
 
 		case <-debounceC:
 			// An event says to look, not what to conclude; the fingerprint decides, as on a poll tick.
@@ -231,7 +234,7 @@ func (m *artifactWatcherMeta) notifyOnDirectoryChange(state *artifactWatcherRunS
 		wasReadable := state.directoryReadable
 		state.directoryReadable = false
 		state.watchingDirectory = false
-		if err := m.reconcileStatus(state, fmt.Errorf("%w: fingerprint directory %q: %w", runtime.ErrArtifactWatch, m.directory, err)); err != nil {
+		if err := m.reconcileStatus(state, fmt.Errorf("%w: fingerprint directory %q: %w", ErrArtifactWatch, m.directory, err)); err != nil {
 			return err
 		}
 		if !wasReadable {
@@ -255,7 +258,7 @@ func (m *artifactWatcherMeta) notifyOnDirectoryChange(state *artifactWatcherRunS
 	}
 
 	if err := m.SendWithPriority(m.Parent(), MessageArtifactDirectoryChanged{source: m.ID()}, gen.MessagePriorityHigh); err != nil {
-		return fmt.Errorf("%w: notify directory change: %w", runtime.ErrArtifactWatch, err)
+		return fmt.Errorf("%w: notify directory change: %w", ErrArtifactWatch, err)
 	}
 	return nil
 }
@@ -267,7 +270,7 @@ func (m *artifactWatcherMeta) tryAttachWatch(state *artifactWatcherRunState) err
 	}
 	if err := state.watcher.Add(m.directory); err != nil {
 		state.watchingDirectory = false
-		return fmt.Errorf("%w: watch directory %q: %w", runtime.ErrArtifactWatch, m.directory, err)
+		return fmt.Errorf("%w: watch directory %q: %w", ErrArtifactWatch, m.directory, err)
 	}
 	state.watchingDirectory = true
 	return nil
@@ -338,7 +341,7 @@ func (m *artifactWatcherMeta) reconcileStatus(state *artifactWatcherRunState, wa
 // propagateStatus sends directory facts without changing the reconciliation cache.
 func (m *artifactWatcherMeta) propagateStatus(next MessageArtifactWatcherStatusChanged) error {
 	if err := m.SendWithPriority(m.Parent(), next, gen.MessagePriorityHigh); err != nil {
-		return fmt.Errorf("%w: publish watcher state: %w", runtime.ErrArtifactWatch, err)
+		return fmt.Errorf("%w: publish watcher state: %w", ErrArtifactWatch, err)
 	}
 	return nil
 }

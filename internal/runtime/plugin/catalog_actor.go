@@ -153,7 +153,7 @@ func (a *catalogActor[T]) HandleMessage(from gen.PID, message any) error {
 			ref.retiring = true
 			a.cancelRouterRestartBackoff(id, false)
 			if ref.pid == (gen.PID{}) {
-				a.retireRouter(id, runtime.ErrPluginUnavailable)
+				a.retireRouter(id, ErrPluginUnavailable)
 				continue
 			}
 			_ = a.SendWithPriority(ref.pid, MessageDrain{}, gen.MessagePriorityHigh)
@@ -162,17 +162,17 @@ func (a *catalogActor[T]) HandleMessage(from gen.PID, message any) error {
 
 	case MessageInvokePlugin[T]:
 		if a.draining || a.desiredRevision == 0 {
-			a.finishUntrackedCall(m, runtime.ErrPluginUnavailable)
+			a.finishUntrackedCall(m, ErrPluginUnavailable)
 			return nil
 		}
 		ref := a.routers[m.PluginID]
 		if ref == nil || ref.pid == (gen.PID{}) || ref.retiring {
-			a.finishUntrackedCall(m, runtime.ErrPluginUnavailable)
+			a.finishUntrackedCall(m, ErrPluginUnavailable)
 			return nil
 		}
 		a.inFlightCalls[m.CallID] = ref.pid
 		if err := a.Send(ref.pid, m); err != nil {
-			a.finishTrackedCall(m.CallID, runtime.ErrPluginUnavailable)
+			a.finishTrackedCall(m.CallID, ErrPluginUnavailable)
 			_ = a.Node().SendExit(ref.pid, fmt.Errorf("forward invocation to router: %w", err))
 		}
 
@@ -222,7 +222,7 @@ func (a *catalogActor[T]) HandleMessage(from gen.PID, message any) error {
 		}
 
 		_ = a.SendWithPriority(ref.pid, MessageStop{}, gen.MessagePriorityHigh)
-		a.retireRouter(m.pluginID, runtime.ErrPluginUnavailable)
+		a.retireRouter(m.pluginID, ErrPluginUnavailable)
 
 		if a.draining {
 			a.reconcileStatus()
@@ -285,7 +285,7 @@ func (a *catalogActor[T]) HandleMessage(from gen.PID, message any) error {
 
 			_, desired := a.desired[id]
 			if a.draining || ref.retiring || !desired {
-				a.retireRouter(id, runtime.ErrPluginUnavailable)
+				a.retireRouter(id, ErrPluginUnavailable)
 				if a.draining {
 					if a.liveRouterCount() == 0 {
 						a.reportDrained()
@@ -299,7 +299,7 @@ func (a *catalogActor[T]) HandleMessage(from gen.PID, message any) error {
 				ref.pid = gen.PID{}
 				for callID, routerPID := range a.inFlightCalls {
 					if routerPID == m.PID {
-						a.finishTrackedCall(callID, runtime.ErrPluginUnavailable)
+						a.finishTrackedCall(callID, ErrPluginUnavailable)
 					}
 				}
 				if err := a.scheduleRouterRestart(id); err != nil {

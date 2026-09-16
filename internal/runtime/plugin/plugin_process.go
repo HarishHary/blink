@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -14,6 +15,12 @@ import (
 // ---------------------------------------------------------------------------
 // Types & state
 // ---------------------------------------------------------------------------
+
+var (
+	ErrPluginUnavailable = errors.New("plugin unavailable")
+	ErrQueueFull         = errors.New("plugin queue full")
+	ErrProcessRecycle    = errors.New("plugin process recycled after transport failure")
+)
 
 // PluginProcessActorLifecycle describes a plugin process's lifecycle.
 type PluginProcessActorLifecycle string
@@ -315,7 +322,7 @@ func (p *pluginProcessActor[T]) invoke(manager gen.PID, call MessageInvokePlugin
 		return
 	}
 	if p.pluginMeta.status.availability != runtime.AvailabilityReady || p.pluginMeta.alias == (gen.Alias{}) {
-		p.rejectInvocation(manager, call.CallID, runtime.ErrPluginUnavailable)
+		p.rejectInvocation(manager, call.CallID, ErrPluginUnavailable)
 		return
 	}
 	if _, tracked := p.calls[call.CallID]; tracked {
@@ -325,7 +332,7 @@ func (p *pluginProcessActor[T]) invoke(manager gen.PID, call MessageInvokePlugin
 	if len(p.calls) >= p.deployment.CapacityPerProcess() {
 		// The manager dispatches within the capacity it published, so its view is stale; refusing is
 		// cheap and keeps the subprocess's contract intact.
-		p.rejectInvocation(manager, call.CallID, runtime.ErrQueueFull)
+		p.rejectInvocation(manager, call.CallID, ErrQueueFull)
 		return
 	}
 
@@ -399,9 +406,9 @@ func (p *pluginProcessActor[T]) failGenerationCalls(generation uint64, cause err
 		if entry.generation != generation {
 			continue
 		}
-		err := error(runtime.ErrProcessRecycle)
+		err := error(ErrProcessRecycle)
 		if cause != nil {
-			err = fmt.Errorf("%w: %v", runtime.ErrProcessRecycle, cause)
+			err = fmt.Errorf("%w: %w", ErrProcessRecycle, cause)
 		}
 		p.completeInvocation(callID, err)
 	}
@@ -513,7 +520,7 @@ func (p *pluginProcessActor[T]) failPluginMeta(err error) {
 		return
 	}
 	if p.pluginMeta.status.lastError != nil {
-		err = fmt.Errorf("%w: %v", err, p.pluginMeta.status.lastError)
+		err = fmt.Errorf("%w: %w", err, p.pluginMeta.status.lastError)
 	}
 	p.cancelHealthCheck()
 	p.pluginMeta.status = pluginMetaStatus{
@@ -624,5 +631,5 @@ func samePluginProcessStatus(left, right pluginProcessActorStatus) bool {
 // reason: it decides whether a status is worth publishing.
 func samePluginMetaStatus(left, right pluginMetaStatus) bool {
 	return left.lifecycle == right.lifecycle && left.availability == right.availability &&
-		left.activity == right.activity && errorText(left.lastError) == errorText(right.lastError)
+		left.activity == right.activity && runtime.ErrorText(left.lastError) == runtime.ErrorText(right.lastError)
 }

@@ -407,7 +407,7 @@ func (a *reconcilerActor) requestResolve() error {
 		a.resolver.status.availability = runtime.AvailabilityDegraded
 		a.reconcileStatus()
 		if retryErr := a.scheduleResolutionRetry(); retryErr != nil {
-			return fmt.Errorf("send artifact resolve request: %v; schedule retry: %w", err, retryErr)
+			return fmt.Errorf("send artifact resolve request: %w; schedule retry: %w", err, retryErr)
 		}
 	}
 	return nil
@@ -437,7 +437,7 @@ func (a *reconcilerActor) startArtifactResolverMeta() error {
 		a.Log().Error("artifact resolver meta spawn failed: error=%v", err)
 		a.reconcileStatus()
 		if retryErr := a.scheduleResolverRestart(); retryErr != nil {
-			return fmt.Errorf("spawn artifact resolver meta: %v; schedule restart: %w", err, retryErr)
+			return fmt.Errorf("spawn artifact resolver meta: %w; schedule restart: %w", err, retryErr)
 		}
 		return nil
 	}
@@ -447,7 +447,7 @@ func (a *reconcilerActor) startArtifactResolverMeta() error {
 		a.Log().Error("artifact resolver meta monitor failed: error=%v", err)
 		a.reconcileStatus()
 		if retryErr := a.scheduleResolverRestart(); retryErr != nil {
-			return fmt.Errorf("monitor artifact resolver meta: %v; schedule restart: %w", err, retryErr)
+			return fmt.Errorf("monitor artifact resolver meta: %w; schedule restart: %w", err, retryErr)
 		}
 		return nil
 	}
@@ -475,7 +475,7 @@ func (a *reconcilerActor) startArtifactWatcherMeta() error {
 		a.Log().Error("artifact watcher meta spawn failed: error=%v", err)
 		a.reconcileStatus()
 		if retryErr := a.scheduleWatcherRestart(); retryErr != nil {
-			return fmt.Errorf("spawn artifact watcher meta: %v; schedule restart: %w", err, retryErr)
+			return fmt.Errorf("spawn artifact watcher meta: %w; schedule restart: %w", err, retryErr)
 		}
 		return nil
 	}
@@ -485,7 +485,7 @@ func (a *reconcilerActor) startArtifactWatcherMeta() error {
 		a.Log().Error("artifact watcher meta monitor failed: error=%v", err)
 		a.reconcileStatus()
 		if retryErr := a.scheduleWatcherRestart(); retryErr != nil {
-			return fmt.Errorf("monitor artifact watcher meta: %v; schedule restart: %w", err, retryErr)
+			return fmt.Errorf("monitor artifact watcher meta: %w; schedule restart: %w", err, retryErr)
 		}
 		return nil
 	}
@@ -658,14 +658,6 @@ func (a *reconcilerActor) HandleInspect(gen.PID, ...string) map[string]string {
 		"reconciler:watcher:lifecycle":     string(a.watcher.status.lifecycle),
 		"reconciler:watcher:availability":  string(a.watcher.status.availability),
 	}
-}
-
-// errorText returns an empty string for nil errors and the error text otherwise.
-func errorText(err error) string {
-	if err == nil {
-		return ""
-	}
-	return err.Error()
 }
 
 // sameReconcilerActorStatus compares the status fields that trigger publication.

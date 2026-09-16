@@ -22,6 +22,11 @@ import (
 // Types & state
 // ---------------------------------------------------------------------------
 
+var (
+	ErrRuntimeNotStarted = errors.New("actor runtime not started")
+	ErrRuntimeStopped    = errors.New("actor runtime stopped")
+)
+
 // applicationLifecycle tracks only caller-visible application boundaries.
 type applicationLifecycle uint8
 
@@ -177,9 +182,9 @@ func (a *Application[P, M]) Terminate(reason error) {
 		a.mu.Unlock()
 		return
 	}
-	pendingErr := runtime.ErrRuntimeStopped
+	pendingErr := ErrRuntimeStopped
 	if a.lifecycle == applicationStopping {
-		pendingErr = runtime.ErrPluginUnavailable
+		pendingErr = ErrPluginUnavailable
 	}
 	a.lifecycle = applicationTerminated
 	a.supervisorDone.err = reason
@@ -199,7 +204,7 @@ func (a *Application[P, M]) Wait(ctx context.Context) error {
 	a.mu.Lock()
 	if a.lifecycle == applicationNew {
 		a.mu.Unlock()
-		return runtime.ErrRuntimeNotStarted
+		return ErrRuntimeNotStarted
 	}
 	done := a.supervisorDone.done
 	a.mu.Unlock()
@@ -209,7 +214,7 @@ func (a *Application[P, M]) Wait(ctx context.Context) error {
 		a.mu.Lock()
 		defer a.mu.Unlock()
 		if reason := a.supervisorDone.err; reason != nil && !errors.Is(reason, gen.TerminateReasonNormal) {
-			return fmt.Errorf("%w: %v", runtime.ErrRuntimeStopped, reason)
+			return fmt.Errorf("%w: %w", ErrRuntimeStopped, reason)
 		}
 		return nil
 	case <-ctx.Done():
@@ -246,7 +251,7 @@ func (a *Application[P, M]) Submit(ctx context.Context, pluginID string, rollout
 	a.mu.Lock()
 	if a.calls.byPlugin[pluginID] >= a.opts.maxOutstandingInvocationsPerPlugin {
 		a.mu.Unlock()
-		return runtime.Invocation{}, runtime.ErrQueueFull
+		return runtime.Invocation{}, ErrQueueFull
 	}
 	a.calls.byPlugin[pluginID]++
 	a.mu.Unlock()
@@ -316,11 +321,11 @@ func applicationAcceptingError(lifecycle applicationLifecycle) error {
 	case applicationRunning:
 		return nil
 	case applicationTerminated:
-		return runtime.ErrRuntimeStopped
+		return ErrRuntimeStopped
 	case applicationStopping:
-		return runtime.ErrPluginUnavailable
+		return ErrPluginUnavailable
 	default:
-		return runtime.ErrRuntimeNotStarted
+		return ErrRuntimeNotStarted
 	}
 }
 
@@ -466,10 +471,10 @@ func (a *Application[P, M]) Status(ctx context.Context) (SupervisorStatus, error
 	switch {
 	case a.lifecycle == applicationTerminated:
 		a.mu.Unlock()
-		return SupervisorStatus{}, runtime.ErrRuntimeStopped
+		return SupervisorStatus{}, ErrRuntimeStopped
 	case a.lifecycle == applicationNew:
 		a.mu.Unlock()
-		return SupervisorStatus{}, runtime.ErrRuntimeNotStarted
+		return SupervisorStatus{}, ErrRuntimeNotStarted
 	}
 	n, supervisor, done := a.Node(), a.supervisor, a.supervisorDone.done
 	a.mu.Unlock()
@@ -479,7 +484,7 @@ func (a *Application[P, M]) Status(ctx context.Context) (SupervisorStatus, error
 		// The supervisor may have terminated since the liveness check; prefer its terminal error.
 		select {
 		case <-done:
-			return SupervisorStatus{}, runtime.ErrRuntimeStopped
+			return SupervisorStatus{}, ErrRuntimeStopped
 		default:
 		}
 		return SupervisorStatus{}, err
@@ -503,11 +508,11 @@ func (a *Application[P, M]) State(ctx context.Context) (snapshot.ProjectionState
 	a.mu.Lock()
 	if a.lifecycle == applicationTerminated {
 		a.mu.Unlock()
-		return snapshot.ProjectionState[M]{}, runtime.ErrRuntimeStopped
+		return snapshot.ProjectionState[M]{}, ErrRuntimeStopped
 	}
 	if a.lifecycle == applicationNew {
 		a.mu.Unlock()
-		return snapshot.ProjectionState[M]{}, runtime.ErrRuntimeNotStarted
+		return snapshot.ProjectionState[M]{}, ErrRuntimeNotStarted
 	}
 	n, supervisor, done := a.Node(), a.supervisor, a.supervisorDone.done
 	a.mu.Unlock()
@@ -515,7 +520,7 @@ func (a *Application[P, M]) State(ctx context.Context) (snapshot.ProjectionState
 	if err != nil {
 		select {
 		case <-done:
-			return snapshot.ProjectionState[M]{}, runtime.ErrRuntimeStopped
+			return snapshot.ProjectionState[M]{}, ErrRuntimeStopped
 		default:
 		}
 		return snapshot.ProjectionState[M]{}, err
@@ -528,13 +533,13 @@ func (a *Application[P, M]) State(ctx context.Context) (snapshot.ProjectionState
 	if err != nil {
 		select {
 		case <-done:
-			return snapshot.ProjectionState[M]{}, runtime.ErrRuntimeStopped
+			return snapshot.ProjectionState[M]{}, ErrRuntimeStopped
 		default:
 		}
 		return snapshot.ProjectionState[M]{}, err
 	}
 	if state.CommittedGeneration != metadata.Generation || !state.Availability.Routable() {
-		return snapshot.ProjectionState[M]{}, runtime.ErrPluginUnavailable
+		return snapshot.ProjectionState[M]{}, ErrPluginUnavailable
 	}
 	return state, nil
 }
