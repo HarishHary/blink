@@ -73,7 +73,7 @@ type reconcilerActor struct {
 	proposedGeneration int64
 	lifecycle          ReconcilerActorLifecycle // the reconciler's own live lifecycle; the supervisor owns starting and restarting
 	err                error                    // the reconciler's own failure, kept apart from its metas' errors
-	lastStatus         reconcilerActorStatus // last published projection, the baseline reconcileStatus dedupes against
+	lastStatus         reconcilerActorStatus    // last published projection, the baseline reconcileStatus dedupes against
 	lastStatusEpoch    int64
 	labels             telemetry.Labels
 }
