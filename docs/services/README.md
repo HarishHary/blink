@@ -15,7 +15,7 @@ See the [runtime overview](../internals/README.md) for actor composition, and [m
 
 ## Shared metrics
 
-Every service embeds `internal/services.Runner`, so every process exposes `blink_runner_*` on its own health server at `:8080/metrics`. Matcher, executor, and tuner share the Kafka-stage metric contract below, under separate service prefixes. Controller retains its control-plane metrics on radar.
+Every service embeds `internal/services.Runner`, so every process exposes `blink_runner_*` on its own health server at `:8080/metrics`. Matcher, executor, and tuner share the Kafka-stage metric contract below, under separate service prefixes. Controller retains its control-plane metrics on radar. Merger, enricher, and formatter do not follow that contract: they expose their own `blink_alert_merger_*`, `blink_alert_enricher_*`, and `blink_alert_formatter_*` families, so do not query them with the suffixes below.
 
 | Metric                                                | Meaning                                                                      |
 | ----------------------------------------------------- | ---------------------------------------------------------------------------- |
@@ -24,12 +24,15 @@ Every service embeds `internal/services.Runner`, so every process exposes `blink
 
 The `service` label is the service's own `Name()`, not the process:
 
-| Process         | `service` values                                                                                                                |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `controller`    | `controller-rule`, `controller-matcher`, `controller-tuning`, `controller-formatter`, `controller-enrichment`, `health service` |
-| `event_matcher` | `event-matcher`, `health service`                                                                                               |
-| `rule_executor` | `rule-executor`, `health service`                                                                                               |
-| `rule_tuner`    | `rule-tuner`, `health service`                                                                                                  |
+| Process           | `service` values                                                                                                                |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `controller`      | `controller-rule`, `controller-matcher`, `controller-tuning`, `controller-formatter`, `controller-enrichment`, `health service` |
+| `event_matcher`   | `event-matcher`, `health service`                                                                                               |
+| `rule_executor`   | `rule-executor`, `health service`                                                                                               |
+| `rule_tuner`      | `rule-tuner`, `health service`                                                                                                  |
+| `alert_merger`    | `alert-merger`, `health service`                                                                                                |
+| `alert_enricher`  | `alert-enricher`, `health service`                                                                                              |
+| `alert_formatter` | `alert-formatter`, `health service`                                                                                             |
 
 ## Kafka-stage metrics
 

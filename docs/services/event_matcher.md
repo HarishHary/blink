@@ -78,8 +78,8 @@ Radar, `RADAR_HOST:RADAR_PORT`, default `0.0.0.0:9090`, carried for every servic
 
 | Endpoint        | Current behavior                                                                                                                                                              |
 | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/health/live`  | HTTP 200 while Radar is serving; subtree signals affect readiness only. |
-| `/health/ready` | HTTP 503 if any registered subtree readiness signal is down or expires (90 s without a heartbeat). |
+| `/health/live`  | HTTP 200 while Radar is serving; subtree signals affect readiness only.                                                                                                       |
+| `/health/ready` | HTTP 503 if any registered subtree readiness signal is down or expires (90 s without a heartbeat).                                                                            |
 | `/metrics`      | `blink_plugin_*` ([plugin runtime](../internals/plugin-runtime.md#telemetry)) and `blink_snapshot_*` ([snapshot runtime](../internals/snapshot-runtime.md#telemetry)) series. |
 
 ### Readiness and admission
@@ -98,7 +98,7 @@ Admission knobs:
 - `MAX_CONCURRENT_CALLS` caps concurrent service calls into the matcher application.
 - `MAX_BATCH_SIZE` and `MAX_CONCURRENT_CALLS` also pass to the runtime as `MaxBatchSize` and `MaxConcurrentCalls`, sizing its per-plugin and shared admission budgets, which reject rather than wait.
 - A fan-out is bounded by the batch size and by the widest invocation capacity a matcher may declare.
-- Plugin processes are subprocesses, budgeted separately: up to `GOMAXPROCS x 2` past every deployment's `min_procs`.
+- Plugin processes are subprocesses, budgeted separately: a CPU- and memory-derived process budget past every deployment's `min_procs`.
 
 See [plugin-runtime.md](../internals/plugin-runtime.md#invocation) and [concurrency-knobs.md](../internals/concurrency-knobs.md).
 

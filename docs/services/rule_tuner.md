@@ -76,8 +76,8 @@ Radar, `RADAR_HOST:RADAR_PORT`, default `0.0.0.0:9090`, carried for every servic
 
 | Endpoint        | Current behavior                                                                                                                                                              |
 | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/health/live`  | HTTP 200 while Radar is serving; subtree signals affect readiness only. |
-| `/health/ready` | HTTP 503 if any registered subtree readiness signal is down or expires (90 s without a heartbeat). |
+| `/health/live`  | HTTP 200 while Radar is serving; subtree signals affect readiness only.                                                                                                       |
+| `/health/ready` | HTTP 503 if any registered subtree readiness signal is down or expires (90 s without a heartbeat).                                                                            |
 | `/metrics`      | `blink_plugin_*` ([plugin runtime](../internals/plugin-runtime.md#telemetry)) and `blink_snapshot_*` ([snapshot runtime](../internals/snapshot-runtime.md#telemetry)) series. |
 
 ### Readiness and admission
@@ -88,7 +88,7 @@ Startup waits for the tuning projection and runtime status to be `Ready`, but do
 
 State reads during a batch retry only `ErrPluginUnavailable` for approximately `TIMEOUT_SEC + 1s`; that is a retry window, not a hard call deadline. Other errors fail the attempt. Unlike matcher, tuner does not replay a batch when a generation moves.
 
-`MAX_CONCURRENT_CALLS` caps concurrent service calls into the tuning application. `MAX_BATCH_SIZE` and `MAX_CONCURRENT_CALLS` also pass to the runtime as `MaxBatchSize` and `MaxConcurrentCalls`, sizing its per-plugin and shared admission budgets. Plugin processes are subprocesses, budgeted separately: up to `GOMAXPROCS x 2` past every deployment's `min_procs`. See [plugin-runtime.md](../internals/plugin-runtime.md#invocation) and [concurrency-knobs.md](../internals/concurrency-knobs.md).
+`MAX_CONCURRENT_CALLS` caps concurrent service calls into the tuning application. `MAX_BATCH_SIZE` and `MAX_CONCURRENT_CALLS` also pass to the runtime as `MaxBatchSize` and `MaxConcurrentCalls`, sizing its per-plugin and shared admission budgets. Plugin processes are subprocesses, budgeted separately: a CPU- and memory-derived process budget past every deployment's `min_procs`. See [plugin-runtime.md](../internals/plugin-runtime.md#invocation) and [concurrency-knobs.md](../internals/concurrency-knobs.md).
 
 ### Metrics
 

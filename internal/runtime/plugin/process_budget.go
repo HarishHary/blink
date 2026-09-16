@@ -19,6 +19,10 @@ const (
 func processBudgetFromResources() int {
 	cpuFloor := goruntime.GOMAXPROCS(0) * DefaultRuntimeProcessGrowthPerProc
 	limit, ok := cgroupMemoryLimitBytes()
+	return processBudgetForLimit(cpuFloor, limit, ok)
+}
+
+func processBudgetForLimit(cpuFloor int, limit int64, ok bool) int {
 	if !ok {
 		return cpuFloor
 	}

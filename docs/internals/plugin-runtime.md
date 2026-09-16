@@ -107,7 +107,7 @@ Admission takes two permits. `Submit` reserves the plugin's share, `maxOutstandi
 - `MaxDeploymentProcs + 1` covers the process count and the two routing groups a batch can split into. A caller declaring no `MaxBatchSize` gets the widest fan-out allowed.
 - Callers request `min(share, Application.CallBudget)`; a deployment declaring more spends the rest over further calls. Raising batch size or concurrency requires passing both.
 - Budgets bound concurrent calls, not batch pieces: an oversized batch is cut under the transport limit and run through a bounded pool, so pieces can outnumber capacity while live invocations do not.
-- `ProcessBudget` (see Deployment manager) bounds subprocesses instead, sized from CPUs. [concurrency-knobs.md](concurrency-knobs.md) tabulates every knob that moves call counts.
+- `ProcessBudget` (see Deployment manager) bounds subprocesses instead, sized from CPUs and memory. [concurrency-knobs.md](concurrency-knobs.md) tabulates every knob that moves call counts.
 
 ## Runtime supervisor
 
@@ -273,12 +273,12 @@ stateDiagram-v2
 
 ### Messages
 
-| Message                              | Direction                        | Meaning                                         |
-| ------------------------------------ | -------------------------------- | ----------------------------------------------- |
-| `MessageArtifactDirectoryChanged`    | watcher meta → reconciler        | A debounced filesystem or poll-detected change. |
+| Message                               | Direction                        | Meaning                                                     |
+| ------------------------------------- | -------------------------------- | ----------------------------------------------------------- |
+| `MessageArtifactDirectoryChanged`     | watcher meta → reconciler        | A debounced filesystem or poll-detected change.             |
 | `MessageArtifactWatcherStatusChanged` | watcher meta → reconciler        | Versioned directory-readability and watch-attachment facts. |
-| `SendExitMeta`                       | reconciler → Ergo meta runtime   | Requests termination of the watcher meta.       |
-| `Terminate`                          | Ergo meta runtime → watcher meta | Invokes cleanup for fsnotify and polling.       |
+| `SendExitMeta`                        | reconciler → Ergo meta runtime   | Requests termination of the watcher meta.                   |
+| `Terminate`                           | Ergo meta runtime → watcher meta | Invokes cleanup for fsnotify and polling.                   |
 
 ### Readiness
 
@@ -425,7 +425,7 @@ Committed capacity is `ready processes x callsPerProcess`. `selectProcess` picks
 
 Shrink gives back only an empty process; at a zero minimum the last one goes too and the deployment sleeps holding nothing.
 
-`MaxProcs` is only this deployment's ceiling. Growth past its reserved `max(1, MinProcs)` also needs a permit from one `ProcessBudget` shared by every manager in the process, sized `GOMAXPROCS x DefaultRuntimeProcessGrowthPerProc` (2).
+`MaxProcs` is only this deployment's ceiling. Growth past its reserved `max(1, MinProcs)` also needs a permit from one `ProcessBudget` shared by every manager in the process, sized `max(cpuFloor, memoryBudget)`: `GOMAXPROCS x DefaultRuntimeProcessGrowthPerProc` (2) against `(cgroup memory limit - DefaultProcessBudgetMemoryReserve) / DefaultPluginProcessMemoryFootprint`, the latter capped by `DefaultProcessBudgetHardCap` (512).
 
 - Reservations sit outside the budget: `MinProcs` is always granted, and a `MinProcs=0` route always gets the one process a queued call wakes.
 - Reservations are counted only to warn. Exceeding the budget logs `reserved plugin processes exceed the process budget` and starts anyway.

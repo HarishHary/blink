@@ -76,8 +76,8 @@ Radar, `RADAR_HOST:RADAR_PORT`, default `0.0.0.0:9090`, carried for every servic
 
 | Endpoint        | Current behavior                                                                                                                                                              |
 | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/health/live`  | HTTP 200 while Radar is serving; subtree signals affect readiness only. |
-| `/health/ready` | HTTP 503 if any registered subtree readiness signal is down or expires (90 s without a heartbeat). |
+| `/health/live`  | HTTP 200 while Radar is serving; subtree signals affect readiness only.                                                                                                       |
+| `/health/ready` | HTTP 503 if any registered subtree readiness signal is down or expires (90 s without a heartbeat).                                                                            |
 | `/metrics`      | `blink_plugin_*` ([plugin runtime](../internals/plugin-runtime.md#telemetry)) and `blink_snapshot_*` ([snapshot runtime](../internals/snapshot-runtime.md#telemetry)) series. |
 
 ### Readiness and admission
@@ -91,7 +91,7 @@ Startup is stricter. Before creating the consumer-group reader it requires:
 
 `MAX_CONCURRENT_CALLS` caps concurrent service calls into the rule application. `MAX_BATCH_SIZE` and `MAX_CONCURRENT_CALLS` also pass to the runtime as `MaxBatchSize` and `MaxConcurrentCalls`, sizing its per-plugin and shared admission budgets. The application may split one rule's events by rollout side and payload size, but its bounded worker budget limits active invocations.
 
-Plugin processes are subprocesses, budgeted separately: up to `GOMAXPROCS x 2` past every deployment's `min_procs`. See [plugin-runtime.md](../internals/plugin-runtime.md#invocation) and [concurrency-knobs.md](../internals/concurrency-knobs.md).
+Plugin processes are subprocesses, budgeted separately: a CPU- and memory-derived process budget past every deployment's `min_procs`. See [plugin-runtime.md](../internals/plugin-runtime.md#invocation) and [concurrency-knobs.md](../internals/concurrency-knobs.md).
 
 ### Metrics
 
@@ -185,14 +185,14 @@ Selected rules are grouped by rule ID. Each event is encoded once and its bytes 
 
 Required service variables are `KAFKA_BROKERS`, `ETCD_ENDPOINTS`, `CLUSTER_COOKIE`, `RULE_PLUGIN_DIR`, `KAFKA_TOPIC_EXECUTOR`, `KAFKA_GROUP_EXECUTOR`, `KAFKA_TOPIC_MERGER`, and `KAFKA_TOPIC_EXECUTOR_DLQ`. `CONTROLLER_NODE_HOST` defaults to `controller`; Kubernetes supplies `POD_NAME` and `POD_IP` for the node and executor identity.
 
-| Variable                 | Default | Meaning                                                        |
-| ------------------------ | ------- | -------------------------------------------------------------- |
-| `MAX_BATCH_SIZE`         | `10000` | Maximum records fetched per source batch.                      |
-| `MAX_CONCURRENT_CALLS`   | `10`    | Maximum active service calls into the rule application.        |
-| `TIMEOUT_SEC`            | `10`    | Deadline for one rule application call.                        |
-| `MAX_ATTEMPTS`           | `3`     | Evaluation attempts before a failed item is dead-lettered.     |
-| `RETRY_BASE_MS`          | `100`   | Initial evaluation and publication retry delay.                |
-| `RETRY_CAP_MS`           | `5000`  | Maximum retry delay; raised to the base when configured lower. |
+| Variable               | Default | Meaning                                                        |
+| ---------------------- | ------- | -------------------------------------------------------------- |
+| `MAX_BATCH_SIZE`       | `10000` | Maximum records fetched per source batch.                      |
+| `MAX_CONCURRENT_CALLS` | `10`    | Maximum active service calls into the rule application.        |
+| `TIMEOUT_SEC`          | `10`    | Deadline for one rule application call.                        |
+| `MAX_ATTEMPTS`         | `3`     | Evaluation attempts before a failed item is dead-lettered.     |
+| `RETRY_BASE_MS`        | `100`   | Initial evaluation and publication retry delay.                |
+| `RETRY_CAP_MS`         | `5000`  | Maximum retry delay; raised to the base when configured lower. |
 
 ## Source references
 
