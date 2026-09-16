@@ -679,7 +679,7 @@ func (a *routerActor[T]) newDeploymentManager(ref *deploymentRouteState) *deploy
 	ref.status = deploymentManagerStatus{
 		lifecycle:    DeploymentManagerStarting,
 		availability: runtime.AvailabilityUnavailable,
-		processes:    make(map[gen.PID]pluginProcessStatus),
+		processes:    make(map[gen.PID]pluginProcessActorStatus),
 	}
 	return &deploymentManager[T]{
 		adapter:    a.adapter,
@@ -769,7 +769,7 @@ func (a *routerActor[T]) deploymentStatusFor(deployment *Deployment) deploymentR
 		return deploymentRouteStatus{
 			lifecycle:    DeploymentRouteStopped,
 			availability: runtime.AvailabilityUnavailable,
-			processes:    make(map[gen.PID]pluginProcessStatus),
+			processes:    make(map[gen.PID]pluginProcessActorStatus),
 		}
 	}
 	ref := a.routesByKey[deployment.RouteKey()]
@@ -778,7 +778,7 @@ func (a *routerActor[T]) deploymentStatusFor(deployment *Deployment) deploymentR
 			lifecycle:        DeploymentRouteStarting,
 			availability:     runtime.AvailabilityUnavailable,
 			desiredProcesses: deployment.ProcessCountLimit(),
-			processes:        make(map[gen.PID]pluginProcessStatus),
+			processes:        make(map[gen.PID]pluginProcessActorStatus),
 		}
 	}
 	lifecycle := DeploymentRouteStarting

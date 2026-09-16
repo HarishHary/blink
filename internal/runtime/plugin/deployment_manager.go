@@ -41,7 +41,7 @@ type deploymentManagerStatus struct {
 	active            int
 	availableCapacity int
 	lastError         error
-	processes         map[gen.PID]pluginProcessStatus
+	processes         map[gen.PID]pluginProcessActorStatus
 }
 
 // deploymentManagerCallPhase tracks one invocation through the manager pipeline.
@@ -123,7 +123,7 @@ func (q *pendingQueue[T]) remove(entry *deploymentManagerCall[T]) {
 type pluginProcessState struct {
 	pid         gen.PID
 	restart     *runtime.ScheduledBackoff
-	status      pluginProcessStatus
+	status      pluginProcessActorStatus
 	statusEpoch int64
 	assigned    int
 	retiring    bool
@@ -365,7 +365,7 @@ func (m *deploymentManager[T]) HandleMessage(from gen.PID, message any) error {
 		delete(m.byPID, msg.PID)
 		*process = pluginProcessState{
 			restart: process.restart,
-			status:  pluginProcessStatus{lifecycle: PluginProcessRestarting, availability: runtime.AvailabilityUnavailable},
+			status:  pluginProcessActorStatus{lifecycle: PluginProcessActorRestarting, availability: runtime.AvailabilityUnavailable},
 		}
 		m.failProcessCalls(msg.PID, runtime.ErrPluginUnavailable)
 		m.Log().Warning("plugin process down: slot=%d route=%s retiring=%v replace=%v reason=%v", slot, m.route, retiring, replace, msg.Reason)
@@ -811,8 +811,8 @@ func (m *deploymentManager[T]) openSlot() bool {
 	m.nextSlot++
 	m.processes[slot] = &pluginProcessState{
 		restart: runtime.NewScheduledBackoff(m.options.RestartMin, m.options.RestartMax),
-		status: pluginProcessStatus{
-			lifecycle:    PluginProcessStarting,
+		status: pluginProcessActorStatus{
+			lifecycle:    PluginProcessActorStarting,
 			availability: runtime.AvailabilityUnavailable,
 		},
 	}
@@ -877,7 +877,7 @@ func (m *deploymentManager[T]) startPluginProcess(slot int) bool {
 	// LinkParent only propagates manager termination downward, so a process that dies on its own never
 	// takes the manager with it; the monitor below is what reports that death back.
 	pid, err := m.Spawn(func() gen.ProcessBehavior {
-		return &pluginProcess[T]{
+		return &pluginProcessActor[T]{
 			adapter:    m.adapter,
 			options:    m.options.PluginProcessOptions,
 			deployment: m.deployment,
@@ -896,8 +896,8 @@ func (m *deploymentManager[T]) startPluginProcess(slot int) bool {
 	}
 	process.pid = pid
 	process.statusEpoch = 0
-	process.status = pluginProcessStatus{
-		lifecycle:    PluginProcessStarting,
+	process.status = pluginProcessActorStatus{
+		lifecycle:    PluginProcessActorStarting,
 		availability: runtime.AvailabilityUnavailable,
 	}
 	m.byPID[pid] = slot
@@ -1061,8 +1061,8 @@ func (m *deploymentManager[T]) activeCalls() int {
 
 // processStatuses snapshots what each owned process last reported, keyed by PID since that is what an
 // operator sees, and skipping a slot standing empty between two of them.
-func (m *deploymentManager[T]) processStatuses() map[gen.PID]pluginProcessStatus {
-	statuses := make(map[gen.PID]pluginProcessStatus, len(m.processes))
+func (m *deploymentManager[T]) processStatuses() map[gen.PID]pluginProcessActorStatus {
+	statuses := make(map[gen.PID]pluginProcessActorStatus, len(m.processes))
 	for _, process := range m.processes {
 		if process.pid != (gen.PID{}) {
 			statuses[process.pid] = process.status

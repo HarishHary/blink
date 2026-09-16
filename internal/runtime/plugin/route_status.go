@@ -32,7 +32,7 @@ type deploymentRouteStatus struct {
 	desiredProcesses int
 	queueDepth       int
 	activeCalls      int
-	processes        map[gen.PID]pluginProcessStatus
+	processes        map[gen.PID]pluginProcessActorStatus
 }
 
 // ---------------------------------------------------------------------------
@@ -42,7 +42,7 @@ type deploymentRouteStatus struct {
 // clone copies a route status and its process map.
 func (s deploymentRouteStatus) clone() deploymentRouteStatus {
 	clone := s
-	clone.processes = make(map[gen.PID]pluginProcessStatus, len(s.processes))
+	clone.processes = make(map[gen.PID]pluginProcessActorStatus, len(s.processes))
 	maps.Copy(clone.processes, s.processes)
 	return clone
 }

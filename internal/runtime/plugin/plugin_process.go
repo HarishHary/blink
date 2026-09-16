@@ -15,19 +15,19 @@ import (
 // Types & state
 // ---------------------------------------------------------------------------
 
-// PluginProcessLifecycle describes a plugin process's lifecycle.
-type PluginProcessLifecycle string
+// PluginProcessActorLifecycle describes a plugin process's lifecycle.
+type PluginProcessActorLifecycle string
 
 const (
-	PluginProcessStarting   PluginProcessLifecycle = "starting"
-	PluginProcessRunning    PluginProcessLifecycle = "running"
-	PluginProcessRestarting PluginProcessLifecycle = "restarting"
-	PluginProcessFailed     PluginProcessLifecycle = "failed"
+	PluginProcessActorStarting   PluginProcessActorLifecycle = "starting"
+	PluginProcessActorRunning    PluginProcessActorLifecycle = "running"
+	PluginProcessActorRestarting PluginProcessActorLifecycle = "restarting"
+	PluginProcessActorFailed     PluginProcessActorLifecycle = "failed"
 )
 
-// pluginProcessStatus is the immutable process snapshot sent to its manager.
-type pluginProcessStatus struct {
-	lifecycle    PluginProcessLifecycle
+// pluginProcessActorStatus is the immutable process snapshot sent to its manager.
+type pluginProcessActorStatus struct {
+	lifecycle    PluginProcessActorLifecycle
 	availability runtime.Availability
 	meta         pluginMetaStatus
 }
@@ -42,14 +42,14 @@ type pluginProcessCall struct {
 	timeout    gen.CancelFunc
 }
 
-// pluginProcess owns one plugin process meta-process incarnation.
-type pluginProcess[T Artifact] struct {
+// pluginProcessActor owns one plugin process meta-process incarnation.
+type pluginProcessActor[T Artifact] struct {
 	act.Actor
 	adapter         *Adapter[T]
 	options         PluginProcessOptions
 	deployment      Deployment
 	pluginMeta      pluginMetaState
-	lastStatus      pluginProcessStatus
+	lastStatus      pluginProcessActorStatus
 	lastStatusEpoch int64
 	calls           map[uint64]*pluginProcessCall
 }
@@ -65,7 +65,7 @@ const pluginMetaInvokeSlack = time.Second
 // MessagePluginProcessStatusChanged reports a process status update to its manager.
 type MessagePluginProcessStatusChanged struct {
 	process     gen.PID
-	status      pluginProcessStatus
+	status      pluginProcessActorStatus
 	statusEpoch int64
 }
 
@@ -117,7 +117,7 @@ type MessagePluginMetaHealthTimeout struct {
 // ---------------------------------------------------------------------------
 
 // Init configures retry state and starts the process meta-process.
-func (p *pluginProcess[T]) Init(...any) error {
+func (p *pluginProcessActor[T]) Init(...any) error {
 	p.options = pluginProcessOptionsWithDefaults(p.options)
 	p.calls = make(map[uint64]*pluginProcessCall)
 	p.pluginMeta.restart = runtime.NewScheduledBackoff(p.options.RestartMin, p.options.RestartMax)
@@ -133,7 +133,7 @@ func (p *pluginProcess[T]) Init(...any) error {
 
 // Terminate cancels recovery, releases in-flight calls so the subprocess stops working on answers
 // nobody will collect, and tells the manager, which fails those calls itself.
-func (p *pluginProcess[T]) Terminate(error) {
+func (p *pluginProcessActor[T]) Terminate(error) {
 	p.pluginMeta.restart.CancelScheduled(false)
 	p.pluginMeta.healthRestart.CancelScheduled(false)
 	for callID, entry := range p.calls {
@@ -144,7 +144,7 @@ func (p *pluginProcess[T]) Terminate(error) {
 }
 
 // HandleMessage processes process lifecycle, health, and invocation messages.
-func (p *pluginProcess[T]) HandleMessage(from gen.PID, message any) error {
+func (p *pluginProcessActor[T]) HandleMessage(from gen.PID, message any) error {
 	switch msg := message.(type) {
 	case MessageInvokePlugin[T]:
 		p.invoke(from, msg)
@@ -275,12 +275,12 @@ func (p *pluginProcess[T]) HandleMessage(from gen.PID, message any) error {
 }
 
 // HandleCall rejects unsupported synchronous process calls.
-func (p *pluginProcess[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
+func (p *pluginProcessActor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, error) {
 	return fmt.Errorf("unsupported plugin process call %T", request), nil
 }
 
 // HandleInspect exposes the meta's lifecycle, both restart tracks, and in-flight call depth.
-func (p *pluginProcess[T]) HandleInspect(gen.PID, ...string) map[string]string {
+func (p *pluginProcessActor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 	return map[string]string{
 		"process:meta_lifecycle":         string(p.pluginMeta.status.lifecycle),
 		"process:meta_availability":      string(p.pluginMeta.status.availability),
@@ -300,7 +300,7 @@ func (p *pluginProcess[T]) HandleInspect(gen.PID, ...string) map[string]string {
 
 // invoke hands one invocation to the active meta-process without waiting; the answer arrives later as
 // a pluginMetaInvokeResult.
-func (p *pluginProcess[T]) invoke(manager gen.PID, call MessageInvokePlugin[T]) {
+func (p *pluginProcessActor[T]) invoke(manager gen.PID, call MessageInvokePlugin[T]) {
 	_ = p.SendWithPriority(manager, MessageInvocationStarted{callID: call.CallID}, gen.MessagePriorityHigh)
 	base := call.Context
 	if base == nil {
@@ -362,7 +362,7 @@ func (p *pluginProcess[T]) invoke(manager gen.PID, call MessageInvokePlugin[T]) 
 
 // invokeBackstop waits the cancellation grace past the caller's deadline, since firing classifies a
 // hung subprocess and racing the meta-process would retire one that honoured cancellation.
-func (p *pluginProcess[T]) invokeBackstop(ctx context.Context) time.Duration {
+func (p *pluginProcessActor[T]) invokeBackstop(ctx context.Context) time.Duration {
 	remaining := p.options.InvocationTimeout
 	if deadline, ok := ctx.Deadline(); ok {
 		if until := time.Until(deadline); until < remaining {
@@ -376,12 +376,12 @@ func (p *pluginProcess[T]) invokeBackstop(ctx context.Context) time.Duration {
 }
 
 // rejectInvocation reports a call this process never handed to its meta-process.
-func (p *pluginProcess[T]) rejectInvocation(manager gen.PID, callID uint64, err error) {
+func (p *pluginProcessActor[T]) rejectInvocation(manager gen.PID, callID uint64, err error) {
 	_ = p.SendWithPriority(manager, MessageInvocationFinished{callID: callID, err: err}, gen.MessagePriorityHigh)
 }
 
 // completeInvocation reports one tracked call's outcome and releases what it held.
-func (p *pluginProcess[T]) completeInvocation(callID uint64, err error) {
+func (p *pluginProcessActor[T]) completeInvocation(callID uint64, err error) {
 	entry, ok := p.calls[callID]
 	if !ok {
 		return
@@ -394,7 +394,7 @@ func (p *pluginProcess[T]) completeInvocation(callID uint64, err error) {
 
 // failGenerationCalls completes every call owed by a gone incarnation, whose answers can never arrive,
 // so siblings learn the reason instead of waiting for a deadline.
-func (p *pluginProcess[T]) failGenerationCalls(generation uint64, cause error) {
+func (p *pluginProcessActor[T]) failGenerationCalls(generation uint64, cause error) {
 	for callID, entry := range p.calls {
 		if entry.generation != generation {
 			continue
@@ -408,7 +408,7 @@ func (p *pluginProcess[T]) failGenerationCalls(generation uint64, cause error) {
 }
 
 // releaseCall stops a call's backstop timer and cancels the context the plugin sees.
-func (p *pluginProcess[T]) releaseCall(entry *pluginProcessCall) {
+func (p *pluginProcessActor[T]) releaseCall(entry *pluginProcessCall) {
 	if entry.timeout != nil {
 		entry.timeout()
 	}
@@ -417,7 +417,7 @@ func (p *pluginProcess[T]) releaseCall(entry *pluginProcessCall) {
 
 // refreshActivity republishes only on a crossing between idle, busy, and saturated, the only load
 // changes anything above this process can act on; the in-flight count rides along.
-func (p *pluginProcess[T]) refreshActivity() {
+func (p *pluginProcessActor[T]) refreshActivity() {
 	if p.pluginMeta.status.availability != runtime.AvailabilityReady {
 		return
 	}
@@ -442,7 +442,7 @@ func (p *pluginProcess[T]) refreshActivity() {
 // ---------------------------------------------------------------------------
 
 // startPluginMeta creates and monitors the meta-process that owns the subprocess.
-func (p *pluginProcess[T]) startPluginMeta() error {
+func (p *pluginProcessActor[T]) startPluginMeta() error {
 	if p.pluginMeta.alias != (gen.Alias{}) {
 		return nil
 	}
@@ -475,7 +475,7 @@ func (p *pluginProcess[T]) startPluginMeta() error {
 }
 
 // schedulePluginMetaRestart schedules normal or health recovery.
-func (p *pluginProcess[T]) schedulePluginMetaRestart(health bool) error {
+func (p *pluginProcessActor[T]) schedulePluginMetaRestart(health bool) error {
 	if p.pluginMeta.status.lifecycle == PluginMetaFailed {
 		return nil
 	}
@@ -508,7 +508,7 @@ func (p *pluginProcess[T]) schedulePluginMetaRestart(health bool) error {
 }
 
 // failPluginMeta records terminal recovery failure and notifies the manager.
-func (p *pluginProcess[T]) failPluginMeta(err error) {
+func (p *pluginProcessActor[T]) failPluginMeta(err error) {
 	if p.pluginMeta.status.lifecycle == PluginMetaFailed {
 		return
 	}
@@ -528,7 +528,7 @@ func (p *pluginProcess[T]) failPluginMeta(err error) {
 }
 
 // retirePluginMeta stops the active meta-process and begins recovery.
-func (p *pluginProcess[T]) retirePluginMeta(alias gen.Alias, err error, health bool) {
+func (p *pluginProcessActor[T]) retirePluginMeta(alias gen.Alias, err error, health bool) {
 	if alias != p.pluginMeta.alias {
 		return
 	}
@@ -542,7 +542,7 @@ func (p *pluginProcess[T]) retirePluginMeta(alias gen.Alias, err error, health b
 }
 
 // scheduleHealthCheck queues a health check for the active meta-process.
-func (p *pluginProcess[T]) scheduleHealthCheck(alias gen.Alias) {
+func (p *pluginProcessActor[T]) scheduleHealthCheck(alias gen.Alias) {
 	if p.pluginMeta.status.availability != runtime.AvailabilityReady || alias != p.pluginMeta.alias {
 		return
 	}
@@ -555,7 +555,7 @@ func (p *pluginProcess[T]) scheduleHealthCheck(alias gen.Alias) {
 }
 
 // cancelHealthCheck invalidates pending health checks.
-func (p *pluginProcess[T]) cancelHealthCheck() {
+func (p *pluginProcessActor[T]) cancelHealthCheck() {
 	p.pluginMeta.healthRestart.Token++
 	p.pluginMeta.pingPending = false
 }
@@ -565,7 +565,7 @@ func (p *pluginProcess[T]) cancelHealthCheck() {
 // ---------------------------------------------------------------------------
 
 // reportUnavailable records a recoverable meta-process failure; reconcileStatus deduplicates repeats.
-func (p *pluginProcess[T]) reportUnavailable(err error) {
+func (p *pluginProcessActor[T]) reportUnavailable(err error) {
 	p.pluginMeta.status = pluginMetaStatus{
 		lifecycle:    PluginMetaRestarting,
 		availability: runtime.AvailabilityUnavailable,
@@ -577,24 +577,24 @@ func (p *pluginProcess[T]) reportUnavailable(err error) {
 }
 
 // status derives process health from the meta status owned by this actor.
-func (p *pluginProcess[T]) status() pluginProcessStatus {
-	lifecycle := PluginProcessStarting
+func (p *pluginProcessActor[T]) status() pluginProcessActorStatus {
+	lifecycle := PluginProcessActorStarting
 	switch p.pluginMeta.status.lifecycle {
 	case PluginMetaRunning:
-		lifecycle = PluginProcessRunning
+		lifecycle = PluginProcessActorRunning
 	case PluginMetaRestarting:
-		lifecycle = PluginProcessRestarting
+		lifecycle = PluginProcessActorRestarting
 	case PluginMetaFailed:
-		lifecycle = PluginProcessFailed
+		lifecycle = PluginProcessActorFailed
 	}
-	return pluginProcessStatus{
+	return pluginProcessActorStatus{
 		lifecycle: lifecycle, availability: p.pluginMeta.status.availability, meta: p.pluginMeta.status,
 	}
 }
 
 // reconcileStatus propagates changed health immediately; the runtime supervisor owns the gauges.
 // Failure status must precede invocation completion, which can reopen manager admission.
-func (p *pluginProcess[T]) reconcileStatus() {
+func (p *pluginProcessActor[T]) reconcileStatus() {
 	next := p.status()
 	if samePluginProcessStatus(p.lastStatus, next) {
 		return
@@ -605,7 +605,7 @@ func (p *pluginProcess[T]) reconcileStatus() {
 }
 
 // propagateStatus sends the supplied snapshot without reconciling state or publishing gauges.
-func (p *pluginProcess[T]) propagateStatus(next pluginProcessStatus) {
+func (p *pluginProcessActor[T]) propagateStatus(next pluginProcessActorStatus) {
 	_ = p.SendWithPriority(p.Parent(), MessagePluginProcessStatusChanged{
 		statusEpoch: p.lastStatusEpoch,
 		process:     p.PID(),
@@ -615,7 +615,7 @@ func (p *pluginProcess[T]) propagateStatus(next pluginProcessStatus) {
 
 // samePluginProcessStatus dedups status publishes, ignoring sampled load: the activity label already
 // carries the crossings that matter (see pluginMetaStatus).
-func samePluginProcessStatus(left, right pluginProcessStatus) bool {
+func samePluginProcessStatus(left, right pluginProcessActorStatus) bool {
 	return left.lifecycle == right.lifecycle && left.availability == right.availability &&
 		samePluginMetaStatus(left.meta, right.meta)
 }
