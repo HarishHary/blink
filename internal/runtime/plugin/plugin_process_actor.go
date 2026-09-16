@@ -38,7 +38,7 @@ type pluginProcessActorStatus struct {
 	lifecycle    PluginProcessActorLifecycle
 	availability runtime.Availability
 	meta         pluginMetaStatus
-	lastError    error
+	err          error
 }
 
 // pluginProcessCall is one in-flight invocation, tagged with the incarnation that took it so a
@@ -58,9 +58,11 @@ type pluginProcessActor[T Artifact] struct {
 	options         PluginProcessOptions
 	deployment      Deployment
 	pluginMeta      pluginMetaState
-	lastStatus      pluginProcessActorStatus
-	lastStatusEpoch int64
 	calls           map[uint64]*pluginProcessCall
+	stopped         bool                     // latched by Terminate; the terminal lifecycle outlives the meta it was derived from
+	err             error                    // the actor's own failure, kept apart from its meta's errors
+	lastStatus      pluginProcessActorStatus // last published projection, the baseline reconcileStatus dedupes against
+	lastStatusEpoch int64
 }
 
 // pluginMetaInvokeSlack pads the backstop timer so a late-scheduled timer never calls a subprocess
@@ -143,11 +145,9 @@ func (p *pluginProcessActor[T]) Init(...any) error {
 // Terminate cancels recovery, releases in-flight calls so the subprocess stops working on answers
 // nobody will collect, and tells the manager, which fails those calls itself.
 func (p *pluginProcessActor[T]) Terminate(reason error) {
-	next := p.status()
-	next.lifecycle = PluginProcessActorStopped
-	next.availability = runtime.AvailabilityUnavailable
-	next.lastError = runtime.FirstError(reason, next.lastError)
-	p.reconcileStatus(next)
+	p.stopped = true
+	p.err = runtime.FirstError(reason, p.err)
+	p.reconcileStatus()
 	p.pluginMeta.restart.CancelScheduled(false)
 	p.pluginMeta.healthRestart.CancelScheduled(false)
 	for callID, entry := range p.calls {
@@ -220,7 +220,7 @@ func (p *pluginProcessActor[T]) HandleMessage(from gen.PID, message any) error {
 			capacity:     p.deployment.CapacityPerProcess(),
 		}
 		p.scheduleHealthCheck(p.pluginMeta.alias)
-		p.reconcileStatus(p.status())
+		p.reconcileStatus()
 
 	case MessagePluginMetaRestart:
 		restart := p.pluginMeta.restart
@@ -296,8 +296,8 @@ func (p *pluginProcessActor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (a
 // HandleInspect exposes the meta's lifecycle, both restart tracks, and in-flight call depth.
 func (p *pluginProcessActor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 	return map[string]string{
-		"process:last_error":             runtime.ErrorText(p.status().lastError),
-		"process:meta_last_error":        runtime.ErrorText(p.pluginMeta.status.lastError),
+		"process:last_error":             runtime.ErrorText(p.status().err),
+		"process:meta_last_error":        runtime.ErrorText(p.pluginMeta.status.err),
 		"process:meta_lifecycle":         string(p.pluginMeta.status.lifecycle),
 		"process:meta_availability":      string(p.pluginMeta.status.availability),
 		"process:meta_activity":          string(p.pluginMeta.status.activity),
@@ -450,7 +450,7 @@ func (p *pluginProcessActor[T]) refreshActivity() {
 		return
 	}
 	p.pluginMeta.status.activity = activity
-	p.reconcileStatus(p.status())
+	p.reconcileStatus()
 }
 
 // ---------------------------------------------------------------------------
@@ -469,7 +469,7 @@ func (p *pluginProcessActor[T]) startPluginMeta() error {
 		activity:     PluginMetaIdle,
 		capacity:     p.deployment.CapacityPerProcess(),
 	}
-	p.reconcileStatus(p.status())
+	p.reconcileStatus()
 	alias, err := p.SpawnMeta(&pluginProcessMeta[T]{
 		adapter:    p.adapter,
 		deployment: p.deployment,
@@ -528,8 +528,8 @@ func (p *pluginProcessActor[T]) failPluginMeta(err error) {
 	if p.pluginMeta.status.lifecycle == PluginMetaFailed {
 		return
 	}
-	if p.pluginMeta.status.lastError != nil {
-		err = fmt.Errorf("%w: %w", err, p.pluginMeta.status.lastError)
+	if p.pluginMeta.status.err != nil {
+		err = fmt.Errorf("%w: %w", err, p.pluginMeta.status.err)
 	}
 	p.cancelHealthCheck()
 	p.pluginMeta.status = pluginMetaStatus{
@@ -537,9 +537,9 @@ func (p *pluginProcessActor[T]) failPluginMeta(err error) {
 		availability: runtime.AvailabilityUnavailable,
 		activity:     PluginMetaIdle,
 		capacity:     p.deployment.CapacityPerProcess(),
-		lastError:    err,
+		err:          err,
 	}
-	p.reconcileStatus(p.status())
+	p.reconcileStatus()
 	_ = p.SendWithPriority(p.Parent(), MessagePluginProcessRestartExhausted{err: err}, gen.MessagePriorityHigh)
 }
 
@@ -587,16 +587,13 @@ func (p *pluginProcessActor[T]) reportUnavailable(err error) {
 		availability: runtime.AvailabilityUnavailable,
 		activity:     PluginMetaIdle,
 		capacity:     p.deployment.CapacityPerProcess(),
-		lastError:    err,
+		err:          err,
 	}
-	p.reconcileStatus(p.status())
+	p.reconcileStatus()
 }
 
 // status derives process health from the meta status owned by this actor.
 func (p *pluginProcessActor[T]) status() pluginProcessActorStatus {
-	if p.lastStatus.lifecycle == PluginProcessActorStopped {
-		return p.lastStatus
-	}
 	lifecycle := PluginProcessActorStarting
 	switch p.pluginMeta.status.lifecycle {
 	case PluginMetaRunning:
@@ -606,17 +603,25 @@ func (p *pluginProcessActor[T]) status() pluginProcessActorStatus {
 	case PluginMetaFailed:
 		lifecycle = PluginProcessActorFailed
 	}
-	return pluginProcessActorStatus{
+	status := pluginProcessActorStatus{
 		lifecycle:    lifecycle,
 		availability: p.pluginMeta.status.availability,
 		meta:         p.pluginMeta.status,
-		lastError:    p.pluginMeta.status.lastError,
+		// The actor's own failure wins over its meta's.
+		err: runtime.FirstError(p.err, p.pluginMeta.status.err),
 	}
+	// Termination outranks the meta health it was derived from.
+	if p.stopped {
+		status.lifecycle = PluginProcessActorStopped
+		status.availability = runtime.AvailabilityUnavailable
+	}
+	return status
 }
 
 // reconcileStatus propagates changed health immediately; the runtime supervisor owns the gauges.
 // Failure status must precede invocation completion, which can reopen manager admission.
-func (p *pluginProcessActor[T]) reconcileStatus(next pluginProcessActorStatus) {
+func (p *pluginProcessActor[T]) reconcileStatus() {
+	next := p.status()
 	if samePluginProcessStatus(p.lastStatus, next) {
 		return
 	}
@@ -639,7 +644,7 @@ func (p *pluginProcessActor[T]) propagateStatus(next pluginProcessActorStatus) {
 func samePluginProcessStatus(left, right pluginProcessActorStatus) bool {
 	return left.lifecycle == right.lifecycle &&
 		left.availability == right.availability &&
-		runtime.ErrorText(left.lastError) == runtime.ErrorText(right.lastError) &&
+		runtime.ErrorText(left.err) == runtime.ErrorText(right.err) &&
 		samePluginMetaStatus(left.meta, right.meta)
 }
 
@@ -649,5 +654,5 @@ func samePluginMetaStatus(left, right pluginMetaStatus) bool {
 	return left.lifecycle == right.lifecycle &&
 		left.availability == right.availability &&
 		left.activity == right.activity &&
-		runtime.ErrorText(left.lastError) == runtime.ErrorText(right.lastError)
+		runtime.ErrorText(left.err) == runtime.ErrorText(right.err)
 }
