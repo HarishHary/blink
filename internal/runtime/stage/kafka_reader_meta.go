@@ -33,7 +33,7 @@ const (
 type kafkaReaderMetaStatus struct {
 	Lifecycle    KafkaReaderMetaLifecycle
 	Availability runtime.Availability
-	LastError    error
+	err          error
 }
 
 // kafkaReaderMeta serializes all blocking access to one reader incarnation.

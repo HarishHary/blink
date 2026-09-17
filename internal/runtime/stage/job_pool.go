@@ -25,9 +25,9 @@ const (
 
 // JobPoolStatus reports job-pool lifecycle and availability.
 type JobPoolStatus struct {
-	LastError    error
 	Lifecycle    JobPoolLifecycle
 	Availability runtime.Availability
+	err          error
 }
 
 // jobPool routes jobs round-robin while coordinators manage admission and completion.
@@ -149,7 +149,7 @@ func (p *jobPool) status() JobPoolStatus {
 	return JobPoolStatus{
 		Lifecycle:    p.lifecycle,
 		Availability: availability,
-		LastError:    p.err,
+		err:          p.err,
 	}
 }
 
@@ -174,7 +174,7 @@ func (p *jobPool) propagateStatus(next JobPoolStatus) {
 func (p *jobPool) HandleInspect(from gen.PID, item ...string) map[string]string {
 	result := p.Pool.HandleInspect(from, item...)
 	status := p.status()
-	result["job_pool:last_error"] = runtime.ErrorText(status.LastError)
+	result["job_pool:err"] = runtime.ErrorText(status.err)
 	result["job_pool:lifecycle"] = string(status.Lifecycle)
 	result["job_pool:availability"] = string(status.Availability)
 	return result
@@ -195,5 +195,5 @@ func (p *jobPool) publishGauges() {
 func sameJobPoolStatus(left, right JobPoolStatus) bool {
 	return left.Lifecycle == right.Lifecycle &&
 		left.Availability == right.Availability &&
-		runtime.ErrorText(left.LastError) == runtime.ErrorText(right.LastError)
+		runtime.ErrorText(left.err) == runtime.ErrorText(right.err)
 }

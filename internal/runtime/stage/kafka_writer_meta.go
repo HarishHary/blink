@@ -33,7 +33,7 @@ const (
 type kafkaWriterMetaStatus struct {
 	Lifecycle    KafkaWriterMetaLifecycle
 	Availability runtime.Availability
-	LastError    error
+	err          error
 }
 
 // kafkaWriterMeta owns one writer client and bounded write queue.
