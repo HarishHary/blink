@@ -23,10 +23,10 @@ const (
 	JobPoolStopped  JobPoolLifecycle = "stopped"
 )
 
-// JobPoolStatus reports job-pool lifecycle and availability.
-type JobPoolStatus struct {
-	Lifecycle    JobPoolLifecycle
-	Availability runtime.Availability
+// jobPoolStatus reports job-pool lifecycle and availability.
+type jobPoolStatus struct {
+	lifecycle    JobPoolLifecycle
+	availability runtime.Availability
 	err          error
 }
 
@@ -36,7 +36,7 @@ type jobPool struct {
 	opts            JobPoolOptions
 	lifecycle       JobPoolLifecycle
 	err             error
-	lastStatus      JobPoolStatus
+	lastStatus      jobPoolStatus
 	lastStatusEpoch int64
 	labels          telemetry.Labels
 }
@@ -54,7 +54,7 @@ type MessageJobPoolStatusRequest struct{}
 // MessageJobPoolStatusChanged reports a job pool's current status.
 type MessageJobPoolStatusChanged struct {
 	StatusEpoch int64
-	Status      JobPoolStatus
+	Status      jobPoolStatus
 }
 
 // ---------------------------------------------------------------------------
@@ -138,7 +138,7 @@ func (p *jobPool) Terminate(reason error) {
 // ---------------------------------------------------------------------------
 
 // status returns the pool lifecycle and availability.
-func (p *jobPool) status() JobPoolStatus {
+func (p *jobPool) status() jobPoolStatus {
 	availability := runtime.AvailabilityUnavailable
 	if p.lifecycle == JobPoolRunning {
 		availability = runtime.AvailabilityReady
@@ -146,9 +146,9 @@ func (p *jobPool) status() JobPoolStatus {
 			availability = runtime.AvailabilityDegraded
 		}
 	}
-	return JobPoolStatus{
-		Lifecycle:    p.lifecycle,
-		Availability: availability,
+	return jobPoolStatus{
+		lifecycle:    p.lifecycle,
+		availability: availability,
 		err:          p.err,
 	}
 }
@@ -166,7 +166,7 @@ func (p *jobPool) reconcileStatus() {
 }
 
 // propagateStatus sends the supplied snapshot without reconciling state or publishing gauges.
-func (p *jobPool) propagateStatus(next JobPoolStatus) {
+func (p *jobPool) propagateStatus(next jobPoolStatus) {
 	_ = p.SendWithPriority(p.Parent(), MessageJobPoolStatusChanged{StatusEpoch: p.lastStatusEpoch, Status: next}, gen.MessagePriorityHigh)
 }
 
@@ -175,8 +175,8 @@ func (p *jobPool) HandleInspect(from gen.PID, item ...string) map[string]string 
 	result := p.Pool.HandleInspect(from, item...)
 	status := p.status()
 	result["job_pool:err"] = runtime.ErrorText(status.err)
-	result["job_pool:lifecycle"] = string(status.Lifecycle)
-	result["job_pool:availability"] = string(status.Availability)
+	result["job_pool:lifecycle"] = string(status.lifecycle)
+	result["job_pool:availability"] = string(status.availability)
 	return result
 }
 
@@ -188,12 +188,12 @@ func (p *jobPool) publishGauges() {
 			workers = value
 		}
 	}
-	jobPoolGauges{availability: p.status().Availability, workers: workers}.publish(p.labels, p)
+	jobPoolGauges{availability: p.status().availability, workers: workers}.publish(p.labels, p)
 }
 
 // sameJobPoolStatus compares the status fields that trigger publication.
-func sameJobPoolStatus(left, right JobPoolStatus) bool {
-	return left.Lifecycle == right.Lifecycle &&
-		left.Availability == right.Availability &&
+func sameJobPoolStatus(left, right jobPoolStatus) bool {
+	return left.lifecycle == right.lifecycle &&
+		left.availability == right.availability &&
 		runtime.ErrorText(left.err) == runtime.ErrorText(right.err)
 }

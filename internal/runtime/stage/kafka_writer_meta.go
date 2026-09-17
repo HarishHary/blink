@@ -31,8 +31,8 @@ const (
 
 // kafkaWriterMetaStatus is derived and owned by the writer actor.
 type kafkaWriterMetaStatus struct {
-	Lifecycle    KafkaWriterMetaLifecycle
-	Availability runtime.Availability
+	lifecycle    KafkaWriterMetaLifecycle
+	availability runtime.Availability
 	err          error
 }
 

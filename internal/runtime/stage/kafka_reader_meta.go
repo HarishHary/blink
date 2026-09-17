@@ -31,8 +31,8 @@ const (
 
 // kafkaReaderMetaStatus is derived and owned by the reader actor.
 type kafkaReaderMetaStatus struct {
-	Lifecycle    KafkaReaderMetaLifecycle
-	Availability runtime.Availability
+	lifecycle    KafkaReaderMetaLifecycle
+	availability runtime.Availability
 	err          error
 }
 
