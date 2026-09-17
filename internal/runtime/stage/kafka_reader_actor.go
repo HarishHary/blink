@@ -42,7 +42,8 @@ const (
 	KafkaReaderStopped  KafkaReaderLifecycle = "stopped"
 )
 
-// KafkaReaderStatus reports Kafka reader activity and actor status.
+// KafkaReaderStatus reports Kafka reader activity and actor status. It is exported because the reader
+// sends it to the caller-supplied coordinator.
 type KafkaReaderStatus struct {
 	Lifecycle    KafkaReaderLifecycle
 	Availability runtime.Availability
