@@ -108,13 +108,15 @@ type routerActor[T Artifact] struct {
 // Messages
 // ---------------------------------------------------------------------------
 
-// routerInvocation tracks one in-flight call routed to a manager, awaiting accept/complete.
+// routerInvocation tracks one in-flight call routed to a manager, awaiting accept/complete, and then
+// the manager's release when the result arrived while the plugin was still executing.
 type routerInvocation struct {
-	route    gen.Atom
-	ackToken uint64
-	ackStop  gen.CancelFunc
-	accepted bool
-	manager  gen.PID
+	route     gen.Atom
+	ackToken  uint64
+	ackStop   gen.CancelFunc
+	accepted  bool
+	completed bool
+	manager   gen.PID
 }
 
 // MessageInvocationTimedOut fires when a routed call is not accepted before its deadline.
@@ -309,6 +311,9 @@ func (a *routerActor[T]) HandleMessage(from gen.PID, message any) error {
 	case MessageInvocationCompleted:
 		a.completeInvocation(from, m)
 
+	case MessageInvocationReleased:
+		a.releaseInvocation(from, m)
+
 	case MessageDeploymentManagerDrained:
 		if ref, ok := a.currentManager(m.route, from, m.manager); ok && ref.phase == deploymentRouteDraining {
 			a.removeDrainedRoute(ref)
@@ -479,14 +484,38 @@ func (a *routerActor[T]) acceptInvocation(message MessageInvocationAccepted) {
 	call.accepted, call.manager = true, message.manager
 }
 
-// completeInvocation finishes an in-flight call reported done by its bound manager.
+// completeInvocation finishes an in-flight call reported done by its bound manager, keeping a call the
+// manager is still executing tracked until it reports the capacity released.
 func (a *routerActor[T]) completeInvocation(from gen.PID, message MessageInvocationCompleted) {
 	call := a.inFlightCalls[message.CallID]
-	if call == nil || !call.accepted || call.route != message.Route || call.manager != from ||
-		call.manager != message.Manager {
+	if call == nil || call.completed || !call.accepted || call.route != message.Route ||
+		call.manager != from || call.manager != message.Manager {
 		return
 	}
-	a.finishTrackedCall(message.CallID, message.Err)
+	if !message.Executing {
+		a.finishTrackedCall(message.CallID, message.Err)
+		return
+	}
+	if call.ackStop != nil {
+		call.ackStop()
+		call.ackStop = nil
+	}
+	call.completed = true
+	_ = a.SendWithPriority(a.Parent(), MessageInvocationCompleted{
+		CallID: message.CallID, Err: message.Err, Executing: true,
+	}, gen.MessagePriorityHigh)
+}
+
+// releaseInvocation forgets a completed call whose manager reported its capacity free.
+func (a *routerActor[T]) releaseInvocation(from gen.PID, message MessageInvocationReleased) {
+	call := a.inFlightCalls[message.CallID]
+	if call == nil || !call.completed || call.route != message.Route ||
+		call.manager != from || call.manager != message.Manager {
+		return
+	}
+	a.dropCall(message.CallID)
+	_ = a.SendWithPriority(a.Parent(),
+		MessageInvocationReleased{CallID: message.CallID}, gen.MessagePriorityHigh)
 }
 
 // cancelInvocation forwards a cancellation to the call's manager, or fails it locally.
@@ -510,17 +539,31 @@ func (a *routerActor[T]) cancelInvocation(message MessageCancelInvocation) {
 	}
 }
 
-// finishTrackedCall stops the acceptance timer and reports the call complete to the catalog.
+// finishTrackedCall drops the call and reports the result to the catalog, or only the release when this
+// call's result was already reported as still executing.
 func (a *routerActor[T]) finishTrackedCall(callID uint64, err error) {
-	call := a.inFlightCalls[callID]
+	call := a.dropCall(callID)
 	if call == nil {
 		return
+	}
+	if call.completed {
+		_ = a.SendWithPriority(a.Parent(), MessageInvocationReleased{CallID: callID}, gen.MessagePriorityHigh)
+		return
+	}
+	_ = a.SendWithPriority(a.Parent(), MessageInvocationCompleted{CallID: callID, Err: err}, gen.MessagePriorityHigh)
+}
+
+// dropCall stops a call's acceptance timer and forgets it, returning what was tracked.
+func (a *routerActor[T]) dropCall(callID uint64) *routerInvocation {
+	call := a.inFlightCalls[callID]
+	if call == nil {
+		return nil
 	}
 	if call.ackStop != nil {
 		call.ackStop()
 	}
 	delete(a.inFlightCalls, callID)
-	_ = a.SendWithPriority(a.Parent(), MessageInvocationCompleted{CallID: callID, Err: err}, gen.MessagePriorityHigh)
+	return call
 }
 
 // drainRoute advances one route toward teardown: quiesce its manager, then let it be removed.

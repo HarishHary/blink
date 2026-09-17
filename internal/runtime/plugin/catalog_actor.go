@@ -58,6 +58,13 @@ func (s catalogActorStatus) clone() catalogActorStatus {
 	return clone
 }
 
+// catalogInvocation is one call forwarded to a router, kept until that router reports the call's
+// execution capacity released rather than only its result.
+type catalogInvocation struct {
+	router    gen.PID
+	completed bool
+}
+
 // catalogActor owns router actors and projects their aggregate status.
 type catalogActor[T Artifact] struct {
 	act.Actor
@@ -67,7 +74,7 @@ type catalogActor[T Artifact] struct {
 	activated       bool
 	routers         map[string]*routerState
 	desired         map[string]routerDesiredState
-	inFlightCalls   map[uint64]gen.PID
+	inFlightCalls   map[uint64]catalogInvocation
 	lifecycle       CatalogActorLifecycle // the catalog's own live lifecycle; the supervisor owns restarting
 	err             error                 // the catalog's own failure, kept apart from its routers' errors
 	lastStatus      catalogActorStatus    // last published projection, the baseline reconcileStatus dedupes against
@@ -122,7 +129,7 @@ func (a *catalogActor[T]) Init(...any) error {
 	a.opts = catalogOptionsWithDefaults(a.opts)
 	a.routers = make(map[string]*routerState)
 	a.desired = make(map[string]routerDesiredState)
-	a.inFlightCalls = make(map[uint64]gen.PID)
+	a.inFlightCalls = make(map[uint64]catalogInvocation)
 	a.lifecycle = CatalogActorStarting
 	return nil
 }
@@ -172,26 +179,42 @@ func (a *catalogActor[T]) HandleMessage(from gen.PID, message any) error {
 			a.finishUntrackedCall(m, ErrPluginUnavailable)
 			return nil
 		}
-		a.inFlightCalls[m.CallID] = ref.pid
+		a.inFlightCalls[m.CallID] = catalogInvocation{router: ref.pid}
 		if err := a.Send(ref.pid, m); err != nil {
 			a.finishTrackedCall(m.CallID, ErrPluginUnavailable)
 			_ = a.Node().SendExit(ref.pid, fmt.Errorf("forward invocation to router: %w", err))
 		}
 
 	case MessageCancelInvocation:
-		routerPID, ok := a.inFlightCalls[m.CallID]
+		call, ok := a.inFlightCalls[m.CallID]
 		if !ok {
 			return nil
 		}
-		if err := a.SendWithPriority(routerPID, m, gen.MessagePriorityHigh); err != nil {
+		if err := a.SendWithPriority(call.router, m, gen.MessagePriorityHigh); err != nil {
 			a.finishTrackedCall(m.CallID, m.Err)
 		}
 
 	case MessageInvocationCompleted:
-		if routerPID, ok := a.inFlightCalls[m.CallID]; ok && from == routerPID {
-			delete(a.inFlightCalls, m.CallID)
-			_ = a.SendWithPriority(a.Parent(), m, gen.MessagePriorityHigh)
+		call, ok := a.inFlightCalls[m.CallID]
+		if !ok || from != call.router || call.completed {
+			return nil
 		}
+		// An executing call stays tracked: its router still owes the release that frees plugin capacity.
+		if m.Executing {
+			call.completed = true
+			a.inFlightCalls[m.CallID] = call
+		} else {
+			delete(a.inFlightCalls, m.CallID)
+		}
+		_ = a.SendWithPriority(a.Parent(), m, gen.MessagePriorityHigh)
+
+	case MessageInvocationReleased:
+		call, ok := a.inFlightCalls[m.CallID]
+		if !ok || from != call.router || !call.completed {
+			return nil
+		}
+		delete(a.inFlightCalls, m.CallID)
+		_ = a.SendWithPriority(a.Parent(), m, gen.MessagePriorityHigh)
 
 	case MessageDrain:
 		if a.isDraining() {
@@ -298,8 +321,8 @@ func (a *catalogActor[T]) HandleMessage(from gen.PID, message any) error {
 				}
 			} else {
 				ref.pid = gen.PID{}
-				for callID, routerPID := range a.inFlightCalls {
-					if routerPID == m.PID {
+				for callID, call := range a.inFlightCalls {
+					if call.router == m.PID {
 						a.finishTrackedCall(callID, ErrPluginUnavailable)
 					}
 				}
@@ -372,12 +395,18 @@ func (a *catalogActor[T]) finishUntrackedCall(call MessageInvokePlugin[T], err e
 	_ = a.SendWithPriority(a.Parent(), MessageInvocationCompleted{CallID: call.CallID, Err: err}, gen.MessagePriorityHigh)
 }
 
-// finishTrackedCall removes and reports a completed invocation.
+// finishTrackedCall removes an invocation and reports its result, or only its release when the result
+// was already reported while the plugin was still executing.
 func (a *catalogActor[T]) finishTrackedCall(callID uint64, err error) {
-	if _, ok := a.inFlightCalls[callID]; !ok {
+	call, ok := a.inFlightCalls[callID]
+	if !ok {
 		return
 	}
 	delete(a.inFlightCalls, callID)
+	if call.completed {
+		_ = a.SendWithPriority(a.Parent(), MessageInvocationReleased{CallID: callID}, gen.MessagePriorityHigh)
+		return
+	}
 	_ = a.SendWithPriority(a.Parent(), MessageInvocationCompleted{CallID: callID, Err: err}, gen.MessagePriorityHigh)
 }
 
@@ -473,8 +502,8 @@ func (a *catalogActor[T]) retireRouter(id string, callErr error) {
 
 	retiredPID := ref.pid
 	if retiredPID != (gen.PID{}) {
-		for callID, routerPID := range a.inFlightCalls {
-			if routerPID == retiredPID {
+		for callID, call := range a.inFlightCalls {
+			if call.router == retiredPID {
 				a.finishTrackedCall(callID, callErr)
 			}
 		}

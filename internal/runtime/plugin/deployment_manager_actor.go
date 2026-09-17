@@ -60,7 +60,8 @@ type deploymentManagerCall[T Artifact] struct {
 	process       gen.PID
 	dispatchToken uint64
 	dispatchStop  gen.CancelFunc
-	completed     bool
+	completed     bool                      // result reported; execution may still hold a process slot
+	released      bool                      // process capacity returned, reported once
 	queued        bool                      // linked into the manager's pending queue
 	prev, next    *deploymentManagerCall[T] // pending queue links, valid while queued
 	accepted      time.Time                 // when the manager took the call, for the invocation histogram
@@ -299,7 +300,9 @@ func (m *deploymentManagerActor[T]) HandleMessage(from gen.PID, message any) err
 		if entry.phase == deploymentManagerPending {
 			m.removeCall(msg.CallID, err)
 		} else {
-			m.completeInvocation(entry, err)
+			// A cancelled call the process already took keeps its slot: the caller has its error, but only
+			// MessageInvocationFinished proves the plugin stopped working.
+			m.completeInvocation(entry, err, true)
 		}
 		m.reconcile()
 
@@ -489,19 +492,19 @@ func (m *deploymentManagerActor[T]) acceptInvocation(call MessageInvokePlugin[T]
 		return
 	}
 	if m.draining || m.circuitOpen {
-		m.completeInvocation(&deploymentManagerCall[T]{call: call}, ErrPluginUnavailable)
+		m.completeInvocation(&deploymentManagerCall[T]{call: call}, ErrPluginUnavailable, false)
 		return
 	}
 	if call.Context == nil {
 		call.Context = context.Background()
 	}
 	if err := call.Context.Err(); err != nil {
-		m.completeInvocation(&deploymentManagerCall[T]{call: call}, err)
+		m.completeInvocation(&deploymentManagerCall[T]{call: call}, err, false)
 		return
 	}
 	if m.pendingCalls.length >= m.options.QueueSize {
 		m.labels.Count(m, metricQueueRejects)
-		m.completeInvocation(&deploymentManagerCall[T]{call: call}, ErrQueueFull)
+		m.completeInvocation(&deploymentManagerCall[T]{call: call}, ErrQueueFull, false)
 		return
 	}
 	entry := &deploymentManagerCall[T]{call: call, phase: deploymentManagerPending, accepted: time.Now()}
@@ -762,11 +765,13 @@ func (m *deploymentManagerActor[T]) removeCall(callID uint64, err error) {
 			}
 		}
 	}
-	m.completeInvocation(entry, err)
+	m.completeInvocation(entry, err, false)
+	m.releaseInvocation(entry)
 }
 
-// completeInvocation publishes one idempotent invocation result to the Router.
-func (m *deploymentManagerActor[T]) completeInvocation(entry *deploymentManagerCall[T], err error) {
+// completeInvocation publishes one idempotent invocation result to the Router. An executing call keeps
+// the process capacity it holds until the process itself reports the work finished.
+func (m *deploymentManagerActor[T]) completeInvocation(entry *deploymentManagerCall[T], err error, executing bool) {
 	if entry.completed {
 		return
 	}
@@ -778,6 +783,22 @@ func (m *deploymentManagerActor[T]) completeInvocation(entry *deploymentManagerC
 	_ = m.SendWithPriority(m.Parent(), MessageInvocationCompleted{
 		CallID: entry.call.CallID,
 		Err:    err, Route: m.route, Manager: m.PID(),
+		Executing: executing,
+	}, gen.MessagePriorityHigh)
+	if !executing {
+		entry.released = true
+	}
+}
+
+// releaseInvocation reports once that this manager holds no capacity for an invocation whose result it
+// already published as executing.
+func (m *deploymentManagerActor[T]) releaseInvocation(entry *deploymentManagerCall[T]) {
+	if entry.released {
+		return
+	}
+	entry.released = true
+	_ = m.SendWithPriority(m.Parent(), MessageInvocationReleased{
+		CallID: entry.call.CallID, Route: m.route, Manager: m.PID(),
 	}, gen.MessagePriorityHigh)
 }
 
