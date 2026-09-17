@@ -158,7 +158,7 @@ type deploymentManagerActor[T Artifact] struct {
 	idleSince       time.Time
 	lastScale       time.Time
 	growthProcs     int                          // processes held from the process budget, above this deployment's reservation
-	stopped         bool                         // latched by Terminate; the terminal lifecycle outlives the state it was derived from
+	stopped         bool                         // set by Terminate, never cleared: the slots it would be derived from are gone
 	err             error                        // the manager's own failure, kept apart from its processes' errors
 	lastStatus      deploymentManagerActorStatus // last published projection, the baseline reconcileStatus dedupes against
 	lastStatusEpoch int64
