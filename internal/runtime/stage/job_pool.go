@@ -53,8 +53,8 @@ type MessageJobPoolStatusRequest struct{}
 
 // MessageJobPoolStatusChanged reports a job pool's current status.
 type MessageJobPoolStatusChanged struct {
-	StatusEpoch int64
-	Status      jobPoolStatus
+	statusEpoch int64
+	status      jobPoolStatus
 }
 
 // ---------------------------------------------------------------------------
@@ -167,7 +167,7 @@ func (p *jobPool) reconcileStatus() {
 
 // propagateStatus sends the supplied snapshot without reconciling state or publishing gauges.
 func (p *jobPool) propagateStatus(next jobPoolStatus) {
-	_ = p.SendWithPriority(p.Parent(), MessageJobPoolStatusChanged{StatusEpoch: p.lastStatusEpoch, Status: next}, gen.MessagePriorityHigh)
+	_ = p.SendWithPriority(p.Parent(), MessageJobPoolStatusChanged{statusEpoch: p.lastStatusEpoch, status: next}, gen.MessagePriorityHigh)
 }
 
 // HandleInspect returns pool inspection data with lifecycle and availability.
