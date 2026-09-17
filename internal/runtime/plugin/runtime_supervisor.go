@@ -84,11 +84,15 @@ type runtimeDrainWaiter struct {
 // alive reports whether the drain waiter can still receive a response.
 func (t runtimeDrainWaiter) alive() bool { return t.ref.IsAlive() }
 
-// runtimeCall tracks an in-flight runtime call.
+// runtimeCall tracks an in-flight runtime call. A completed call stays tracked until the tree reports
+// its plugin capacity released, so the gateway that owns its admission permit hears both facts.
 type runtimeCall struct {
-	catalog gen.PID
-	result  *runtime.AsyncResult
-	cancel  context.CancelFunc
+	ref       InvocationRef
+	owner     gen.PID
+	catalog   gen.PID
+	result    *runtime.AsyncResult
+	cancel    context.CancelFunc
+	completed bool
 }
 
 // supervisor coordinates the runtime actor subtree.
@@ -158,9 +162,9 @@ type MessageProposeDesiredState struct {
 	desired MessageApplyCatalogDesiredState
 }
 
-// MessageSubmitInvocation requests execution of a plugin invocation.
+// MessageSubmitInvocation requests execution of a plugin invocation the gateway has admitted.
 type MessageSubmitInvocation[T Artifact] struct {
-	callID               uint64
+	ref                  InvocationRef
 	context              context.Context
 	cancel               context.CancelFunc
 	pluginID, rolloutKey string
@@ -199,9 +203,8 @@ func (s *supervisor[P, M]) Init(...any) (act.SupervisorSpec, error) {
 			"namespace, adapter, reader options, projection, and directory are required",
 		)
 	}
-	name := SupervisorName(s.namespace)
-	if err := s.RegisterName(name); err != nil {
-		return act.SupervisorSpec{}, fmt.Errorf("register runtime supervisor %q: %w", name, err)
+	if err := requireSubtreeName(s, SupervisorName(s.namespace)); err != nil {
+		return act.SupervisorSpec{}, fmt.Errorf("runtime supervisor name: %w", err)
 	}
 
 	s.inFlightCalls = make(map[uint64]runtimeCall)
@@ -326,25 +329,34 @@ func (s *supervisor[P, M]) HandleMessage(from gen.PID, message any) error {
 		return nil
 
 	case MessageSubmitInvocation[P]:
+		// The sender has to be the gateway its own reference names, which is the identity notifyOwner
+		// requires to answer: anything else holds no admission permit and could hear no result.
+		if from != m.ref.Gateway {
+			s.labels.Count(s, metricInvocationsRejected, "owner")
+			s.rejectSubmission(from, m, ErrPluginUnavailable)
+			return nil
+		}
 		if !s.acceptsSubmission(m.expectedGeneration) {
 			s.labels.Count(s, metricInvocationsRejected, "closed")
-			m.result.Complete(ErrPluginUnavailable)
+			s.rejectSubmission(from, m, ErrPluginUnavailable)
 			return nil
 		}
 		if err := m.context.Err(); err != nil {
 			s.labels.Count(s, metricInvocationsRejected, "context")
-			m.result.Complete(err)
+			s.rejectSubmission(from, m, err)
 			return nil
 		}
 
 		catalogPID := s.catalog.pid
-		s.inFlightCalls[m.callID] = runtimeCall{
+		s.inFlightCalls[m.ref.CallID] = runtimeCall{
+			ref:     m.ref,
+			owner:   from,
 			catalog: catalogPID,
 			result:  m.result,
 			cancel:  m.cancel,
 		}
 		call := MessageInvokePlugin[P]{
-			CallID:     m.callID,
+			CallID:     m.ref.CallID,
 			Context:    m.context,
 			Cancel:     m.cancel,
 			PluginID:   m.pluginID,
@@ -353,12 +365,14 @@ func (s *supervisor[P, M]) HandleMessage(from gen.PID, message any) error {
 			Shadow:     m.shadow,
 		}
 		if err := s.Send(catalogPID, call); err != nil {
-			s.finishCall(m.callID, ErrPluginUnavailable)
+			s.finishCall(m.ref.CallID, ErrPluginUnavailable)
 			_ = s.Node().SendExit(
 				catalogPID,
 				fmt.Errorf("forward invocation to catalog: %w", err),
 			)
+			return nil
 		}
+		s.notifyOwner(m.ref, from, MessageGatewayInvocationAdmitted{Ref: m.ref})
 
 	case MessageReconcilerActorStatusChanged:
 		if from != s.reconciler.pid || m.epoch <= s.reconciler.statusEpoch {
@@ -450,22 +464,41 @@ func (s *supervisor[P, M]) HandleMessage(from gen.PID, message any) error {
 		}
 		return s.beginPendingDesiredStateTransition()
 
-	case MessageCancelInvocation:
-		call, ok := s.inFlightCalls[m.CallID]
-		if !ok {
+	case MessageGatewayCancelInvocation:
+		call, ok := s.inFlightCalls[m.Ref.CallID]
+		if !ok || call.ref != m.Ref || from != call.owner {
 			return nil
 		}
 		if call.cancel != nil {
 			call.cancel()
 		}
-		if err := s.SendWithPriority(call.catalog, m, gen.MessagePriorityHigh); err != nil {
-			s.finishCall(m.CallID, m.Err)
+		if err := s.SendWithPriority(call.catalog, MessageCancelInvocation{
+			CallID: m.Ref.CallID, Err: m.Err,
+		}, gen.MessagePriorityHigh); err != nil {
+			s.finishCall(m.Ref.CallID, m.Err)
 		}
 
 	case MessageInvocationCompleted:
-		if call, ok := s.inFlightCalls[m.CallID]; ok && from == call.catalog {
-			s.finishCall(m.CallID, m.Err)
+		call, ok := s.inFlightCalls[m.CallID]
+		if !ok || from != call.catalog {
+			return nil
 		}
+		// Always this call's first answer: the catalog drops a second completion for a call it already
+		// reported, so an executing one is finished by MessageInvocationReleased below instead.
+		if !m.Executing {
+			s.finishCall(m.CallID, m.Err)
+			return nil
+		}
+		// The caller gets its result now; the plugin capacity behind it is only free once the tree says so,
+		// so this call stays tracked and its gateway permit stays held.
+		s.completeCall(m.CallID, m.Err)
+
+	case MessageInvocationReleased:
+		call, ok := s.inFlightCalls[m.CallID]
+		if !ok || from != call.catalog || !call.completed {
+			return nil
+		}
+		s.releaseCall(m.CallID)
 
 	case MessageCatalogStatusChanged:
 		if from != s.catalog.pid ||
@@ -560,19 +593,80 @@ func (s *supervisor[P, M]) Terminate(reason error) {
 // Work
 // ---------------------------------------------------------------------------
 
-// finishCall completes and removes an in-flight plugin invocation.
+// finishCall completes an in-flight plugin invocation and releases what the tree held for it, which is
+// every path but a cancellation the plugin has not finished acting on yet.
 func (s *supervisor[P, M]) finishCall(callID uint64, err error) {
+	s.completeCall(callID, err)
+	s.releaseCall(callID)
+}
+
+// completeCall reports one invocation's result to its caller and its gateway, leaving the call tracked.
+func (s *supervisor[P, M]) completeCall(callID uint64, err error) {
 	call, ok := s.inFlightCalls[callID]
-	if !ok {
+	if !ok || call.completed {
 		return
 	}
-	delete(s.inFlightCalls, callID)
+	call.completed = true
+	s.inFlightCalls[callID] = call
 	if call.cancel != nil {
 		call.cancel()
 	}
 	s.labels.Count(s, metricInvocations, telemetry.Result(err))
 	call.result.Complete(err)
+	s.notifyOwner(call.ref, call.owner, MessageGatewayInvocationCompleted{Ref: call.ref, Err: err})
 	_ = s.promotePendingDesiredState()
+}
+
+// releaseCall forgets one invocation and tells its gateway the plugin capacity behind it is free.
+func (s *supervisor[P, M]) releaseCall(callID uint64) {
+	call, ok := s.inFlightCalls[callID]
+	if !ok {
+		return
+	}
+	delete(s.inFlightCalls, callID)
+	s.notifyOwner(call.ref, call.owner, MessageGatewayInvocationReleased{Ref: call.ref})
+	_ = s.promotePendingDesiredState()
+}
+
+// callCounts splits the tracked calls into those whose caller has no result yet and those completed but
+// still holding plugin capacity. Both are derived from the tracking map, which is the only record of either.
+func (s *supervisor[P, M]) callCounts() (incomplete, unreleased int) {
+	for _, call := range s.inFlightCalls {
+		if call.completed {
+			unreleased++
+			continue
+		}
+		incomplete++
+	}
+	return incomplete, unreleased
+}
+
+// hasIncompleteCalls reports whether any tracked call still owes its caller a result, which is what a
+// revision transition waits on.
+func (s *supervisor[P, M]) hasIncompleteCalls() bool {
+	for _, call := range s.inFlightCalls {
+		if !call.completed {
+			return true
+		}
+	}
+	return false
+}
+
+// rejectSubmission answers a submission the runtime never took, completing its caller and releasing the
+// gateway permit it was admitted against.
+func (s *supervisor[P, M]) rejectSubmission(from gen.PID, m MessageSubmitInvocation[P], err error) {
+	m.result.Complete(err)
+	s.notifyOwner(m.ref, from, MessageGatewayInvocationCompleted{Ref: m.ref, Err: err})
+	s.notifyOwner(m.ref, from, MessageGatewayInvocationReleased{Ref: m.ref})
+}
+
+// notifyOwner sends one invocation fact to the gateway incarnation that submitted it, and to no other:
+// a reused call id belonging to a previous incarnation is addressed to a process that no longer exists.
+func (s *supervisor[P, M]) notifyOwner(ref InvocationRef, owner gen.PID, message any) {
+	if owner == (gen.PID{}) || ref.Gateway != owner {
+		return
+	}
+	_ = s.SendWithPriority(owner, message, gen.MessagePriorityHigh)
 }
 
 // promotePendingDesiredState applies the latest proposal after tracked calls drain.
@@ -580,9 +674,10 @@ func (s *supervisor[P, M]) promotePendingDesiredState() error {
 	if s.lifecycle == SupervisorDraining ||
 		s.lifecycle == SupervisorStopped ||
 		s.transition == SupervisorTransitionIdle ||
-		len(s.inFlightCalls) != 0 ||
 		s.pendingDesiredState.desiredRevision == 0 ||
-		s.pendingDesiredState.snapshotGeneration != s.transitionGeneration {
+		s.pendingDesiredState.snapshotGeneration != s.transitionGeneration ||
+		// Last, so the only walk of the tracking map happens on a transition that is otherwise ready.
+		s.hasIncompleteCalls() {
 		return nil
 	}
 	s.desiredState = s.pendingDesiredState
@@ -1094,6 +1189,7 @@ func (s *supervisor[P, M]) propagateReadiness() {
 // publishGauges publishes current values without changing state or propagating status.
 func (s *supervisor[P, M]) publishGauges() {
 	processesReady, processesDesired, queueDepth, activeCalls := s.routeTotals()
+	incompleteCalls, unreleasedCalls := s.callCounts()
 	runtimeGauges{
 		lifecycle:              s.lifecycle,
 		availability:           s.runtimeAvailability(),
@@ -1101,7 +1197,8 @@ func (s *supervisor[P, M]) publishGauges() {
 		desiredRevision:        s.currentDesiredRevision(),
 		readyGeneration:        s.projection.ReadyGeneration,
 		committedGeneration:    s.projection.CommittedGeneration,
-		inFlightCalls:          len(s.inFlightCalls),
+		inFlightCalls:          incompleteCalls,
+		unreleasedCalls:        unreleasedCalls,
 		reconcilerAvailability: s.reconciler.status.availability,
 		reconcilerGeneration:   s.reconciler.status.snapshotGeneration,
 		reconcilerRevision:     s.reconciler.status.revision,
@@ -1178,6 +1275,7 @@ func (s *supervisor[P, M]) radarUnavailableOnce(err error) {
 // in-flight call and drain-waiter counts.
 func (s *supervisor[P, M]) HandleInspect(gen.PID, ...string) map[string]string {
 	status := s.status()
+	incompleteCalls, unreleasedCalls := s.callCounts()
 	return map[string]string{
 		"runtime:err":                             runtime.ErrorText(status.err),
 		"runtime:lifecycle":                       string(status.Lifecycle),
@@ -1195,7 +1293,8 @@ func (s *supervisor[P, M]) HandleInspect(gen.PID, ...string) map[string]string {
 		"runtime:reconciler:availability":         string(status.Reconciler.availability),
 		"runtime:projection:ready_generation":     fmt.Sprintf("%d", s.projection.ReadyGeneration),
 		"runtime:projection:committed_generation": fmt.Sprintf("%d", s.projection.CommittedGeneration),
-		"runtime:in_flight_calls":                 fmt.Sprintf("%d", len(s.inFlightCalls)),
+		"runtime:in_flight_calls":                 fmt.Sprintf("%d", incompleteCalls),
+		"runtime:unreleased_calls":                fmt.Sprintf("%d", unreleasedCalls),
 		"runtime:drain_waiters":                   fmt.Sprintf("%d", len(s.drainWaiters)),
 	}
 }
