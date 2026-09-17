@@ -13,13 +13,22 @@ type ApplicationOptions struct {
 	MaxBatchSize       int
 	MaxConcurrentCalls int
 	CloseTimeout       time.Duration
-	// Admission budgets, derived from the two knobs above in runtimeOptionsWithDefaults: a budget
-	// set apart from the fan-out it has to hold is a budget that rejects a legitimate call.
-	callFanOut                         int
-	maxOutstandingInvocations          int
-	maxOutstandingInvocationsPerPlugin int
-	shadowMaxOutstandingInvocations    int
-	SupervisorOptions                  SupervisorOptions
+	// How wide one call may fan out, derived from the two knobs above in runtimeOptionsWithDefaults.
+	// The gateway's budgets derive from it there too: a budget set apart from the fan-out it has to
+	// hold is a budget that rejects a legitimate call.
+	callFanOut        int
+	GatewayOptions    GatewayOptions
+	SupervisorOptions SupervisorOptions
+}
+
+// GatewayOptions configures one invocation gateway. Every budget defaults from the application's two
+// knobs above, so a caller never has to size them.
+type GatewayOptions struct {
+	MaxOutstandingInvocations          int
+	MaxOutstandingInvocationsPerPlugin int
+	ShadowMaxOutstandingInvocations    int
+	MaxWaiting                         int           // callers that may wait for a production permit at once
+	SubmitTimeout                      time.Duration // bounds a submission from a caller that set no deadline
 }
 
 // SupervisorOptions configures a runtime supervisor. It carries no name and no namespace: the
