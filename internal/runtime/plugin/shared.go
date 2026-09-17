@@ -114,4 +114,16 @@ type MessageInvocationCompleted struct {
 	Err     error
 	Route   gen.Atom
 	Manager gen.PID
+	// Executing means the plugin call may still be running, so this result frees no execution capacity
+	// and a MessageInvocationReleased follows it. A cancelled or expired invocation is the case that
+	// needs it: the caller has its error while the subprocess is still working.
+	Executing bool
+}
+
+// MessageInvocationReleased reports that one invocation's execution capacity is free again, for a
+// result already reported as still executing.
+type MessageInvocationReleased struct {
+	CallID  uint64
+	Route   gen.Atom
+	Manager gen.PID
 }
