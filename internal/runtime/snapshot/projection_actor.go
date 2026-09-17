@@ -468,14 +468,14 @@ func (a *projectionActor[T]) HandleInspect(gen.PID, ...string) map[string]string
 		observedGeneration = a.observed.generation
 	}
 	return map[string]string{
-		"projection:last_error":           runtime.ErrorText(status.Err),
+		"projection:err":                  runtime.ErrorText(status.Err),
 		"projection:lifecycle":            string(status.Lifecycle),
 		"projection:availability":         string(status.Availability),
 		"projection:committed_generation": fmt.Sprintf("%d", status.CommittedGeneration),
 		"projection:prepared_generation":  fmt.Sprintf("%d", status.PreparedGeneration),
 		"projection:observed_generation":  fmt.Sprintf("%d", observedGeneration),
-		"projection:reader_ready":         fmt.Sprintf("%t", a.readerActor.status.Availability == runtime.AvailabilityReady),
-		"projection:reader_generation":    fmt.Sprintf("%d", a.readerActor.status.Generation),
+		"projection:reader:ready":         fmt.Sprintf("%t", a.readerActor.status.Availability == runtime.AvailabilityReady),
+		"projection:reader:generation":    fmt.Sprintf("%d", a.readerActor.status.Generation),
 	}
 }
 

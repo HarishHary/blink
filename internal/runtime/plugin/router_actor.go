@@ -910,9 +910,9 @@ func (a *routerActor[T]) propagateStatus(next routerActorStatus) {
 func (a *routerActor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 	status := a.status()
 	return map[string]string{
-		"router:last_error":             runtime.ErrorText(status.err),
-		"router:primary:last_error":     runtime.ErrorText(status.primary.err),
-		"router:candidate:last_error":   runtime.ErrorText(status.candidate.err),
+		"router:err":                    runtime.ErrorText(status.err),
+		"router:primary:err":            runtime.ErrorText(status.primary.err),
+		"router:candidate:err":          runtime.ErrorText(status.candidate.err),
 		"router:lifecycle":              string(status.lifecycle),
 		"router:availability":           string(status.availability),
 		"router:revision":               fmt.Sprintf("%d", status.revision),

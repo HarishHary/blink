@@ -481,13 +481,13 @@ func (s *supervisor[T]) radarUnavailableOnce(err error) {
 func (s *supervisor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 	status := s.status()
 	return map[string]string{
-		"supervisor:last_error":         runtime.ErrorText(status.err),
+		"supervisor:err":                runtime.ErrorText(status.err),
 		"supervisor:lifecycle":          string(status.lifecycle),
 		"supervisor:availability":       string(status.availability),
-		"supervisor:child":              fmt.Sprintf("%s", s.actor.pid),
-		"supervisor:child_lifecycle":    string(s.actor.status.lifecycle),
-		"supervisor:child_availability": string(s.actor.status.availability),
-		"supervisor:child_generation":   fmt.Sprintf("%d", s.actor.status.generation),
+		"supervisor:child":              s.actor.pid.String(),
+		"supervisor:child:lifecycle":    string(s.actor.status.lifecycle),
+		"supervisor:child:availability": string(s.actor.status.availability),
+		"supervisor:child:generation":   fmt.Sprintf("%d", s.actor.status.generation),
 		"supervisor:writer_fences":      fmt.Sprintf("%d", len(s.writerFences)),
 		"supervisor:readiness_signal":   s.signal.State(),
 	}

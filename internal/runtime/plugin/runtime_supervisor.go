@@ -43,6 +43,20 @@ const (
 	SupervisorTransitionAwaitingProjection
 )
 
+// String names the phase for inspection; the gauge publishes the ordinal instead.
+func (p SupervisorTransitionPhase) String() string {
+	switch p {
+	case SupervisorTransitionPreparing:
+		return "preparing"
+	case SupervisorTransitionAwaitingFreshness:
+		return "awaiting_freshness"
+	case SupervisorTransitionAwaitingProjection:
+		return "awaiting_projection"
+	default:
+		return "idle"
+	}
+}
+
 // SupervisorStatus is the authoritative public status the runtime supervisor publishes.
 type SupervisorStatus struct {
 	Lifecycle       SupervisorLifecycle
@@ -1165,15 +1179,15 @@ func (s *supervisor[P, M]) radarUnavailableOnce(err error) {
 func (s *supervisor[P, M]) HandleInspect(gen.PID, ...string) map[string]string {
 	status := s.status()
 	return map[string]string{
-		"runtime:last_error":                      runtime.ErrorText(status.err),
+		"runtime:err":                             runtime.ErrorText(status.err),
 		"runtime:lifecycle":                       string(status.Lifecycle),
 		"runtime:availability":                    string(status.Availability),
 		"runtime:readiness_signal":                s.signal.State(),
 		"runtime:desired_revision":                fmt.Sprintf("%d", status.DesiredRevision),
-		"runtime:transition":                      fmt.Sprintf("%d", status.Transition),
-		"runtime:catalog:last_error":              runtime.ErrorText(status.Catalog.err),
-		"runtime:reconciler:last_error":           runtime.ErrorText(status.Reconciler.err),
-		"runtime:projection:last_error":           runtime.ErrorText(s.projection.Status.Err),
+		"runtime:transition":                      status.Transition.String(),
+		"runtime:catalog:err":                     runtime.ErrorText(status.Catalog.err),
+		"runtime:reconciler:err":                  runtime.ErrorText(status.Reconciler.err),
+		"runtime:projection:err":                  runtime.ErrorText(s.projection.Status.Err),
 		"runtime:catalog:lifecycle":               string(status.Catalog.lifecycle),
 		"runtime:catalog:availability":            string(status.Catalog.availability),
 		"runtime:catalog:routers":                 fmt.Sprintf("%d", status.Catalog.desiredRouters),

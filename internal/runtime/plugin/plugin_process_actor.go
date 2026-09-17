@@ -60,7 +60,7 @@ type pluginProcessActor[T Artifact] struct {
 	deployment      Deployment
 	pluginMeta      pluginMetaState
 	calls           map[uint64]*pluginProcessCall
-	stopped         bool                     // latched by Terminate; the terminal lifecycle outlives the meta it was derived from
+	stopped         bool                     // set by Terminate, never cleared: the meta it would be derived from is gone
 	err             error                    // the actor's own failure, kept apart from its meta's errors
 	lastStatus      pluginProcessActorStatus // last published projection, the baseline reconcileStatus dedupes against
 	lastStatusEpoch int64
@@ -295,14 +295,18 @@ func (p *pluginProcessActor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (a
 	return fmt.Errorf("unsupported plugin process call %T", request), nil
 }
 
-// HandleInspect exposes the meta's lifecycle, both restart tracks, and in-flight call depth.
+// HandleInspect exposes the actor's own lifecycle, the meta's, both restart tracks, and in-flight
+// call depth.
 func (p *pluginProcessActor[T]) HandleInspect(gen.PID, ...string) map[string]string {
+	status := p.status()
 	return map[string]string{
-		"process:last_error":             runtime.ErrorText(p.status().err),
-		"process:meta_last_error":        runtime.ErrorText(p.pluginMeta.status.err),
-		"process:meta_lifecycle":         string(p.pluginMeta.status.lifecycle),
-		"process:meta_availability":      string(p.pluginMeta.status.availability),
-		"process:meta_activity":          string(p.pluginMeta.status.activity),
+		"process:err":                    runtime.ErrorText(status.err),
+		"process:lifecycle":              string(status.lifecycle),
+		"process:availability":           string(status.availability),
+		"process:meta:err":               runtime.ErrorText(p.pluginMeta.status.err),
+		"process:meta:lifecycle":         string(p.pluginMeta.status.lifecycle),
+		"process:meta:availability":      string(p.pluginMeta.status.availability),
+		"process:meta:activity":          string(p.pluginMeta.status.activity),
 		"process:generation":             fmt.Sprintf("%d", p.pluginMeta.generation),
 		"process:has_subprocess":         fmt.Sprintf("%t", p.pluginMeta.alias != (gen.Alias{})),
 		"process:calls":                  fmt.Sprintf("%d/%d", len(p.calls), p.pluginMeta.status.capacity),

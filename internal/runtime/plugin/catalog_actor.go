@@ -319,8 +319,8 @@ func (a *catalogActor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (any, er
 	return fmt.Errorf("unsupported catalog call %T", request), nil
 }
 
-// Terminate latches the terminal lifecycle and cancels pending router restarts; the supervisor fails
-// the in-flight calls this incarnation owned, so they are not touched here.
+// Terminate marks the catalog stopped and cancels pending router restarts; the supervisor fails the
+// in-flight calls this incarnation owned, so they are not touched here.
 func (a *catalogActor[T]) Terminate(reason error) {
 	defer a.reconcileStatus()
 	a.err = runtime.FirstError(reason, a.err)
@@ -678,7 +678,7 @@ func (a *catalogActor[T]) propagateStatus(next catalogActorStatus) {
 func (a *catalogActor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 	status := a.status()
 	return map[string]string{
-		"catalog:last_error":       runtime.ErrorText(status.err),
+		"catalog:err":              runtime.ErrorText(status.err),
 		"catalog:lifecycle":        string(status.lifecycle),
 		"catalog:availability":     string(status.availability),
 		"catalog:desired_revision": fmt.Sprintf("%d", status.desiredRevision),

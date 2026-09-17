@@ -327,12 +327,13 @@ func (a *readerActor) status() ReaderActorStatus {
 func (a *readerActor) HandleInspect(gen.PID, ...string) map[string]string {
 	status := a.status()
 	return map[string]string{
+		"reader:err":          runtime.ErrorText(status.Err),
+		"reader:lifecycle":    string(status.Lifecycle),
 		"reader:availability": string(status.Availability),
 		"reader:subscribed":   fmt.Sprintf("%t", a.subscribed),
 		"reader:generation":   fmt.Sprintf("%d", a.lastGeneration),
-		"reader:controller":   fmt.Sprintf("%s", a.controllerPID),
+		"reader:controller":   a.controllerPID.String(),
 		"reader:executor_id":  a.opts.ExecutorID,
-		"reader:last_error":   runtime.ErrorText(status.Err),
 	}
 }
 

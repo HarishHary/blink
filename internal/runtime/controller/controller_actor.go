@@ -890,9 +890,9 @@ func (a *actor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 	}
 	status := a.status()
 	return map[string]string{
-		"controller:last_error":                  runtime.ErrorText(status.err),
-		"controller:scanner:last_error":          runtime.ErrorText(a.scanner.status.err),
-		"controller:writer:last_error":           runtime.ErrorText(a.writer.status.err),
+		"controller:err":                         runtime.ErrorText(status.err),
+		"controller:scanner:err":                 runtime.ErrorText(a.scanner.status.err),
+		"controller:writer:err":                  runtime.ErrorText(a.writer.status.err),
 		"controller:lifecycle":                   string(status.lifecycle),
 		"controller:availability":                string(status.availability),
 		"controller:generation":                  fmt.Sprintf("%d", status.generation),

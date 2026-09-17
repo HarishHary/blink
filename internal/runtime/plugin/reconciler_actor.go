@@ -682,15 +682,15 @@ func (a *reconcilerActor) propagateStatus(next reconcilerActorStatus) {
 func (a *reconcilerActor) HandleInspect(gen.PID, ...string) map[string]string {
 	status := a.status()
 	return map[string]string{
-		"reconciler:last_error":            runtime.ErrorText(status.err),
-		"reconciler:resolver:last_error":   runtime.ErrorText(a.resolver.status.err),
-		"reconciler:watcher:last_error":    runtime.ErrorText(a.watcher.status.err),
+		"reconciler:err":                   runtime.ErrorText(status.err),
+		"reconciler:resolver:err":          runtime.ErrorText(a.resolver.status.err),
+		"reconciler:watcher:err":           runtime.ErrorText(a.watcher.status.err),
 		"reconciler:lifecycle":             string(status.lifecycle),
 		"reconciler:availability":          string(status.availability),
 		"reconciler:revision":              fmt.Sprintf("%d", status.revision),
 		"reconciler:snapshot_generation":   fmt.Sprintf("%d", status.snapshotGeneration),
 		"reconciler:proposed_generation":   fmt.Sprintf("%d", a.proposedGeneration),
-		"reconciler:reader_ready":          fmt.Sprintf("%t", a.readerActor.status.Availability == runtime.AvailabilityReady),
+		"reconciler:reader:ready":          fmt.Sprintf("%t", a.readerActor.status.Availability == runtime.AvailabilityReady),
 		"reconciler:resolving":             fmt.Sprintf("%t", a.resolving),
 		"reconciler:dirty":                 fmt.Sprintf("%t", a.dirty),
 		"reconciler:deferred":              fmt.Sprintf("%t", a.deferred),

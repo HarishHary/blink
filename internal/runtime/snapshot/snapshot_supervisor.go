@@ -433,22 +433,24 @@ func (s *Supervisor[T]) cancelExecutorReport() {
 
 // HandleInspect exposes both children's identity and last-reported status plus any in-flight commit.
 func (s *Supervisor[T]) HandleInspect(gen.PID, ...string) map[string]string {
+	status := s.status()
 	return map[string]string{
-		"supervisor:last_error":                      runtime.ErrorText(s.status().err),
-		"supervisor:projection_last_error":           runtime.ErrorText(s.projectionActor.status.Err),
-		"supervisor:lifecycle":                       string(s.lifecycle),
+		"supervisor:err":                             runtime.ErrorText(status.err),
+		"supervisor:lifecycle":                       string(status.lifecycle),
+		"supervisor:availability":                    string(status.availability),
 		"supervisor:readiness_signal":                s.signal.State(),
-		"supervisor:reader":                          fmt.Sprintf("%s", s.readerActor.pid),
-		"supervisor:reader_lifecycle":                string(s.readerActor.status.Lifecycle),
-		"supervisor:reader_availability":             string(s.readerActor.status.Availability),
-		"supervisor:reader_generation":               fmt.Sprintf("%d", s.readerActor.status.Generation),
-		"supervisor:reader_last_error":               runtime.ErrorText(s.readerActor.status.Err),
+		"supervisor:reader":                          s.readerActor.pid.String(),
+		"supervisor:reader:lifecycle":                string(s.readerActor.status.Lifecycle),
+		"supervisor:reader:availability":             string(s.readerActor.status.Availability),
+		"supervisor:reader:generation":               fmt.Sprintf("%d", s.readerActor.status.Generation),
+		"supervisor:reader:err":                      runtime.ErrorText(s.readerActor.status.Err),
 		"supervisor:reported_availability":           string(s.executorAvailability()),
-		"supervisor:projection":                      fmt.Sprintf("%s", s.projectionActor.pid),
-		"supervisor:projection_lifecycle":            string(s.projectionActor.status.Lifecycle),
-		"supervisor:projection_availability":         string(s.projectionActor.status.Availability),
-		"supervisor:projection_committed_generation": fmt.Sprintf("%d", s.projectionActor.status.CommittedGeneration),
-		"supervisor:commit_pending":                  fmt.Sprintf("%d", s.projectionActor.commitGeneration),
+		"supervisor:projection":                      s.projectionActor.pid.String(),
+		"supervisor:projection:err":                  runtime.ErrorText(s.projectionActor.status.Err),
+		"supervisor:projection:lifecycle":            string(s.projectionActor.status.Lifecycle),
+		"supervisor:projection:availability":         string(s.projectionActor.status.Availability),
+		"supervisor:projection:committed_generation": fmt.Sprintf("%d", s.projectionActor.status.CommittedGeneration),
+		"supervisor:projection:commit_pending":       fmt.Sprintf("%d", s.projectionActor.commitGeneration),
 	}
 }
 

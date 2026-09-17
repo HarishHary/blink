@@ -463,7 +463,8 @@ func (m *deploymentManagerActor[T]) HandleInspect(_ gen.PID, _ ...string) map[st
 	// Processes and calls are reported apart: a saturated deployment may be short of processes or of the
 	// capacity each one was given, and only one of those is its own to raise.
 	return map[string]string{
-		"deployment:last_error":        runtime.ErrorText(status.err),
+		"deployment:err":               runtime.ErrorText(status.err),
+		"deployment:lifecycle":         string(status.lifecycle),
 		"deployment:availability":      string(status.availability),
 		"deployment:current":           fmt.Sprintf("%d", status.currentProcs),
 		"deployment:ready":             fmt.Sprintf("%d", status.readyProcs),
