@@ -219,8 +219,10 @@ stateDiagram-v2
     Ready --> Resolving: newer snapshot or directory change
     Observing --> Recovering: resolver or watcher meta down
     Recovering --> Observing: meta restarted on its own backoff
-    Ready --> Stopped: terminate
+    Ready --> Stopped: Terminate
 ```
+
+`Terminate` sets `stopped`, which never clears. A stopped reconciler reports `AvailabilityUnavailable` and ignores reader and meta health.
 
 ### Messages
 
@@ -315,9 +317,13 @@ stateDiagram-v2
     Running --> Running: revision applied, router restarted, statuses aggregated
     Running --> Draining: MessageDrain
     Draining --> Stopped: all routers drained
+    Starting --> Stopped: Terminate
+    Running --> Stopped: Terminate
 ```
 
 The first nonzero desired revision, not activation, is what makes the lifecycle `running`. Router churn and revision application stay inside `running`, moving `blink_plugin_catalog_availability` and the router counts instead.
+
+`Terminate` sets `stopped`, publishes the status, and cancels pending router restarts. A stopped catalog reports `AvailabilityUnavailable` and ignores its routers' last statuses. It does not fail in-flight calls; the supervisor does.
 
 ### Messages
 
@@ -335,7 +341,7 @@ The first nonzero desired revision, not activation, is what makes the lifecycle 
 
 ### Readiness
 
-Status receivers validate the current PID/alias and any incarnation generation, then accept only a newer status timestamp. Tracked child records keep `status` and `statusEpoch`; actor publishers keep `lastStatus` and `lastStatusEpoch`. The reconciler's reader-event consumer keeps its own `readerActor.statusEpoch` watermark, and the supervisor's projection-status consumer keeps `lastProjectionStatusEpoch`. This applies throughout the watcher, reconciler, process, manager, router, and catalog status chains. `reconcileStatus` uses `same<Type>Status` against `lastStatus` to suppress unchanged publication; the process/meta comparisons still ignore sampled load counters. Epochs protect ordering independently of equality. On router loss the catalog fails calls assigned to that PID.
+Status receivers validate the current PID/alias and any incarnation generation, then accept only a newer status timestamp. Tracked child records keep `status` and `statusEpoch`; actor publishers keep `lastStatus` and `lastStatusEpoch`. The runtime supervisor keeps a `lastStatus` with no epoch, since it publishes no status upward; `SupervisorStatusRequest` is answered from live state. The reconciler's reader-event consumer keeps its own `readerActor.statusEpoch` watermark, and the supervisor's projection-status consumer keeps `lastProjectionStatusEpoch`. This applies throughout the watcher, reconciler, process, manager, router, and catalog status chains. `reconcileStatus` uses `same<Type>Status` against `lastStatus` to suppress unchanged publication; the process/meta comparisons still ignore sampled load counters. Epochs protect ordering independently of equality. On router loss the catalog fails calls assigned to that PID.
 
 ## Router actor
 
@@ -464,7 +470,11 @@ stateDiagram-v2
     Running --> Draining: MessageDrain
     Draining --> Stopped: calls and processes drained
     Draining --> Stopped: drain deadline expires
+    Running --> Stopped: Terminate
+    Failed --> Stopped: Terminate
 ```
+
+Every other state here is derived from the slots on each read. `stopped` is a flag `Terminate` sets, applied at the end of `status()`: the process and queue counters stay accurate, while lifecycle, availability, and available capacity report a manager that serves nothing.
 
 ### Messages
 
@@ -534,7 +544,11 @@ stateDiagram-v2
     Saturated --> Restarting: transport failure or timeout
     Restarting --> Ready: meta restart
     Restarting --> Failed: restart budget exhausted
+    Ready --> Stopped: Terminate
+    Failed --> Stopped: Terminate
 ```
+
+Every other lifecycle here is a translation of the current meta's. `stopped` is a flag instead, because the meta is gone by then: `Terminate` sets it, fails the calls in flight, cancels both restart tracks, and reports `MessagePluginProcessStopped`.
 
 ### Messages
 
@@ -671,6 +685,7 @@ Every layer publishes into the node's radar application, labelled by `namespace`
 | Catalog Actor      | -               | itself            | Router starts, restarts, terminations.                                                                       |
 | Router Actor       | -               | itself            | Rollout target per invocation; calls with no route or no manager acknowledgement.                            |
 | Deployment Manager | -               | itself            | Queue rejects, dispatch timeouts, process churn, circuit opens, scaling, invocation histogram.               |
+| Plugin Process     | -               | itself            | Subprocess starts, restarts by reason, and restart budget exhaustion.                                        |
 
 | Metric                                                                                                                                                                                          | Published by       | Meaning                                                                                                                                                                                                     |
 | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -701,7 +716,7 @@ Emission is best-effort. An unreachable radar produces a discarded `Send` error,
 - [`internal/runtime/plugin/runtime_supervisor.go`](../../internal/runtime/plugin/runtime_supervisor.go) - RestForOne tree, desired-state barrier, projection commit, drain.
 - [`internal/runtime/plugin/reconciler_actor.go`](../../internal/runtime/plugin/reconciler_actor.go), [`artifact_resolver_meta.go`](../../internal/runtime/plugin/artifact_resolver_meta.go), [`artifact_watcher_meta.go`](../../internal/runtime/plugin/artifact_watcher_meta.go) - desired state and local artifact facts.
 - [`internal/runtime/plugin/catalog_actor.go`](../../internal/runtime/plugin/catalog_actor.go), [`router_actor.go`](../../internal/runtime/plugin/router_actor.go) - router ownership, route lifecycle, rollout, fences.
-- [`internal/runtime/plugin/deployment_manager.go`](../../internal/runtime/plugin/deployment_manager.go), [`process_budget.go`](../../internal/runtime/plugin/process_budget.go), [`plugin_process.go`](../../internal/runtime/plugin/plugin_process.go), [`plugin_process_meta.go`](../../internal/runtime/plugin/plugin_process_meta.go) - queue, dispatch, plugin processes, subprocess, recovery, drain.
+- [`internal/runtime/plugin/deployment_manager_actor.go`](../../internal/runtime/plugin/deployment_manager_actor.go), [`process_budget.go`](../../internal/runtime/plugin/process_budget.go), [`plugin_process_actor.go`](../../internal/runtime/plugin/plugin_process_actor.go), [`plugin_process_meta.go`](../../internal/runtime/plugin/plugin_process_meta.go) - queue, dispatch, plugin processes, subprocess, recovery, drain.
 - [`internal/runtime/invocation.go`](../../internal/runtime/invocation.go), [`internal/runtime/backoff.go`](../../internal/runtime/backoff.go) - one-shot completion and shared scheduled backoff.
 - [`internal/runtime/plugin/metrics.go`](../../internal/runtime/plugin/metrics.go), [`internal/runtime/telemetry/metrics.go`](../../internal/runtime/telemetry/metrics.go) - the `blink_plugin_*` specs and gauge publishing.
 - [`internal/runtime/plugin/defaults.go`](../../internal/runtime/plugin/defaults.go) - namespace-derived subtree names and the option defaults every layer is sized by.

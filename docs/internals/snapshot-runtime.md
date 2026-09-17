@@ -92,7 +92,7 @@ The supervisor is the sole producer of `MessageExecutorReport{ExecutorID, Heartb
 | `Heartbeat.ReadyGeneration`     | projection status `CommittedGeneration`                                     | The generation this executor actually holds live.                                                                |
 | `Heartbeat.Availability`        | projection availability, capped at `degraded` while the reader is not ready | A live projection with a dead reader still serves its last generation, but can no longer receive the next one.   |
 | `Applied`                       | a projection commit that advanced the generation                            | Edge event; `Admitted` is false when the generation went live degraded.                                          |
-| `LastError`                     | `runtime.FirstError` over supervisor, projection, then reader `LastError`   | The first non-nil error in the subtree, so a projection parse failure is reported even while the reader is fine. |
+| `LastError`                     | `runtime.FirstError(own err, projection Err, reader Err)`                   | The first non-nil error in the subtree, so a projection parse failure is reported even while the reader is fine. |
 
 Under `ProjectionCommitExternal` the two diverge while the parent fetches binaries; only its commit makes the new generation live.
 

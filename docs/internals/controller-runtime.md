@@ -73,9 +73,9 @@ Scanner and writer health is derived by the controller from current-alias operat
 
 ### Status composition
 
-`LastError` composes first-non-nil, never last-writer-wins. The actor reports `runtime.FirstError(own terminate reason, writer, scanner)`, and its own reason counts only once its lifecycle is `stopped`, so a live controller surfaces worker diagnostics rather than masking them; a terminating one surfaces its exit reason without erasing them. The supervisor reports `runtime.FirstError(subtree terminate reason, tracked child status)`, and `HandleChildTerminate` records the child's exit reason there. A recovered worker clears the field at both layers on the next reconcile.
+`err` composes first-non-nil, never last-writer-wins. The actor reports `runtime.FirstError(own terminate reason, writer, scanner)`, and its own reason counts only once its lifecycle is `stopped`, so a live controller surfaces worker diagnostics rather than masking them; a terminating one surfaces its exit reason without erasing them. The supervisor reports `runtime.FirstError(subtree terminate reason, tracked child status)`, and `HandleChildTerminate` records the child's exit reason there. A recovered worker clears the field at both layers on the next reconcile.
 
-Publication is deduplicated. The actor's `reconcileStatus` compares a pre-handler snapshot against the recomputed status on lifecycle, availability, generation, and `runtime.ErrorText(LastError)`; an identical status publishes nothing and leaves the epoch alone. A change stamps `runtime.NextStatusEpoch` - `max(now in nanoseconds, previous + 1)` - so epochs stay strictly monotonic even across a backwards clock step.
+Publication is deduplicated. The actor's `reconcileStatus` compares a pre-handler snapshot against the recomputed status on lifecycle, availability, generation, and `runtime.ErrorText(err)`; an identical status publishes nothing and leaves the epoch alone. A change stamps `runtime.NextStatusEpoch` - `max(now in nanoseconds, previous + 1)` - so epochs stay strictly monotonic even across a backwards clock step.
 
 The supervisor drops any `MessageActorStatusChanged` whose sender is not the tracked actor PID or whose `statusEpoch` is not greater than the recorded watermark. `HandleChildStart` resets that watermark to zero, so a replacement's first epoch is accepted while the previous PID's late facts stay fenced out.
 
@@ -214,7 +214,7 @@ On a changed commit - `MessageSnapshotWriteResult` with `a.pending.next.Generati
 
 They differ when a generation is received but not yet adopted; under `ProjectionCommitExternal` the gap is the plugin runtime fetching binaries. See [Executor reporting](snapshot-runtime.md#executor-reporting).
 
-`Apply` overwrites `LastError` only when the report carries a heartbeat or a new error of its own, so an applied-only report keeps the last heartbeat's diagnosis and a healthy heartbeat clears it. `Applied` alone advances `ReadyGeneration` without touching availability.
+`Apply` overwrites `ExecutorStatus.Err` only when the report carries a heartbeat or a `LastError` of its own, so an applied-only report keeps the last heartbeat's diagnosis and a healthy heartbeat clears it. `Applied` alone advances `ReadyGeneration` without touching availability.
 
 Reports arrive every `executorReportInterval` (30s, a quarter of the stale threshold), and on any change to either generation, reader availability, or reader liveness.
 

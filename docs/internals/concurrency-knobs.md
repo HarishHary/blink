@@ -144,6 +144,6 @@ Rejections are answers about capacity, so a retry can succeed. `ResourceExhauste
 - [`cmd/rule_tuner/tuner/tuner.go`](../../cmd/rule_tuner/tuner/tuner.go) - alert batching and shared process-local knobs.
 - [`internal/runtime/plugin/defaults.go`](../../internal/runtime/plugin/defaults.go) - derived budgets, timing defaults.
 - [`internal/runtime/plugin/runtime_application.go`](../../internal/runtime/plugin/runtime_application.go) - `CallBudget`, admission, rejection paths.
-- [`internal/runtime/plugin/deployment_manager.go`](../../internal/runtime/plugin/deployment_manager.go) - queueing, dispatch, scaling, idle shrink, circuit.
-- [`internal/runtime/plugin/plugin_process.go`](../../internal/runtime/plugin/plugin_process.go) - one process, its subprocess session, `calls_per_process`.
+- [`internal/runtime/plugin/deployment_manager_actor.go`](../../internal/runtime/plugin/deployment_manager_actor.go) - queueing, dispatch, scaling, idle shrink, circuit.
+- [`internal/runtime/plugin/plugin_process_actor.go`](../../internal/runtime/plugin/plugin_process_actor.go) - one process, its subprocess session, `calls_per_process`.
 - [`internal/runtime/plugin/process_budget.go`](../../internal/runtime/plugin/process_budget.go) - the process-wide budget.
