@@ -44,7 +44,7 @@ const (
 const (
 	metricGatewayAdmitted          = "blink_plugin_gateway_admitted_total"
 	metricGatewayRejected          = "blink_plugin_gateway_rejected_total"
-	metricGatewayDeferred          = "blink_plugin_gateway_deferred_total"
+	metricGatewayWaited            = "blink_plugin_gateway_waited_total"
 	metricGatewayLifecycle         = "blink_plugin_gateway_lifecycle"
 	metricGatewayProductionPermits = "blink_plugin_gateway_production_permits"
 	metricGatewayShadowPermits     = "blink_plugin_gateway_shadow_permits"
@@ -137,7 +137,7 @@ var (
 		{Kind: telemetry.Gauge, Name: metricGatewayUnreleased, Help: "Gateway invocations whose caller has a result while plugin capacity is still held", Labels: namespaceLabels},
 		{Kind: telemetry.Counter, Name: metricGatewayAdmitted, Help: "Invocations admitted, by budget", Labels: []string{"namespace", "budget"}},
 		{Kind: telemetry.Counter, Name: metricGatewayRejected, Help: "Invocations refused by the gateway, by reason", Labels: reasonLabels},
-		{Kind: telemetry.Counter, Name: metricGatewayDeferred, Help: "Invocations that had to wait for production admission", Labels: namespaceLabels},
+		{Kind: telemetry.Counter, Name: metricGatewayWaited, Help: "Invocations that had to wait for production admission", Labels: namespaceLabels},
 
 		// reconciler
 		{Kind: telemetry.Counter, Name: metricResolutions, Help: "Artifact resolutions by outcome: proposed, unchanged, deferred, or stale", Labels: resultLabels},
