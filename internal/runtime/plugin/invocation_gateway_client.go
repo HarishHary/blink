@@ -18,14 +18,7 @@ type gatewayClient[T Artifact] struct {
 }
 
 // submit admits one invocation through the gateway and returns the handle its caller cancels and waits on.
-func (c gatewayClient[T]) submit(
-	ctx context.Context,
-	pluginID string,
-	rolloutKey string,
-	expectedGeneration int64,
-	fn func(context.Context, T) error,
-	shadow bool,
-) (runtime.Invocation, error) {
+func (c gatewayClient[T]) submit(ctx context.Context, pluginID string, rolloutKey string, expectedGeneration int64, fn func(context.Context, T) error, shadow bool) (runtime.Invocation, error) {
 	if c.node == nil {
 		return runtime.Invocation{}, ErrRuntimeNotStarted
 	}
@@ -52,7 +45,14 @@ func (c gatewayClient[T]) submit(
 	}, c.opts.SubmitTimeout)
 	if err != nil {
 		release()
-		return runtime.Invocation{}, submitError(base, err)
+		// The gateway never answered: the caller's own expired deadline is that deadline, not a runtime failure.
+		if ctxErr := base.Err(); ctxErr != nil {
+			return runtime.Invocation{}, ctxErr
+		}
+		if errors.Is(err, gen.ErrProcessUnknown) || errors.Is(err, gen.ErrProcessTerminated) {
+			return runtime.Invocation{}, fmt.Errorf("%w: %w", ErrPluginUnavailable, err)
+		}
+		return runtime.Invocation{}, fmt.Errorf("submit plugin invocation: %w", err)
 	}
 	reply, ok := response.(MessageGatewaySubmitted)
 	if !ok {
@@ -93,16 +93,4 @@ func invocationContext(ctx context.Context, shadow bool) (context.Context, conte
 		return context.WithDeadline(base, deadline)
 	}
 	return context.WithCancel(base)
-}
-
-// submitError names what refused a submission the gateway never answered; the caller's own expired deadline
-// is that deadline, not a runtime failure.
-func submitError(ctx context.Context, err error) error {
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return ctxErr
-	}
-	if errors.Is(err, gen.ErrProcessUnknown) || errors.Is(err, gen.ErrProcessTerminated) {
-		return fmt.Errorf("%w: %w", ErrPluginUnavailable, err)
-	}
-	return fmt.Errorf("submit plugin invocation: %w", err)
 }

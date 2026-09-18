@@ -7,13 +7,16 @@ import (
 )
 
 // Radar metric names by publishing layer. The namespace label is the controller namespace this runtime
-// follows, so its series join the controller's and the snapshot subtree's.
+// follows, so its series join the controller's and the snapshot subtree's. A name carries the component it
+// describes - supervisor, gateway, reconciler, catalog, router, process - and carries none when the value is
+// the whole runtime's.
 
-// Supervisor series: every gauge, since it holds what the reconciler, catalog, and routes report and a
-// namespace-labelled gauge published from below too would be overwritten by whoever sampled last.
+// Supervisor series: every gauge below the supervisor too, since it holds what the reconciler, catalog, and
+// routes report and a namespace-labelled gauge published from below as well would be overwritten by whoever
+// sampled last.
 const (
 	metricSupervisorLifecycle    = "blink_plugin_supervisor_lifecycle"
-	metricAvailability           = "blink_plugin_availability"
+	metricSupervisorAvailability = "blink_plugin_supervisor_availability"
 	metricTransition             = "blink_plugin_transition"
 	metricDesiredRevision        = "blink_plugin_desired_revision"
 	metricReadyGeneration        = "blink_plugin_projection_ready_generation"
@@ -35,7 +38,7 @@ const (
 	metricChildStarts            = "blink_plugin_child_starts_total"
 	metricChildTerminations      = "blink_plugin_child_terminations_total"
 	metricInvocations            = "blink_plugin_invocations_total"
-	metricInvocationsRejected    = "blink_plugin_invocations_rejected_total"
+	metricSubmissionsRejected    = "blink_plugin_submissions_rejected_total"
 	metricProjectionCommits      = "blink_plugin_projection_commits_total"
 	metricPromotions             = "blink_plugin_desired_state_promotions_total"
 )
@@ -52,8 +55,8 @@ const (
 	metricGatewayLifecycle         = "blink_plugin_gateway_lifecycle"
 	metricGatewayProductionPermits = "blink_plugin_gateway_production_permits"
 	metricGatewayShadowPermits     = "blink_plugin_gateway_shadow_permits"
-	metricGatewayWaiting           = "blink_plugin_gateway_waiting"
-	metricGatewayUnreleased        = "blink_plugin_gateway_unreleased"
+	metricGatewayWaitingCalls      = "blink_plugin_gateway_waiting_calls"
+	metricGatewayUnreleasedCalls   = "blink_plugin_gateway_unreleased_calls"
 )
 
 // Reconciler series: resolving the snapshot and the artifact directory into desired state.
@@ -107,7 +110,7 @@ var (
 	runtimeMetrics    = []telemetry.MetricSpec{
 		// supervisor
 		{Kind: telemetry.Gauge, Name: metricSupervisorLifecycle, Help: "Supervisor lifecycle: 0 starting, 1 running, 2 draining, 3 stopped", Labels: namespaceLabels},
-		{Kind: telemetry.Gauge, Name: metricAvailability, Help: "Runtime availability: 0 unavailable, 1 degraded, 2 ready", Labels: namespaceLabels},
+		{Kind: telemetry.Gauge, Name: metricSupervisorAvailability, Help: "Runtime availability, the execution half of readiness: 0 unavailable, 1 degraded, 2 ready", Labels: namespaceLabels},
 		{Kind: telemetry.Gauge, Name: metricTransition, Help: "Desired-state transition: 0 idle, 1 preparing, 2 awaiting freshness, 3 awaiting projection", Labels: namespaceLabels},
 		{Kind: telemetry.Gauge, Name: metricDesiredRevision, Help: "Newest applied or pending desired-state revision", Labels: namespaceLabels},
 		{Kind: telemetry.Gauge, Name: metricReadyGeneration, Help: "Projection generation this runtime admits calls against", Labels: namespaceLabels},
@@ -129,7 +132,7 @@ var (
 		{Kind: telemetry.Counter, Name: metricChildStarts, Help: "Supervised children started, by child", Labels: []string{"namespace", "child"}},
 		{Kind: telemetry.Counter, Name: metricChildTerminations, Help: "Supervised children exited, by child and reason", Labels: []string{"namespace", "child", "reason"}},
 		{Kind: telemetry.Counter, Name: metricInvocations, Help: "Invocations completed by result", Labels: resultLabels},
-		{Kind: telemetry.Counter, Name: metricInvocationsRejected, Help: "Invocations refused at admission, by reason", Labels: reasonLabels},
+		{Kind: telemetry.Counter, Name: metricSubmissionsRejected, Help: "Gateway submissions the runtime supervisor refused, by reason", Labels: reasonLabels},
 		{Kind: telemetry.Counter, Name: metricProjectionCommits, Help: "Projection commit requests by result", Labels: resultLabels},
 		{Kind: telemetry.Counter, Name: metricPromotions, Help: "Desired-state revisions promoted into the catalog", Labels: namespaceLabels},
 
@@ -140,8 +143,8 @@ var (
 		{Kind: telemetry.Gauge, Name: metricGatewayLifecycle, Help: "Gateway lifecycle: 0 starting, 1 running, 2 draining, 3 stopped", Labels: namespaceLabels},
 		{Kind: telemetry.Gauge, Name: metricGatewayProductionPermits, Help: "Production admission permits the gateway holds", Labels: namespaceLabels},
 		{Kind: telemetry.Gauge, Name: metricGatewayShadowPermits, Help: "Shadow admission permits the gateway holds", Labels: namespaceLabels},
-		{Kind: telemetry.Gauge, Name: metricGatewayWaiting, Help: "Callers waiting on production admission", Labels: namespaceLabels},
-		{Kind: telemetry.Gauge, Name: metricGatewayUnreleased, Help: "Gateway invocations whose caller has a result while plugin capacity is still held", Labels: namespaceLabels},
+		{Kind: telemetry.Gauge, Name: metricGatewayWaitingCalls, Help: "Callers waiting on production admission", Labels: namespaceLabels},
+		{Kind: telemetry.Gauge, Name: metricGatewayUnreleasedCalls, Help: "Gateway invocations whose caller has a result while plugin capacity is still held", Labels: namespaceLabels},
 		{Kind: telemetry.Counter, Name: metricGatewayAdmitted, Help: "Invocations admitted, by budget", Labels: []string{"namespace", "budget"}},
 		{Kind: telemetry.Counter, Name: metricGatewayRejected, Help: "Invocations refused by the gateway, by reason", Labels: reasonLabels},
 		{Kind: telemetry.Counter, Name: metricGatewayWaited, Help: "Invocations that had to wait for production admission", Labels: namespaceLabels},
@@ -182,7 +185,7 @@ var (
 	}
 )
 
-// runtimeGauges is every gauge one plugin runtime publishes, one per field.
+// runtimeGauges is every gauge the runtime supervisor publishes, one per field.
 type runtimeGauges struct {
 	lifecycle              SupervisorLifecycle
 	availability           runtime.Availability
@@ -206,11 +209,10 @@ type runtimeGauges struct {
 	activeCalls            int
 }
 
-// publish reports the runtime's gauges, republished on the supervisor's radar tick so a converged runtime
-// still reports fresh series.
+// publish reports the runtime's gauges, from the supervisor's status reconcile and nowhere else.
 func (g runtimeGauges) publish(labels telemetry.Labels, sender telemetry.Sender) {
 	labels.Set(sender, metricSupervisorLifecycle, supervisorLifecycleValue(g.lifecycle))
-	labels.Set(sender, metricAvailability, telemetry.AvailabilityValue(g.availability))
+	labels.Set(sender, metricSupervisorAvailability, telemetry.AvailabilityValue(g.availability))
 	labels.Set(sender, metricTransition, float64(g.transition))
 	labels.Set(sender, metricDesiredRevision, float64(g.desiredRevision))
 	labels.Set(sender, metricReadyGeneration, float64(g.readyGeneration))
@@ -236,27 +238,27 @@ type pluginRuntimeGauges struct {
 	readiness runtime.Availability
 }
 
-// publish reports the namespace's readiness, republished on the branch's radar tick.
+// publish reports the namespace's readiness, the same value the readiness signal carries.
 func (g pluginRuntimeGauges) publish(labels telemetry.Labels, sender telemetry.Sender) {
 	labels.Set(sender, metricReadiness, telemetry.AvailabilityValue(g.readiness))
 }
 
 // gatewayGauges is every gauge the invocation gateway publishes, one per field.
 type gatewayGauges struct {
-	lifecycle  GatewayLifecycle
-	production int
-	shadow     int
-	waiting    int
-	unreleased int
+	lifecycle         GatewayLifecycle
+	productionPermits int
+	shadowPermits     int
+	waitingCalls      int
+	unreleasedCalls   int
 }
 
-// publish reports the gateway's gauges, republished on its radar tick so a quiet gateway stays fresh too.
+// publish reports the gateway's gauges, from its status reconcile and nowhere else.
 func (g gatewayGauges) publish(labels telemetry.Labels, sender telemetry.Sender) {
 	labels.Set(sender, metricGatewayLifecycle, gatewayLifecycleValue(g.lifecycle))
-	labels.Set(sender, metricGatewayProductionPermits, float64(g.production))
-	labels.Set(sender, metricGatewayShadowPermits, float64(g.shadow))
-	labels.Set(sender, metricGatewayWaiting, float64(g.waiting))
-	labels.Set(sender, metricGatewayUnreleased, float64(g.unreleased))
+	labels.Set(sender, metricGatewayProductionPermits, float64(g.productionPermits))
+	labels.Set(sender, metricGatewayShadowPermits, float64(g.shadowPermits))
+	labels.Set(sender, metricGatewayWaitingCalls, float64(g.waitingCalls))
+	labels.Set(sender, metricGatewayUnreleasedCalls, float64(g.unreleasedCalls))
 }
 
 // newHealthSignal names this runtime's readiness signal independently of other subtrees.

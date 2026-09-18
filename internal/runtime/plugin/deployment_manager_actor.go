@@ -462,16 +462,16 @@ func (m *deploymentManagerActor[T]) HandleInspect(_ gen.PID, _ ...string) map[st
 	// Processes and calls are reported apart: a saturated deployment may be short of processes or of the
 	// capacity each one was given, and only one of those is its own to raise.
 	return map[string]string{
-		"deployment:err":               runtime.ErrorText(status.err),
-		"deployment:lifecycle":         string(status.lifecycle),
-		"deployment:availability":      string(status.availability),
-		"deployment:current":           fmt.Sprintf("%d", status.currentProcs),
-		"deployment:ready":             fmt.Sprintf("%d", status.readyProcs),
-		"deployment:calls_per_process": fmt.Sprintf("%d", status.callsPerProcess),
-		"deployment:capacity":          fmt.Sprintf("%d/%d", status.totalCapacity, m.deployment.MaxInvocationCapacity()),
-		"deployment:available":         fmt.Sprintf("%d", status.availableCapacity),
-		"deployment:active":            fmt.Sprintf("%d", status.active),
-		"deployment:queue":             fmt.Sprintf("%d", status.queueDepth),
+		"deployment:err":                runtime.ErrorText(status.err),
+		"deployment:lifecycle":          string(status.lifecycle),
+		"deployment:availability":       string(status.availability),
+		"deployment:current_procs":      fmt.Sprintf("%d", status.currentProcs),
+		"deployment:ready_procs":        fmt.Sprintf("%d", status.readyProcs),
+		"deployment:calls_per_process":  fmt.Sprintf("%d", status.callsPerProcess),
+		"deployment:capacity":           fmt.Sprintf("%d/%d", status.totalCapacity, m.deployment.MaxInvocationCapacity()),
+		"deployment:available_capacity": fmt.Sprintf("%d", status.availableCapacity),
+		"deployment:active_calls":       fmt.Sprintf("%d", status.active),
+		"deployment:queue_depth":        fmt.Sprintf("%d", status.queueDepth),
 	}
 }
 

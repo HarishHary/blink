@@ -537,11 +537,11 @@ func (g *invocationGateway[T]) unreleasedCalls() int {
 // reconcileStatus publishes the gateway's own gauges, then its half of the namespace's readiness.
 func (g *invocationGateway[T]) reconcileStatus() {
 	gatewayGauges{
-		lifecycle:  g.lifecycle,
-		production: g.production,
-		shadow:     g.shadow,
-		waiting:    len(g.waiters),
-		unreleased: g.unreleasedCalls(),
+		lifecycle:         g.lifecycle,
+		productionPermits: g.production,
+		shadowPermits:     g.shadow,
+		waitingCalls:      len(g.waiters),
+		unreleasedCalls:   g.unreleasedCalls(),
 	}.publish(g.labels, g)
 	g.propagateStatus()
 }
@@ -582,15 +582,16 @@ func (g *invocationGateway[T]) HandleInspect(gen.PID, ...string) map[string]stri
 		}
 	}
 	return map[string]string{
-		"gateway:err":              runtime.ErrorText(g.err),
-		"gateway:lifecycle":        string(g.lifecycle),
-		"gateway:runtime":          g.runtimePID.String(),
-		"gateway:production":       fmt.Sprintf("%d/%d", g.production, g.opts.MaxOutstandingInvocations),
-		"gateway:shadow":           fmt.Sprintf("%d/%d", g.shadow, g.opts.ShadowMaxOutstandingInvocations),
-		"gateway:waiting":          fmt.Sprintf("%d/%d", len(g.waiters), g.opts.MaxWaiting),
-		"gateway:plugins":          fmt.Sprintf("%d", len(g.perPlugin)),
-		"gateway:in_flight_calls":  fmt.Sprintf("%d", len(g.calls)),
-		"gateway:admitted_calls":   fmt.Sprintf("%d", admitted),
-		"gateway:unreleased_calls": fmt.Sprintf("%d", g.unreleasedCalls()),
+		"gateway:err":                runtime.ErrorText(g.err),
+		"gateway:lifecycle":          string(g.lifecycle),
+		"gateway:availability":       string(g.availability()),
+		"gateway:runtime":            g.runtimePID.String(),
+		"gateway:production_permits": fmt.Sprintf("%d/%d", g.production, g.opts.MaxOutstandingInvocations),
+		"gateway:shadow_permits":     fmt.Sprintf("%d/%d", g.shadow, g.opts.ShadowMaxOutstandingInvocations),
+		"gateway:waiting_calls":      fmt.Sprintf("%d/%d", len(g.waiters), g.opts.MaxWaiting),
+		"gateway:plugins":            fmt.Sprintf("%d", len(g.perPlugin)),
+		"gateway:in_flight_calls":    fmt.Sprintf("%d", len(g.calls)),
+		"gateway:admitted_calls":     fmt.Sprintf("%d", admitted),
+		"gateway:unreleased_calls":   fmt.Sprintf("%d", g.unreleasedCalls()),
 	}
 }

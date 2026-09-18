@@ -314,17 +314,17 @@ func (s *supervisor[P, M]) HandleMessage(from gen.PID, message any) error {
 		// The sender has to be the gateway its own reference names, which is the identity notifyOwner
 		// requires to answer: anything else holds no admission permit and could hear no result.
 		if from != m.ref.Gateway {
-			s.labels.Count(s, metricInvocationsRejected, "owner")
+			s.labels.Count(s, metricSubmissionsRejected, "owner")
 			s.rejectSubmission(from, m, ErrPluginUnavailable)
 			return nil
 		}
 		if !s.acceptsSubmission(m.expectedGeneration) {
-			s.labels.Count(s, metricInvocationsRejected, "closed")
+			s.labels.Count(s, metricSubmissionsRejected, "closed")
 			s.rejectSubmission(from, m, ErrPluginUnavailable)
 			return nil
 		}
 		if err := m.context.Err(); err != nil {
-			s.labels.Count(s, metricInvocationsRejected, "context")
+			s.labels.Count(s, metricSubmissionsRejected, "context")
 			s.rejectSubmission(from, m, err)
 			return nil
 		}
