@@ -97,9 +97,9 @@ type routerActor[T Artifact] struct {
 	desiredCandidate *Deployment
 	activePrimary    *Deployment
 	activeCandidate  *Deployment
-	lifecycle        RouterActorLifecycle // the router's own live lifecycle
-	err              error                // the router's own failure, kept apart from its routes' errors
-	lastStatus       routerActorStatus    // last published projection, the baseline reconcileStatus dedupes against
+	lifecycle        RouterActorLifecycle
+	err              error             // the router's own failure, kept apart from its routes' errors
+	lastStatus       routerActorStatus // last published projection, the baseline reconcileStatus dedupes against
 	lastStatusEpoch  int64
 	labels           telemetry.Labels
 }
@@ -745,8 +745,8 @@ func (a *routerActor[T]) newDeploymentManager(ref *deploymentRouteState) *deploy
 	}
 }
 
-// routePID reads the route's live manager PID without touching fencing state, so status
-// projections and inspections stay free of side effects.
+// routePID reads the route's live manager PID without touching fencing state, so status projections
+// and inspections stay free of side effects.
 func (a *routerActor[T]) routePID(ref *deploymentRouteState) gen.PID {
 	info, ok := a.Route(ref.name)
 	if !ok {
@@ -883,7 +883,7 @@ func (a *routerActor[T]) activeRouteAvailable(deployment *Deployment) bool {
 	return ref != nil && ref.phase == deploymentRouteActive && a.routePID(ref) != (gen.PID{})
 }
 
-// routeAvailability computes route status and routability from desired/active deployments
+// routeAvailability computes route status and routability from the desired and active deployments.
 func (a *routerActor[T]) routeAvailability() (deploymentRouteStatus, deploymentRouteStatus, bool, bool, runtime.Availability) {
 	primaryStatus, candidateStatus := a.deploymentStatusFor(a.desiredPrimary), a.deploymentStatusFor(a.desiredCandidate)
 	primaryRoutable, candidateRoutable := a.activeRouteAvailable(a.activePrimary), a.activeRouteAvailable(a.activeCandidate)
@@ -907,8 +907,7 @@ func (a *routerActor[T]) routeAvailability() (deploymentRouteStatus, deploymentR
 	return primaryStatus, candidateStatus, normalRoutable, shadowRoutable, availability
 }
 
-// status computes the router's current publishable status, shared by reconcileStatus (to the catalog)
-// and HandleInspect (to an operator).
+// status computes the router's current publishable status.
 func (a *routerActor[T]) status() routerActorStatus {
 	primaryStatus, candidateStatus, normalRoutable, shadowRoutable, availability := a.routeAvailability()
 	if a.lifecycle == RouterActorStopped {
@@ -948,8 +947,7 @@ func (a *routerActor[T]) propagateStatus(next routerActorStatus) {
 	}
 }
 
-// HandleInspect exposes lifecycle and availability plus each route's own health, which a Ready
-// router status alone does not distinguish.
+// HandleInspect exposes each route's own health, which a Ready router status alone does not distinguish.
 func (a *routerActor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 	status := a.status()
 	return map[string]string{

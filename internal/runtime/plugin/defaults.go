@@ -78,10 +78,8 @@ func subtreeName(namespace, suffix string) gen.Atom {
 	return gen.Atom("plugin-" + namespace + "-" + suffix)
 }
 
-// A registered name addresses a process across supervision lines, where the caller holds no PID: the
-// client to the gateway, the gateway to its sibling runtime, the application to both. Within a line a
-// parent addresses its children by the PID it spawned and monitors, which a name cannot replace, since a
-// name resolves to whichever incarnation holds it now. The two below are that boundary's two halves.
+// A registered name addresses a process across supervision lines, where the caller holds no PID. Within a
+// line a parent uses the PID it spawned, since a name resolves to whichever incarnation holds it now.
 
 // requireSubtreeName fails a process its spawner did not register under the name the rest of the subtree
 // resolves it by, since an unnamed or misnamed process starts fine and then answers nobody.
@@ -92,8 +90,7 @@ func requireSubtreeName(process gen.Process, name gen.Atom) error {
 	return fmt.Errorf("process %s registered as %q, want %q", process.PID(), process.Name(), name)
 }
 
-// subtreePID resolves one registered subtree name, since a name addresses a process only while it is up,
-// and an unreachable part of the runtime is one nothing can be submitted to.
+// subtreePID resolves one registered subtree name, which succeeds only while that process is up.
 func subtreePID(node gen.Node, name gen.Atom) (gen.PID, error) {
 	pid, err := node.ProcessPID(name)
 	if err != nil {
@@ -124,8 +121,7 @@ func runtimeOptionsWithDefaults(opts ApplicationOptions) ApplicationOptions {
 		opts.SupervisorOptions.CatalogOptions.RouterOptions.DeploymentManagerOptions.QueueSize = share
 	}
 
-	// Growth past a deployment's min_procs: see processBudgetFromResources for why this is sized from
-	// CPU and memory together
+	// Growth past a deployment's min_procs; processBudgetFromResources says why CPU and memory both size it.
 	if opts.SupervisorOptions.CatalogOptions.RouterOptions.DeploymentManagerOptions.ProcessBudget == nil {
 		opts.SupervisorOptions.CatalogOptions.RouterOptions.DeploymentManagerOptions.ProcessBudget = NewProcessBudget(processBudgetFromResources())
 	}
@@ -136,9 +132,8 @@ func runtimeOptionsWithDefaults(opts ApplicationOptions) ApplicationOptions {
 	return opts
 }
 
-// gatewayBudgetsWithDefaults sizes the admission budgets a caller left unset from how wide one call may
-// fan out and how many calls that caller runs at once, since a budget set apart from the fan-out it has
-// to hold is a budget that rejects a legitimate call.
+// gatewayBudgetsWithDefaults sizes unset admission budgets from the fan-out and concurrency they have to
+// hold, since a budget set apart from those rejects a legitimate call.
 func gatewayBudgetsWithDefaults(opts GatewayOptions, fanOut, concurrent int) GatewayOptions {
 	// The per-plugin share rejects rather than waits, so it holds a whole fan-out per concurrent call.
 	if opts.MaxOutstandingInvocationsPerPlugin <= 0 {

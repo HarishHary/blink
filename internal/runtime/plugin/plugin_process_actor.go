@@ -67,8 +67,8 @@ type pluginProcessActor[T Artifact] struct {
 	labels          telemetry.Labels
 }
 
-// pluginMetaInvokeSlack pads the backstop timer so a late-scheduled timer never calls a subprocess
-// still inside its cancellation grace hung.
+// pluginMetaInvokeSlack pads the backstop timer so a late-scheduled one never calls a subprocess hung
+// while it is still inside its cancellation grace.
 const pluginMetaInvokeSlack = time.Second
 
 // ---------------------------------------------------------------------------
@@ -295,8 +295,7 @@ func (p *pluginProcessActor[T]) HandleCall(_ gen.PID, _ gen.Ref, request any) (a
 	return fmt.Errorf("unsupported plugin process call %T", request), nil
 }
 
-// HandleInspect exposes the actor's own lifecycle, the meta's, both restart tracks, and in-flight
-// call depth.
+// HandleInspect exposes the actor's own lifecycle, the meta's, and both restart tracks.
 func (p *pluginProcessActor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 	status := p.status()
 	return map[string]string{
@@ -662,8 +661,7 @@ func samePluginProcessStatus(left, right pluginProcessActorStatus) bool {
 		samePluginMetaStatus(left.meta, right.meta)
 }
 
-// samePluginMetaStatus compares meta-process status snapshots on the same terms and for the same
-// reason: it decides whether a status is worth publishing.
+// samePluginMetaStatus compares meta-process snapshots on the same terms, and for the same reason.
 func samePluginMetaStatus(left, right pluginMetaStatus) bool {
 	return left.lifecycle == right.lifecycle &&
 		left.availability == right.availability &&

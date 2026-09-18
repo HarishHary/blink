@@ -15,8 +15,7 @@ import (
 // Types & state
 // ---------------------------------------------------------------------------
 
-// GatewayLifecycle describes one invocation gateway incarnation, which is what it admits: Starting has no
-// runtime to forward to yet, Draining and Stopped refuse.
+// GatewayLifecycle is what a gateway admits: Starting has no runtime yet, Draining and Stopped refuse.
 type GatewayLifecycle string
 
 const (
@@ -26,49 +25,44 @@ const (
 	GatewayStopped  GatewayLifecycle = "stopped"
 )
 
-// InvocationRef identifies one admitted invocation together with the gateway incarnation that admitted it.
-// Call ids restart at 1 with the gateway, so the PID is what keeps a completion meant for a previous
-// incarnation off a new call holding the same number.
+// InvocationRef identifies one admitted invocation. Call ids restart at 1 with each gateway, so the PID is
+// what keeps a previous incarnation's completion off a live call holding the same number.
 type InvocationRef struct {
 	Gateway gen.PID
 	CallID  uint64
 }
 
-// gatewayInvocation is one admitted invocation and the budgets it holds. Those permits outlive the
-// caller's result: a cancelled or expired call frees admission only once the runtime reports the plugin
-// stopped executing it.
+// gatewayInvocation is one admitted invocation and the permits it holds: admitted once the runtime took it,
+// completed once its caller has a result, and released — freeing the permits — once the plugin stopped.
 type gatewayInvocation struct {
 	pluginID  string
 	shadow    bool
 	result    *runtime.AsyncResult
-	admitted  bool // the runtime accepted it and forwarded it into the catalog
-	completed bool // its caller has a result, while its execution capacity may still be held
+	admitted  bool
+	completed bool
 }
 
-// gatewayWaiter is one caller waiting for a production permit to free. Its per-plugin permit is held
-// already, so waiting cannot take a plugin past its own share.
+// gatewayWaiter is one caller waiting for a production permit; its per-plugin permit is held already, so
+// waiting cannot take a plugin past its share.
 type gatewayWaiter[T Artifact] struct {
 	pid     gen.PID
 	ref     gen.Ref
 	request MessageGatewaySubmit[T]
 }
 
-// alive reports whether the waiting caller can still receive a response.
 func (w gatewayWaiter[T]) alive() bool { return w.ref.IsAlive() }
 
-// invocationGateway admits caller invocations into one plugin runtime and owns their bookkeeping: the
-// budgets admission holds, the cancellations callers ask for, and the results and releases the runtime
-// reports back. It is the runtime supervisor's sibling, not its child, so a lost runtime is a fact it
-// survives to report to the callers waiting on it.
+// invocationGateway admits caller invocations into one plugin runtime and owns their bookkeeping. It is the
+// runtime supervisor's sibling, not its child, so a lost runtime is a fact it survives to report.
 type invocationGateway[T Artifact] struct {
 	act.Actor
 	opts       GatewayOptions
 	namespace  string
-	runtimePID gen.PID // runtime supervisor incarnation last seen, re-resolved from its registered name
-	watching   bool    // a monitor on that name is installed
+	runtimePID gen.PID
+	watching   bool
 	nextCallID uint64
 	calls      map[uint64]*gatewayInvocation
-	perPlugin  map[string]int // admitted and waiting invocations per plugin, for fair admission
+	perPlugin  map[string]int // counts waiting callers too, so waiting cannot take a plugin past its share
 	production int
 	shadow     int
 	waiters    []gatewayWaiter[T]
@@ -81,8 +75,8 @@ type invocationGateway[T Artifact] struct {
 // Messages
 // ---------------------------------------------------------------------------
 
-// MessageGatewaySubmit asks the gateway to admit one invocation. Callers send it as a call, so a
-// submission that has to wait for a permit waits in the gateway rather than in the caller's own budget.
+// MessageGatewaySubmit asks the gateway to admit one invocation. It is a call, so a submission that has to
+// wait waits in the gateway rather than in the caller's own budget.
 type MessageGatewaySubmit[T Artifact] struct {
 	Context            context.Context
 	Cancel             context.CancelFunc
@@ -94,15 +88,13 @@ type MessageGatewaySubmit[T Artifact] struct {
 	Result             *runtime.AsyncResult
 }
 
-// MessageGatewaySubmitted answers a submission with the reference the gateway admitted, or with the error
-// that refused it and nothing held.
+// MessageGatewaySubmitted answers a submission with the reference admitted, or the error that refused it.
 type MessageGatewaySubmitted struct {
 	Ref InvocationRef
 	Err error
 }
 
-// MessageGatewayCancelInvocation asks that one admitted invocation be cancelled. It frees no admission
-// capacity by itself: the runtime reports the release when the plugin stops.
+// MessageGatewayCancelInvocation asks that one invocation be cancelled; it frees no capacity by itself.
 type MessageGatewayCancelInvocation struct {
 	Ref InvocationRef
 	Err error
@@ -117,8 +109,7 @@ type MessageGatewayInvocationCompleted struct {
 	Err error
 }
 
-// MessageGatewayInvocationReleased reports that one invocation's execution capacity is free, which is what
-// frees the admission permits the gateway held for it.
+// MessageGatewayInvocationReleased reports one invocation's execution capacity free, which frees its permits.
 type MessageGatewayInvocationReleased struct{ Ref InvocationRef }
 
 // MessageGatewayRadarTick drives the gateway's periodic gauge publish and runtime watch.
@@ -182,8 +173,7 @@ func (g *invocationGateway[T]) HandleMessage(from gen.PID, message any) error {
 	case MessageGatewayCancelInvocation:
 		g.cancelInvocation(m)
 
-	// Every runtime message below is fenced the same way: a reference this incarnation minted, sent by the
-	// runtime itself. Call ids restart with the gateway, so an unfenced one could land on a live call.
+	// Each runtime message below is fenced twice: a reference this incarnation minted, from the runtime itself.
 	case MessageGatewayInvocationAdmitted:
 		if m.Ref.Gateway != g.PID() || !g.isRuntime(from) {
 			return nil
@@ -200,7 +190,7 @@ func (g *invocationGateway[T]) HandleMessage(from gen.PID, message any) error {
 		if !tracked || call.completed {
 			return nil
 		}
-		// The permits stay held: this result may be a cancellation the plugin has not finished acting on.
+		// Permits stay held: this result may be a cancellation the plugin has not finished acting on.
 		call.completed = true
 		call.result.Complete(m.Err)
 
@@ -212,7 +202,7 @@ func (g *invocationGateway[T]) HandleMessage(from gen.PID, message any) error {
 		if !tracked {
 			return nil
 		}
-		// A release with no result before it means the runtime never reported one, and nobody else will.
+		// A release with no result before it means nobody will ever report one.
 		call.result.Complete(ErrPluginUnavailable)
 		delete(g.calls, m.Ref.CallID)
 		g.releaseBudgets(call.pluginID, call.shadow)
@@ -225,8 +215,7 @@ func (g *invocationGateway[T]) HandleMessage(from gen.PID, message any) error {
 		g.refuseWaiters(ErrPluginUnavailable)
 
 	case MessageStop:
-		// Refused here rather than left to Terminate, so the pump below does not admit a caller into a
-		// gateway that is already stopping.
+		// Refused here, not in Terminate, so the trailing admit cannot take a caller into a stopping gateway.
 		g.refuseWaiters(ErrRuntimeStopped)
 		return gen.TerminateReasonNormal
 
@@ -246,8 +235,7 @@ func (g *invocationGateway[T]) HandleMessage(from gen.PID, message any) error {
 	return nil
 }
 
-// Terminate fails every invocation this incarnation owned: a gateway that is gone can neither report a
-// result nor hold a permit, and no caller may be left waiting on either.
+// Terminate fails every invocation this incarnation owned: a gone gateway can neither answer nor hold a permit.
 func (g *invocationGateway[T]) Terminate(reason error) {
 	pendingErr := ErrRuntimeStopped
 	if g.lifecycle == GatewayDraining {
@@ -270,9 +258,7 @@ func (g *invocationGateway[T]) Terminate(reason error) {
 // Work
 // ---------------------------------------------------------------------------
 
-// admit decides one submission: refused with nothing held, forwarded against a permit, or left waiting
-// until production admission frees one. A refusal leaves the caller's result alone, since a submission the
-// gateway did not take never reaches the runtime and its caller has the error in hand.
+// admit decides one submission: refused holding nothing, forwarded against a permit, or left waiting for one.
 func (g *invocationGateway[T]) admit(from gen.PID, ref gen.Ref, request MessageGatewaySubmit[T]) (any, error) {
 	if err := g.admissionError(); err != nil {
 		g.labels.Count(g, metricGatewayRejected, "closed")
@@ -291,8 +277,7 @@ func (g *invocationGateway[T]) admit(from gen.PID, ref gen.Ref, request MessageG
 		return MessageGatewaySubmitted{Err: err}, nil
 	}
 
-	// Shadow admission never waits: a slow candidate drops its own newest call rather than queueing, so it
-	// cannot consume production capacity.
+	// Shadow never waits: a slow candidate drops its own newest call rather than consuming production capacity.
 	if request.Shadow {
 		if g.shadow >= g.opts.ShadowMaxOutstandingInvocations {
 			g.labels.Count(g, metricGatewayRejected, "shadow_dropped")
@@ -302,8 +287,7 @@ func (g *invocationGateway[T]) admit(from gen.PID, ref gen.Ref, request MessageG
 		return g.forward(request), nil
 	}
 
-	// This plugin's share comes before the shared budget, so one stalled plugin fails its own calls fast
-	// rather than holding admission against every other caller.
+	// The plugin's own share comes first, so one stalled plugin fails its own calls instead of everyone's.
 	if g.perPlugin[request.PluginID] >= g.opts.MaxOutstandingInvocationsPerPlugin {
 		g.labels.Count(g, metricGatewayRejected, "queue_full")
 		return MessageGatewaySubmitted{Err: ErrQueueFull}, nil
@@ -324,8 +308,7 @@ func (g *invocationGateway[T]) admit(from gen.PID, ref gen.Ref, request MessageG
 	return g.forward(request), nil
 }
 
-// forward hands one admitted invocation to the runtime supervisor and starts tracking it. Its permits are
-// held already, so a hand-off that fails has to give them back.
+// forward hands one admitted invocation to the runtime and tracks it, giving the permits back if that fails.
 func (g *invocationGateway[T]) forward(request MessageGatewaySubmit[T]) MessageGatewaySubmitted {
 	target, err := g.runtime()
 	if err != nil {
@@ -366,15 +349,15 @@ func (g *invocationGateway[T]) forward(request MessageGatewaySubmit[T]) MessageG
 	return MessageGatewaySubmitted{Ref: ref}
 }
 
-// admitWaiters admits waiting callers while production permits are free, oldest first. Every handler ends
-// here, so nothing that frees a permit has to drain the queue itself.
+// admitWaiters admits waiting callers oldest first. Every handler ends here, so nothing that frees a permit
+// has to drain the queue itself.
 func (g *invocationGateway[T]) admitWaiters() {
 	for len(g.waiters) > 0 && g.production < g.opts.MaxOutstandingInvocations &&
 		(g.lifecycle == GatewayStarting || g.lifecycle == GatewayRunning) {
 		waiter := g.waiters[0]
 		g.waiters = g.waiters[1:]
 		if !waiter.alive() {
-			// The caller stopped waiting, so nothing is owed but the per-plugin permit it held.
+			// Nobody to answer, so only the per-plugin permit is owed back.
 			g.releasePluginPermit(waiter.request.PluginID)
 			continue
 		}
@@ -389,8 +372,8 @@ func (g *invocationGateway[T]) admitWaiters() {
 	}
 }
 
-// cancelInvocation forwards one caller's cancellation to the runtime. The invocation stays tracked and its
-// permits stay held: a caller giving up does not prove the plugin stopped.
+// cancelInvocation forwards one caller's cancellation. Permits stay held: giving up does not prove the
+// plugin stopped.
 func (g *invocationGateway[T]) cancelInvocation(message MessageGatewayCancelInvocation) {
 	call, ok := g.calls[message.Ref.CallID]
 	if !ok || message.Ref.Gateway != g.PID() || call.completed {
@@ -419,9 +402,8 @@ func (g *invocationGateway[T]) refuseWaiters(err error) {
 	}
 }
 
-// failInFlightCalls completes and forgets every in-flight invocation once the runtime can no longer account
-// for them. A lost runtime takes its plugin processes with it, so nothing is still executing behind these
-// permits.
+// failInFlightCalls completes and forgets every in-flight invocation. A lost runtime takes its plugin
+// processes with it, so nothing is still executing behind these permits.
 func (g *invocationGateway[T]) failInFlightCalls(err error) {
 	for callID, call := range g.calls {
 		delete(g.calls, callID)
@@ -430,8 +412,7 @@ func (g *invocationGateway[T]) failInFlightCalls(err error) {
 	}
 }
 
-// releaseBudgets frees the budgets one invocation held. Admitting whoever was waiting on them is the
-// handler's job, not this one's.
+// releaseBudgets frees the permits one invocation held; admitting whoever waited on them is the handler's job.
 func (g *invocationGateway[T]) releaseBudgets(pluginID string, shadow bool) {
 	if shadow {
 		if g.shadow > 0 {
@@ -456,9 +437,8 @@ func (g *invocationGateway[T]) releasePluginPermit(pluginID string) {
 // Recovery
 // ---------------------------------------------------------------------------
 
-// runtime resolves the runtime supervisor from its registered name, so a restarted runtime is
-// addressed correctly without the gateway being told. Resolving it is what records the incarnation and
-// opens admission.
+// runtime resolves the runtime supervisor by name, so a restart is addressed right without the gateway being
+// told. Resolving it is also what records the incarnation and opens admission.
 func (g *invocationGateway[T]) runtime() (gen.PID, error) {
 	pid, err := subtreePID(g.Node(), SupervisorName(g.namespace))
 	if err != nil {
@@ -473,9 +453,8 @@ func (g *invocationGateway[T]) runtime() (gen.PID, error) {
 	return pid, nil
 }
 
-// isRuntime reports whether a message came from the runtime supervisor, re-resolving the name when the
-// sender is not the incarnation last seen, since a runtime that started after the last submission is one
-// the gateway has no PID for yet.
+// isRuntime reports whether a message came from the runtime, re-resolving when the sender is not the
+// incarnation last seen — a runtime started since the last submission has no PID here yet.
 func (g *invocationGateway[T]) isRuntime(from gen.PID) bool {
 	if from != (gen.PID{}) && from == g.runtimePID {
 		return true
@@ -484,8 +463,8 @@ func (g *invocationGateway[T]) isRuntime(from gen.PID) bool {
 	return err == nil && pid == from
 }
 
-// ensureRuntimeWatch keeps a monitor on the runtime supervisor's name installed, which is what turns a
-// lost runtime into a fact this gateway can report to the callers waiting on it.
+// ensureRuntimeWatch keeps a monitor on the runtime's name armed. It cannot arm at Init, where the gateway
+// starts first and the name does not exist yet, so an unarmed watch is retried on every tick and submission.
 func (g *invocationGateway[T]) ensureRuntimeWatch() {
 	if g.watching {
 		return
@@ -525,8 +504,8 @@ func (g *invocationGateway[T]) unreleasedCalls() int {
 	return unreleased
 }
 
-// reconcileStatus publishes the gateway's own state without changing it. Nothing aggregates a gateway
-// status, so its gauges are the whole of what it publishes.
+// reconcileStatus publishes the gateway's own state. Nothing aggregates or queries it, so gauges are all it
+// publishes.
 func (g *invocationGateway[T]) reconcileStatus() {
 	gatewayGauges{
 		lifecycle:  g.lifecycle,
@@ -537,8 +516,7 @@ func (g *invocationGateway[T]) reconcileStatus() {
 	}.publish(g.labels, g)
 }
 
-// HandleInspect exposes the budgets in hand and how far the invocations behind them have progressed,
-// which is what a permit held past its caller's result looks like from outside.
+// HandleInspect exposes the permits in hand and how far the invocations behind them have progressed.
 func (g *invocationGateway[T]) HandleInspect(gen.PID, ...string) map[string]string {
 	admitted := 0
 	for _, call := range g.calls {

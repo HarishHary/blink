@@ -29,14 +29,12 @@ func (e ValidationError) Error() string {
 	return fmt.Sprintf("%s: %s", e.File, e.Message)
 }
 
-// Loader[T] handles per-plugin-type metadata loading and projection behavior;
-// embed BaseLoader[U, T] for defaults.
+// Loader[T] handles per-plugin-type metadata loading and projection; embed BaseLoader[U, T] for defaults.
 type Loader[T any] interface {
 	snapshot.Loader[T]
 	// Parse reads a single YAML sidecar file and returns the parsed metadata.
 	Parse(path string) (T, error)
-	// Validate runs directory-level checks given already-parsed items and
-	// executable binary names present in the directory.
+	// Validate runs directory-level checks against parsed items and the directory's executable names.
 	Validate(items []T, binaries []string) []ValidationError
 	// CrossValidate runs cross-item checks (e.g. dependency cycle detection).
 	CrossValidate(all []T) error

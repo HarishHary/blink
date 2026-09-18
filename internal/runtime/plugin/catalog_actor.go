@@ -599,7 +599,7 @@ func (a *catalogActor[T]) cancelAllRouterRestarts(reset bool) {
 // Status
 // ---------------------------------------------------------------------------
 
-// status computes the aggregate catalog status, shared by reconcileStatus and HandleInspect.
+// status computes the aggregate catalog status.
 func (a *catalogActor[T]) status() catalogActorStatus {
 	routers := make(map[string]routerActorStatus, len(a.desired))
 	routable := 0
@@ -702,8 +702,7 @@ func (a *catalogActor[T]) propagateStatus(next catalogActorStatus) {
 	}, gen.MessagePriorityHigh)
 }
 
-// HandleInspect exposes aggregate router health plus the desired-vs-actual router count and call depth
-// a Ready status alone does not distinguish.
+// HandleInspect exposes the desired-vs-actual router counts a Ready status alone does not distinguish.
 func (a *catalogActor[T]) HandleInspect(gen.PID, ...string) map[string]string {
 	status := a.status()
 	return map[string]string{

@@ -16,8 +16,7 @@ import (
 // Types & state
 // ---------------------------------------------------------------------------
 
-// ReconcilerActorLifecycle describes the actor projecting snapshots and local artifacts into desired
-// state.
+// ReconcilerActorLifecycle describes the actor projecting snapshots and artifacts into desired state.
 type ReconcilerActorLifecycle string
 
 const (
@@ -43,8 +42,8 @@ type reconcilerActorStatus struct {
 	err                error
 }
 
-// readerActorState groups the reader identity, status, and accepted stream epoch.
-// Buffered reader events carry no PID; pid is unset for this subscriber.
+// readerActorState groups the reader's status and accepted stream epoch. Buffered reader events carry
+// no PID, so pid is unset for this subscriber.
 type readerActorState struct {
 	pid         gen.PID
 	status      snapshot.ReaderActorStatus
@@ -71,7 +70,7 @@ type reconcilerActor struct {
 	// proposes, which is why a replacement proposes once on its revision base.
 	proposed           map[string]routerDesiredState
 	proposedGeneration int64
-	lifecycle          ReconcilerActorLifecycle // the reconciler's own live lifecycle; the supervisor owns starting and restarting
+	lifecycle          ReconcilerActorLifecycle // the supervisor owns starting and restarting
 	err                error                    // the reconciler's own failure, kept apart from its metas' errors
 	lastStatus         reconcilerActorStatus    // last published projection, the baseline reconcileStatus dedupes against
 	lastStatusEpoch    int64
@@ -82,8 +81,7 @@ type reconcilerActor struct {
 // Messages
 // ---------------------------------------------------------------------------
 
-// MessageReconcilerActorActivate gives a replacement reconciler a revision base past the last
-// accepted state.
+// MessageReconcilerActorActivate gives a replacement reconciler a revision base past the last accepted state.
 type MessageReconcilerActorActivate struct{ revisionBase uint64 }
 
 // MessageReconcilerActorStatusChanged publishes the reconciler status to its supervisor.
@@ -422,7 +420,7 @@ func (a *reconcilerActor) requestResolve() error {
 	a.dirty = false
 	a.reconcileStatus()
 	snap := a.snapshot.Clone()
-	// Each own attempt supersedes the reconciler's previous failure.
+	// A fresh attempt supersedes the reconciler's previous failure, here and in every start below.
 	a.err = nil
 	if err := a.Send(a.resolver.alias, MessageResolveArtifacts{snapshot: *snap}); err != nil {
 		a.resolving = false
@@ -449,7 +447,6 @@ func (a *reconcilerActor) startArtifactResolverMeta() error {
 
 	a.resolver.status.lifecycle = ArtifactResolverMetaStarting
 	a.resolver.status.availability = runtime.AvailabilityUnavailable
-	// Each own attempt supersedes the reconciler's previous failure.
 	a.err = nil
 	a.reconcileStatus()
 	alias, err := a.SpawnMeta(
@@ -491,7 +488,6 @@ func (a *reconcilerActor) startArtifactWatcherMeta() error {
 
 	a.watcher.status.lifecycle = ArtifactWatcherMetaStarting
 	a.watcher.status.availability = runtime.AvailabilityUnavailable
-	// Each own attempt supersedes the reconciler's previous failure.
 	a.err = nil
 	a.reconcileStatus()
 	alias, err := a.SpawnMeta(

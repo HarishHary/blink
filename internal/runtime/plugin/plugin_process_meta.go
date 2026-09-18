@@ -38,8 +38,7 @@ const (
 	PluginMetaFailed     PluginMetaLifecycle = "failed"
 )
 
-// PluginMetaActivity labels how loaded one subprocess is rather than counting it; the count rides along
-// with the label its owner publishes.
+// PluginMetaActivity labels how loaded one subprocess is; the exact count rides along with the label.
 type PluginMetaActivity string
 
 const (
@@ -261,9 +260,8 @@ func (m *pluginProcessMeta[T]) invoke(msg pluginMetaInvoke[T]) {
 	}()
 }
 
-// answerInvocation reports the outcome before acting on a fatal one, since closing first would race
-// this message against the DOWN and the owner would report a generic recycle.
-// Match DOWN's high priority so it cannot overtake a result already queued for the owner.
+// answerInvocation reports the outcome before acting on a fatal one, at DOWN's own priority: closing first
+// would race this message against the DOWN and the owner would report a generic recycle instead.
 func (m *pluginProcessMeta[T]) answerInvocation(msg pluginMetaInvoke[T], result pluginMetaInvokeResult) {
 	result.alias, result.callID, result.generation = m.ID(), msg.callID, msg.generation
 	_ = m.SendWithPriority(m.Parent(), result, gen.MessagePriorityHigh)
@@ -287,7 +285,7 @@ func (m *pluginProcessMeta[T]) classifyInvocation(ctx context.Context, err error
 	return pluginMetaInvokeResult{err: err, recycle: recycle}
 }
 
-// HandleInspect exposes which artifact this subprocess runs and whether it's connected
+// HandleInspect exposes which artifact this subprocess runs and whether it is still connected.
 func (m *pluginProcessMeta[T]) HandleInspect(gen.PID, ...string) map[string]string {
 	return map[string]string{
 		"meta:deployment_id":   m.deployment.Id,

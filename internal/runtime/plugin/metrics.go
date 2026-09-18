@@ -199,8 +199,8 @@ type runtimeGauges struct {
 	activeCalls            int
 }
 
-// publish reports the runtime's gauges; the supervisor republishes them on its radar tick so a
-// converged runtime still reports fresh series.
+// publish reports the runtime's gauges, republished on the supervisor's radar tick so a converged runtime
+// still reports fresh series.
 func (g runtimeGauges) publish(labels telemetry.Labels, sender telemetry.Sender) {
 	labels.Set(sender, metricSupervisorLifecycle, supervisorLifecycleValue(g.lifecycle))
 	labels.Set(sender, metricAvailability, telemetry.AvailabilityValue(g.availability))
@@ -233,8 +233,7 @@ type gatewayGauges struct {
 	unreleased int
 }
 
-// publish reports the gateway's gauges; it republishes them on its radar tick so a quiet gateway still
-// reports fresh series.
+// publish reports the gateway's gauges, republished on its radar tick so a quiet gateway stays fresh too.
 func (g gatewayGauges) publish(labels telemetry.Labels, sender telemetry.Sender) {
 	labels.Set(sender, metricGatewayLifecycle, gatewayLifecycleValue(g.lifecycle))
 	labels.Set(sender, metricGatewayProductionPermits, float64(g.production))

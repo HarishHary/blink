@@ -64,8 +64,7 @@ type ProcessBudget struct {
 	reserved atomic.Int64
 }
 
-// NewProcessBudget returns a budget allowing limit plugin processes past the reservations, and none
-// below one.
+// NewProcessBudget returns a budget allowing limit plugin processes past the reservations, floored at zero.
 func NewProcessBudget(limit int) *ProcessBudget {
 	return &ProcessBudget{max: int64(max(0, limit))}
 }
@@ -78,8 +77,7 @@ func (b *ProcessBudget) limit() int {
 	return int(b.max)
 }
 
-// acquire takes one plugin process from the budget and reports whether it had room; a nil budget is
-// unbounded.
+// acquire takes one plugin process from the budget and reports whether it had room; nil is unbounded.
 func (b *ProcessBudget) acquire() bool {
 	if b == nil {
 		return true

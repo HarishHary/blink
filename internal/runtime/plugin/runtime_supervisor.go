@@ -23,7 +23,7 @@ const (
 	supervisorChildRestartPeriod    uint16 = 5
 )
 
-// SupervisorLifecycle describes the complete plugin runtime subtree.
+// SupervisorLifecycle is what the runtime subtree does with invocations: Draining and Stopped take none.
 type SupervisorLifecycle string
 
 const (
@@ -116,10 +116,10 @@ type supervisor[P Artifact, M any] struct {
 	radarLogged               bool
 	labels                    telemetry.Labels
 	signal                    telemetry.Signal
-	lifecycle                 SupervisorLifecycle       // the supervisor's own live lifecycle
-	transition                SupervisorTransitionPhase // the live revision-transition phase
-	err                       error                     // the supervisor's own failure, kept apart from its children's errors
-	lastStatus                SupervisorStatus          // last reconciled projection; queries read live state instead
+	lifecycle                 SupervisorLifecycle
+	transition                SupervisorTransitionPhase
+	err                       error            // the supervisor's own failure, kept apart from its children's errors
+	lastStatus                SupervisorStatus // last reconciled projection; queries read live state instead
 }
 
 // ---------------------------------------------------------------------------
@@ -629,7 +629,7 @@ func (s *supervisor[P, M]) releaseCall(callID uint64) {
 }
 
 // callCounts splits the tracked calls into those whose caller has no result yet and those completed but
-// still holding plugin capacity. Both are derived from the tracking map, which is the only record of either.
+// still holding plugin capacity.
 func (s *supervisor[P, M]) callCounts() (incomplete, unreleased int) {
 	for _, call := range s.inFlightCalls {
 		if call.completed {
@@ -1155,9 +1155,8 @@ func (s *supervisor[P, M]) mergeCatalogStatus(status catalogActorStatus) {
 	state.status = next
 }
 
-// status computes the current runtime status, shared by the status query, the gauges, and
-// HandleInspect (to an operator). Nothing caches it: the supervisor publishes no status message, so a
-// query is answered from live state rather than from whatever the last callback happened to leave.
+// status computes the current runtime status. Nothing caches it: the supervisor publishes no status
+// message, so a query is answered from live state rather than from whatever the last callback left.
 func (s *supervisor[P, M]) status() SupervisorStatus {
 	lifecycle := s.lifecycle
 	if lifecycle == "" {
@@ -1214,8 +1213,7 @@ func (s *supervisor[P, M]) publishGauges() {
 	}.publish(s.labels, s)
 }
 
-// routeTotals sums every route under every router, since these gauges are per runtime, not per
-// deployment.
+// routeTotals sums every route under every router, since these gauges are per runtime, not per deployment.
 func (s *supervisor[P, M]) routeTotals() (ready, desired, queued, active int) {
 	for _, router := range s.catalog.status.routers {
 		for _, route := range []deploymentRouteStatus{router.primary, router.candidate} {
@@ -1271,8 +1269,7 @@ func (s *supervisor[P, M]) radarUnavailableOnce(err error) {
 	s.Log().Debug("radar telemetry unavailable: namespace=%q error=%v", s.namespace, err)
 }
 
-// HandleInspect exposes lifecycle, both children's sub-status, the projection generations, and the
-// in-flight call and drain-waiter counts.
+// HandleInspect exposes the subtree's lifecycle, its children's status, and what it still owes callers.
 func (s *supervisor[P, M]) HandleInspect(gen.PID, ...string) map[string]string {
 	status := s.status()
 	incompleteCalls, unreleasedCalls := s.callCounts()

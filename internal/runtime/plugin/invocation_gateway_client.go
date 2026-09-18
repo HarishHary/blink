@@ -9,9 +9,8 @@ import (
 	"github.com/harishhary/blink/internal/runtime"
 )
 
-// gatewayClient submits invocations to one invocation gateway on behalf of Go callers. It holds no
-// admission state of its own: every budget lives in the gateway, so a caller and the runtime cannot
-// disagree about what was admitted.
+// gatewayClient submits invocations to one gateway for Go callers, holding no admission state of its own:
+// every budget lives in the gateway, so a caller and the runtime cannot disagree about what was admitted.
 type gatewayClient[T Artifact] struct {
 	node      gen.Node
 	namespace string
@@ -35,8 +34,8 @@ func (c gatewayClient[T]) submit(
 		return runtime.Invocation{}, err
 	}
 
-	// The invocation's own context outlives the submission call, so cancelling the caller's handle stops
-	// the plugin call whatever the gateway has done with it since.
+	// The invocation's context outlives the submission, so the caller's handle stops the plugin call whatever
+	// the gateway has done with it since.
 	base, detach := invocationContext(ctx, shadow)
 	invokeCtx, invokeCancel := context.WithCancel(base)
 	release := func() { invokeCancel(); detach() }
@@ -68,8 +67,7 @@ func (c gatewayClient[T]) submit(
 	ref := reply.Ref
 	state := runtime.NewInvocationState(func(err error) {
 		invokeCancel()
-		// Addressed to the gateway incarnation that minted the reference: a restarted gateway has already
-		// failed this invocation, and its successor owns a different call of the same number.
+		// Addressed to the incarnation that minted the reference: a successor owns a different call of that number.
 		_ = c.node.SendWithPriority(ref.Gateway, MessageGatewayCancelInvocation{Ref: ref, Err: err}, gen.MessagePriorityHigh)
 	})
 	stopContextWatch := context.AfterFunc(base, func() {
@@ -84,9 +82,8 @@ func (c gatewayClient[T]) submit(
 	return runtime.Invocation{Id: ref.CallID, State: state}, nil
 }
 
-// invocationContext returns the context one invocation runs under and the release its completion owes. A
-// shadow invocation is detached from its caller, so the production call that spawned it cannot cancel it,
-// while its deadline still bounds it: a candidate is judged inside the same window.
+// invocationContext returns the context one invocation runs under and the release its completion owes. Shadow
+// is detached from its caller but keeps its deadline, so a candidate is judged inside the same window.
 func invocationContext(ctx context.Context, shadow bool) (context.Context, context.CancelFunc) {
 	if !shadow {
 		return ctx, func() {}
@@ -98,8 +95,8 @@ func invocationContext(ctx context.Context, shadow bool) (context.Context, conte
 	return context.WithCancel(base)
 }
 
-// submitError names what refused a submission the gateway never answered. A call that ran out of time on
-// the caller's own deadline is that deadline, not a runtime failure.
+// submitError names what refused a submission the gateway never answered; the caller's own expired deadline
+// is that deadline, not a runtime failure.
 func submitError(ctx context.Context, err error) error {
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return ctxErr

@@ -217,7 +217,7 @@ func (m *artifactWatcherMeta) HandleCall(_ gen.PID, _ gen.Ref, request any) (any
 	return fmt.Errorf("unsupported artifact watcher call %T", request), nil
 }
 
-// HandleInspect exposes the watched directory and whether this instance is shutting down
+// HandleInspect exposes the watched directory and whether this instance is shutting down.
 func (m *artifactWatcherMeta) HandleInspect(gen.PID, ...string) map[string]string {
 	return map[string]string{
 		"watcher:directory":     m.directory,

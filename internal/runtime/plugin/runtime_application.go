@@ -1,4 +1,4 @@
-// Package actorruntime provides the local Ergo runtime for Blink plugins.
+// Package plugin provides the local Ergo runtime for Blink plugins.
 package plugin
 
 import (
@@ -103,8 +103,7 @@ func (a *Application[P, M]) Load(...any) (spec gen.ApplicationSpec, loadErr erro
 		StopTimeout: a.opts.CloseTimeout,
 		Network:     gen.ApplicationNetwork{RegisterTypes: snapshot.NetworkTypes()},
 		Group: []gen.ApplicationMemberSpec{{
-			// Ergo registers the name, as the branch supervisor's own child specs do for its children:
-			// every name in the subtree is claimed by whoever spawns the process.
+			// Ergo claims this name, the same way the branch supervisor's child specs claim their own.
 			Name: a.PluginRuntimeName(),
 			Factory: func() gen.ProcessBehavior {
 				return newPluginRuntimeSupervisor(a.opts, a.adapter, a.loader)
@@ -229,8 +228,7 @@ func (a *Application[P, M]) Wait(ctx context.Context) error {
 // ErrShadowDropped means shadow admission was full; production is unaffected and nothing was sent.
 var ErrShadowDropped = errors.New("shadow invocation dropped")
 
-// CallBudget is how many invocations one call may split into: declared capacity under the admission
-// share's width.
+// CallBudget is how many invocations one call may split into, capped by the admission share's width.
 func (a *Application[P, M]) CallBudget(rollout snapshot.Rollout) int {
 	return min(rollout.Capacity(), max(1, a.opts.callFanOut))
 }
@@ -273,8 +271,7 @@ func (a *Application[P, M]) SubmitShadow(ctx context.Context, pluginID string, e
 	return invocation, err
 }
 
-// gatewayClient returns a client for this runtime's gateway, naming why a submission is refused while the
-// application is not running.
+// gatewayClient returns a client for this runtime's gateway, or the reason a submission is refused.
 func (a *Application[P, M]) gatewayClient() (gatewayClient[P], error) {
 	a.mu.Lock()
 	lifecycle := a.lifecycle
@@ -295,9 +292,8 @@ func (a *Application[P, M]) gatewayClient() (gatewayClient[P], error) {
 	}
 }
 
-// callSupervisor makes one control request to the runtime supervisor, resolving its name per request
-// because the supervisor restarts alone under its branch and a PID kept from startup would address the
-// incarnation before it. A failure once the application itself is finished reports that instead.
+// callSupervisor makes one control request to the runtime supervisor, resolving its name per request: the
+// supervisor restarts alone, so a PID kept from startup would address the incarnation before it.
 func (a *Application[P, M]) callSupervisor(ctx context.Context, request any) (any, error) {
 	a.mu.Lock()
 	n, done := a.Node(), a.supervisorDone.done
@@ -368,8 +364,8 @@ func callTimeoutSeconds(ctx context.Context, fallback time.Duration) int {
 // Status
 // ---------------------------------------------------------------------------
 
-// Status queries the supervisor's reconciled status without publishing gauges or propagating it.
-// Application lifecycle is synchronized separately; health and its metrics belong to the supervisor.
+// Status queries the supervisor's reconciled status: health and its metrics belong to the supervisor, so
+// this neither publishes gauges nor propagates what it reads.
 func (a *Application[P, M]) Status(ctx context.Context) (result SupervisorStatus, statusErr error) {
 	defer func() {
 		if statusErr != nil {

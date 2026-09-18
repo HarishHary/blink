@@ -13,9 +13,7 @@ type ApplicationOptions struct {
 	MaxBatchSize       int
 	MaxConcurrentCalls int
 	CloseTimeout       time.Duration
-	// How wide one call may fan out, derived from the two knobs above in runtimeOptionsWithDefaults.
-	// The gateway's budgets derive from it there too: a budget set apart from the fan-out it has to
-	// hold is a budget that rejects a legitimate call.
+	// how wide one call may fan out, derived from the two knobs above, and what the gateway's budgets hold
 	callFanOut        int
 	GatewayOptions    GatewayOptions
 	SupervisorOptions SupervisorOptions
@@ -58,9 +56,9 @@ type RouterOptions struct {
 	DeploymentManagerOptions DeploymentManagerOptions // handed straight to each spawned manager
 }
 
-// DeploymentManagerOptions configures one deployment manager. Restart bounds pace replacing a lost process;
-// exhaustion opens its circuit. ProcessBudget is shared by every manager
-// in the process and bounds their combined scale-up past min_procs, nil leaving each to its max_procs.
+// DeploymentManagerOptions configures one deployment manager. Restart bounds pace replacing a lost process,
+// and exhaustion opens its circuit. ProcessBudget is shared: it bounds every manager's combined scale-up
+// past min_procs, nil leaving each to its own max_procs.
 type DeploymentManagerOptions struct {
 	QueueSize            int
 	DispatchTimeout      time.Duration

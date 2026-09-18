@@ -60,11 +60,11 @@ type deploymentManagerCall[T Artifact] struct {
 	process       gen.PID
 	dispatchToken uint64
 	dispatchStop  gen.CancelFunc
-	completed     bool                      // result reported; execution may still hold a process slot
-	released      bool                      // process capacity returned, reported once
-	queued        bool                      // linked into the manager's pending queue
-	prev, next    *deploymentManagerCall[T] // pending queue links, valid while queued
-	accepted      time.Time                 // when the manager took the call, for the invocation histogram
+	completed     bool // result reported; execution may still hold a process slot
+	released      bool // process capacity returned, reported once
+	queued        bool
+	prev, next    *deploymentManagerCall[T]
+	accepted      time.Time // when the manager took the call, for the invocation histogram
 }
 
 // pendingQueue is the manager's FIFO of accepted invocations waiting for capacity, linked through the
@@ -117,10 +117,8 @@ func (q *pendingQueue[T]) remove(entry *deploymentManagerCall[T]) {
 	q.length--
 }
 
-// pluginProcessActorState is one process slot: a stable identity that outlives the PIDs filling it, what the
-// current process reported, and the backoff that owns its next start. A zero pid waits on that backoff,
-// assigned is the outstanding invocation count the manager schedules from, retiring stops a process once
-// its calls finish, and replace refills the slot, separating a failure from a deliberate shrink.
+// pluginProcessActorState is one process slot: an identity that outlives the PIDs filling it, so a slot's
+// retry budget survives the process that spent it. A zero pid is a slot waiting on that backoff.
 type pluginProcessActorState struct {
 	pid         gen.PID
 	restart     *runtime.ScheduledBackoff
@@ -128,7 +126,7 @@ type pluginProcessActorState struct {
 	statusEpoch int64
 	assigned    int
 	retiring    bool
-	replace     bool
+	replace     bool // refill the slot once retired, separating a failure from a deliberate shrink
 }
 
 // deploymentManagerActor owns invocation, scaling, and process lifecycle for one concrete deployment.
@@ -140,14 +138,12 @@ type deploymentManagerActor[T Artifact] struct {
 	drained    bool
 	deployment Deployment
 	route      gen.Atom
-	// processes are this deployment's slots by id, order records the sequence they were opened in so
-	// shrinking retires the newest, and byPID resolves a child's facts back to its slot.
+	// slots by id; order is the sequence they opened in, so shrinking retires the newest.
 	processes map[int]*pluginProcessActorState
 	order     []int
 	byPID     map[gen.PID]int
 	nextSlot  int
-	// desiredProcs is how many processes the manager wants running: min_procs at rest, one more per
-	// scale-up, and none for an idle deployment that reserves none.
+	// desiredProcs is how many processes the manager wants running: min_procs at rest, one more per scale-up.
 	desiredProcs    int
 	inFlightCalls   map[uint64]*deploymentManagerCall[T]
 	pendingCalls    pendingQueue[T]
@@ -585,8 +581,7 @@ func (m *deploymentManagerActor[T]) reconcile() {
 	m.reconcileStatus()
 }
 
-// reconcileProcesses moves the deployment's slots toward the desired count and fills the empty ones,
-// one pass at a time.
+// reconcileProcesses moves the slots toward the desired count and fills the empty ones, one pass at a time.
 func (m *deploymentManagerActor[T]) reconcileProcesses() {
 	if m.draining || m.circuitOpen {
 		return
@@ -705,8 +700,8 @@ func (m *deploymentManagerActor[T]) scheduleScaleReconcile() {
 	}
 }
 
-// requiredProcs converts the invocations this deployment owes into the process count that would serve
-// them, each carrying its whole declared capacity, floored at the reservation and capped at max_procs.
+// requiredProcs turns the invocations this deployment owes into a process count, floored at min_procs
+// and capped at max_procs.
 func (m *deploymentManagerActor[T]) requiredProcs() int {
 	capacity := m.deployment.CapacityPerProcess()
 	demand := m.activeCalls() + m.dispatchingCalls() + m.pendingCalls.length
@@ -889,8 +884,7 @@ func (m *deploymentManagerActor[T]) releaseSlot(slot int) {
 	m.order = slices.DeleteFunc(m.order, func(id int) bool { return id == slot })
 }
 
-// startPluginProcess spawns and monitors the process for one empty slot, reporting whether the slot
-// was filled.
+// startPluginProcess spawns and monitors the process for one empty slot, reporting whether it was filled.
 func (m *deploymentManagerActor[T]) startPluginProcess(slot int) bool {
 	process := m.processes[slot]
 	if process == nil {
@@ -997,8 +991,7 @@ func (m *deploymentManagerActor[T]) readyProcs() int {
 	return count
 }
 
-// idleProcs reports whether the manager holds a process it could give back right now: one it has not
-// already retired and that is running no invocation.
+// idleProcs reports whether the manager holds a process it could give back: not retired, running nothing.
 func (m *deploymentManagerActor[T]) idleProcs() bool {
 	for _, process := range m.processes {
 		if !process.retiring && process.assigned == 0 {
@@ -1057,8 +1050,8 @@ func (m *deploymentManagerActor[T]) cancelCircuitCooldown() {
 // Status
 // ---------------------------------------------------------------------------
 
-// committedCapacity is what this deployment can execute at once, counting only ready processes and each
-// for the calls it can serve; the per-process figure is the declared one every process enforces.
+// committedCapacity is what this deployment can execute at once: ready processes only, each for its
+// declared calls.
 func (m *deploymentManagerActor[T]) committedCapacity() int {
 	return m.readyProcs() * m.deployment.CapacityPerProcess()
 }
@@ -1085,8 +1078,7 @@ func (m *deploymentManagerActor[T]) activeCalls() int {
 	return count
 }
 
-// processStatuses snapshots what each owned process last reported, keyed by PID since that is what an
-// operator sees, and skipping a slot standing empty between two of them.
+// processStatuses snapshots what each owned process last reported, skipping a slot standing empty.
 func (m *deploymentManagerActor[T]) processStatuses() map[gen.PID]pluginProcessActorStatus {
 	statuses := make(map[gen.PID]pluginProcessActorStatus, len(m.processes))
 	for _, process := range m.processes {
