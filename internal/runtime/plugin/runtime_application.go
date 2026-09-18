@@ -11,7 +11,6 @@ import (
 
 	"ergo.services/ergo/app"
 	"ergo.services/ergo/gen"
-	"golang.org/x/sync/semaphore"
 
 	"github.com/harishhary/blink/internal/logger"
 	"github.com/harishhary/blink/internal/runtime"
@@ -43,28 +42,18 @@ type runtimeCompletion struct {
 	err  error
 }
 
-// Application bridges Go callers and snapshot updates into one runtime supervisor on a shared node.
+// Application bridges Go callers and snapshot updates into one plugin runtime on a shared node. It owns
+// composition and lifecycle only: admission and invocation bookkeeping live in the gateway it loads.
 type Application[P Artifact, M any] struct {
 	app.Application
-	opts                ApplicationOptions
-	logger              *logger.Logger
-	supervisor          gen.PID
-	mu                  sync.Mutex
-	adapter             *Adapter[P]
-	loader              Loader[M]
-	productionAdmission *semaphore.Weighted
-	shadowAdmission     *semaphore.Weighted
-	nextCallID          uint64
-	calls               outstandingCalls
-	supervisorDone      runtimeCompletion
-	lifecycle           applicationLifecycle
-	err                 error
-}
-
-// outstandingCalls indexes the same accepted invocations two ways, under Application.mu.
-type outstandingCalls struct {
-	byID     map[uint64]*runtime.AsyncResult // results to complete on cancel and shutdown
-	byPlugin map[string]int                  // per-plugin depth, for fair admission
+	opts           ApplicationOptions
+	logger         *logger.Logger
+	mu             sync.Mutex
+	adapter        *Adapter[P]
+	loader         Loader[M]
+	supervisorDone runtimeCompletion
+	lifecycle      applicationLifecycle
+	err            error
 }
 
 // ---------------------------------------------------------------------------
@@ -75,17 +64,11 @@ type outstandingCalls struct {
 func NewApplication[P Artifact, M any](opts ApplicationOptions, adapter *Adapter[P], loader Loader[M], logger *logger.Logger) *Application[P, M] {
 	opts = runtimeOptionsWithDefaults(opts)
 	return &Application[P, M]{
-		opts:                opts,
-		lifecycle:           applicationNew,
-		adapter:             adapter,
-		loader:              loader,
-		logger:              logger,
-		productionAdmission: semaphore.NewWeighted(int64(opts.maxOutstandingInvocations)),
-		shadowAdmission:     semaphore.NewWeighted(int64(opts.shadowMaxOutstandingInvocations)),
-		calls: outstandingCalls{
-			byID:     make(map[uint64]*runtime.AsyncResult),
-			byPlugin: make(map[string]int),
-		},
+		opts:           opts,
+		lifecycle:      applicationNew,
+		adapter:        adapter,
+		loader:         loader,
+		logger:         logger,
 		supervisorDone: runtimeCompletion{done: make(chan struct{})},
 	}
 }
@@ -95,10 +78,16 @@ func (a *Application[P, M]) Name() gen.Atom {
 	return ApplicationName(a.opts.Namespace)
 }
 
-// SupervisorName returns the registered root supervisor name, derived the same way.
+// SupervisorName returns the registered runtime supervisor name, derived the same way.
 func (a *Application[P, M]) SupervisorName() gen.Atom { return SupervisorName(a.opts.Namespace) }
 
-// Load describes the root runtime supervisor managed by Ergo.
+// GatewayName returns the registered invocation gateway name, derived the same way.
+func (a *Application[P, M]) GatewayName() gen.Atom { return GatewayName(a.opts.Namespace) }
+
+// PluginRuntimeName returns the registered branch supervisor name over both of them.
+func (a *Application[P, M]) PluginRuntimeName() gen.Atom { return PluginRuntimeName(a.opts.Namespace) }
+
+// Load describes the plugin runtime branch managed by Ergo: one gateway and the runtime it feeds.
 func (a *Application[P, M]) Load(...any) (spec gen.ApplicationSpec, loadErr error) {
 	defer func() { a.setErr(loadErr) }()
 	supervisorOpts := a.opts.SupervisorOptions
@@ -114,11 +103,18 @@ func (a *Application[P, M]) Load(...any) (spec gen.ApplicationSpec, loadErr erro
 		StopTimeout: a.opts.CloseTimeout,
 		Network:     gen.ApplicationNetwork{RegisterTypes: snapshot.NetworkTypes()},
 		Group: []gen.ApplicationMemberSpec{{
+			// Ergo registers the name, as the branch supervisor's own child specs do for its children:
+			// every name in the subtree is claimed by whoever spawns the process.
+			Name: a.PluginRuntimeName(),
 			Factory: func() gen.ProcessBehavior {
-				return newRuntimeSupervisor(a.opts.Namespace, supervisorOpts, a.adapter, a.loader)
+				return newPluginRuntimeSupervisor(a.opts, a.adapter, a.loader)
 			},
 		}},
-		Map: map[string]gen.Atom{"supervisor": a.SupervisorName()},
+		Map: map[string]gen.Atom{
+			"runtime":    a.PluginRuntimeName(),
+			"gateway":    a.GatewayName(),
+			"supervisor": a.SupervisorName(),
+		},
 	}, nil
 }
 
@@ -134,15 +130,15 @@ func (a *Application[P, M]) Init(gen.Ref, gen.ApplicationMode) error {
 
 // Start marks the application available after Ergo has started its group.
 func (a *Application[P, M]) Start(gen.Ref, gen.ApplicationMode) {
-	supervisor, err := a.Node().ProcessPID(a.SupervisorName())
-	if err != nil {
+	// Resolving the name proves the branch came up. The PID is not kept: the runtime supervisor is the
+	// second rest-for-one child, so it restarts alone, and this application is not restarted with it.
+	if _, err := subtreePID(a.Node(), a.SupervisorName()); err != nil {
 		a.setErr(err)
-		a.logger.ErrorF("lookup plugin runtime supervisor %s: %v", a.SupervisorName(), err)
+		a.logger.ErrorF("start plugin runtime: %v", err)
 		return
 	}
 	a.mu.Lock()
 	if a.lifecycle == applicationNew {
-		a.supervisor = supervisor
 		a.lifecycle = applicationRunning
 		a.err = nil
 	}
@@ -161,13 +157,17 @@ func (a *Application[P, M]) Stop(ref gen.Ref, _ error) {
 
 	ctx, cancel := context.WithDeadline(context.Background(), time.Unix(int64(ref.Deadline()), 0))
 	defer cancel()
-	pid, err := a.Node().ProcessPID(a.SupervisorName())
+	// Admission closes first, so the drain below is not racing callers the gateway would still admit.
+	if gateway, err := subtreePID(a.Node(), a.GatewayName()); err == nil {
+		_ = a.Node().SendWithPriority(gateway, MessageDrain{}, gen.MessagePriorityHigh)
+	}
+	supervisor, err := subtreePID(a.Node(), a.SupervisorName())
 	if err != nil {
 		a.setErr(err)
-		a.logger.ErrorF("lookup plugin runtime supervisor %s: %v", a.SupervisorName(), err)
+		a.logger.ErrorF("drain plugin runtime: %v", err)
 		return
 	}
-	response, err := callPIDWithContext(ctx, a.Node(), pid, DrainRequest{}, 0)
+	response, err := callPIDWithContext(ctx, a.Node(), supervisor, DrainRequest{}, 0)
 	if err == nil {
 		if reply, ok := response.(DrainResponse); !ok {
 			err = fmt.Errorf("unexpected drain response %T", response)
@@ -181,22 +181,16 @@ func (a *Application[P, M]) Stop(ref gen.Ref, _ error) {
 	}
 }
 
-// Terminate records final application completion and releases all caller-side calls.
+// Terminate records final application completion. Outstanding invocations are the gateway's, and its own
+// Terminate has already failed them.
 func (a *Application[P, M]) Terminate(reason error) {
 	a.mu.Lock()
 	if a.lifecycle == applicationTerminated {
 		a.mu.Unlock()
 		return
 	}
-	pendingErr := ErrRuntimeStopped
-	if a.lifecycle == applicationStopping {
-		pendingErr = ErrPluginUnavailable
-	}
 	a.lifecycle = applicationTerminated
 	a.supervisorDone.err = reason
-	for _, call := range a.calls.byID {
-		call.Complete(pendingErr)
-	}
 	close(a.supervisorDone.done)
 	a.mu.Unlock()
 }
@@ -241,7 +235,7 @@ func (a *Application[P, M]) CallBudget(rollout snapshot.Rollout) int {
 	return min(rollout.Capacity(), max(1, a.opts.callFanOut))
 }
 
-// Submit admits and submits a production plugin invocation.
+// Submit admits and submits a production plugin invocation through the gateway.
 func (a *Application[P, M]) Submit(ctx context.Context, pluginID string, rolloutKey string, expectedGeneration int64, fn func(context.Context, P) error) (runtime.Invocation, error) {
 	if err := ctx.Err(); err != nil {
 		return runtime.Invocation{}, err
@@ -249,37 +243,15 @@ func (a *Application[P, M]) Submit(ctx context.Context, pluginID string, rollout
 	if fn == nil {
 		return runtime.Invocation{}, fmt.Errorf("invocation function is required")
 	}
-	if err := a.checkAccepting(); err != nil {
+	client, err := a.gatewayClient()
+	if err != nil {
 		return runtime.Invocation{}, err
 	}
-	// Reserve this plugin's share before the shared budget, so one stalled plugin fails its own calls
-	// fast rather than holding the global semaphore against every other caller.
-	a.mu.Lock()
-	if a.calls.byPlugin[pluginID] >= a.opts.maxOutstandingInvocationsPerPlugin {
-		a.mu.Unlock()
-		return runtime.Invocation{}, ErrQueueFull
-	}
-	a.calls.byPlugin[pluginID]++
-	a.mu.Unlock()
-	releasePluginSlot := func() {
-		a.mu.Lock()
-		if a.calls.byPlugin[pluginID]--; a.calls.byPlugin[pluginID] <= 0 {
-			delete(a.calls.byPlugin, pluginID)
-		}
-		a.mu.Unlock()
-	}
-	if err := a.productionAdmission.Acquire(ctx, 1); err != nil {
-		releasePluginSlot()
-		return runtime.Invocation{}, err
-	}
-	return a.submit(ctx, pluginID, rolloutKey, expectedGeneration, fn, false, func() {
-		a.productionAdmission.Release(1)
-		releasePluginSlot()
-	})
+	return client.submit(ctx, pluginID, rolloutKey, expectedGeneration, fn, false)
 }
 
-// SubmitShadow admits against an independent non-blocking budget, dropping the newest invocation when
-// it is full, so a slow candidate cannot consume production capacity.
+// SubmitShadow admits against the gateway's independent non-blocking budget, which drops the newest
+// invocation when it is full, so a slow candidate cannot consume production capacity.
 func (a *Application[P, M]) SubmitShadow(ctx context.Context, pluginID string, expectedGeneration int64, fn func(context.Context, P) error) (runtime.Invocation, error) {
 	if err := ctx.Err(); err != nil {
 		return runtime.Invocation{}, err
@@ -287,134 +259,64 @@ func (a *Application[P, M]) SubmitShadow(ctx context.Context, pluginID string, e
 	if fn == nil {
 		return runtime.Invocation{}, fmt.Errorf("invocation function is required")
 	}
-	if err := a.checkAccepting(); err != nil {
+	client, err := a.gatewayClient()
+	if err != nil {
 		return runtime.Invocation{}, err
 	}
-	if !a.shadowAdmission.TryAcquire(1) {
+	invocation, err := client.submit(ctx, pluginID, "", expectedGeneration, fn, true)
+	switch {
+	case errors.Is(err, ErrShadowDropped):
 		a.logger.ErrorF("shadow call %s dropped", pluginID)
-		return runtime.Invocation{}, ErrShadowDropped
-	}
-
-	base := context.WithoutCancel(ctx)
-	var shadowCtx context.Context
-	var shadowCancel context.CancelFunc
-	if deadline, ok := ctx.Deadline(); ok {
-		shadowCtx, shadowCancel = context.WithDeadline(base, deadline)
-	} else {
-		shadowCtx, shadowCancel = context.WithCancel(base)
-	}
-	cleanup := func() {
-		shadowCancel()
-		a.shadowAdmission.Release(1)
-	}
-	invocation, err := a.submit(shadowCtx, pluginID, "", expectedGeneration, fn, true, cleanup)
-	if err != nil && !errors.Is(err, ErrShadowDropped) {
+	case err != nil:
 		a.logger.ErrorF("shadow call %s: %v", pluginID, err)
 	}
 	return invocation, err
 }
 
-// checkAccepting reports whether the runtime accepts new invocations.
-func (a *Application[P, M]) checkAccepting() error {
+// gatewayClient returns a client for this runtime's gateway, naming why a submission is refused while the
+// application is not running.
+func (a *Application[P, M]) gatewayClient() (gatewayClient[P], error) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	return applicationAcceptingError(a.lifecycle)
-}
-
-// applicationAcceptingError maps a lifecycle to the error a submission is refused with, nil while running.
-func applicationAcceptingError(lifecycle applicationLifecycle) error {
+	lifecycle := a.lifecycle
+	a.mu.Unlock()
 	switch lifecycle {
 	case applicationRunning:
-		return nil
-	case applicationTerminated:
-		return ErrRuntimeStopped
+		return gatewayClient[P]{
+			node:      a.Node(),
+			namespace: a.opts.Namespace,
+			opts:      a.opts.GatewayOptions,
+		}, nil
 	case applicationStopping:
-		return ErrPluginUnavailable
+		return gatewayClient[P]{}, ErrPluginUnavailable
+	case applicationTerminated:
+		return gatewayClient[P]{}, ErrRuntimeStopped
 	default:
-		return ErrRuntimeNotStarted
+		return gatewayClient[P]{}, ErrRuntimeNotStarted
 	}
 }
 
-// submit sends an admitted invocation to the runtime supervisor.
-func (a *Application[P, M]) submit(ctx context.Context, pluginID string, rolloutKey string, expectedGeneration int64, fn func(context.Context, P) error, shadow bool, cleanup func()) (runtime.Invocation, error) {
-	invokeCtx, invokeCancel := context.WithCancel(ctx)
-	release := sync.OnceFunc(func() {
-		invokeCancel()
-		if cleanup != nil {
-			cleanup()
-		}
-	})
-	fail := func(err error) (runtime.Invocation, error) {
-		release()
-		return runtime.Invocation{}, err
-	}
-
-	if err := ctx.Err(); err != nil {
-		return fail(err)
-	}
-
+// callSupervisor makes one control request to the runtime supervisor, resolving its name per request
+// because the supervisor restarts alone under its branch and a PID kept from startup would address the
+// incarnation before it. A failure once the application itself is finished reports that instead.
+func (a *Application[P, M]) callSupervisor(ctx context.Context, request any) (any, error) {
 	a.mu.Lock()
-	if a.lifecycle != applicationRunning {
-		lifecycle := a.lifecycle
-		a.mu.Unlock()
-		return fail(applicationAcceptingError(lifecycle))
-	}
-	a.nextCallID++
-	callID := a.nextCallID
-	nodeRef, supervisor := a.Node(), a.supervisor
+	n, done := a.Node(), a.supervisorDone.done
 	a.mu.Unlock()
 
-	result := runtime.NewAsyncResult()
-	state := runtime.NewInvocationState(func(err error) {
-		invokeCancel()
-		_ = nodeRef.SendWithPriority(supervisor, MessageCancelInvocation{CallID: callID, Err: err}, gen.MessagePriorityHigh)
-	})
-
-	a.mu.Lock()
-	if a.lifecycle != applicationRunning {
-		lifecycle := a.lifecycle
-		a.mu.Unlock()
-		return fail(applicationAcceptingError(lifecycle))
+	var response any
+	pid, err := subtreePID(n, a.SupervisorName())
+	if err == nil {
+		response, err = callPIDWithContext(ctx, n, pid, request, a.opts.SupervisorOptions.ControlTimeout)
 	}
-	a.calls.byID[callID] = result
-	a.mu.Unlock()
-
-	request := MessageSubmitInvocation[P]{
-		callID:             callID,
-		context:            invokeCtx,
-		cancel:             invokeCancel,
-		pluginID:           pluginID,
-		rolloutKey:         rolloutKey,
-		expectedGeneration: expectedGeneration,
-		fn:                 fn,
-		shadow:             shadow,
-		result:             result,
-	}
-	if err := nodeRef.Send(supervisor, request); err != nil {
-		a.mu.Lock()
-		delete(a.calls.byID, callID)
-		a.mu.Unlock()
-		return fail(fmt.Errorf("submit plugin invocation: %w", err))
-	}
-
-	stopContextWatch := context.AfterFunc(ctx, func() {
-		state.RequestCancel(ctx.Err())
-	})
-
-	go func() {
-		err := <-result.Ch
-		stopContextWatch()
-		a.mu.Lock()
-		delete(a.calls.byID, callID)
-		a.mu.Unlock()
-		release()
-		state.Complete(err)
-		if shadow && err != nil {
-			a.logger.ErrorF("shadow call %s: %v", pluginID, err)
+	if err != nil {
+		select {
+		case <-done:
+			return nil, ErrRuntimeStopped
+		default:
 		}
-	}()
-
-	return runtime.Invocation{Id: callID, State: state}, nil
+		return nil, err
+	}
+	return response, nil
 }
 
 // controlOutcome holds the result of a control-plane request.
@@ -495,17 +397,10 @@ func (a *Application[P, M]) Status(ctx context.Context) (result SupervisorStatus
 		}
 		return SupervisorStatus{}, ErrRuntimeNotStarted
 	}
-	n, supervisor, done := a.Node(), a.supervisor, a.supervisorDone.done
 	a.mu.Unlock()
 
-	response, err := callPIDWithContext(ctx, n, supervisor, SupervisorStatusRequest{}, a.opts.SupervisorOptions.ControlTimeout)
+	response, err := a.callSupervisor(ctx, SupervisorStatusRequest{})
 	if err != nil {
-		// The supervisor may have terminated since the liveness check; prefer its terminal error.
-		select {
-		case <-done:
-			return SupervisorStatus{}, ErrRuntimeStopped
-		default:
-		}
 		return SupervisorStatus{}, err
 	}
 
@@ -543,15 +438,10 @@ func (a *Application[P, M]) State(ctx context.Context) (snapshot.ProjectionState
 		a.mu.Unlock()
 		return snapshot.ProjectionState[M]{}, ErrRuntimeNotStarted
 	}
-	n, supervisor, done := a.Node(), a.supervisor, a.supervisorDone.done
+	n, done := a.Node(), a.supervisorDone.done
 	a.mu.Unlock()
-	response, err := callPIDWithContext(ctx, n, supervisor, SupervisorStateRequest{}, a.opts.SupervisorOptions.ControlTimeout)
+	response, err := a.callSupervisor(ctx, SupervisorStateRequest{})
 	if err != nil {
-		select {
-		case <-done:
-			return snapshot.ProjectionState[M]{}, ErrRuntimeStopped
-		default:
-		}
 		return snapshot.ProjectionState[M]{}, err
 	}
 	metadata, ok := response.(SupervisorStateResponse)
