@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"ergo.services/ergo/act"
 	"ergo.services/ergo/gen"
@@ -24,6 +25,24 @@ const (
 	GatewayDraining GatewayLifecycle = "draining"
 	GatewayStopped  GatewayLifecycle = "stopped"
 )
+
+// gatewayRuntimeWatchInterval is how long a gateway with no traffic can be wrong about its runtime.
+const gatewayRuntimeWatchInterval = 30 * time.Second
+
+// gatewayActorStatus is the gateway's summary of itself, the admission half of a namespace's readiness. Its
+// full state stays with the gateway and is answered there.
+type gatewayActorStatus struct {
+	lifecycle    GatewayLifecycle
+	availability runtime.Availability
+	err          error
+}
+
+// gatewayActorState is the last report the branch supervisor accepted from its gateway.
+type gatewayActorState struct {
+	pid         gen.PID
+	status      gatewayActorStatus
+	statusEpoch int64
+}
 
 // InvocationRef identifies one admitted invocation. Call ids restart at 1 with each gateway, so the PID is
 // what keeps a previous incarnation's completion off a live call holding the same number.
@@ -56,19 +75,21 @@ func (w gatewayWaiter[T]) alive() bool { return w.ref.IsAlive() }
 // runtime supervisor's sibling, not its child, so a lost runtime is a fact it survives to report.
 type invocationGateway[T Artifact] struct {
 	act.Actor
-	opts       GatewayOptions
-	namespace  string
-	runtimePID gen.PID
-	watching   bool
-	nextCallID uint64
-	calls      map[uint64]*gatewayInvocation
-	perPlugin  map[string]int // counts waiting callers too, so waiting cannot take a plugin past its share
-	production int
-	shadow     int
-	waiters    []gatewayWaiter[T]
-	lifecycle  GatewayLifecycle
-	err        error
-	labels     telemetry.Labels
+	opts            GatewayOptions
+	namespace       string
+	runtimePID      gen.PID
+	watching        bool
+	nextCallID      uint64
+	calls           map[uint64]*gatewayInvocation
+	perPlugin       map[string]int // counts waiting callers too, so waiting cannot take a plugin past its share
+	production      int
+	shadow          int
+	waiters         []gatewayWaiter[T]
+	lifecycle       GatewayLifecycle
+	err             error
+	labels          telemetry.Labels
+	lastStatus      gatewayActorStatus // last published roll-up, the baseline propagateStatus dedupes against
+	lastStatusEpoch int64
 }
 
 // ---------------------------------------------------------------------------
@@ -112,8 +133,16 @@ type MessageGatewayInvocationCompleted struct {
 // MessageGatewayInvocationReleased reports one invocation's execution capacity free, which frees its permits.
 type MessageGatewayInvocationReleased struct{ Ref InvocationRef }
 
-// MessageGatewayRadarTick drives the gateway's periodic gauge publish and runtime watch.
-type MessageGatewayRadarTick struct{}
+// MessageGatewayWatchTick re-resolves the runtime, which is how a gateway with no traffic notices one.
+type MessageGatewayWatchTick struct{}
+
+// MessageGatewayStatusChanged publishes one gateway status revision to the branch supervisor, which is what
+// puts a draining or runtime-less gateway into the namespace's readiness.
+type MessageGatewayStatusChanged struct {
+	pid         gen.PID
+	status      gatewayActorStatus
+	statusEpoch int64
+}
 
 // ---------------------------------------------------------------------------
 // Actor lifecycle & handlers
@@ -137,9 +166,8 @@ func (g *invocationGateway[T]) Init(...any) error {
 	g.perPlugin = make(map[string]int)
 	g.lifecycle = GatewayStarting
 	g.ensureRuntimeWatch()
-	// A message, not an inline publish: radar must not delay the first admission.
-	if err := g.Send(g.PID(), MessageGatewayRadarTick{}); err != nil {
-		return fmt.Errorf("schedule radar tick: %w", err)
+	if err := g.Send(g.PID(), MessageGatewayWatchTick{}); err != nil {
+		return fmt.Errorf("schedule watch tick: %w", err)
 	}
 	return nil
 }
@@ -161,13 +189,15 @@ func (g *invocationGateway[T]) HandleMessage(from gen.PID, message any) error {
 	defer g.reconcileStatus()
 	defer g.admitWaiters()
 	switch m := message.(type) {
-	case MessageGatewayRadarTick:
+	case MessageGatewayWatchTick:
 		if from != g.PID() {
 			return nil
 		}
-		g.ensureRuntimeWatch()
-		if _, err := g.SendAfter(g.PID(), MessageGatewayRadarTick{}, telemetry.RadarTickInterval); err != nil {
-			return fmt.Errorf("reschedule radar tick: %w", err)
+		// Resolving, not just monitoring: a namespace nobody is calling still owes an honest readiness, and
+		// the runtime it reached is what makes the gateway running.
+		_, _ = g.runtime()
+		if _, err := g.SendAfter(g.PID(), MessageGatewayWatchTick{}, gatewayRuntimeWatchInterval); err != nil {
+			return fmt.Errorf("reschedule watch tick: %w", err)
 		}
 
 	case MessageGatewayCancelInvocation:
@@ -504,8 +534,7 @@ func (g *invocationGateway[T]) unreleasedCalls() int {
 	return unreleased
 }
 
-// reconcileStatus publishes the gateway's own state. Nothing aggregates or queries it, so gauges are all it
-// publishes.
+// reconcileStatus publishes the gateway's own gauges, then its half of the namespace's readiness.
 func (g *invocationGateway[T]) reconcileStatus() {
 	gatewayGauges{
 		lifecycle:  g.lifecycle,
@@ -514,6 +543,34 @@ func (g *invocationGateway[T]) reconcileStatus() {
 		waiting:    len(g.waiters),
 		unreleased: g.unreleasedCalls(),
 	}.publish(g.labels, g)
+	g.propagateStatus()
+}
+
+// availability is the gateway's half of the namespace's readiness. A full budget is not degraded health: it is
+// load, and readiness that flaps with load tells an operator nothing.
+func (g *invocationGateway[T]) availability() runtime.Availability {
+	if g.lifecycle != GatewayRunning {
+		return runtime.AvailabilityUnavailable
+	}
+	return runtime.AvailabilityReady
+}
+
+// propagateStatus reports the gateway to the branch supervisor on a change, which is what makes a draining or
+// runtime-less gateway show up in the namespace's readiness.
+func (g *invocationGateway[T]) propagateStatus() {
+	next := gatewayActorStatus{
+		lifecycle:    g.lifecycle,
+		availability: g.availability(),
+		err:          g.err,
+	}
+	if next.lifecycle == g.lastStatus.lifecycle && next.availability == g.lastStatus.availability {
+		return
+	}
+	g.lastStatus = next
+	g.lastStatusEpoch = runtime.NextStatusEpoch(g.lastStatusEpoch)
+	_ = g.SendWithPriority(g.Parent(), MessageGatewayStatusChanged{
+		pid: g.PID(), status: next, statusEpoch: g.lastStatusEpoch,
+	}, gen.MessagePriorityHigh)
 }
 
 // HandleInspect exposes the permits in hand and how far the invocations behind them have progressed.

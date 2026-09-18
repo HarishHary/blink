@@ -2,7 +2,6 @@ package plugin
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -57,21 +56,29 @@ func (p SupervisorTransitionPhase) String() string {
 	}
 }
 
-// SupervisorStatus is the authoritative public status the runtime supervisor publishes.
+// SupervisorStatus is the status the runtime supervisor publishes. Availability is what a caller outside the
+// package acts on; the rest is what the branch supervisor and `HandleInspect` read, and stays in the package.
 type SupervisorStatus struct {
-	Lifecycle       SupervisorLifecycle
 	Availability    runtime.Availability
-	DesiredRevision uint64
-	Transition      SupervisorTransitionPhase
-	Catalog         catalogActorStatus
-	Reconciler      reconcilerActorStatus
+	lifecycle       SupervisorLifecycle
+	desiredRevision uint64
+	transition      SupervisorTransitionPhase
+	catalog         catalogActorStatus
+	reconciler      reconcilerActorStatus
 	err             error
 }
 
-// clone returns an independent copy of the runtime status.
+// supervisorState is the last report the branch supervisor accepted from its runtime subtree.
+type supervisorState struct {
+	pid         gen.PID
+	status      SupervisorStatus
+	statusEpoch int64
+}
+
+// clone deep-copies the catalog, the only part of this status holding a map; everything else is a value.
 func (s SupervisorStatus) clone() SupervisorStatus {
 	clone := s
-	clone.Catalog = s.Catalog.clone()
+	clone.catalog = s.catalog.clone()
 	return clone
 }
 
@@ -112,14 +119,12 @@ type supervisor[P Artifact, M any] struct {
 	inFlightCalls             map[uint64]runtimeCall
 	drainWaiters              []runtimeDrainWaiter
 	transitionGeneration      int64
-	collectorsRegistered      bool
-	radarLogged               bool
-	labels                    telemetry.Labels
-	signal                    telemetry.Signal
 	lifecycle                 SupervisorLifecycle
 	transition                SupervisorTransitionPhase
 	err                       error            // the supervisor's own failure, kept apart from its children's errors
-	lastStatus                SupervisorStatus // last reconciled projection; queries read live state instead
+	lastStatus                SupervisorStatus // last published projection, the baseline propagateStatus dedupes against
+	lastStatusEpoch           int64
+	labels                    telemetry.Labels
 }
 
 // ---------------------------------------------------------------------------
@@ -144,8 +149,13 @@ type SupervisorStateRequest struct{}
 // SupervisorStateResponse contains the ready runtime generation.
 type SupervisorStateResponse struct{ Generation int64 }
 
-// MessageRadarTick drives the supervisor's periodic radar reconcile.
-type MessageRadarTick struct{}
+// MessageSupervisorStatusChanged publishes one subtree status revision to the branch supervisor, which
+// is what puts a runtime that cannot execute into the namespace's readiness.
+type MessageSupervisorStatusChanged struct {
+	pid         gen.PID
+	status      SupervisorStatus
+	statusEpoch int64
+}
 
 // MessageProjectionCommitRetry triggers a deferred projection commit retry.
 type MessageProjectionCommitRetry struct{ token uint64 }
@@ -186,7 +196,6 @@ func newRuntimeSupervisor[P Artifact, M any](namespace string, opts SupervisorOp
 		adapter:   adapter,
 		loader:    loader,
 		labels:    telemetry.NewLabels(namespace),
-		signal:    newHealthSignal(namespace),
 	}
 }
 
@@ -216,10 +225,6 @@ func (s *supervisor[P, M]) Init(...any) (act.SupervisorSpec, error) {
 		availability: runtime.AvailabilityUnavailable,
 	}
 	s.reconcileStatus()
-	// A message, not an inline call: radar must not delay the spec.
-	if err := s.Send(s.PID(), MessageRadarTick{}); err != nil {
-		return act.SupervisorSpec{}, fmt.Errorf("schedule radar tick: %w", err)
-	}
 
 	return act.SupervisorSpec{
 		Type:                act.SupervisorTypeRestForOne,
@@ -305,29 +310,6 @@ func (s *supervisor[P, M]) HandleCall(from gen.PID, ref gen.Ref, request any) (a
 func (s *supervisor[P, M]) HandleMessage(from gen.PID, message any) error {
 	defer s.reconcileStatus()
 	switch m := message.(type) {
-	case MessageRadarTick:
-		if from != s.PID() {
-			return nil
-		}
-		s.reconcileRadar()
-		if _, err := s.SendAfter(s.PID(), MessageRadarTick{}, telemetry.RadarTickInterval); err != nil {
-			return fmt.Errorf("reschedule radar tick: %w", err)
-		}
-		return nil
-
-	case gen.MessageDownProcessID:
-		// Forget what a restarted radar lost so the next tick registers it again.
-		switch m.ProcessID.Name {
-		case telemetry.MetricsProcess:
-			s.collectorsRegistered = false
-		case telemetry.HealthProcess:
-			s.signal = newHealthSignal(s.namespace)
-		default:
-			return nil
-		}
-		s.Log().Debug("radar process down, re-registering on next tick: namespace=%q process=%s", s.namespace, m.ProcessID.Name)
-		return nil
-
 	case MessageSubmitInvocation[P]:
 		// The sender has to be the gateway its own reference names, which is the identity notifyOwner
 		// requires to answer: anything else holds no admission permit and could hear no result.
@@ -1164,25 +1146,48 @@ func (s *supervisor[P, M]) status() SupervisorStatus {
 	}
 	return SupervisorStatus{
 		err:             runtime.FirstError(s.err, s.catalog.status.err, s.reconciler.status.err, s.projection.Status.Err),
-		Lifecycle:       lifecycle,
 		Availability:    s.runtimeAvailability(),
-		DesiredRevision: s.currentDesiredRevision(),
-		Transition:      s.transition,
-		Catalog:         s.catalog.status.clone(),
-		Reconciler:      s.reconciler.status,
+		lifecycle:       lifecycle,
+		desiredRevision: s.currentDesiredRevision(),
+		transition:      s.transition,
+		catalog:         s.catalog.status.clone(),
+		reconciler:      s.reconciler.status,
 	}
 }
 
-// reconcileStatus records the projection, then refreshes gauges and readiness after each callback.
+// reconcileStatus refreshes the gauges, then what the branch supervisor knows.
 func (s *supervisor[P, M]) reconcileStatus() {
-	s.lastStatus = s.status()
 	s.publishGauges()
-	s.propagateReadiness()
+	s.propagateStatus()
 }
 
-// propagateReadiness updates Radar from current subtree health without publishing status messages.
-func (s *supervisor[P, M]) propagateReadiness() {
-	s.signal.SetReady(s, s.lifecycle == SupervisorRunning && s.runtimeAvailability() == runtime.AvailabilityReady)
+// propagateStatus reports the subtree upward on a change, which is what puts a runtime that cannot execute
+// into the namespace's readiness. A query is still answered from live state, never from this copy.
+func (s *supervisor[P, M]) propagateStatus() {
+	if s.Process == nil {
+		return
+	}
+	next := s.status()
+	if sameSupervisorStatus(s.lastStatus, next) {
+		return
+	}
+	s.lastStatus = next
+	s.lastStatusEpoch = runtime.NextStatusEpoch(s.lastStatusEpoch)
+	_ = s.SendWithPriority(s.Parent(), MessageSupervisorStatusChanged{
+		pid: s.PID(), status: next.clone(), statusEpoch: s.lastStatusEpoch,
+	}, gen.MessagePriorityHigh)
+}
+
+// sameSupervisorStatus reports whether two runtime statuses say the same thing, so a reconcile that changed
+// nothing costs the branch nothing.
+func sameSupervisorStatus(left, right SupervisorStatus) bool {
+	return left.lifecycle == right.lifecycle &&
+		left.Availability == right.Availability &&
+		left.desiredRevision == right.desiredRevision &&
+		left.transition == right.transition &&
+		runtime.ErrorText(left.err) == runtime.ErrorText(right.err) &&
+		sameCatalogActorStatus(left.catalog, right.catalog) &&
+		sameReconcilerActorStatus(left.reconciler, right.reconciler)
 }
 
 // publishGauges publishes current values without changing state or propagating status.
@@ -1226,68 +1231,24 @@ func (s *supervisor[P, M]) routeTotals() (ready, desired, queued, active int) {
 	return ready, desired, queued, active
 }
 
-// reconcileRadar registers whatever radar is still missing, then heartbeats the readiness signal.
-func (s *supervisor[P, M]) reconcileRadar() {
-	if !s.collectorsRegistered {
-		// Registered through the node: radar deletes a dead registrant's metrics.
-		if err := telemetry.Register(s.Node(), runtimeMetrics); err != nil {
-			s.radarUnavailableOnce(err)
-			return
-		}
-		s.collectorsRegistered = true
-		s.watchRadar(telemetry.MetricsProcess)
-	}
-	if !s.signal.Registered() {
-		if !s.watchRadar(telemetry.HealthProcess) {
-			return
-		}
-		if err := s.signal.Register(s); err != nil {
-			s.radarUnavailableOnce(err)
-			return
-		}
-	}
-	s.radarLogged = false
-	s.propagateReadiness()
-	s.signal.Heartbeat(s)
-}
-
-// watchRadar monitors one radar process and reports whether the watch is installed.
-func (s *supervisor[P, M]) watchRadar(name gen.Atom) bool {
-	if err := s.MonitorProcessID(gen.ProcessID{Name: name, Node: s.Node().Name()}); err != nil && !errors.Is(err, gen.ErrTargetExist) {
-		s.Log().Debug("radar monitor unavailable: namespace=%q process=%s error=%v", s.namespace, name, err)
-		return false
-	}
-	return true
-}
-
-// radarUnavailableOnce logs only the first failure of an outage.
-func (s *supervisor[P, M]) radarUnavailableOnce(err error) {
-	if s.radarLogged {
-		return
-	}
-	s.radarLogged = true
-	s.Log().Debug("radar telemetry unavailable: namespace=%q error=%v", s.namespace, err)
-}
-
 // HandleInspect exposes the subtree's lifecycle, its children's status, and what it still owes callers.
 func (s *supervisor[P, M]) HandleInspect(gen.PID, ...string) map[string]string {
 	status := s.status()
 	incompleteCalls, unreleasedCalls := s.callCounts()
 	return map[string]string{
 		"runtime:err":                             runtime.ErrorText(status.err),
-		"runtime:lifecycle":                       string(status.Lifecycle),
+		"runtime:lifecycle":                       string(status.lifecycle),
 		"runtime:availability":                    string(status.Availability),
-		"runtime:readiness_signal":                s.signal.State(),
-		"runtime:desired_revision":                fmt.Sprintf("%d", status.DesiredRevision),
-		"runtime:transition":                      status.Transition.String(),
-		"runtime:catalog:err":                     runtime.ErrorText(status.Catalog.err),
-		"runtime:reconciler:err":                  runtime.ErrorText(status.Reconciler.err),
+		"runtime:desired_revision":                fmt.Sprintf("%d", status.desiredRevision),
+		"runtime:transition":                      status.transition.String(),
+		"runtime:catalog:err":                     runtime.ErrorText(status.catalog.err),
+		"runtime:reconciler:err":                  runtime.ErrorText(status.reconciler.err),
 		"runtime:projection:err":                  runtime.ErrorText(s.projection.Status.Err),
-		"runtime:catalog:lifecycle":               string(status.Catalog.lifecycle),
-		"runtime:catalog:availability":            string(status.Catalog.availability),
-		"runtime:catalog:routers":                 fmt.Sprintf("%d", status.Catalog.desiredRouters),
-		"runtime:reconciler:lifecycle":            string(status.Reconciler.lifecycle),
-		"runtime:reconciler:availability":         string(status.Reconciler.availability),
+		"runtime:catalog:lifecycle":               string(status.catalog.lifecycle),
+		"runtime:catalog:availability":            string(status.catalog.availability),
+		"runtime:catalog:routers":                 fmt.Sprintf("%d", status.catalog.desiredRouters),
+		"runtime:reconciler:lifecycle":            string(status.reconciler.lifecycle),
+		"runtime:reconciler:availability":         string(status.reconciler.availability),
 		"runtime:projection:ready_generation":     fmt.Sprintf("%d", s.projection.ReadyGeneration),
 		"runtime:projection:committed_generation": fmt.Sprintf("%d", s.projection.CommittedGeneration),
 		"runtime:in_flight_calls":                 fmt.Sprintf("%d", incompleteCalls),

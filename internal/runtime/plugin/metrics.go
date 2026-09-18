@@ -40,6 +40,10 @@ const (
 	metricPromotions             = "blink_plugin_desired_state_promotions_total"
 )
 
+// Plugin runtime supervisor series: the branch's roll-up of admission and execution, which is the value its
+// readiness signal publishes. The supervisor gauge above is the execution half of it.
+const metricReadiness = "blink_plugin_readiness"
+
 // Gateway series: admission, the budgets it holds, and the invocations it owns.
 const (
 	metricGatewayAdmitted          = "blink_plugin_gateway_admitted_total"
@@ -128,6 +132,9 @@ var (
 		{Kind: telemetry.Counter, Name: metricInvocationsRejected, Help: "Invocations refused at admission, by reason", Labels: reasonLabels},
 		{Kind: telemetry.Counter, Name: metricProjectionCommits, Help: "Projection commit requests by result", Labels: resultLabels},
 		{Kind: telemetry.Counter, Name: metricPromotions, Help: "Desired-state revisions promoted into the catalog", Labels: namespaceLabels},
+
+		// plugin runtime supervisor
+		{Kind: telemetry.Gauge, Name: metricReadiness, Help: "Namespace readiness the node advertises, gateway and runtime together: 0 unavailable, 1 degraded, 2 ready", Labels: namespaceLabels},
 
 		// gateway
 		{Kind: telemetry.Gauge, Name: metricGatewayLifecycle, Help: "Gateway lifecycle: 0 starting, 1 running, 2 draining, 3 stopped", Labels: namespaceLabels},
@@ -222,6 +229,16 @@ func (g runtimeGauges) publish(labels telemetry.Labels, sender telemetry.Sender)
 	labels.Set(sender, metricProcessesDesired, float64(g.processesDesired))
 	labels.Set(sender, metricQueueDepth, float64(g.queueDepth))
 	labels.Set(sender, metricActiveCalls, float64(g.activeCalls))
+}
+
+// pluginRuntimeGauges is the branch supervisor's roll-up of its two children.
+type pluginRuntimeGauges struct {
+	readiness runtime.Availability
+}
+
+// publish reports the namespace's readiness, republished on the branch's radar tick.
+func (g pluginRuntimeGauges) publish(labels telemetry.Labels, sender telemetry.Sender) {
+	labels.Set(sender, metricReadiness, telemetry.AvailabilityValue(g.readiness))
 }
 
 // gatewayGauges is every gauge the invocation gateway publishes, one per field.
