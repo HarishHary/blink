@@ -164,8 +164,8 @@ Debug logging is chart-wide, not per workload: `--set debug=true` puts `DEBUG=tr
 
 ## Monitoring
 
-`deployments/helm/blink/templates/monitoring.yaml` installs Grafana and the Prometheus that feeds it as part of the Blink chart, like etcd. Prometheus discovers pods by annotation, so no target lists need maintaining: every workload is scraped on 8080 (runner restarts, Go and process metrics) and every pod carrying the `blink.io/radar-port` annotation is scraped a second time on its radar port (every `blink_controller_*`, `blink_plugin_*`, and `blink_snapshot_*` series).
-Grafana provisions the datasource and three dashboards from `deployments/helm/blink/files/grafana/dashboards/`, so a fresh install already has them in the `Blink` folder: **Blink Controller**, **Blink Plugin Runtime**, and **Blink Snapshot Runtime**. Between them they panel every `blink_*` series the runtime publishes.
+`deployments/helm/blink/templates/monitoring.yaml` installs Grafana and the Prometheus that feeds it as part of the Blink chart, like etcd. Prometheus discovers pods by annotation, so no target lists need maintaining: every workload is scraped on 8080 (runner restarts, Go and process metrics) and every pod carrying the `blink.io/radar-port` annotation is scraped a second time on its radar port (every `blink_controller_*`, `blink_plugin_*`, `blink_snapshot_*`, and `blink_stage_*` series).
+Grafana provisions the datasource and four dashboards from `deployments/helm/blink/files/grafana/dashboards/`, so a fresh install already has them in the `Blink` folder: **Blink Controller**, **Blink Plugin Runtime**, **Blink Snapshot Runtime**, and **Blink Stage Runtime**. Between them they panel every `blink_*` series the runtime publishes.
 
 ```bash
 kubectl port-forward deployment/blink-grafana 3000:3000 --namespace blink
@@ -180,6 +180,8 @@ Each dashboard is grouped the same way - availability and lifecycle state first,
   on them, invocation rate and latency, every way a call is rejected before a plugin sees it, and the router, process, subprocess, and child churn under a live supervisor.
 - **Blink Snapshot Runtime** - reader, projection, and reported availability, then delivered vs serving generations and the lag the controller reads as drift, subscription attempts and controller
   losses, ignored updates by reason, parse results and latency, and external commit outcomes.
+- **Blink Stage Runtime** - reader, writer, and processing-session availability, then the uncommitted ledger behind consumer lag, broker fetch, commit, and write attempts with their latency, what each
+  side refused, and the child churn under a live processor supervisor. Empty until a service runs the stage runtime.
 
 ```bash
 # Confirm both scrape jobs are up before blaming an empty panel.
