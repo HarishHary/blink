@@ -1,0 +1,663 @@
+{
+  "uid": "blink-stage-runtime",
+  "title": "Blink Stage Runtime",
+  "description": "Per-namespace stage runtime on every service that consumes a topic: reader, writer, and processing-session availability, the uncommitted ledger behind consumer lag, broker fetch, commit, and write attempts with their latency, and the churn under a live processor supervisor.",
+  "tags": ["blink", "stage"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "namespace",
+        "label": "Stage namespace",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+        "query": "label_values(blink_stage_processor_availability, namespace)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Processing session availability",
+      "description": "The processor supervisor's roll-up of its children, and what its readiness signal carries. Worst pod in the namespace.",
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "min by (namespace) (blink_stage_processor_availability{namespace=~\"$namespace\"})",
+          "legendFormat": "{{namespace}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": { "text": "unavailable", "index": 0 },
+                "1": { "text": "degraded", "index": 1 },
+                "2": { "text": "ready", "index": 2 }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "green", "value": 2 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Reader availability",
+      "description": "Degraded means the reader is retrying the broker; unavailable means it is fetching nothing.",
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "min by (namespace) (blink_stage_kafka_reader_availability{namespace=~\"$namespace\"})",
+          "legendFormat": "{{namespace}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": { "text": "unavailable", "index": 0 },
+                "1": { "text": "degraded", "index": 1 },
+                "2": { "text": "ready", "index": 2 }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "green", "value": 2 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Writer availability",
+      "description": "One value per destination, so the main topic and the DLQ are separate.",
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "min by (namespace, destination) (blink_stage_kafka_writer_availability{namespace=~\"$namespace\"})",
+          "legendFormat": "{{namespace}} {{destination}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": { "text": "unavailable", "index": 0 },
+                "1": { "text": "degraded", "index": 1 },
+                "2": { "text": "ready", "index": 2 }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "green", "value": 2 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Job pool availability",
+      "description": "The workers that run the stage's own processing; unavailable here stops the ledger draining even while the reader is healthy.",
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "min by (namespace) (blink_stage_job_pool_availability{namespace=~\"$namespace\"})",
+          "legendFormat": "{{namespace}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": { "text": "unavailable", "index": 0 },
+                "1": { "text": "degraded", "index": 1 },
+                "2": { "text": "ready", "index": 2 }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "green", "value": 2 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Uncommitted ledger records",
+      "description": "Fetched records the reader holds until a commit is acknowledged. Climbing with healthy fetches is processing falling behind, not the broker.",
+      "gridPos": { "h": 7, "w": 6, "x": 0, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (namespace) (blink_stage_kafka_reader_ledger_records{namespace=~\"$namespace\"})",
+          "legendFormat": "{{namespace}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Uncommitted ledger bytes",
+      "description": "Payload bytes behind the same records, which is what the reader's pending-bytes ceiling bounds.",
+      "gridPos": { "h": 7, "w": 6, "x": 6, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (namespace) (blink_stage_kafka_reader_ledger_bytes{namespace=~\"$namespace\"})",
+          "legendFormat": "{{namespace}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": { "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Reader I/O queue",
+      "description": "Fetch and commit commands waiting on the reader's meta-process, which runs one at a time.",
+      "gridPos": { "h": 7, "w": 6, "x": 12, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (namespace) (blink_stage_kafka_reader_io_queue{namespace=~\"$namespace\"})",
+          "legendFormat": "{{namespace}} queued"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Reader state",
+      "description": "Active is an I/O operation in flight. Draining stuck at 1 is a shutdown waiting on the ledger to commit.",
+      "gridPos": { "h": 7, "w": 6, "x": 18, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (namespace) (blink_stage_kafka_reader_active{namespace=~\"$namespace\"})",
+          "legendFormat": "{{namespace}} active"
+        },
+        {
+          "refId": "B",
+          "expr": "max by (namespace) (blink_stage_kafka_reader_draining{namespace=~\"$namespace\"})",
+          "legendFormat": "{{namespace}} draining"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "max": 1,
+          "min": 0,
+          "custom": { "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": ".*draining.*" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Reader broker attempts",
+      "description": "Fetch and commit attempts against the broker, retries included, so an error rate here is retry pressure rather than lost work.",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 13 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (namespace, result) (rate(blink_stage_kafka_reader_fetches_total{namespace=~\"$namespace\"}[5m]))",
+          "legendFormat": "{{namespace}} fetch {{result}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (namespace, result) (rate(blink_stage_kafka_reader_commits_total{namespace=~\"$namespace\"}[5m]))",
+          "legendFormat": "{{namespace}} commit {{result}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Reader records",
+      "description": "Records fetched against records a commit has covered. A lasting gap between the two is the ledger growing.",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 13 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (namespace) (rate(blink_stage_kafka_reader_fetched_records_total{namespace=~\"$namespace\"}[5m]))",
+          "legendFormat": "{{namespace}} fetched"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (namespace) (rate(blink_stage_kafka_reader_committed_records_total{namespace=~\"$namespace\"}[5m]))",
+          "legendFormat": "{{namespace}} committed"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Reader I/O latency",
+      "description": "One broker attempt, so a slow fetch and a slow commit are told apart.",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.99, sum by (namespace, le) (rate(blink_stage_kafka_reader_fetch_seconds_bucket{namespace=~\"$namespace\"}[5m])))",
+          "legendFormat": "{{namespace}} fetch p99"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.5, sum by (namespace, le) (rate(blink_stage_kafka_reader_fetch_seconds_bucket{namespace=~\"$namespace\"}[5m])))",
+          "legendFormat": "{{namespace}} fetch p50"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum by (namespace, le) (rate(blink_stage_kafka_reader_commit_seconds_bucket{namespace=~\"$namespace\"}[5m])))",
+          "legendFormat": "{{namespace}} commit p99"
+        },
+        {
+          "refId": "D",
+          "expr": "histogram_quantile(0.5, sum by (namespace, le) (rate(blink_stage_kafka_reader_commit_seconds_bucket{namespace=~\"$namespace\"}[5m])))",
+          "legendFormat": "{{namespace}} commit p50"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "lineWidth": 1, "fillOpacity": 0, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Reader rejected messages",
+      "description": "Messages the reader refused. Stale and foreign ones are what it ignores after a restart and are normal in small numbers; busy, not_ready, and a full I/O queue are work it could not take.",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (namespace, reason) (rate(blink_stage_kafka_reader_rejections_total{namespace=~\"$namespace\"}[5m]))",
+          "legendFormat": "{{namespace}} {{reason}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (namespace) (rate(blink_stage_kafka_reader_io_queue_rejections_total{namespace=~\"$namespace\"}[5m]))",
+          "legendFormat": "{{namespace}} io queue full"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": ".*io queue full.*" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Writer pending publications",
+      "description": "Publications the writer accepted and has not acknowledged, the active write included.",
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 27 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (namespace, destination) (blink_stage_kafka_writer_pending{namespace=~\"$namespace\"})",
+          "legendFormat": "{{namespace}} {{destination}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Writer pending bytes",
+      "description": "Bytes behind those publications, which is what the writer's admission ceiling bounds.",
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 27 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (namespace, destination) (blink_stage_kafka_writer_pending_bytes{namespace=~\"$namespace\"})",
+          "legendFormat": "{{namespace}} {{destination}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": { "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Writer I/O queue",
+      "description": "Write commands waiting on the writer's meta-process, which runs one at a time.",
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 27 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (namespace, destination) (blink_stage_kafka_writer_queue_depth{namespace=~\"$namespace\"})",
+          "legendFormat": "{{namespace}} {{destination}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "Writer throughput",
+      "description": "Broker write attempts with retries included, the records successful publications acknowledged, and what the writer refused on a full queue or a spent admission budget.",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 34 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (namespace, destination, result) (rate(blink_stage_kafka_writer_operations_total{namespace=~\"$namespace\"}[5m]))",
+          "legendFormat": "{{namespace}} {{destination}} write {{result}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (namespace, destination) (rate(blink_stage_kafka_writer_records_total{namespace=~\"$namespace\"}[5m]))",
+          "legendFormat": "{{namespace}} {{destination}} records"
+        },
+        {
+          "refId": "C",
+          "expr": "sum by (namespace, destination) (rate(blink_stage_kafka_writer_queue_rejects_total{namespace=~\"$namespace\"}[5m]))",
+          "legendFormat": "{{namespace}} {{destination}} rejected"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": ".*rejected.*" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "Writer latency",
+      "description": "One broker write attempt per destination, queueing excluded.",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 34 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.99, sum by (namespace, destination, le) (rate(blink_stage_kafka_writer_operation_seconds_bucket{namespace=~\"$namespace\"}[5m])))",
+          "legendFormat": "{{namespace}} {{destination}} p99"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (namespace, destination, le) (rate(blink_stage_kafka_writer_operation_seconds_bucket{namespace=~\"$namespace\"}[5m])))",
+          "legendFormat": "{{namespace}} {{destination}} p95"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.5, sum by (namespace, destination, le) (rate(blink_stage_kafka_writer_operation_seconds_bucket{namespace=~\"$namespace\"}[5m])))",
+          "legendFormat": "{{namespace}} {{destination}} p50"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "lineWidth": 1, "fillOpacity": 0, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "id": 18,
+      "type": "timeseries",
+      "title": "Processing children and job-pool workers",
+      "description": "Children are the reader, each writer, the coordinator, and the job pool. Workers is what the pool is configured to run.",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 41 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (namespace) (blink_stage_processor_children{namespace=~\"$namespace\"})",
+          "legendFormat": "{{namespace}} children"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (namespace) (blink_stage_job_pool_workers{namespace=~\"$namespace\"})",
+          "legendFormat": "{{namespace}} job-pool workers"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "id": 19,
+      "type": "timeseries",
+      "title": "Processing child churn",
+      "description": "Children restarting underneath a live processor supervisor; a repeating child is what keeps the session degraded.",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 41 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (namespace, child) (increase(blink_stage_processor_child_starts_total{namespace=~\"$namespace\"}[1h]))",
+          "legendFormat": "{{namespace}} {{child}} starts"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (namespace, child, reason) (increase(blink_stage_processor_child_terminations_total{namespace=~\"$namespace\"}[1h]))",
+          "legendFormat": "{{namespace}} {{child}} exit {{reason}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    }
+  ]
+}
