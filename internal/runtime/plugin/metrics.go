@@ -49,14 +49,14 @@ const metricReadiness = "blink_plugin_readiness"
 
 // Gateway series: admission, the budgets it holds, and the invocations it owns.
 const (
-	metricGatewayAdmitted          = "blink_plugin_gateway_admitted_total"
-	metricGatewayRejected          = "blink_plugin_gateway_rejected_total"
-	metricGatewayWaited            = "blink_plugin_gateway_waited_total"
 	metricGatewayLifecycle         = "blink_plugin_gateway_lifecycle"
 	metricGatewayProductionPermits = "blink_plugin_gateway_production_permits"
 	metricGatewayShadowPermits     = "blink_plugin_gateway_shadow_permits"
 	metricGatewayWaitingCalls      = "blink_plugin_gateway_waiting_calls"
 	metricGatewayUnreleasedCalls   = "blink_plugin_gateway_unreleased_calls"
+	metricGatewayAdmitted          = "blink_plugin_gateway_admitted_total"
+	metricGatewayRejected          = "blink_plugin_gateway_rejected_total"
+	metricGatewayWaited            = "blink_plugin_gateway_waited_total"
 )
 
 // Reconciler series: resolving the snapshot and the artifact directory into desired state.
