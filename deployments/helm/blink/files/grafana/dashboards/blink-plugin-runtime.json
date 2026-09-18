@@ -16,7 +16,7 @@
         "label": "Plugin namespace",
         "type": "query",
         "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
-        "query": "label_values(blink_plugin_availability, namespace)",
+        "query": "label_values(blink_plugin_supervisor_availability, namespace)",
         "refresh": 2,
         "includeAll": true,
         "multi": true,
@@ -27,16 +27,61 @@
   },
   "panels": [
     {
-      "id": 1,
+      "id": 20,
       "type": "stat",
-      "title": "Runtime availability",
-      "description": "Worst pod in the namespace: ready only while something is routable, degraded while it serves a stale revision.",
-      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 0 },
+      "title": "Namespace readiness",
+      "description": "What the node advertises for this namespace, the gateway and the runtime together, so it is never better than either.",
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
       "targets": [
         {
           "refId": "A",
-          "expr": "min by (namespace) (blink_plugin_availability{namespace=~\"$namespace\"})",
+          "expr": "min by (namespace) (blink_plugin_readiness{namespace=~\"$namespace\"})",
+          "legendFormat": "{{namespace}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": { "text": "unavailable", "index": 0 },
+                "1": { "text": "degraded", "index": 1 },
+                "2": { "text": "ready", "index": 2 }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "green", "value": 2 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      }
+    },
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Runtime availability",
+      "description": "The execution half of readiness. Worst pod in the namespace: ready only while something is routable, degraded while it serves a stale revision.",
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "min by (namespace) (blink_plugin_supervisor_availability{namespace=~\"$namespace\"})",
           "legendFormat": "{{namespace}}"
         }
       ],
@@ -76,7 +121,7 @@
       "type": "stat",
       "title": "Supervisor lifecycle",
       "description": "Published by the runtime supervisor, which stays up while its children restart underneath it.",
-      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 0 },
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
       "targets": [
         {
@@ -121,7 +166,7 @@
       "type": "stat",
       "title": "Desired-state transition",
       "description": "Anything other than idle means a revision is mid-promotion; a stuck value is what in-flight calls or an uncommitted projection hold.",
-      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 0 },
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
       "targets": [
         {
@@ -339,7 +384,7 @@
       "id": 9,
       "type": "timeseries",
       "title": "Calls in flight and queued",
-      "description": "In-flight is what a transition waits on; queue depth rising with flat active calls is process capacity, not plugin latency.",
+      "description": "In-flight is what a transition waits on; queue depth rising with flat active calls is process capacity, not plugin latency. Capacity held counts calls whose caller already has a result.",
       "gridPos": { "h": 7, "w": 12, "x": 0, "y": 20 },
       "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
       "targets": [
@@ -357,6 +402,11 @@
           "refId": "C",
           "expr": "sum by (namespace) (blink_plugin_queue_depth{namespace=~\"$namespace\"})",
           "legendFormat": "{{namespace}} queued"
+        },
+        {
+          "refId": "D",
+          "expr": "sum by (namespace) (blink_plugin_unreleased_calls{namespace=~\"$namespace\"})",
+          "legendFormat": "{{namespace}} capacity held"
         }
       ],
       "fieldConfig": {
@@ -394,11 +444,114 @@
       }
     },
     {
+      "id": 21,
+      "type": "stat",
+      "title": "Gateway lifecycle",
+      "description": "The gateway admits every call. Draining means it is finishing what it already accepted and taking nothing new.",
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 27 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (namespace) (blink_plugin_gateway_lifecycle{namespace=~\"$namespace\"})",
+          "legendFormat": "{{namespace}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": { "text": "starting", "index": 0 },
+                "1": { "text": "running", "index": 1 },
+                "2": { "text": "draining", "index": 2 },
+                "3": { "text": "stopped", "index": 3 }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "orange", "value": null },
+              { "color": "green", "value": 1 },
+              { "color": "orange", "value": 2 },
+              { "color": "red", "value": 3 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      }
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Gateway permits held",
+      "description": "Production and shadow have separate budgets, so shadow traffic never eats into production. Production sitting at its ceiling is what makes callers wait.",
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 27 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (namespace) (blink_plugin_gateway_production_permits{namespace=~\"$namespace\"})",
+          "legendFormat": "{{namespace}} production"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (namespace) (blink_plugin_gateway_shadow_permits{namespace=~\"$namespace\"})",
+          "legendFormat": "{{namespace}} shadow"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "id": 23,
+      "type": "timeseries",
+      "title": "Gateway waiting and unreleased calls",
+      "description": "Waiting callers sit against the wait ceiling, past which the gateway refuses. Unreleased means the caller has a result while plugin capacity is still held, which a deadline alone never frees.",
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 27 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (namespace) (blink_plugin_gateway_waiting_calls{namespace=~\"$namespace\"})",
+          "legendFormat": "{{namespace}} waiting"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (namespace) (blink_plugin_gateway_unreleased_calls{namespace=~\"$namespace\"})",
+          "legendFormat": "{{namespace}} unreleased"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
       "id": 11,
       "type": "timeseries",
       "title": "Invocation latency",
       "description": "A deployment manager accepting one invocation to completing it, so queueing is included.",
-      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 27 },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 34 },
       "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
       "targets": [
         {
@@ -433,14 +586,19 @@
       "id": 12,
       "type": "timeseries",
       "title": "Rejections and timeouts",
-      "description": "Every way a call fails before a plugin sees it: admission budget, no route, no manager acknowledgement, a full deployment queue, or no process started in time.",
-      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 27 },
+      "description": "Every way a call fails before a plugin sees it: the gateway refusing it, the runtime supervisor refusing the submission, no route, no manager acknowledgement, a full deployment queue, or no process started in time.",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 34 },
       "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
       "targets": [
         {
+          "refId": "F",
+          "expr": "sum by (namespace, reason) (rate(blink_plugin_gateway_rejected_total{namespace=~\"$namespace\"}[5m]))",
+          "legendFormat": "{{namespace}} gateway {{reason}}"
+        },
+        {
           "refId": "A",
-          "expr": "sum by (namespace, reason) (rate(blink_plugin_invocations_rejected_total{namespace=~\"$namespace\"}[5m]))",
-          "legendFormat": "{{namespace}} admission {{reason}}"
+          "expr": "sum by (namespace, reason) (rate(blink_plugin_submissions_rejected_total{namespace=~\"$namespace\"}[5m]))",
+          "legendFormat": "{{namespace}} submission {{reason}}"
         },
         {
           "refId": "B",
@@ -476,11 +634,42 @@
       }
     },
     {
+      "id": 24,
+      "type": "timeseries",
+      "title": "Gateway admission",
+      "description": "Calls admitted against each budget, and how often one had to wait for a production permit first.",
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 41 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (namespace, budget) (rate(blink_plugin_gateway_admitted_total{namespace=~\"$namespace\"}[5m]))",
+          "legendFormat": "{{namespace}} {{budget}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (namespace) (rate(blink_plugin_gateway_waited_total{namespace=~\"$namespace\"}[5m]))",
+          "legendFormat": "{{namespace}} waited"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
       "id": 13,
       "type": "timeseries",
       "title": "Routing by rollout target",
       "description": "Which side of a canary or shadow rollout each call took.",
-      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 34 },
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 41 },
       "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
       "targets": [
         {
@@ -506,7 +695,7 @@
       "type": "timeseries",
       "title": "Scale events",
       "description": "Autoscaling decisions past a deployment's min_procs, bounded by the process budget shared across the pod.",
-      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 34 },
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 41 },
       "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
       "targets": [
         {
@@ -528,8 +717,8 @@
       "id": 15,
       "type": "timeseries",
       "title": "Plugin process churn",
-      "description": "Restarts spend a slot's retry budget; a circuit open is that budget exhausted, which stops admitting calls for the cooldown.",
-      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 34 },
+      "description": "The process actor holding a slot. Restarts spend a slot's retry budget; a circuit open is that budget exhausted, which stops admitting calls for the cooldown.",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 48 },
       "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
       "targets": [
         {
@@ -568,11 +757,49 @@
       }
     },
     {
+      "id": 25,
+      "type": "timeseries",
+      "title": "Plugin subprocess churn",
+      "description": "The subprocess inside one process actor. A subprocess restarted in place keeps the slot, so it never shows in process churn; a failure is the process actor giving up on restarting it.",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 48 },
+      "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (namespace) (increase(blink_plugin_subprocess_starts_total{namespace=~\"$namespace\"}[1h]))",
+          "legendFormat": "{{namespace}} starts"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (namespace, reason) (increase(blink_plugin_subprocess_restarts_total{namespace=~\"$namespace\"}[1h]))",
+          "legendFormat": "{{namespace}} restart {{reason}}"
+        },
+        {
+          "refId": "C",
+          "expr": "sum by (namespace) (increase(blink_plugin_subprocess_failures_total{namespace=~\"$namespace\"}[1h]))",
+          "legendFormat": "{{namespace}} failures"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 1, "fillOpacity": 10, "showPoints": "never" } },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": ".*failures.*" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
       "id": 16,
       "type": "timeseries",
       "title": "Reconciler resolutions",
       "description": "Deferred and stale resolutions are the ones that need a retry, and an artifact worker restart is what re-reads the catalog after one.",
-      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 41 },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 55 },
       "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
       "targets": [
         {
@@ -605,7 +832,7 @@
       "type": "timeseries",
       "title": "Router churn",
       "description": "A promotion retires the routers serving the old revision, so starts and terminations track rollouts as much as failures.",
-      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 41 },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 55 },
       "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
       "targets": [
         {
@@ -638,7 +865,7 @@
       "type": "timeseries",
       "title": "Promotions and projection commits",
       "description": "One promotion per revision that reached the catalog; a failed commit is what leaves the transition awaiting the projection.",
-      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 48 },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 62 },
       "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
       "targets": [
         {
@@ -666,7 +893,7 @@
       "type": "timeseries",
       "title": "Supervised child churn",
       "description": "The reconciler and catalog restarting underneath a live supervisor; a repeating child is what keeps a namespace degraded.",
-      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 48 },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 62 },
       "datasource": { "type": "prometheus", "uid": "blink-prometheus" },
       "targets": [
         {

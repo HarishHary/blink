@@ -176,8 +176,8 @@ Each dashboard is grouped the same way - availability and lifecycle state first,
 
 - **Blink Controller** - commit flow, then writer queue and database attempts, artifact files the scanner could not index by stage, writer I/O fences, controller-actor terminations by reason, and
   application load/close outcomes per runner attempt.
-- **Blink Plugin Runtime** - the rollout transition and the revisions and generations behind it, then routers and plugin processes, invocation rate and latency, every way a call is rejected before a
-  plugin sees it, and the router, process, and child churn under a live supervisor.
+- **Blink Plugin Runtime** - namespace readiness and the rollout transition with the revisions and generations behind it, then routers and plugin processes, the gateway's permits and the calls waiting
+  on them, invocation rate and latency, every way a call is rejected before a plugin sees it, and the router, process, subprocess, and child churn under a live supervisor.
 - **Blink Snapshot Runtime** - reader, projection, and reported availability, then delivered vs serving generations and the lag the controller reads as drift, subscription attempts and controller
   losses, ignored updates by reason, parse results and latency, and external commit outcomes.
 
